@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use d2b_contracts_broker::broker_wire::{
@@ -217,7 +217,7 @@ struct SocketTarget {
 /// the socket targets they derive are only observable through the store.
 #[derive(Default)]
 pub struct PlaneResourceRegistry {
-    inner: Mutex<RegistryInner>,
+    inner: tokio::sync::Mutex<RegistryInner>,
     /// The durable authority this registry caches rows from; attached by
     /// the plane once its spec store is open.
     store: OnceLock<Arc<SpecStore>>,
@@ -245,29 +245,44 @@ impl PlaneResourceRegistry {
         Self::default()
     }
 
-    fn with_inner<R>(&self, run: impl FnOnce(&mut RegistryInner) -> R) -> R {
-        let mut inner = self.inner.lock().expect("plane registry lock");
+    async fn with_inner<R>(&self, run: impl FnOnce(&mut RegistryInner) -> R) -> R {
+        let mut inner = self.inner.lock().await;
         run(&mut inner)
     }
 
+    /// Synchronous cache access: non-blocking `try_lock` per plan U4. A
+    /// collision reports a miss (fail-closed) - the async socket-target
+    /// lookups fall through to the authority on a miss, and the fences
+    /// treat an unbound identity as unavailable.
+    fn with_inner_sync<R>(&self, run: impl FnOnce(&mut RegistryInner) -> R) -> Option<R> {
+        let mut inner = self.inner.try_lock().ok()?;
+        Some(run(&mut inner))
+    }
+
     fn lookup_anchor(&self, volume_uid: &ResourceUid) -> Option<VolumeAnchor> {
-        self.with_inner(|inner| {
+        self.with_inner_sync(|inner| {
             let volume_name = inner.volume_names_by_uid.get(volume_uid.as_str()).cloned()?;
             inner.volume_anchors_by_name.get(&volume_name).cloned()
         })
+        .flatten()
     }
 
-    fn lookup_socket_target_by_identity(&self, socket: &SocketIdentity) -> Option<SocketTarget> {
+    async fn lookup_socket_target_by_identity(
+        &self,
+        socket: &SocketIdentity,
+    ) -> Option<SocketTarget> {
         self.with_inner(|inner| inner.socket_targets_by_identity.get(&socket.to_hex()).cloned())
+            .await
     }
 
-    fn lookup_socket_target_by_ref(&self, producer_ref: &ResourceRef) -> Option<SocketTarget> {
+    async fn lookup_socket_target_by_ref(&self, producer_ref: &ResourceRef) -> Option<SocketTarget> {
         self.with_inner(|inner| {
             inner
                 .socket_targets_by_ref
                 .get(&producer_ref.to_canonical_string())
                 .cloned()
         })
+        .await
     }
 
     /// Attach the durable authority (the plane's spec store) the cache
@@ -291,7 +306,7 @@ impl PlaneResourceRegistry {
         match store.list(selector).await {
             Ok(rows) => {
                 for row in &rows {
-                    register_binding_row(self, zone_token, row);
+                    register_binding_row(self, zone_token, row).await;
                 }
             }
             Err(error) => {
@@ -312,11 +327,11 @@ impl PlaneResourceRegistry {
         zone_token: &BoundedToken,
         socket: &SocketIdentity,
     ) -> Option<SocketTarget> {
-        if let Some(target) = self.lookup_socket_target_by_identity(socket) {
+        if let Some(target) = self.lookup_socket_target_by_identity(socket).await {
             return Some(target);
         }
         self.load_binding_targets(zone_token).await;
-        self.lookup_socket_target_by_identity(socket)
+        self.lookup_socket_target_by_identity(socket).await
     }
 
     /// Socket target for one serving-pair ref (worker Process or Endpoint):
@@ -326,14 +341,14 @@ impl PlaneResourceRegistry {
         zone_token: &BoundedToken,
         producer_ref: &ResourceRef,
     ) -> Option<SocketTarget> {
-        if let Some(target) = self.lookup_socket_target_by_ref(producer_ref) {
+        if let Some(target) = self.lookup_socket_target_by_ref(producer_ref).await {
             return Some(target);
         }
         self.load_binding_targets(zone_token).await;
-        self.lookup_socket_target_by_ref(producer_ref)
+        self.lookup_socket_target_by_ref(producer_ref).await
     }
 
-    fn register_volume(&self, volume_uid: &str, volume_name: &str, anchor: VolumeAnchor) {
+    async fn register_volume(&self, volume_uid: &str, volume_name: &str, anchor: VolumeAnchor) {
         self.with_inner(|inner| {
             inner
                 .volume_names_by_uid
@@ -350,10 +365,11 @@ impl PlaneResourceRegistry {
                     }
                 })
                 .or_insert(anchor);
-        });
+        })
+        .await;
     }
 
-    fn register_binding(
+    async fn register_binding(
         &self,
         socket_hex: &str,
         worker_ref: &ResourceRef,
@@ -370,7 +386,8 @@ impl PlaneResourceRegistry {
             inner
                 .socket_targets_by_ref
                 .insert(endpoint_ref.to_canonical_string(), target);
-        });
+        })
+        .await;
     }
 
     /// Register every durable row this plane serves (U9 open, U10
@@ -387,9 +404,10 @@ impl PlaneResourceRegistry {
                         &resource_uid_string(&row.uid),
                         &row.key.name,
                         volume_anchor_from_row(&row),
-                    );
+                    )
+                    .await;
                 }
-                "VolumeBinding" => register_binding_row(self, zone_token, &row),
+                "VolumeBinding" => register_binding_row(self, zone_token, &row).await,
                 _ => {}
             }
         }
@@ -400,7 +418,7 @@ impl PlaneResourceRegistry {
     /// Process effects bind it to controller rows that Provider owns. Fed by
     /// the plane's construction path from
     /// [`ConstructionInputs::committed_provider_identities`].
-    pub(crate) fn register_committed_provider_identity(
+    pub(crate) async fn register_committed_provider_identity(
         &self,
         provider_ref: &ResourceRef,
         uid: ResourceUid,
@@ -410,25 +428,31 @@ impl PlaneResourceRegistry {
             inner
                 .committed_provider_identities
                 .insert(provider_ref.to_canonical_string(), (uid, generation));
-        });
+        })
+        .await;
     }
 
     /// The committed-`Provider` identity view the production Process effects
     /// consult (KTD7), published by [`PlaneResourceRegistry`].
+    ///
+    /// Synchronous surface over the `tokio::sync` inner (plan U4): the
+    /// non-blocking `try_lock` reports unbound on a collision (fail-closed);
+    /// the fences refuse as unavailable and the effects retry.
     pub(crate) fn committed_provider_identity(
         &self,
         provider_ref: &ResourceRef,
     ) -> Option<(ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)> {
-        self.with_inner(|inner| {
+        self.with_inner_sync(|inner| {
             inner
                 .committed_provider_identities
                 .get(&provider_ref.to_canonical_string())
                 .cloned()
         })
+        .flatten()
     }
 }
 
-fn register_binding_row(registry: &PlaneResourceRegistry, zone_token: &BoundedToken, row: &StoredDesiredResource) {
+async fn register_binding_row(registry: &PlaneResourceRegistry, zone_token: &BoundedToken, row: &StoredDesiredResource) {
     let Ok(spec) = serde_json::from_slice::<d2b_contracts_resource::v3::ResourceSpec>(&row.spec)
     else {
         return;
@@ -451,15 +475,17 @@ fn register_binding_row(registry: &PlaneResourceRegistry, zone_token: &BoundedTo
     else {
         return;
     };
-    registry.register_binding(
-        &socket.to_hex(),
-        &worker_ref,
-        &endpoint_ref,
-        SocketTarget {
-            volume_ref: stored.spec().volume_ref().clone(),
-            execution_ref: stored.spec().execution_ref().clone(),
-        },
-    );
+    registry
+        .register_binding(
+            &socket.to_hex(),
+            &worker_ref,
+            &endpoint_ref,
+            SocketTarget {
+                volume_ref: stored.spec().volume_ref().clone(),
+                execution_ref: stored.spec().execution_ref().clone(),
+            },
+        )
+        .await;
 }
 
 /// Derive the per-volume anchor from one durable Volume row.
@@ -747,13 +773,13 @@ struct SocketRemoveEffect {
 /// publishes it. The plane table is resolved lazily per read - the
 /// composition fills it only after its per-zone loop finishes.
 struct GuestControlEndpointProbe {
-    planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
+    planes: Arc<tokio::sync::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
     zone: ZoneId,
 }
 
 impl GuestControlEndpointProbe {
     fn new(
-        planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
+        planes: Arc<tokio::sync::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
         zone: ZoneId,
     ) -> Self {
         Self { planes, zone }
@@ -787,7 +813,7 @@ impl GuestControlEndpointProbe {
                 vmm_ref
             }
         };
-        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+        let Some(plane) = self.planes.lock().await.get(self.zone.as_str()).cloned() else {
             return false;
         };
         let key = ResourceKey::new(
@@ -822,13 +848,13 @@ impl GuestControlEndpointProbe {
 /// VMM row. The daemon owns nothing here: the worker creates the sockets and a
 /// Device delete retires them with the row.
 struct DeviceWorkerEndpointProbe {
-    planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
+    planes: Arc<tokio::sync::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
     zone: ZoneId,
 }
 
 impl DeviceWorkerEndpointProbe {
     fn new(
-        planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
+        planes: Arc<tokio::sync::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>>,
         zone: ZoneId,
     ) -> Self {
         Self { planes, zone }
@@ -840,7 +866,7 @@ impl DeviceWorkerEndpointProbe {
         if !device_worker_purpose(purpose) || producer_ref.resource_type().as_str() != "Process" {
             return false;
         }
-        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+        let Some(plane) = self.planes.lock().await.get(self.zone.as_str()).cloned() else {
             return false;
         };
         let key = ResourceKey::new(
@@ -1626,8 +1652,9 @@ impl GuestOwnerIdentitySource for PlaneGuestOwnerIdentities {
             .state
             .resource_plane
             .lock()
-            .ok()
-            .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(zone).ok()))?;
+            .await
+            .as_ref()
+            .and_then(|plane| plane.zone(zone).ok())?;
         match runtime.guest_owner_uid(guest_ref).await {
             Ok(uid) => Some(uid),
             Err(error) => {
@@ -2112,7 +2139,7 @@ impl ResourcePlaneV3 {
         for (provider_ref, (uid, generation)) in &committed_provider_identities {
             inputs
                 .registry
-                .register_committed_provider_identity(provider_ref, uid.clone(), *generation);
+                .register_committed_provider_identity(provider_ref, uid.clone(), *generation).await;
         }
         readiness.set_spec_store_ready(true);
         // Stage 2: start the zone's providers through the toolkit base. Each
@@ -3365,8 +3392,8 @@ mod tests {
         let process_effects: Arc<dyn ProcessDriverEffects> = effects.clone();
         inputs.process_effects = process_effects;
         let zone = ZoneId::parse("test").expect("zone");
-        let planes: Arc<parking_lot::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>> =
-            Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let planes: Arc<tokio::sync::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>> =
+            Arc::new(tokio::sync::Mutex::new(HashMap::new()));
         let plane = Arc::new(ResourcePlaneV3::open(inputs).await.expect("plane"));
         // The owner row the child commits are linked under, exactly as the
         // production ingest commits the Guest before its provider controller
@@ -3381,6 +3408,7 @@ mod tests {
             .expect("owner ingest");
         planes
             .lock()
+            .await
             .insert(zone.as_str().to_owned(), Arc::clone(&plane));
         let probe = GuestControlEndpointProbe::new(Arc::clone(&planes), zone.clone());
         let guest = ResourceRef::parse("Guest/acceptance-guest").expect("guest");

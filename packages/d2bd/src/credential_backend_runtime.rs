@@ -16,7 +16,6 @@
 #[cfg(test)]
 use std::{
     collections::BTreeMap,
-    sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -381,14 +380,14 @@ struct GuestCredentialLeaseRegistryState {
 /// material.
 #[cfg(test)]
 struct GuestCredentialLeaseRegistry {
-    state: Mutex<GuestCredentialLeaseRegistryState>,
+    state: tokio::sync::Mutex<GuestCredentialLeaseRegistryState>,
 }
 
 #[cfg(test)]
 impl GuestCredentialLeaseRegistry {
     fn new() -> Self {
         Self {
-            state: Mutex::new(GuestCredentialLeaseRegistryState {
+            state: tokio::sync::Mutex::new(GuestCredentialLeaseRegistryState {
                 leases: BTreeMap::new(),
                 operations: BTreeMap::new(),
                 idempotencies: BTreeMap::new(),
@@ -462,7 +461,7 @@ impl GuestCredentialLeaseRegistry {
         };
         let mut state = self
             .state
-            .lock()
+            .try_lock()
             .map_err(|_| GuestCredentialBackendSourceError::Unavailable)?;
         if let Some((existing_idempotency, existing_handle)) =
             state.operations.get(&operation_key).cloned()
@@ -541,7 +540,7 @@ impl GuestCredentialLeaseRegistry {
         let lease_handle = field_bounded_ascii(fields, "leaseHandle")?;
         let mut state = self
             .state
-            .lock()
+            .try_lock()
             .map_err(|_| GuestCredentialBackendSourceError::Unavailable)?;
         let record = state
             .leases
@@ -562,7 +561,7 @@ impl GuestCredentialLeaseRegistry {
         let lease_handle = field_bounded_ascii(fields, "leaseHandle")?;
         let mut state = self
             .state
-            .lock()
+            .try_lock()
             .map_err(|_| GuestCredentialBackendSourceError::Unavailable)?;
         let current = state
             .leases
@@ -612,7 +611,7 @@ impl GuestCredentialLeaseRegistry {
         let lease_handle = field_bounded_ascii(fields, "leaseHandle")?;
         let mut state = self
             .state
-            .lock()
+            .try_lock()
             .map_err(|_| GuestCredentialBackendSourceError::Unavailable)?;
         let mut target_handle = lease_handle;
         loop {

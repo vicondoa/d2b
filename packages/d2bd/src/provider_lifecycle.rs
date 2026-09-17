@@ -227,26 +227,21 @@ fn registration_reason(error: &ProviderDirectoryError) -> String {
 /// collide with it.
 #[derive(Default)]
 struct DriverRegistrations {
-    directory: Mutex<ProviderDirectory>,
-    refusal: Mutex<Option<ProviderStartupError>>,
+    directory: tokio::sync::Mutex<ProviderDirectory>,
+    refusal: tokio::sync::Mutex<Option<ProviderStartupError>>,
 }
 
 impl DriverRegistrations {
     /// Register every driver one provider declared.
-    fn register(&self, provider_ref: &'static str, drivers: &[DriverDescriptor]) -> Result<(), ()> {
-        let mut directory = self.directory.lock().unwrap_or_else(|poisoned| {
-            poisoned.into_inner()
-        });
+    async fn register(&self, provider_ref: &'static str, drivers: &[DriverDescriptor]) -> Result<(), ()> {
+        let mut directory = self.directory.lock().await;
         for driver in drivers {
             if let Err(error) = directory.register_driver(driver) {
                 let refusal = ProviderStartupError::Registration {
                     provider_ref,
                     reason: registration_reason(&error),
                 };
-                let mut slot = self
-                    .refusal
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut slot = self.refusal.lock().await;
                 if slot.is_none() {
                     *slot = Some(refusal);
                 }
@@ -257,21 +252,13 @@ impl DriverRegistrations {
     }
 
     /// Take the assembled directory, once.
-    fn take_directory(&self) -> ProviderDirectory {
-        std::mem::take(
-            &mut *self
-                .directory
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        )
+    async fn take_directory(&self) -> ProviderDirectory {
+        std::mem::take(&mut *self.directory.lock().await)
     }
 
     /// The first registration refusal, if any.
-    fn refusal(&self) -> Option<ProviderStartupError> {
-        self.refusal
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+    async fn refusal(&self) -> Option<ProviderStartupError> {
+        self.refusal.lock().await.clone()
     }
 }
 
@@ -313,6 +300,7 @@ impl ProviderBase for ZoneProvider {
         }
         self.registrations
             .register(self.provider_ref(), &self.drivers)
+            .await
             .map_err(|_| AttachError::Refused)
     }
 
@@ -321,7 +309,7 @@ impl ProviderBase for ZoneProvider {
         if deadline.expired() {
             return Err(DrainError::DeadlineExpired);
         }
-        self.port.release(self.provider_ref());
+        self.port.release(self.provider_ref()).await;
         Ok(())
     }
 }
@@ -620,6 +608,7 @@ impl ProviderSet {
                 let handle = lifecycle.plane_handle(zone.clone(), Arc::clone(&port_handle));
                 lifecycle.attach(&handle).await
             };
+            let plane_refusal = registrations.refusal().await;
             attached.map_err(|error| match error {
                 AttachError::Plane(_) => match port.refusal() {
                     Some(refusal) => ProviderStartupError::Plane(refusal),
@@ -627,11 +616,9 @@ impl ProviderSet {
                         provider_ref: provider.provider_ref(),
                     },
                 },
-                AttachError::Refused => registrations.refusal().unwrap_or(
-                    ProviderStartupError::Attach {
-                        provider_ref: provider.provider_ref(),
-                    },
-                ),
+                AttachError::Refused => plane_refusal.unwrap_or(ProviderStartupError::Attach {
+                    provider_ref: provider.provider_ref(),
+                }),
             })?;
             if let Some(surface) = ProviderOperations::over(&zone, &provider, &audit)? {
                 operations.push(surface);
@@ -664,8 +651,8 @@ impl ProviderSet {
             port,
             providers,
             startup_order,
-            drain_order: Mutex::new(Vec::new()),
-            directory: registrations.take_directory(),
+            drain_order: tokio::sync::Mutex::new(Vec::new()),
+            directory: registrations.take_directory().await,
             operations,
             trusted_context_publication,
             effect_services,
@@ -679,7 +666,7 @@ pub(crate) struct ProviderRuntime {
     port: Arc<ProductionPlanePort>,
     providers: Vec<ZoneProvider>,
     startup_order: Vec<&'static str>,
-    drain_order: Mutex<Vec<&'static str>>,
+    drain_order: tokio::sync::Mutex<Vec<&'static str>>,
     directory: ProviderDirectory,
     /// The operation surfaces of the providers that declared operations.
     operations: Vec<ProviderOperations>,
@@ -709,10 +696,14 @@ impl ProviderRuntime {
 
     /// The providers in the order they drained, once drained.
     pub(crate) fn drain_order(&self) -> Vec<&'static str> {
+        // Synchronous tracing/test surface over the `tokio::sync` drain
+        // ledger (plan U4): a concurrent drain-writer yields an empty view
+        // (fail-closed) instead of blocking the tracing path.
         self.drain_order
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .try_lock()
+            .ok()
+            .map(|order| order.clone())
+            .unwrap_or_default()
     }
 
     /// The claimed storage roots of every started provider.
@@ -902,10 +893,7 @@ impl ProviderRuntime {
                     provider_ref: provider.provider_ref(),
                     code: error.code(),
                 })?;
-            self.drain_order
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(provider.provider_ref());
+            self.drain_order.lock().await.push(provider.provider_ref());
         }
         Ok(())
     }

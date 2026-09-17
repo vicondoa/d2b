@@ -72,7 +72,7 @@ use std::io;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use d2b_audit::evidence_chain::{
@@ -212,7 +212,10 @@ struct ZoneBinding {
 /// process last observed from a publication acknowledgement.
 #[derive(Default)]
 pub(crate) struct ForwardRendezvous {
-    zones: Mutex<BTreeMap<String, ZoneBinding>>,
+    /// The per-Zone forwarding bindings (plan U10: `tokio::sync::Mutex`, the
+    /// async-purity replacement for the std table lock; every critical
+    /// section is a single map operation, never held across an await).
+    zones: tokio::sync::Mutex<BTreeMap<String, ZoneBinding>>,
     /// The broker epoch this process currently validates contexts against.
     /// Zero means no publication has been acknowledged yet: no context can
     /// be verified, so every attested call is refused fail-closed.
@@ -226,7 +229,7 @@ pub(crate) struct ForwardRendezvous {
     /// writes exactly one root record per root invocation, each nested leg
     /// writes a correlation record keyed by the root invocation id and its
     /// depth, and forwarded ops audit here alone - never also broker-side.
-    chain_audit: Mutex<Option<Arc<dyn ChainAuditSink>>>,
+    chain_audit: tokio::sync::Mutex<Option<Arc<dyn ChainAuditSink>>>,
 }
 
 impl ForwardRendezvous {
@@ -244,9 +247,9 @@ impl ForwardRendezvous {
     /// the origination leg: a context the broker mints against it then
     /// matches, and a republish that outran the broker's cache refuses the
     /// pre-republish contexts by the same comparison.
-    pub(crate) fn publish(&self, zone: &str, providers: Arc<ProviderRuntime>) -> u64 {
+    pub(crate) async fn publish(&self, zone: &str, providers: Arc<ProviderRuntime>) -> u64 {
         let revision = {
-            let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut zones = self.zones.lock().await;
             let entry = zones.entry(zone.to_owned()).or_insert(ZoneBinding {
                 revision: 0,
                 controller_generation: 0,
@@ -281,7 +284,25 @@ impl ForwardRendezvous {
         controller_generation: u64,
         guest_generation: u64,
     ) {
-        let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Synchronous caller surface (the broker publication ack rides the
+        // origination leg's sync transport inside `ProviderRuntime::publish_trusted_context`):
+        // non-blocking `try_lock` per plan U4. A collision (another
+        // operation mid-critical-section, sub-microsecond) skips the
+        // generation update fail-closed: the broker keeps the older
+        // generations, contexts minted against them refuse as stale, and the
+        // next publication self-heals. The epoch STILL advances (it is an
+        // atomic), so a skipped update can never admit a context the daemon
+        // outgrew - only refuse contexts the broker minted on stale values.
+        // R13: std poison recovery (into_inner) had the same recoverable
+        // shape; tokio mutexes do not poison, so the failure mode is now
+        // contention-only.
+        let Ok(mut zones) = self.zones.try_lock() else {
+            tracing::warn!(
+                zone = %zone,
+                "generation publication skipped: rendezvous binding busy"
+            );
+            return;
+        };
         // A Zone with no started providers has no binding to carry values
         // for; the daemon publishes generations alongside the set that
         // serves them.
@@ -310,8 +331,8 @@ impl ForwardRendezvous {
     /// provider publication; a Zone whose seam was never wired serves
     /// forwarded family operations without a kernel leg (they refuse when
     /// their handler needs one).
-    pub(crate) fn set_kernel_seam(&self, zone: &str, kernel: KernelCaller) {
-        let mut zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    pub(crate) async fn set_kernel_seam(&self, zone: &str, kernel: KernelCaller) {
+        let mut zones = self.zones.lock().await;
         match zones.get_mut(zone) {
             Some(binding) => binding.kernel = Some(kernel),
             None => tracing::warn!(
@@ -328,22 +349,14 @@ impl ForwardRendezvous {
     /// are its tests and the future composition wiring (U9 note: the
     /// composition seam owns this call).
     #[allow(dead_code)]
-    pub(crate) fn set_chain_audit(&self, sink: Arc<dyn ChainAuditSink>) {
-        *self
-            .chain_audit
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sink);
+    pub(crate) async fn set_chain_audit(&self, sink: Arc<dyn ChainAuditSink>) {
+        *self.chain_audit.lock().await = Some(sink);
     }
 
     /// Write one chain record through the wired sink, logging an append
     /// failure rather than changing the call's outcome.
-    fn record_chain(&self, record: ChainRecord) {
-        let Some(sink) = self
-            .chain_audit
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-        else {
+    async fn record_chain(&self, record: ChainRecord) {
+        let Some(sink) = self.chain_audit.lock().await.clone() else {
             return;
         };
         if let Err(error) = sink.record(&record) {
@@ -366,7 +379,7 @@ impl ForwardRendezvous {
     /// the deadline budget must be a positive value under the shared
     /// ceiling. The broker is the sole minter, so any mismatch is a stale
     /// or mutated attestation.
-    fn context_admitted(&self, context: &ForwardContext, request_zone: &str) -> bool {
+    async fn context_admitted(&self, context: &ForwardContext, request_zone: &str) -> bool {
         let observed_epoch = self.broker_epoch.load(Ordering::SeqCst);
         if observed_epoch == 0 {
             // No epoch observed yet: the attestation cannot be verified, so
@@ -383,7 +396,7 @@ impl ForwardRendezvous {
         if context.deadline_ms == 0 || context.deadline_ms > MAX_CONTEXT_DEADLINE_MS {
             return false;
         }
-        let zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let zones = self.zones.lock().await;
         match zones.get(request_zone) {
             Some(binding) => {
                 context.provider_set_revision == binding.revision
@@ -411,7 +424,7 @@ impl ForwardRendezvous {
     ) -> (ForwardOperationResponse, Vec<OwnedFd>) {
         let zone = request.zone.clone();
         let (providers, kernel) = {
-            let zones = self.zones.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let zones = self.zones.lock().await;
             match zones.get(&zone) {
                 Some(binding) => (
                     Some(Arc::clone(&binding.providers)),
@@ -494,7 +507,8 @@ impl ForwardRendezvous {
                 operation,
                 zone,
                 &response,
-            ));
+            ))
+            .await;
             return response;
         }
         let request = ForwardOperationRequest {
@@ -514,7 +528,8 @@ impl ForwardRendezvous {
             operation,
             zone,
             &response,
-        ));
+        ))
+        .await;
         response
     }
 
@@ -641,7 +656,8 @@ impl ForwardRendezvous {
                 &request.operation,
                 &request.zone,
                 &response,
-            ));
+            ))
+            .await;
             return connection
                 .write_frame_with_fds(&encode_reply(&response)?, &[], FORWARD_REPLY_DEADLINE)
                 .await;
@@ -656,7 +672,7 @@ impl ForwardRendezvous {
         // shared ceiling by the admission.
         let handler_deadline = match request.context.as_ref() {
             Some(context) => {
-                if !self.context_admitted(context, &request.zone) {
+                if !self.context_admitted(context, &request.zone).await {
                     tracing::warn!(
                         operation = %request.operation,
                         zone = %request.zone,
@@ -673,7 +689,8 @@ impl ForwardRendezvous {
                         &request.operation,
                         &request.zone,
                         &response,
-                    ));
+                    ))
+                    .await;
                     return connection
                         .write_frame_with_fds(
                             &encode_reply(&response)?,
@@ -757,7 +774,8 @@ impl ForwardRendezvous {
             &operation,
             &zone,
             &response,
-        ));
+        ))
+        .await;
         // The reply frame carries the descriptors the handler minted for
         // this invocation, index-aligned with the outcome's declarations
         // (U10); a response that mints none carries no attachments.
@@ -1419,6 +1437,7 @@ fn decode_frame(datagram: &[u8]) -> Result<Vec<u8>, TypedError> {
 mod tests {
     use d2b_audit::evidence_chain::root_record_count;
     use std::sync::LazyLock;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
@@ -1937,7 +1956,9 @@ mod tests {
                 .expect("the process family starts through the base");
             let providers = Arc::new(providers);
             let rendezvous = Arc::new(ForwardRendezvous::new());
-            rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+            rendezvous
+                .publish(zone.as_str(), Arc::clone(&providers))
+                .await;
             let socket_path = scratch.path().join("d2bd-forward.sock");
             (rendezvous, socket_path, scratch, providers)
         }
@@ -1965,7 +1986,9 @@ mod tests {
             .expect("the fixture provider starts through the base");
         let providers = Arc::new(providers);
         let rendezvous = Arc::new(ForwardRendezvous::new());
-        rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+        rendezvous
+            .publish(zone.as_str(), Arc::clone(&providers))
+            .await;
         let socket_path = scratch.path().join("d2bd-forward.sock");
         (rendezvous, socket_path, scratch, providers)
     }
@@ -2046,11 +2069,16 @@ mod tests {
 
     /// An in-memory chain audit sink the tests assert on: every record the
     /// daemon-side leg writes lands here.
+    ///
+    /// Synchronous by construction (the `ChainAuditSink` trait surface is
+    /// sync), so it stays a `std::sync::Mutex` test fake under the plan's
+    /// sanctioned cfg(test)-helper survivor class.
     #[derive(Default)]
     struct RecordingChainSink {
         records: Mutex<Vec<ChainRecord>>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl RecordingChainSink {
         fn snapshot(&self) -> Vec<ChainRecord> {
             self.records
@@ -2060,6 +2088,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl ChainAuditSink for RecordingChainSink {
         fn record(&self, record: &ChainRecord) -> std::io::Result<()> {
             self.records
@@ -2071,17 +2100,31 @@ mod tests {
     }
 
     /// Wire `sink` into `serving`'s rendezvous and return it.
-    fn attached_sink(serving: &ServingRendezvous) -> Arc<RecordingChainSink> {
+    async fn attached_sink(serving: &ServingRendezvous) -> Arc<RecordingChainSink> {
         let sink = Arc::new(RecordingChainSink::default());
-        serving.rendezvous.set_chain_audit(sink.clone());
+        serving.rendezvous.set_chain_audit(sink.clone()).await;
         sink
     }
 
     /// The threads this process is running, one per task entry.
-    fn thread_count() -> usize {
-        std::fs::read_dir("/proc/self/task")
+    ///
+    /// `tokio::fs` (plan U10): the count probes the process's own thread
+    /// table, so the async form never parks an executor worker on the
+    /// directory read.
+    async fn thread_count() -> usize {
+        let mut entries = tokio::fs::read_dir("/proc/self/task")
+            .await
+            .expect("/proc/self/task is readable");
+        let mut count = 0usize;
+        while entries
+            .next_entry()
+            .await
             .expect("/proc/self/task is readable")
-            .count()
+            .is_some()
+        {
+            count += 1;
+        }
+        count
     }
 
     /// The production posture with a test's own in-flight cap and handler
@@ -2443,7 +2486,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
             ForwardOperationOutcome::Result { .. }
         ));
 
-        let before = thread_count();
+        let before = thread_count().await;
         let calls: Vec<_> = (0..CALLS)
             .map(|_| {
                 tokio::spawn(forward_async(
@@ -2457,7 +2500,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         // Every call reached the handler while none of them was released: the
         // second call does not wait for the first.
         THREADS_GATE.wait_for(CALLS).await;
-        let held = thread_count();
+        let held = thread_count().await;
         // The counter is process-wide (/proc/self/task): other tests'
         // runtimes and their blocking pools grow concurrently under
         // parallel test load, and this runtime's own blocking pool expands
@@ -3191,6 +3234,11 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// socket, read the daemon's request envelope, assert the published
     /// values, and reply with `reply`. The envelope the daemon actually sent
     /// is delivered on `seen`.
+    ///
+    /// Synchronous by construction (a dedicated blocking broker thread, the
+    /// plan's sanctioned bounded seat), so the blocking socket/channel calls
+    /// stay under the cfg(test)-helper survivor class.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn serve_one_publication(
         socket_path: PathBuf,
         expected: PublishTrustedContextValues,
@@ -3239,6 +3287,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// context minted against the acked epoch, revision, and generations is
     /// admitted, and any pre-ack state is stale.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn the_daemon_publishes_over_the_origination_leg_and_advances_on_the_ack() {
         let zone = ZoneId::parse("test").expect("the test zone label is canonical");
         let scratch = tempfile::tempdir().expect("test scratch");
@@ -3296,7 +3345,9 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
                 .expect("the process family starts through the base"),
         );
         let rendezvous = Arc::new(ForwardRendezvous::new());
-        let revision = rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+        let revision = rendezvous
+            .publish(zone.as_str(), Arc::clone(&providers))
+            .await;
         assert_eq!(revision, 1, "the first publication is revision 1");
         let envelope =
             seen_rx
@@ -3364,6 +3415,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     /// no context validates - the daemon never trusts an epoch it was not
     /// acknowledged.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_refused_publication_leaves_the_rendezvous_fail_closed() {
         let zone = ZoneId::parse("test").expect("the test zone label is canonical");
         let scratch = tempfile::tempdir().expect("test scratch");
@@ -3425,7 +3477,9 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
                 .expect("the process family starts through the base"),
         );
         let rendezvous = Arc::new(ForwardRendezvous::new());
-        rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+        rendezvous
+            .publish(zone.as_str(), Arc::clone(&providers))
+            .await;
         broker.join().expect("the test broker completes");
 
         let listener = bind(&rendezvous_socket, &test_identity()).expect("bind the rendezvous");
@@ -3495,7 +3549,9 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
                 .expect("the process family starts through the base"),
         );
         let rendezvous = Arc::new(ForwardRendezvous::new());
-        rendezvous.publish(zone.as_str(), Arc::clone(&providers));
+        rendezvous
+            .publish(zone.as_str(), Arc::clone(&providers))
+            .await;
 
         let listener = bind(&rendezvous_socket, &test_identity()).expect("bind the rendezvous");
         spawn_server(rendezvous.clone(), listener, tokio::runtime::Handle::current())
@@ -3780,7 +3836,7 @@ assert_eq!(
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_forwarded_root_writes_exactly_one_daemon_side_root_record_per_outcome() {
         let serving = ServingRendezvous::start().await;
-        let sink = attached_sink(&serving);
+        let sink = attached_sink(&serving).await;
 
         let refused = forward_request_async(
             serving.socket_path.clone(),
@@ -3855,7 +3911,7 @@ assert_eq!(
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_nested_leg_writes_one_correlation_record_and_never_a_second_root() {
         let serving = ServingRendezvous::start().await;
-        let sink = attached_sink(&serving);
+        let sink = attached_sink(&serving).await;
 
         let refused_chain =
             EvidenceChain::root("invocation-nested-1", "daemon").nested("provider-alpha");
@@ -3924,7 +3980,7 @@ assert_eq!(
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_nested_chain_past_the_depth_cap_is_refused_with_the_loop_code() {
         let serving = ServingRendezvous::start().await;
-        let sink = attached_sink(&serving);
+        let sink = attached_sink(&serving).await;
 
         let mut chain = EvidenceChain::root("invocation-loop-1", "daemon");
         for _ in 0..=MAX_NESTED_DEPTH {
@@ -3962,7 +4018,7 @@ assert_eq!(
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_attested_forwarded_root_is_recorded_under_the_initiating_identity() {
         let serving = ServingRendezvous::start_attesting().await;
-        let sink = attached_sink(&serving);
+        let sink = attached_sink(&serving).await;
         let response = forward_request_async(
             serving.socket_path.clone(),
             attested_request("invocation-attr-1", "error-boom", "provider-alpha"),

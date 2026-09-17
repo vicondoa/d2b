@@ -27,7 +27,7 @@
 //! travel on the Process controller's `launch_args` channel.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+
 
 use d2b_contracts::types::{BundleOpId, VmId};
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
@@ -270,11 +270,11 @@ struct LiveTpmResourceEffectPort<'a> {
     execution_ref: ResourceRef,
     /// The Device's owning Guest lifecycle admission, resolved the first time
     /// the pass reaches the launchable row the lease is consumed by.
-    lifecycle_admission: Mutex<TpmLifecycleAdmission>,
+    lifecycle_admission: tokio::sync::Mutex<TpmLifecycleAdmission>,
     /// The guest lifecycle lease is consumed at most once, by the first
     /// effect that reaches a launchable row (the preserved
     /// `lifecycle_lease_consumed` gate of the old executor).
-    lifecycle_lease_consumed: Mutex<bool>,
+    lifecycle_lease_consumed: tokio::sync::Mutex<bool>,
 }
 
 impl LiveTpmResourceEffectPort<'_> {
@@ -304,7 +304,7 @@ impl LiveTpmResourceEffectPort<'_> {
     fn lifecycle_authorization(&self) -> Result<LifecycleAuthorization, TpmResourceEffectError> {
         let mut slot = self
             .lifecycle_admission
-            .lock()
+            .try_lock()
             .map_err(|_| TpmResourceEffectError::Transient)?;
         if let TpmLifecycleAdmission::Issued(authorization) = &*slot {
             return Ok(authorization.clone());
@@ -315,10 +315,12 @@ impl LiveTpmResourceEffectPort<'_> {
         let operation_id = operation_id.clone();
         let zone = ZoneId::parse(self.rows.zone.as_str())
             .map_err(|_| TpmResourceEffectError::InvalidDevice)?;
+        // Synchronous caller: non-blocking `try_lock` per plan U4. A
+        // collision reports Transient (fail-closed), never a stall.
         let runtime = self
             .state
             .resource_plane
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&zone).ok()))
             .ok_or(TpmResourceEffectError::Transient)?;
@@ -346,7 +348,7 @@ impl LiveTpmResourceEffectPort<'_> {
     fn consume_lifecycle_lease(&self) -> Result<(), TpmResourceEffectError> {
         let mut consumed = self
             .lifecycle_lease_consumed
-            .lock()
+            .try_lock()
             .map_err(|_| TpmResourceEffectError::Transient)?;
         if *consumed {
             return Ok(());
@@ -659,8 +661,8 @@ impl AdmittedTpmDevice {
             device_uid: self.device_uid,
             device_ref: self.device_ref,
             execution_ref: self.execution_ref,
-            lifecycle_admission: Mutex::new(self.lifecycle_admission),
-            lifecycle_lease_consumed: Mutex::new(false),
+            lifecycle_admission: tokio::sync::Mutex::new(self.lifecycle_admission),
+            lifecycle_lease_consumed: tokio::sync::Mutex::new(false),
         }
     }
 }
@@ -712,6 +714,7 @@ pub(crate) fn finalize_device_tpm_controller(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Mutex;
 
     use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance};

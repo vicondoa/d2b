@@ -26,7 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::ZoneId;
@@ -91,7 +91,7 @@ pub(crate) struct ProductionPlanePort {
     zone: ZoneId,
     state_root: PathBuf,
     surfaces: BTreeMap<&'static str, ProviderSurface>,
-    ledger: Mutex<PlaneLedger>,
+    ledger: tokio::sync::Mutex<PlaneLedger>,
 }
 
 impl core::fmt::Debug for ProductionPlanePort {
@@ -136,73 +136,92 @@ impl ProductionPlanePort {
             zone,
             state_root,
             surfaces,
-            ledger: Mutex::new(PlaneLedger::default()),
+            ledger: tokio::sync::Mutex::new(PlaneLedger::default()),
         }
     }
 
     /// The first refusal the port recorded, if any.
+    ///
+    /// Synchronous surface over the `tokio::sync` ledger (plan U4): a
+    /// concurrent writer collision reads no refusal (fail-closed) - the
+    /// attach path surfaces a generic `Attach` error instead of a stale one.
     pub(crate) fn refusal(&self) -> Option<PlaneRefusal> {
         self.ledger
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .try_lock()
+            .ok()?
             .refusal
             .clone()
     }
 
     /// Every claimed storage root, provider by provider.
+    ///
+    /// Synchronous surface: a concurrent ledger writer yields an empty view
+    /// (fail-closed, U4); status consumers re-query after the writer drains.
     pub(crate) fn claimed_roots(&self) -> Vec<ClaimedRoot> {
         self.ledger
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .roots
-            .values()
-            .flatten()
-            .cloned()
-            .collect()
+            .try_lock()
+            .ok()
+            .map(|ledger| {
+                ledger
+                    .roots
+                    .values()
+                    .flatten()
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Every deployed adapter, provider by provider.
+    ///
+    /// Synchronous surface: a concurrent ledger writer yields an empty view
+    /// (fail-closed, U4).
     pub(crate) fn deployed_adapters(&self) -> Vec<(&'static str, &'static str)> {
         self.ledger
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .adapters
-            .iter()
-            .flat_map(|(provider, adapters)| {
-                adapters.iter().map(move |adapter| (*provider, *adapter))
+            .try_lock()
+            .ok()
+            .map(|ledger| {
+                ledger
+                    .adapters
+                    .iter()
+                    .flat_map(|(provider, adapters)| {
+                        adapters.iter().map(move |adapter| (*provider, *adapter))
+                    })
+                    .collect()
             })
-            .collect()
+            .unwrap_or_default()
     }
 
     /// Every published service, provider by provider.
+    ///
+    /// Synchronous surface: a concurrent ledger writer yields an empty view
+    /// (fail-closed, U4).
     pub(crate) fn published_services(&self) -> Vec<(&'static str, &'static str)> {
         self.ledger
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .services
-            .iter()
-            .flat_map(|(provider, services)| {
-                services.iter().map(move |service| (*provider, *service))
+            .try_lock()
+            .ok()
+            .map(|ledger| {
+                ledger
+                    .services
+                    .iter()
+                    .flat_map(|(provider, services)| {
+                        services.iter().map(move |service| (*provider, *service))
+                    })
+                    .collect()
             })
-            .collect()
+            .unwrap_or_default()
     }
 
     /// Release everything one provider claimed through the port.
-    pub(crate) fn release(&self, provider_ref: &'static str) {
-        let mut ledger = self
-            .ledger
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    pub(crate) async fn release(&self, provider_ref: &'static str) {
+        let mut ledger = self.ledger.lock().await;
         ledger.roots.remove(provider_ref);
         ledger.adapters.remove(provider_ref);
         ledger.services.remove(provider_ref);
     }
 
-    fn refuse(&self, provider_ref: &'static str, row: String, reason: &'static str) -> PlaneError {
-        let mut ledger = self
-            .ledger
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    async fn refuse(&self, provider_ref: &'static str, row: String, reason: &'static str) -> PlaneError {
+        let mut ledger = self.ledger.lock().await;
         Self::refuse_locked(&mut ledger, provider_ref, row, reason)
     }
 
@@ -283,28 +302,28 @@ impl ZonePlanePort for ProductionPlanePort {
         root: &StorageRoot,
     ) -> Result<(), PlaneError> {
         let Some(surface) = Self::surface(&self.surfaces, provider_ref) else {
-            return Err(self.refuse(provider_ref, root.path.to_owned(), "provider-undeclared"));
+            return Err(self.refuse(provider_ref, root.path.to_owned(), "provider-undeclared").await);
         };
+        let undeclared_refusal =
+            self.refuse(provider_ref, root.path.to_owned(), "storage-root-undeclared").await;
         let declared = surface
             .storage_roots
             .iter()
             .find(|declared| declared.path == root.path)
-            .ok_or_else(|| {
-                self.refuse(provider_ref, root.path.to_owned(), "storage-root-undeclared")
-            })?;
+            .ok_or(undeclared_refusal)?;
         if declared.provider_owned != root.provider_owned {
             return Err(self.refuse(
                 provider_ref,
                 root.path.to_owned(),
                 "storage-root-ownership-mismatch",
-            ));
+            ).await);
         }
         if !clean_relative(root.path) {
             return Err(self.refuse(
                 provider_ref,
                 root.path.to_owned(),
                 "storage-root-escapes-subtree",
-            ));
+            ).await);
         }
         if Self::other_subtrees(&self.surfaces, provider_ref)
             .into_iter()
@@ -314,13 +333,10 @@ impl ZonePlanePort for ProductionPlanePort {
                 provider_ref,
                 root.path.to_owned(),
                 "storage-root-overlap",
-            ));
+            ).await);
         }
         {
-            let mut ledger = self
-                .ledger
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ledger = self.ledger.lock().await;
             if ledger
                 .roots
                 .get(provider_ref)
@@ -353,18 +369,18 @@ impl ZonePlanePort for ProductionPlanePort {
                     provider_ref,
                     root.path.to_owned(),
                     "storage-root-claim-failed",
-                ));
+                ).await);
             }
         } else if !resolved.exists() {
             return Err(self.refuse(
                 provider_ref,
                 root.path.to_owned(),
                 "storage-root-missing",
-            ));
+            ).await);
         }
         self.ledger
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .await
             .roots
             .entry(provider_ref)
             .or_default()
@@ -382,19 +398,16 @@ impl ZonePlanePort for ProductionPlanePort {
         adapter: &PlaneAdapter,
     ) -> Result<(), PlaneError> {
         let Some(surface) = Self::surface(&self.surfaces, provider_ref) else {
-            return Err(self.refuse(provider_ref, adapter.id.to_owned(), "provider-undeclared"));
+            return Err(self.refuse(provider_ref, adapter.id.to_owned(), "provider-undeclared").await);
         };
         if !surface
             .adapters
             .iter()
             .any(|declared| declared.id == adapter.id && declared.depends_on == adapter.depends_on)
         {
-            return Err(self.refuse(provider_ref, adapter.id.to_owned(), "adapter-undeclared"));
+            return Err(self.refuse(provider_ref, adapter.id.to_owned(), "adapter-undeclared").await);
         }
-        let mut ledger = self
-            .ledger
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ledger = self.ledger.lock().await;
         let refusal = {
             let deployed = ledger.adapters.entry(provider_ref).or_default();
             if deployed.contains(&adapter.id) {
@@ -435,15 +448,12 @@ impl ZonePlanePort for ProductionPlanePort {
         service: &ServiceDecl,
     ) -> Result<(), PlaneError> {
         let Some(surface) = Self::surface(&self.surfaces, provider_ref) else {
-            return Err(self.refuse(provider_ref, service.id.to_owned(), "provider-undeclared"));
+            return Err(self.refuse(provider_ref, service.id.to_owned(), "provider-undeclared").await);
         };
         if !surface.services.contains(&service.id) {
-            return Err(self.refuse(provider_ref, service.id.to_owned(), "service-undeclared"));
+            return Err(self.refuse(provider_ref, service.id.to_owned(), "service-undeclared").await);
         }
-        let mut ledger = self
-            .ledger
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ledger = self.ledger.lock().await;
         let duplicate = ledger
             .services
             .entry(provider_ref)
@@ -747,7 +757,7 @@ mod tests {
             .await
             .expect("network claims");
         assert_eq!(port.claimed_roots().len(), 2);
-        port.release("volume");
+        port.release("volume").await;
         assert_eq!(
             port.claimed_roots(),
             vec![ClaimedRoot {

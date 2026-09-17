@@ -10,7 +10,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -482,7 +482,10 @@ fn published_plane_view(
     planes: &PublishedPlaneTable,
     zone: &ZoneId,
 ) -> Option<Arc<dyn ControllerPlaneView>> {
-    let table = planes.lock().ok().and_then(|slot| slot.clone())?;
+    // Synchronous closure surface: non-blocking `try_lock` per plan U4. A
+    // collision treats the plane as unpublished (fail-closed), never a
+    // stall.
+    let table = planes.try_lock().ok().and_then(|slot| slot.clone())?;
     Some(Arc::new(PublishedPlaneControllerView::new(
         table,
         zone.clone(),
@@ -1061,20 +1064,20 @@ struct ControllerSessionCoordinator {
     /// [`ZoneResourceRuntime::attach_v3_planes`] once the composition
     /// publishes the plane; a read with no published plane is an error, never
     /// an absent row (U14: there is no durable store to fall back to).
-    plane_view: Arc<Mutex<Option<Arc<dyn ControllerPlaneView>>>>,
+    plane_view: Arc<tokio::sync::Mutex<Option<Arc<dyn ControllerPlaneView>>>>,
     /// The manager-backed Resource API service a live controller session
     /// serves: the runtime's slot, filled when the Zone's plane activates.
     api: Arc<
-        Mutex<Option<Arc<ResourceService<ZoneApiBackend>>>>,
+        tokio::sync::Mutex<Option<Arc<ResourceService<ZoneApiBackend>>>>,
     >,
     authorizer: Arc<NativeAuthorizer>,
-    authorization_state: Arc<Mutex<Option<AuthorizationState>>>,
+    authorization_state: Arc<tokio::sync::Mutex<Option<AuthorizationState>>>,
     policy_projection: Arc<PolicyProjection>,
-    registrar: Arc<Mutex<Option<ZoneRegistrar>>>,
+    registrar: Arc<tokio::sync::Mutex<Option<ZoneRegistrar>>>,
     assignments: AssignmentRegistry,
-    controller_sessions: Arc<Mutex<BTreeMap<ResourceRef, ControllerSession>>>,
+    controller_sessions: Arc<tokio::sync::Mutex<BTreeMap<ResourceRef, ControllerSession>>>,
     pending_controller_session_clears:
-        Arc<Mutex<BTreeMap<ResourceRef, crate::process_provider_runtime::ControllerBootstrapContext>>>,
+        Arc<tokio::sync::Mutex<BTreeMap<ResourceRef, crate::process_provider_runtime::ControllerBootstrapContext>>>,
     credential_sessions: CredentialSessionRegistry,
     controller_session_lock: Arc<tokio::sync::Mutex<()>>,
 }
@@ -1083,17 +1086,17 @@ type CloudHypervisorResourceClient = ResourceApiClient<ZoneApiBackend, Unavailab
 
 /// Arc-wrapped slot holding the process-status client once the Zone runtime
 /// has been published to the manager plane.
-type ProcessStatusClientSlot = Arc<Mutex<Option<Arc<CloudHypervisorResourceClient>>>>;
+type ProcessStatusClientSlot = Arc<tokio::sync::Mutex<Option<Arc<CloudHypervisorResourceClient>>>>;
 
 /// The published per-zone v3 plane table (F1 wiring): the manager-backed API
 /// service resolves its manager client and watch hub from here. The inner
 /// lock is the composition's published plane table; the slot is shared with
 /// the reader closures built before publication.
 pub(crate) type PublishedPlaneTable = Arc<
-    Mutex<
+    tokio::sync::Mutex<
         Option<
             Arc<
-                parking_lot::Mutex<
+                tokio::sync::Mutex<
                     std::collections::HashMap<
                         String,
                         Arc<crate::resource_plane_v3::ResourcePlaneV3>,
@@ -1117,16 +1120,16 @@ struct PolicyProjection {
     /// The Zone bus, enrolled when the Zone activates over its published
     /// manager plane (U14: the bus is built with the system-core session,
     /// which needs the manager-backed Resource API service).
-    bus: Arc<Mutex<Option<Arc<ZoneBus>>>>,
-    authorization_state: Arc<Mutex<Option<AuthorizationState>>>,
-    policy_refresh: Arc<Mutex<()>>,
-    policy_loaded: Arc<Mutex<bool>>,
-    installed_controller_subjects: Arc<Mutex<BTreeSet<BoundSubject>>>,
+    bus: Arc<tokio::sync::Mutex<Option<Arc<ZoneBus>>>>,
+    authorization_state: Arc<tokio::sync::Mutex<Option<AuthorizationState>>>,
+    policy_refresh: Arc<tokio::sync::Mutex<()>>,
+    policy_loaded: Arc<tokio::sync::Mutex<bool>>,
+    installed_controller_subjects: Arc<tokio::sync::Mutex<BTreeSet<BoundSubject>>>,
     /// The digest of the committed policy rows the installed projection was
     /// compiled from (U14). The derived revision is not a change signal on
     /// its own, so the refresh compares this digest to decide whether the
     /// installed projection may be kept as is.
-    installed_policy_inputs: Arc<Mutex<Option<[u8; 32]>>>,
+    installed_policy_inputs: Arc<tokio::sync::Mutex<Option<[u8; 32]>>>,
 }
 
 impl PolicyProjection {
@@ -1135,19 +1138,21 @@ impl PolicyProjection {
     /// point; callers that need to pair the authorizer with state must use
     /// this snapshot instead of reading the shadow state independently.
     fn installed_state(&self) -> Result<AuthorizationState, ResourceRuntimeError> {
+        // Synchronous surface (`tokio::sync` fields): non-blocking `try_lock`
+        // per plan U4; a collision fails closed as PolicyUnavailable.
         let _install = self
             .policy_refresh
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::PolicyUnavailable)?;
         let loaded = *self
             .policy_loaded
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::PolicyUnavailable)?;
         if !loaded {
             return Err(ResourceRuntimeError::PolicyUnavailable);
         }
         self.authorization_state
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::PolicyUnavailable)?
             .clone()
             .ok_or(ResourceRuntimeError::PolicyUnavailable)
@@ -1156,8 +1161,10 @@ impl PolicyProjection {
     /// The digest of the policy rows the installed projection was compiled
     /// from; `None` while no projection is installed.
     fn installed_policy_inputs(&self) -> Option<[u8; 32]> {
+        // Non-blocking `try_lock` (synchronous surface, plan U4); a
+        // collision reports no inputs (fail-closed).
         self.installed_policy_inputs
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|inputs| *inputs)
     }
@@ -1188,12 +1195,14 @@ impl PolicyProjection {
     fn installed_controller_subjects(
         &self,
     ) -> Result<BTreeSet<BoundSubject>, ResourceRuntimeError> {
+        // Non-blocking `try_lock` (synchronous surface, plan U4); a
+        // collision fails closed as PolicyUnavailable.
         let _install = self
             .policy_refresh
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::PolicyUnavailable)?;
         self.installed_controller_subjects
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::PolicyUnavailable)
             .map(|subjects| subjects.clone())
     }
@@ -1205,18 +1214,20 @@ impl PolicyProjection {
         controller_subjects: BTreeSet<BoundSubject>,
         policy_inputs: [u8; 32],
     ) -> Result<(), ResourceRuntimeError> {
-        let _install = self
-            .policy_refresh
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
         // The policy refresh mutex linearizes the complete projection:
         // authorizer/ZoneBus replacement and the shadow state are published
         // under one guard. Validation failures happen before mutation and
         // therefore leave the last-known-good projection installed.
+        // Non-blocking `try_lock` (synchronous surface, plan U4): a
+        // collision refuses the install closed rather than stalling.
+        let _install = self
+            .policy_refresh
+            .try_lock()
+            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?;
         let manager_policy = policy.clone();
         let bus = self
             .bus
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)?
             .clone();
         let install_result = if let Some(bus) = &bus {
@@ -1234,7 +1245,7 @@ impl PolicyProjection {
                 incoming_revision = state.zone_policy_revision.get(),
                 installed_revision = ?self
                     .authorization_state
-                    .lock()
+                    .try_lock()
                     .ok()
                     .and_then(|slot| slot.as_ref().map(|state| state.zone_policy_revision.get())),
                 error = ?error,
@@ -1255,25 +1266,25 @@ impl PolicyProjection {
             );
             manager.mark_policy_unavailable();
         }
-        if let Ok(mut installed) = self.authorization_state.lock() {
+        if let Ok(mut installed) = self.authorization_state.try_lock() {
             *installed = Some(state);
         } else {
             self.mark_unavailable();
             return Err(ResourceRuntimeError::AuthorizationUnavailable);
         }
-        if let Ok(mut installed) = self.installed_policy_inputs.lock() {
+        if let Ok(mut installed) = self.installed_policy_inputs.try_lock() {
             *installed = Some(policy_inputs);
         } else {
             self.mark_unavailable();
             return Err(ResourceRuntimeError::AuthorizationUnavailable);
         }
-        if let Ok(mut installed) = self.installed_controller_subjects.lock() {
+        if let Ok(mut installed) = self.installed_controller_subjects.try_lock() {
             *installed = controller_subjects;
         } else {
             self.mark_unavailable();
             return Err(ResourceRuntimeError::AuthorizationUnavailable);
         }
-        if let Ok(mut loaded) = self.policy_loaded.lock() {
+        if let Ok(mut loaded) = self.policy_loaded.try_lock() {
             *loaded = true;
         } else {
             self.mark_unavailable();
@@ -1283,7 +1294,9 @@ impl PolicyProjection {
     }
 
     fn mark_unavailable(&self) {
-        let bus = self.bus.lock().ok().and_then(|bus| bus.clone());
+        // Non-blocking `try_lock` (synchronous surface, plan U4): every
+        // shadow slot flips independently, fail-closed on a collision.
+        let bus = self.bus.try_lock().ok().and_then(|bus| bus.clone());
         if let Some(bus) = &bus {
             bus.mark_policy_unavailable();
         } else {
@@ -1292,16 +1305,16 @@ impl PolicyProjection {
         if let Some(manager) = &self.manager_authorizer {
             manager.mark_policy_unavailable();
         }
-        if let Ok(mut installed) = self.authorization_state.lock() {
+        if let Ok(mut installed) = self.authorization_state.try_lock() {
             *installed = None;
         }
-        if let Ok(mut inputs) = self.installed_policy_inputs.lock() {
+        if let Ok(mut inputs) = self.installed_policy_inputs.try_lock() {
             *inputs = None;
         }
-        if let Ok(mut subjects) = self.installed_controller_subjects.lock() {
+        if let Ok(mut subjects) = self.installed_controller_subjects.try_lock() {
             subjects.clear();
         }
-        if let Ok(mut loaded) = self.policy_loaded.lock() {
+        if let Ok(mut loaded) = self.policy_loaded.try_lock() {
             *loaded = false;
         }
     }
@@ -3006,7 +3019,7 @@ pub struct ZoneResourceRuntime {
     zone: ZoneId,
     authority_identity: Option<ZoneAuthorityIdentity>,
     authorizer: Arc<NativeAuthorizer>,
-    authorization_state: Arc<Mutex<Option<AuthorizationState>>>,
+    authorization_state: Arc<tokio::sync::Mutex<Option<AuthorizationState>>>,
     policy_projection: Arc<PolicyProjection>,
     bundle_resource_types: Vec<ResourceTypeName>,
     /// The published per-zone v3 planes (F1 wiring): the manager-backed API
@@ -3018,20 +3031,20 @@ pub struct ZoneResourceRuntime {
     /// after the Zone's v3 plane has been published. Shared with the
     /// controller-session coordinator, whose live sessions serve it.
     v3_api: Arc<
-        Mutex<Option<Arc<ResourceService<d2b_resource_api::manager_backend::ManagerBackend>>>>,
+        tokio::sync::Mutex<Option<Arc<ResourceService<d2b_resource_api::manager_backend::ManagerBackend>>>>,
     >,
     manager_authorizer: Arc<NativeAuthorizer>,
     policy_subject_fingerprints:
-        Mutex<BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>>,
+        tokio::sync::Mutex<BTreeMap<(ResourceRef, ResourceRef), PolicySubjectFingerprint>>,
     bus: Option<Arc<ZoneBus>>,
-    registrar: Arc<Mutex<Option<ZoneRegistrar>>>,
-    ingress: Mutex<Option<BusIngress>>,
-    service_task: Mutex<Option<tokio::task::JoinHandle<Result<(), SessionServerError>>>>,
+    registrar: Arc<tokio::sync::Mutex<Option<ZoneRegistrar>>>,
+    ingress: tokio::sync::Mutex<Option<BusIngress>>,
+    service_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<(), SessionServerError>>>>,
     process_status_client: ProcessStatusClientSlot,
-    core_controller_subject: Mutex<Option<AuthenticatedSubjectContext>>,
+    core_controller_subject: tokio::sync::Mutex<Option<AuthenticatedSubjectContext>>,
     system_core_rebind_pending: AtomicBool,
     credential_sessions: CredentialSessionRegistry,
-    core: Mutex<CoreProcess>,
+    core: tokio::sync::Mutex<CoreProcess>,
     readiness: ZoneRuntimeReadiness,
     /// The fixed bootstrap policy snapshot (U14). The Zone opens on it and the
     /// manager-served committed policy replaces it at activation; it remains
@@ -3048,20 +3061,20 @@ pub struct ZoneResourceRuntime {
     /// probe/adopt path, not a replayed checkpoint.
     authority_ledger: Arc<ZoneAuthorityLedger>,
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
-    zone_status: Mutex<ZoneStatusResource>,
-    audio_runtime: Arc<Mutex<Option<AudioResourceRuntime>>>,
+    zone_status: tokio::sync::Mutex<ZoneStatusResource>,
+    audio_runtime: Arc<tokio::sync::Mutex<Option<AudioResourceRuntime>>>,
     guest_setup_descriptors: BTreeMap<String, Vec<u8>>,
     guest_setup_descriptor_catalog_keys: BTreeMap<String, String>,
     closed_guest_sessions: Arc<tokio::sync::Mutex<BTreeSet<crate::GuestComponentSessionKey>>>,
     controller_deployment: ProviderDeployment,
     controller_session_providers:
-        Mutex<Option<Arc<crate::process_provider_runtime::ProductionProcessProviders>>>,
-    controller_sessions: Arc<Mutex<BTreeMap<ResourceRef, ControllerSession>>>,
-    controller_session_reconcile_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+        tokio::sync::Mutex<Option<Arc<crate::process_provider_runtime::ProductionProcessProviders>>>,
+    controller_sessions: Arc<tokio::sync::Mutex<BTreeMap<ResourceRef, ControllerSession>>>,
+    controller_session_reconcile_task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     controller_session_reconcile_wake: Arc<tokio::sync::Notify>,
     controller_session_reconcile_shutdown: Arc<AtomicBool>,
     controller_session_coordinator:
-        Arc<Mutex<Option<Arc<ControllerSessionCoordinator>>>>,
+        Arc<tokio::sync::Mutex<Option<Arc<ControllerSessionCoordinator>>>>,
     controller_session_lock: Arc<tokio::sync::Mutex<()>>,
     controller_reconcile_lock: Arc<tokio::sync::Mutex<()>>,
     cloud_hypervisor_reconcile_lock: Arc<tokio::sync::Mutex<()>>,
@@ -3172,16 +3185,16 @@ impl ZoneResourceRuntime {
                 tracing::error!(zone = %zone.as_str(), error = ?error, "resource runtime policy installation failed");
                 ResourceRuntimeError::AuthorizationUnavailable
             })?;
-        let authorization_state = Arc::new(Mutex::new(Some(state)));
+        let authorization_state = Arc::new(tokio::sync::Mutex::new(Some(state)));
         let policy_projection = Arc::new(PolicyProjection {
             authorizer: Arc::clone(&authorizer),
             manager_authorizer: Some(Arc::clone(&manager_authorizer)),
-            bus: Arc::new(Mutex::new(None)),
+            bus: Arc::new(tokio::sync::Mutex::new(None)),
             authorization_state: Arc::clone(&authorization_state),
-            policy_refresh: Arc::new(Mutex::new(())),
-            policy_loaded: Arc::new(Mutex::new(true)),
-            installed_controller_subjects: Arc::new(Mutex::new(BTreeSet::new())),
-            installed_policy_inputs: Arc::new(Mutex::new(None)),
+            policy_refresh: Arc::new(tokio::sync::Mutex::new(())),
+            policy_loaded: Arc::new(tokio::sync::Mutex::new(true)),
+            installed_controller_subjects: Arc::new(tokio::sync::Mutex::new(BTreeSet::new())),
+            installed_policy_inputs: Arc::new(tokio::sync::Mutex::new(None)),
         });
         let core = CoreProcess::new();
         let core_stage = core.stage();
@@ -3205,19 +3218,19 @@ impl ZoneResourceRuntime {
             authorization_state,
             policy_projection,
             bundle_resource_types,
-            v3_planes: Arc::new(Mutex::new(None)),
-            v3_api: Arc::new(Mutex::new(None)),
+            v3_planes: Arc::new(tokio::sync::Mutex::new(None)),
+            v3_api: Arc::new(tokio::sync::Mutex::new(None)),
             manager_authorizer,
-            policy_subject_fingerprints: Mutex::new(BTreeMap::new()),
+            policy_subject_fingerprints: tokio::sync::Mutex::new(BTreeMap::new()),
             bus: None,
-            registrar: Arc::new(Mutex::new(None)),
-            ingress: Mutex::new(None),
-            service_task: Mutex::new(None),
-            process_status_client: Arc::new(Mutex::new(None)),
-            core_controller_subject: Mutex::new(None),
+            registrar: Arc::new(tokio::sync::Mutex::new(None)),
+            ingress: tokio::sync::Mutex::new(None),
+            service_task: tokio::sync::Mutex::new(None),
+            process_status_client: Arc::new(tokio::sync::Mutex::new(None)),
+            core_controller_subject: tokio::sync::Mutex::new(None),
             system_core_rebind_pending: AtomicBool::new(false),
             credential_sessions: CredentialSessionRegistry::default(),
-            core: Mutex::new(core),
+            core: tokio::sync::Mutex::new(core),
             bootstrap_policy_snapshot: bootstrap_snapshot,
             readiness: ZoneRuntimeReadiness {
                 resource_api_ready: false,
@@ -3233,8 +3246,8 @@ impl ZoneResourceRuntime {
             authority_index,
             authority_ledger,
             authority_recovery,
-            zone_status: Mutex::new(zone_status),
-            audio_runtime: Arc::new(Mutex::new(None)),
+            zone_status: tokio::sync::Mutex::new(zone_status),
+            audio_runtime: Arc::new(tokio::sync::Mutex::new(None)),
             guest_setup_descriptors: BTreeMap::new(),
             guest_setup_descriptor_catalog_keys: BTreeMap::new(),
             closed_guest_sessions: Arc::new(tokio::sync::Mutex::new(BTreeSet::new())),
@@ -3243,12 +3256,12 @@ impl ZoneResourceRuntime {
                 d2bd_runtime::target_runtime::AdmissionLimits::host_default(),
             )
             .map_err(|_| ResourceRuntimeError::CoreStartupFailed)?,
-            controller_session_providers: Mutex::new(None),
-            controller_sessions: Arc::new(Mutex::new(BTreeMap::new())),
-            controller_session_reconcile_task: Arc::new(Mutex::new(None)),
+            controller_session_providers: tokio::sync::Mutex::new(None),
+            controller_sessions: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            controller_session_reconcile_task: Arc::new(tokio::sync::Mutex::new(None)),
             controller_session_reconcile_wake: Arc::new(tokio::sync::Notify::new()),
             controller_session_reconcile_shutdown: Arc::new(AtomicBool::new(false)),
-            controller_session_coordinator: Arc::new(Mutex::new(None)),
+            controller_session_coordinator: Arc::new(tokio::sync::Mutex::new(None)),
             controller_session_lock: Arc::new(tokio::sync::Mutex::new(())),
             controller_reconcile_lock: Arc::new(tokio::sync::Mutex::new(())),
             cloud_hypervisor_reconcile_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -3260,7 +3273,7 @@ impl ZoneResourceRuntime {
         *runtime
             .controller_session_coordinator
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(coordinator);
+            .await = Some(coordinator);
         tracing::info!(
             zone = %runtime.zone.as_str(),
             desired_resource_count = desired_bundle.resources.len(),
@@ -3444,33 +3457,29 @@ impl ZoneResourceRuntime {
         *self
             .process_status_client
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
-            Some(Arc::clone(&status_client));
+            .await = Some(Arc::clone(&status_client));
         *self
             .core_controller_subject
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
-            Some(subject_context);
+            .await = Some(subject_context);
         *self
             .policy_projection
             .bus
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)? =
-            Some(Arc::clone(&zone_bus));
+            .await = Some(Arc::clone(&zone_bus));
         self.bus = Some(zone_bus);
         *self
             .registrar
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(zone_registrar);
+            .await = Some(zone_registrar);
         *self
             .ingress
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(zone_ingress);
+            .await = Some(zone_ingress);
         *self
             .service_task
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
-            Some(zone_service_task);
+            .await = Some(zone_service_task);
         self.policy_installed = true;
         self.controller_endpoint_registered = true;
         self.watch_admitted = true;
@@ -3555,7 +3564,7 @@ impl ZoneResourceRuntime {
             let mut core = self
                 .core
                 .lock()
-                .map_err(|_| ResourceRuntimeError::CoreStartupFailed)?;
+                .await;
             core.start_production(
                 CoreRuntimeReadiness {
                     store_ready: true,
@@ -3584,7 +3593,7 @@ impl ZoneResourceRuntime {
                 policy.policy_revision,
             )?;
         };
-        self.zone_status = Mutex::new(
+        self.zone_status = tokio::sync::Mutex::new(
             SystemCoreStatusEmitter::new()
                 .emit(
                     ZoneStatusInput::new(system_core.core_phase, Vec::new())
@@ -3606,7 +3615,7 @@ impl ZoneResourceRuntime {
             let mut core = self
                 .core
                 .lock()
-                .map_err(|_| ResourceRuntimeError::CoreStartupFailed)?;
+                .await;
             core.publish_readiness().map_err(map_startup_error)?
         };
         self.readiness = ZoneRuntimeReadiness {
@@ -3671,9 +3680,11 @@ impl ZoneResourceRuntime {
         request: AssignmentRequest<'_>,
     ) -> Result<ResourceClientLease, AssignmentError> {
         let binding = request.session_binding()?;
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision fails the admission closed as SessionRevoked.
         let active = self
             .controller_sessions
-            .lock()
+            .try_lock()
             .map(|sessions| {
                 sessions
                     .get(binding.session_owner())
@@ -3704,7 +3715,10 @@ impl ZoneResourceRuntime {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .revoke_session_for(binding);
-        let revocation_batch = match self.controller_sessions.lock() {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision skips the revocation batch (fail-closed), never a
+        // stall.
+        let revocation_batch = match self.controller_sessions.try_lock() {
             Ok(sessions) => sessions
                 .get(binding.session_owner())
                 .filter(|session| &session.binding == binding)
@@ -3725,7 +3739,7 @@ impl ZoneResourceRuntime {
             Err(_) => {
                 tracing::warn!(
                     provider = %binding.provider_ref().to_canonical_string(),
-                    "controller session registry lock poisoned; assignment revocation batch skipped",
+                    "controller session registry lock contended; assignment revocation batch skipped",
                 );
                 None
             }
@@ -3774,7 +3788,9 @@ impl ZoneResourceRuntime {
         &self,
         identity: &AssignmentIdentity,
     ) -> Option<(SessionDriverHandle, Vec<u8>)> {
-        let sessions = self.controller_sessions.lock().ok()?;
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision reports no revocation (fail-closed).
+        let sessions = self.controller_sessions.try_lock().ok()?;
         sessions.values().find_map(|session| {
             let lease = session
                 .assignments
@@ -3836,8 +3852,10 @@ impl ZoneResourceRuntime {
     /// against: the installed projection's, or the bootstrap snapshot's while
     /// no manager-served projection is installed.
     pub fn current_revision(&self) -> ZoneRevision {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision falls back to the bootstrap revision (fail-closed).
         self.authorization_state
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|state| state.as_ref().map(|state| state.zone_policy_revision))
             .unwrap_or(ZoneRevision::new(
@@ -3911,7 +3929,7 @@ impl ZoneResourceRuntime {
         let previous = self
             .policy_subject_fingerprints
             .lock()
-            .map_err(|_| ResourceRuntimeError::IdentityUnbound)?
+            .await
             .clone();
         let fingerprints = refreshed_policy_subject_fingerprints(&resources, &previous)?;
         let (policy, state) =
@@ -3929,7 +3947,7 @@ impl ZoneResourceRuntime {
             || self
                 .core_controller_subject
                 .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+                .await
                 .is_some();
         if rebind_core {
             self.system_core_rebind_pending.store(true, Ordering::Release);
@@ -3945,7 +3963,7 @@ impl ZoneResourceRuntime {
         *self
             .policy_subject_fingerprints
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthorizationUnavailable)? = fingerprints;
+            .await = fingerprints;
         if rebind_core {
             self.system_core_rebind_pending
                 .store(false, Ordering::Release);
@@ -3958,7 +3976,7 @@ impl ZoneResourceRuntime {
         let providers = self
             .controller_session_providers
             .lock()
-            .map_err(|_| ResourceRuntimeError::PolicyUnavailable)?
+            .await
             .clone();
         let subjects = self
             .current_controller_policy_subjects_from(providers.as_deref())
@@ -4010,21 +4028,12 @@ impl ZoneResourceRuntime {
             || self
                 .core_controller_subject
                 .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+                .await
                 .is_some();
         let session_state = (
-            self.registrar
-                .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-                .is_some(),
-            self.ingress
-                .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-                .is_some(),
-            self.service_task
-                .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-                .is_some(),
+            self.registrar.lock().await.is_some(),
+            self.ingress.lock().await.is_some(),
+            self.service_task.lock().await.is_some(),
         );
         if session_state == (false, false, false) && !existing_session {
             return Ok(());
@@ -4035,23 +4044,15 @@ impl ZoneResourceRuntime {
         *self
             .process_status_client
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = None;
+            .await = None;
         let mut registrar = self
             .registrar
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .await
             .take()
             .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
-        let ingress = self
-            .ingress
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .take();
-        let task = self
-            .service_task
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .take();
+        let ingress = self.ingress.lock().await.take();
+        let task = self.service_task.lock().await.take();
         if let Some(task) = task {
             task.abort();
             let _ = task.await;
@@ -4066,8 +4067,7 @@ impl ZoneResourceRuntime {
             *self
                 .registrar
                 .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
-                Some(registrar);
+                .await = Some(registrar);
             return Err(ResourceRuntimeError::AuthenticationUnavailable);
         }
         let (new_ingress, new_task, status_client, subject_context) =
@@ -4081,34 +4081,21 @@ impl ZoneResourceRuntime {
             {
                 Ok(session) => session,
                 Err(error) => {
-                    *self
-                        .registrar
-                        .lock()
-                        .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
-                        Some(registrar);
+                    *self.registrar.lock().await = Some(registrar);
                     return Err(error);
                 }
             };
-        *self
-            .registrar
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(registrar);
-        *self
-            .ingress
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(new_ingress);
-        *self
-            .service_task
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(new_task);
+        *self.registrar.lock().await = Some(registrar);
+        *self.ingress.lock().await = Some(new_ingress);
+        *self.service_task.lock().await = Some(new_task);
         *self
             .process_status_client
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(status_client);
+            .await = Some(status_client);
         *self
             .core_controller_subject
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? = Some(subject_context);
+            .await = Some(subject_context);
         Ok(())
     }
 
@@ -4331,12 +4318,14 @@ impl ZoneResourceRuntime {
     pub(crate) fn attach_v3_planes(
         &self,
         planes: Arc<
-            parking_lot::Mutex<
+            tokio::sync::Mutex<
                 std::collections::HashMap<String, Arc<crate::resource_plane_v3::ResourcePlaneV3>>,
             >,
         >,
     ) {
-        if let Ok(mut slot) = self.v3_planes.lock() {
+        // Synchronous one-time attach: non-blocking `try_lock` per plan U4;
+        // the composition publishes the table before any reader resolves it.
+        if let Ok(mut slot) = self.v3_planes.try_lock() {
             *slot = Some(Arc::clone(&planes));
         }
         // The manager is the only authority: the controller-session path (and
@@ -4357,8 +4346,10 @@ impl ZoneResourceRuntime {
     pub(crate) fn controller_session_generation(
         &self,
     ) -> Option<d2b_contracts_resource::v3::identity::ReconnectGeneration> {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision reports no enrolled generation (fail-closed).
         self.core_controller_subject
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|subject| {
                 subject
@@ -4381,14 +4372,17 @@ impl ZoneResourceRuntime {
     pub(crate) fn v3_plane(
         &self,
     ) -> Result<Arc<crate::resource_plane_v3::ResourcePlaneV3>, ResourceRuntimeError> {
+        // Synchronous surface (`tokio::sync` fields): non-blocking
+        // `try_lock` per plan U4; a collision fails closed.
         let planes = self
             .v3_planes
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?
             .clone()
             .ok_or(ResourceRuntimeError::CapabilityUnavailable)?;
         planes
-            .lock()
+            .try_lock()
+            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?
             .get(self.zone.as_str())
             .cloned()
             .ok_or(ResourceRuntimeError::CapabilityUnavailable)
@@ -4471,9 +4465,11 @@ impl ZoneResourceRuntime {
         &self,
     ) -> Result<Arc<ResourceService<d2b_resource_api::manager_backend::ManagerBackend>>, ResourceRuntimeError>
     {
+        // Synchronous surface (`tokio::sync` fields): non-blocking
+        // `try_lock` per plan U4; a collision fails closed.
         if let Some(service) = self
             .v3_api
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?
             .clone()
         {
@@ -4481,12 +4477,13 @@ impl ZoneResourceRuntime {
         }
         let planes = self
             .v3_planes
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?
             .clone()
             .ok_or(ResourceRuntimeError::CapabilityUnavailable)?;
         let plane = planes
-            .lock()
+            .try_lock()
+            .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?
             .get(self.zone.as_str())
             .cloned()
             .ok_or(ResourceRuntimeError::CapabilityUnavailable)?;
@@ -4513,7 +4510,7 @@ impl ZoneResourceRuntime {
         );
         let mut slot = self
             .v3_api
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?;
         *slot = Some(Arc::clone(&service));
         Ok(service)
@@ -4538,8 +4535,10 @@ impl ZoneResourceRuntime {
         if self.system_core_rebind_pending.load(Ordering::Acquire) {
             return None;
         }
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision reports no client (fail-closed).
         self.process_status_client
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|client| client.clone())
     }
@@ -4550,8 +4549,10 @@ impl ZoneResourceRuntime {
         Arc<ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>>,
         ResourceRuntimeError,
     > {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision fails closed as AuthenticationUnavailable.
         self.process_status_client
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
             .clone()
             .ok_or(ResourceRuntimeError::AuthenticationUnavailable)
@@ -4799,16 +4800,20 @@ impl ZoneResourceRuntime {
 
     /// Return the current core-controller stage.
     pub fn core_stage(&self) -> Result<StartupStage, ResourceRuntimeError> {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision fails closed.
         self.core
-            .lock()
+            .try_lock()
             .map(|core| core.stage())
             .map_err(|_| ResourceRuntimeError::CoreStartupFailed)
     }
 
     /// Borrow the production Zone status projection.
     pub fn zone_status(&self) -> Result<ZoneStatusResource, ResourceRuntimeError> {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision fails closed.
         self.zone_status
-            .lock()
+            .try_lock()
             .map(|status| status.clone())
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)
     }
@@ -4897,8 +4902,10 @@ impl ZoneResourceRuntime {
         let status = SystemCoreStatusEmitter::new()
             .emit(input)
             .map_err(|_| ResourceRuntimeError::HandlerNotReady)?;
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision refuses the publish closed.
         self.zone_status
-            .lock()
+            .try_lock()
             .map(|mut current| {
                 *current = status;
             })
@@ -5622,7 +5629,9 @@ impl ZoneResourceRuntime {
     fn cloud_hypervisor_resource_client(
         &self,
     ) -> Result<Arc<CloudHypervisorResourceClient>, ResourceRuntimeError> {
-        if let Ok(sessions) = self.controller_sessions.lock()
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision falls back to the status client (fail-closed).
+        if let Ok(sessions) = self.controller_sessions.try_lock()
             && let Some(session) = sessions.values().find(|session| {
                 d2b_provider_guest_cloud_hypervisor::is_provider_ref(
                     session.context.provider_owner_ref(),
@@ -6174,7 +6183,7 @@ impl ZoneResourceRuntime {
         Ok(ControllerSessionCoordinator {
             zone: self.zone.clone(),
             bundle_resource_types: self.bundle_resource_types.clone(),
-            plane_view: Arc::new(Mutex::new(None)),
+            plane_view: Arc::new(tokio::sync::Mutex::new(None)),
             api: Arc::clone(&self.v3_api),
             authorizer: Arc::clone(&self.authorizer),
             authorization_state: self.authorization_state.clone(),
@@ -6182,15 +6191,18 @@ impl ZoneResourceRuntime {
             registrar: Arc::clone(&self.registrar),
             assignments: Arc::clone(&self.assignments),
             controller_sessions: Arc::clone(&self.controller_sessions),
-            pending_controller_session_clears: Arc::new(Mutex::new(BTreeMap::new())),
+            pending_controller_session_clears: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             credential_sessions: self.credential_sessions.clone(),
             controller_session_lock: Arc::clone(&self.controller_session_lock),
         })
     }
 
     fn controller_session_coordinator(&self) -> Arc<ControllerSessionCoordinator> {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; an
+        // attach-time call is the only writer, so a collision means
+        // missequencing, and the panic stays.
         self.controller_session_coordinator
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|coordinator| coordinator.clone())
             .expect("controller session coordinator initialized")
@@ -6245,7 +6257,7 @@ fn row_status_failure_is_retryable(resource: &Value) -> bool {
 }
 
 fn schedule_controller_session_reconcile(
-    task_slot: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    task_slot: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     wake: Arc<tokio::sync::Notify>,
     shutdown: Arc<AtomicBool>,
     coordinator: Arc<ControllerSessionCoordinator>,
@@ -6254,8 +6266,10 @@ fn schedule_controller_session_reconcile(
     if shutdown.load(Ordering::Acquire) {
         return Ok(());
     }
+    // Synchronous surface: non-blocking `try_lock` per plan U4; a
+    // collision fails the schedule closed.
     let mut slot = task_slot
-        .lock()
+        .try_lock()
         .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
     if shutdown.load(Ordering::Acquire) {
         return Ok(());
@@ -6304,8 +6318,10 @@ impl ControllerSessionCoordinator {
     /// The manager-backed Resource API service a live controller session
     /// serves (the runtime's slot, filled when the Zone's plane activates).
     fn api(&self) -> Result<Arc<ResourceService<ZoneApiBackend>>, ResourceRuntimeError> {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision fails closed as ResourceApiBindFailed.
         self.api
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::ResourceApiBindFailed)?
             .clone()
             .ok_or(ResourceRuntimeError::ResourceApiBindFailed)
@@ -6344,14 +6360,17 @@ impl ControllerSessionCoordinator {
 
     /// Adopt the zone plane's manager view seam (G5).
     fn attach_plane_view(&self, plane: Arc<dyn ControllerPlaneView>) {
-        if let Ok(mut slot) = self.plane_view.lock() {
+        // Synchronous one-time attach: non-blocking `try_lock` per plan U4.
+        if let Ok(mut slot) = self.plane_view.try_lock() {
             *slot = Some(plane);
         }
     }
 
     /// The adopted plane-view seam, when the composition published one.
     fn plane_handle(&self) -> Option<Arc<dyn ControllerPlaneView>> {
-        self.plane_view.lock().ok().and_then(|slot| slot.clone())
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision reports no view (fail-closed).
+        self.plane_view.try_lock().ok().and_then(|slot| slot.clone())
     }
 
     /// The committed policy inputs for this Zone, read from the manager (U14:
@@ -6456,8 +6475,10 @@ impl ControllerSessionCoordinator {
         &self,
         context: &crate::process_provider_runtime::ControllerBootstrapContext,
     ) -> Result<(), ResourceRuntimeError> {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision refuses the queue (fail-closed).
         self.pending_controller_session_clears
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
             .insert(context.process_ref().clone(), context.clone());
         Ok(())
@@ -6468,9 +6489,11 @@ impl ControllerSessionCoordinator {
         process_ref: &ResourceRef,
         context: &crate::process_provider_runtime::ControllerBootstrapContext,
     ) -> Result<(), ResourceRuntimeError> {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision refuses the removal (fail-closed).
         let mut pending = self
             .pending_controller_session_clears
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
         if pending
             .get(process_ref)
@@ -6487,7 +6510,7 @@ impl ControllerSessionCoordinator {
         let pending = self
             .pending_controller_session_clears
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .await
             .iter()
             .map(|(process_ref, context)| (process_ref.clone(), context.clone()))
             .collect::<Vec<_>>();
@@ -6495,7 +6518,7 @@ impl ControllerSessionCoordinator {
             let session_state = self
                 .controller_sessions
                 .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+                .await
                 .get(&process_ref)
                 .map(|session| session.service_task.is_finished());
             match session_state {
@@ -6589,7 +6612,7 @@ impl ControllerSessionCoordinator {
         let stale_sessions = self
             .controller_sessions
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .await
             .iter()
             .filter(|(process_ref, session)| {
                 crate::process_provider_runtime::controller_session_needs_fence(
@@ -6609,7 +6632,7 @@ impl ControllerSessionCoordinator {
         let active_sessions = self
             .controller_sessions
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .await
             .keys()
             .cloned()
             .collect::<BTreeSet<_>>();
@@ -6706,7 +6729,7 @@ impl ControllerSessionCoordinator {
             let sessions = self
                 .controller_sessions
                 .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+                .await;
             sessions
                 .iter()
                 .map(|(process_ref, session)| (process_ref.clone(), session.context.clone()))
@@ -6755,7 +6778,7 @@ impl ControllerSessionCoordinator {
         let active_processes = self
             .controller_sessions
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .await
             .keys()
             .cloned()
             .collect::<BTreeSet<_>>();
@@ -6909,7 +6932,7 @@ impl ControllerSessionCoordinator {
             let existing = self
                 .controller_sessions
                 .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+                .await
                 .get(&process_ref)
                 .map(|session| {
                     (
@@ -6979,29 +7002,18 @@ impl ControllerSessionCoordinator {
             if !providers.controller_bootstrap_ready(&self.zone, &process_ref) {
                 continue;
             }
-            let mut registrar = match self.registrar.lock() {
-                Ok(mut registrar) => match registrar.take() {
-                    Some(registrar) => registrar,
-                    None => {
-                        tracing::debug!(
-                            process = %context.process_ref(),
-                            "controller session registrar unavailable; bootstrap deferred",
-                        );
-                        continue;
-                    }
-                },
-                Err(_) => {
-                    return Err(ResourceRuntimeError::AuthenticationUnavailable);
-                }
+            let Some(registrar) = self.registrar.lock().await.take() else {
+                tracing::debug!(
+                    process = %context.process_ref(),
+                    "controller session registrar unavailable; bootstrap deferred",
+                );
+                continue;
             };
+            let mut registrar = registrar;
             let Some(endpoint) =
                 providers.begin_controller_bootstrap_if_matches(&self.zone, &context)
             else {
-                *self
-                    .registrar
-                    .lock()
-                    .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
-                    Some(registrar);
+                *self.registrar.lock().await = Some(registrar);
                 tracing::debug!(
                     process = %context.process_ref(),
                     "controller bootstrap begin refused; endpoint re-armed for retry",
@@ -7026,46 +7038,10 @@ impl ControllerSessionCoordinator {
                 ok = setup.is_ok(),
                 "controller session establish timing",
             );
-            let mut registrar = Some(registrar);
-            let restored = match self.registrar.lock() {
-                Ok(mut slot) => {
-                    *slot = registrar.take();
-                    true
-                }
-                Err(_) => false,
-            };
-            let mut setup = Some(setup);
-            if !restored {
-                if let Some(Ok((
-                    ingress,
-                    driver,
-                    _resource_client,
-                    service_task,
-                    _session_generation,
-                    _route,
-                    backend_lease,
-                ))) = setup.take()
-                {
-                    if let Some(backend_lease) = backend_lease {
-                        backend_lease.cancel();
-                    }
-                    let _ = driver
-                        .close(
-                            d2b_contracts_zone_session::v3::component_session::CloseReason::RoleMismatch,
-                            d2b_contracts_zone_session::v3::component_session::Remediation::ReplaceGeneration,
-                        )
-                        .await;
-                    service_task.abort();
-                    let _ = service_task.await;
-                    drop(ingress);
-                }
-                // Re-arm instead of dropping: the controller retries its
-                // bootstrap send for as long as it lives, and one failed
-                // receive must not orphan it.
-                providers.rearm_controller_bootstrap(endpoint);
-                return Err(ResourceRuntimeError::AuthenticationUnavailable);
-            }
-            match setup.expect("controller setup result present") {
+            // The registrar slot restore is infallible (tokio lock, no
+            // poisoning), so the setup is consumed directly below.
+            let setup = setup;
+            match setup {
                 Ok((
                     ingress,
                     driver,
@@ -7153,24 +7129,16 @@ impl ControllerSessionCoordinator {
                         transport_closed: false,
                         ingress_revoked: false,
                     });
-                    let inserted = match self.controller_sessions.lock() {
-                        Ok(mut sessions) => {
-                            if sessions.contains_key(&process_ref) {
-                                false
-                            } else {
-                                sessions.insert(
-                                    process_ref.clone(),
-                                    session.take().expect("controller session present"),
-                                );
-                                true
-                            }
-                        }
-                        Err(_) => {
-                            tracing::debug!(
-                                process = %context.process_ref(),
-                                "controller session registry lock poisoned; admitted session torn down",
-                            );
+                    let inserted = {
+                        let mut sessions = self.controller_sessions.lock().await;
+                        if sessions.contains_key(&process_ref) {
                             false
+                        } else {
+                            sessions.insert(
+                                process_ref.clone(),
+                                session.take().expect("controller session present"),
+                            );
+                            true
                         }
                     };
                     if inserted {
@@ -7268,7 +7236,7 @@ impl ControllerSessionCoordinator {
         let sessions = self
             .controller_sessions
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .await
             .values()
             .map(|session| (session.context.clone(), session.binding.clone()))
             .collect::<Vec<_>>();
@@ -7416,11 +7384,7 @@ impl ControllerSessionCoordinator {
             }
         }
         let (retained, stale) = {
-            let sessions = self.controller_sessions.lock().map_err(|_| {
-                ControllerAssignmentRefreshError::Failed(
-                    ResourceRuntimeError::AuthenticationUnavailable,
-                )
-            })?;
+            let sessions = self.controller_sessions.lock().await;
             let Some(session) = sessions.get(binding.session_owner()).filter(|session| {
                 &session.binding == binding && !session.service_task.is_finished()
             }) else {
@@ -7545,11 +7509,7 @@ impl ControllerSessionCoordinator {
         binding: &ControllerSessionBinding,
     ) -> Result<SessionDriverHandle, ControllerAssignmentRefreshError> {
         let (driver, stream_open) = {
-            let sessions = self.controller_sessions.lock().map_err(|_| {
-                ControllerAssignmentRefreshError::Failed(
-                    ResourceRuntimeError::AuthenticationUnavailable,
-                )
-            })?;
+            let sessions = self.controller_sessions.lock().await;
             let Some(session) = sessions.get(binding.session_owner()).filter(|session| {
                 &session.binding == binding && !session.service_task.is_finished()
             }) else {
@@ -7577,11 +7537,7 @@ impl ControllerSessionCoordinator {
                     ResourceRuntimeError::AuthenticationUnavailable,
                 )
             })?;
-        let mut sessions = self.controller_sessions.lock().map_err(|_| {
-            ControllerAssignmentRefreshError::Failed(
-                ResourceRuntimeError::AuthenticationUnavailable,
-            )
-        })?;
+        let mut sessions = self.controller_sessions.lock().await;
         let Some(session) = sessions
             .get_mut(binding.session_owner())
             .filter(|session| &session.binding == binding && !session.service_task.is_finished())
@@ -7596,7 +7552,9 @@ impl ControllerSessionCoordinator {
         &self,
         binding: &ControllerSessionBinding,
     ) -> Result<(), ControllerAssignmentRefreshError> {
-        let mut sessions = self.controller_sessions.lock().map_err(|_| {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision fails the mark closed.
+        let mut sessions = self.controller_sessions.try_lock().map_err(|_| {
             ControllerAssignmentRefreshError::Failed(
                 ResourceRuntimeError::AuthenticationUnavailable,
             )
@@ -7614,8 +7572,10 @@ impl ControllerSessionCoordinator {
     }
 
     fn controller_session_is_live(&self, binding: &ControllerSessionBinding) -> bool {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision reports not live (fail-closed).
         self.controller_sessions
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|sessions| {
                 sessions.get(binding.session_owner()).map(|session| {
@@ -7635,7 +7595,9 @@ impl ControllerSessionCoordinator {
         context: &crate::process_provider_runtime::ControllerBootstrapContext,
         lease: ResourceClientLease,
     ) -> Result<(), ResourceClientLease> {
-        let mut sessions = match self.controller_sessions.lock() {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision refuses the record (the lease returns to the caller).
+        let mut sessions = match self.controller_sessions.try_lock() {
             Ok(sessions) => sessions,
             Err(_) => return Err(lease),
         };
@@ -7670,11 +7632,7 @@ impl ControllerSessionCoordinator {
             && let Ok(bytes) =
                 ControllerAssignmentGrant::encode_revocation(lease.provider_ref(), lease.identity())
             && let Ok(stream) = StreamId::new(CONTROLLER_ASSIGNMENT_STREAM_ID)
-            && let Some(driver) = self.controller_sessions.lock().ok().and_then(|sessions| {
-                sessions
-                    .get(lease.identity().session_owner())
-                    .map(|session| session.driver.clone())
-            })
+            && let Some(driver) = self.controller_sessions.lock().await.get(lease.identity().session_owner()).map(|session| session.driver.clone())
             && let Err(error) = driver.send_named_stream(stream, bytes).await
         {
             tracing::debug!(
@@ -7703,11 +7661,10 @@ impl ControllerSessionCoordinator {
         let (driver, bytes) = self
             .controller_sessions
             .lock()
-            .ok()
-            .and_then(|sessions| {
-                let session = sessions
-                    .get(binding.session_owner())
-                    .filter(|session| &session.binding == binding)?;
+            .await
+            .get(binding.session_owner())
+            .filter(|session| &session.binding == binding)
+            .and_then(|session| {
                 let lease = session.assignments.get(resource_uid)?;
                 if lease.identity() != identity {
                     return None;
@@ -7727,8 +7684,10 @@ impl ControllerSessionCoordinator {
             self.mark_controller_assignment_stream_closed(binding)?;
             return Err(ControllerAssignmentRefreshError::Retryable);
         }
-        if let Ok(mut sessions) = self.controller_sessions.lock()
-            && let Some(session) = sessions
+        if let Some(session) = self
+                .controller_sessions
+                .lock()
+                .await
                 .get_mut(binding.session_owner())
                 .filter(|session| &session.binding == binding)
             && session
@@ -7784,10 +7743,7 @@ impl ControllerSessionCoordinator {
         expected: Option<&crate::process_provider_runtime::ControllerBootstrapContext>,
     ) -> Result<(), ResourceRuntimeError> {
         let (context, mut session) = {
-            let mut sessions = self
-                .controller_sessions
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut sessions = self.controller_sessions.lock().await;
             let Some(session) = sessions.get(process_ref).filter(|session| {
                 expected.is_none_or(|expected| &session.context == expected)
             }) else {
@@ -7805,10 +7761,7 @@ impl ControllerSessionCoordinator {
                 .revoke_controller_ingress_in_place(&mut session.ingress)
                 .await
             {
-                let mut sessions = self
-                    .controller_sessions
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut sessions = self.controller_sessions.lock().await;
                 if sessions.get(process_ref).is_none() {
                     sessions.insert(process_ref.clone(), session);
                 }
@@ -7858,10 +7811,7 @@ impl ControllerSessionCoordinator {
                 );
                 return Ok(());
             }
-            let mut sessions = self
-                .controller_sessions
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut sessions = self.controller_sessions.lock().await;
             if sessions.get(process_ref).is_none() {
                 sessions.insert(process_ref.clone(), session);
             }
@@ -7884,21 +7834,12 @@ impl ControllerSessionCoordinator {
         let mut registrar = self
             .registrar
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .await
             .take()
             .ok_or(ResourceRuntimeError::AuthenticationUnavailable)?;
         let result = registrar.revoke_in_place(ingress).await;
-        let restored = self
-            .registrar
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)
-            .map(|mut slot| {
-                *slot = Some(registrar);
-            })
-            .is_ok();
-        if !restored {
-            return Err(ResourceRuntimeError::AuthenticationUnavailable);
-        }
+        // The slot restore is infallible (tokio lock, no poisoning).
+        *self.registrar.lock().await = Some(registrar);
         result.map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)
     }
 
@@ -8046,7 +7987,7 @@ impl ControllerSessionCoordinator {
         let authorization_state = self
             .authorization_state
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .await
             .clone()
             .ok_or_else(|| authentication_error("authorization-state"))?;
         let (ingress, driver) = registrar
@@ -8256,11 +8197,7 @@ impl ZoneResourceRuntime {
             if self.system_core_rebind_pending.load(Ordering::Acquire) {
                 return Err(ResourceRuntimeError::AuthenticationUnavailable);
             }
-            *self
-                .controller_session_providers
-                .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
-                Some(Arc::clone(&providers));
+            *self.controller_session_providers.lock().await = Some(Arc::clone(&providers));
             providers
                 .set_controller_session_waker(
                     self.zone.clone(),
@@ -8311,8 +8248,10 @@ impl ZoneResourceRuntime {
     pub(crate) fn audio_binding_statuses(
         &self,
     ) -> Result<Vec<AudioBindingRuntimeStatus>, ResourceRuntimeError> {
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision fails closed as CapabilityUnavailable.
         self.audio_runtime
-            .lock()
+            .try_lock()
             .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?
             .as_ref()
             .map(AudioResourceRuntime::statuses)
@@ -8950,40 +8889,30 @@ impl ZoneResourceRuntime {
             ..
         } = self;
         controller_session_reconcile_shutdown.store(true, Ordering::Release);
-        if let Some(task) = service_task
-            .into_inner()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-        {
+        if let Some(task) = service_task.into_inner() {
             task.abort();
             let _ = task.await;
         }
         drop(audio_runtime);
         let controller_session_task = controller_session_reconcile_task
             .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
+            .await
             .take();
         if let Some(task) = controller_session_task {
             task.abort();
             let _ = task.await;
         }
-        controller_session_coordinator
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .take();
+        controller_session_coordinator.lock().await.take();
         let sessions = Arc::try_unwrap(controller_sessions)
             .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .into_inner()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?;
+            .into_inner();
         // Take the registrar out of its shared slot for the whole teardown:
         // each session's `revoke_in_place` is an await, so no `std::sync`
         // guard may be held across it (`clippy::await_holding_lock`). The
         // value goes back before the drops below, so the tail's
         // `Arc::try_unwrap` keeps its meaning: it fails exactly when another
         // owner still shares this runtime's slot.
-        let mut session_registrar = registrar
-            .lock()
-            .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-            .take();
+        let mut session_registrar = registrar.lock().await.take();
         for (_, mut session) in sessions {
             session.cancel_backend_lease();
             if d2b_provider_guest_cloud_hypervisor::is_provider_ref(
@@ -9010,22 +8939,14 @@ impl ZoneResourceRuntime {
             }
         }
         if let Some(session_registrar) = session_registrar {
-            *registrar
-                .lock()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)? =
-                Some(session_registrar);
+            *registrar.lock().await = Some(session_registrar);
         }
         drop(process_status_client);
-        drop(
-            ingress
-                .into_inner()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
-        );
+        drop(ingress.into_inner());
         drop(
             Arc::try_unwrap(registrar)
                 .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?
-                .into_inner()
-                .map_err(|_| ResourceRuntimeError::AuthenticationUnavailable)?,
+                .into_inner(),
         );
         drop(bus);
         drop(authority_recovery);
@@ -9561,7 +9482,7 @@ async fn load_controller_policy_subjects(
     zone: &ZoneId,
     plane: &dyn ControllerPlaneView,
     providers: Option<&crate::process_provider_runtime::ProductionProcessProviders>,
-    controller_sessions: &Mutex<BTreeMap<ResourceRef, ControllerSession>>,
+    controller_sessions: &tokio::sync::Mutex<BTreeMap<ResourceRef, ControllerSession>>,
 ) -> Result<BTreeSet<BoundSubject>, ResourceRuntimeError> {
     let mut contexts = BTreeMap::new();
     if let Some(providers) = providers {
@@ -9569,12 +9490,12 @@ async fn load_controller_policy_subjects(
             contexts.insert(context.process_ref().clone(), context);
         }
     }
-    for session in controller_sessions
-        .lock()
-        .map_err(|_| ResourceRuntimeError::PolicyUnavailable)?
+    let sessions = controller_sessions.lock().await;
+    let sessions_snapshot = sessions
         .values()
-    {
-        let context = session.context.clone();
+        .map(|session| session.context.clone())
+        .collect::<Vec<_>>();
+    for context in sessions_snapshot {
         if let Some(existing) = contexts.get(context.process_ref())
             && existing != &context
         {
@@ -9961,7 +9882,9 @@ impl LiveControllerSessionEvidence for ControllerSessionCoordinator {
         process_uid: &ResourceUid,
         generation: ResourceGeneration,
     ) -> Option<Value> {
-        let sessions = self.controller_sessions.lock().ok()?;
+        // Synchronous surface: non-blocking `try_lock` per plan U4; a
+        // collision reports no evidence (fail-closed).
+        let sessions = self.controller_sessions.try_lock().ok()?;
         let session = sessions.get(process_ref)?;
         // Liveness and identity are re-read per evaluation; a finished task
         // or a session bound to another row identity/generation is not
@@ -13374,12 +13297,12 @@ mod tests {
         PolicyProjection {
             authorizer: Arc::new(runtime_authorizer(&[]).expect("authorizer")),
             manager_authorizer: None,
-            bus: Arc::new(Mutex::new(None)),
-            authorization_state: Arc::new(Mutex::new(installed_revision.map(|_| state))),
-            policy_refresh: Arc::new(Mutex::new(())),
-            policy_loaded: Arc::new(Mutex::new(installed_revision.is_some())),
-            installed_controller_subjects: Arc::new(Mutex::new(BTreeSet::new())),
-            installed_policy_inputs: Arc::new(Mutex::new(None)),
+            bus: Arc::new(tokio::sync::Mutex::new(None)),
+            authorization_state: Arc::new(tokio::sync::Mutex::new(installed_revision.map(|_| state))),
+            policy_refresh: Arc::new(tokio::sync::Mutex::new(())),
+            policy_loaded: Arc::new(tokio::sync::Mutex::new(installed_revision.is_some())),
+            installed_controller_subjects: Arc::new(tokio::sync::Mutex::new(BTreeSet::new())),
+            installed_policy_inputs: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 

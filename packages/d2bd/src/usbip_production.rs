@@ -8,7 +8,7 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -119,15 +119,15 @@ impl AuthorityLedger {
     }
 }
 
-pub(crate) fn new_authority_ledger() -> Arc<Mutex<AuthorityLedger>> {
-    Arc::new(Mutex::new(AuthorityLedger::default()))
+pub(crate) fn new_authority_ledger() -> Arc<tokio::sync::Mutex<AuthorityLedger>> {
+    Arc::new(tokio::sync::Mutex::new(AuthorityLedger::default()))
 }
 
 /// Daemon/broker-backed implementation of the Provider dispatcher.
 pub struct DaemonUsbipDispatcher<'a> {
     state: &'a ServerState,
     context: UsbipBindingContext,
-    ledger: Arc<Mutex<AuthorityLedger>>,
+    ledger: Arc<tokio::sync::Mutex<AuthorityLedger>>,
     attach_identity: Option<AttachProcessIdentity>,
     attach_slot: Option<BindingSlotLease>,
     attach_proxy: Option<BindingProxyLease>,
@@ -141,7 +141,7 @@ impl<'a> DaemonUsbipDispatcher<'a> {
     pub(crate) fn new(
         state: &'a ServerState,
         context: UsbipBindingContext,
-        ledger: Arc<Mutex<AuthorityLedger>>,
+        ledger: Arc<tokio::sync::Mutex<AuthorityLedger>>,
     ) -> Self {
         Self {
             state,
@@ -187,7 +187,7 @@ impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
     ) -> Result<PhysicalAuthorityLease, ServiceLifecycleError> {
         let mut ledger = self
             .ledger
-            .lock()
+            .try_lock()
             .map_err(|_| ServiceLifecycleError::Transient)?;
         if let Some((owner, lease)) = ledger.physical.get(&self.context.physical_key) {
             if owner == &service_uid.to_canonical_string() {
@@ -211,7 +211,7 @@ impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
     ) -> Result<ServiceRelayLease, ServiceLifecycleError> {
         let mut ledger = self
             .ledger
-            .lock()
+            .try_lock()
             .map_err(|_| ServiceLifecycleError::Transient)?;
         if let Some((owner, lease)) = ledger.relay.get(&self.context.env) {
             if owner == &service_uid.to_canonical_string() {
@@ -264,7 +264,7 @@ impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
         }
         let mut ledger = self
             .ledger
-            .lock()
+            .try_lock()
             .map_err(|_| ServiceLifecycleError::Transient)?;
         if ledger
             .relay
@@ -286,7 +286,7 @@ impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
         }
         let mut ledger = self
             .ledger
-            .lock()
+            .try_lock()
             .map_err(|_| ServiceLifecycleError::Transient)?;
         if ledger
             .physical
@@ -306,7 +306,7 @@ impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
         let key = Self::binding_key(binding);
         let mut ledger = self
             .ledger
-            .lock()
+            .try_lock()
             .map_err(|_| BindingLifecycleError::Transient)?;
         if let Some(slot) = ledger.slots.get(&key) {
             self.attach_slot = Some(slot.clone());
@@ -326,7 +326,7 @@ impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
         let key = Self::binding_key(binding);
         let mut ledger = self
             .ledger
-            .lock()
+            .try_lock()
             .map_err(|_| BindingLifecycleError::Transient)?;
         if let Some(proxy) = ledger.proxies.get(&key) {
             self.attach_proxy = Some(proxy.clone());
@@ -388,7 +388,7 @@ impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
         }
         let mut ledger = self
             .ledger
-            .lock()
+            .try_lock()
             .map_err(|_| BindingLifecycleError::Transient)?;
         ledger.proxies.remove(&Self::binding_key(binding));
         self.attach_proxy = None;
@@ -405,7 +405,7 @@ impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
         }
         let mut ledger = self
             .ledger
-            .lock()
+            .try_lock()
             .map_err(|_| BindingLifecycleError::Transient)?;
         let key = Self::binding_key(binding);
         if ledger.slots.get(&key).is_some_and(|owned| owned == slot) {

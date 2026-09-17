@@ -53,9 +53,11 @@ impl ProductionInteractionDriverEffects {
     }
 
     fn runtime(&self) -> Result<Arc<ZoneResourceRuntime>, InteractionEffectError> {
+        // Synchronous caller: non-blocking `try_lock` per plan U4. A
+        // collision reports Unavailable (fail-closed), never a stall.
         self.state
             .resource_plane
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&self.zone).ok()))
             .ok_or(InteractionEffectError::Unavailable)
@@ -237,7 +239,7 @@ impl ProductionInteractionDriverEffects {
         let mut audio = runtime
             .audio_runtime
             .lock()
-            .map_err(|_| InteractionEffectError::Unavailable)?;
+            .await;
         let registry = audio.get_or_insert_with(|| {
             AudioResourceRuntime::new(self.zone.clone(), Arc::clone(&self.state))
         });
@@ -284,7 +286,7 @@ impl ProductionInteractionDriverEffects {
             let mut audio = runtime
                 .audio_runtime
                 .lock()
-                .map_err(|_| InteractionEffectError::Unavailable)?;
+                .await;
             let registry = audio.get_or_insert_with(|| {
                 AudioResourceRuntime::new(self.zone.clone(), Arc::clone(&self.state))
             });
@@ -440,7 +442,7 @@ impl InteractionDriverEffects for ProductionInteractionDriverEffects {
                 let mut audio = runtime
                     .audio_runtime
                     .lock()
-                    .map_err(|_| InteractionEffectError::Unavailable)?;
+                    .await;
                 let registry = audio.get_or_insert_with(|| {
                     AudioResourceRuntime::new(self.zone.clone(), Arc::clone(&self.state))
                 });

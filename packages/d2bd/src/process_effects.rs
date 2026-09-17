@@ -803,11 +803,14 @@ mod tests {
     async fn controller_provider_identity_binds_the_committed_provider_row() {
         let identity = controller_identity();
         let registry = PlaneResourceRegistry::new();
-        registry.register_committed_provider_identity(
-            &ResourceRef::parse("Provider/network-local").unwrap(),
-            ResourceUid::parse(COMMITTED_PROVIDER_UID).expect("provider uid"),
-            ResourceGeneration::new(COMMITTED_PROVIDER_GENERATION).expect("provider generation"),
-        );
+        registry
+            .register_committed_provider_identity(
+                &ResourceRef::parse("Provider/network-local").unwrap(),
+                ResourceUid::parse(COMMITTED_PROVIDER_UID).expect("provider uid"),
+                ResourceGeneration::new(COMMITTED_PROVIDER_GENERATION)
+                    .expect("provider generation"),
+            )
+            .await;
         let context = super::bind_committed_controller_provider_identity(
             &identity,
             Some(&registry),

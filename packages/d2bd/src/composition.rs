@@ -11,9 +11,13 @@ use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicU64, Ordering},
 };
+// The remaining `std::sync::Mutex` uses are cfg(test) fakes (the sanctioned
+// survivor class); production state tables are `tokio::sync::Mutex` (U10).
+#[cfg(test)]
+use std::sync::Mutex;
 
 type InteractionSupervisor = interaction_composition::NonLaunchingProcessEffectPort;
 type InteractionRuntime = interaction_composition::InteractionRuntimeSet<InteractionSupervisor>;
@@ -469,19 +473,27 @@ mod owner_connection_test_hook {
 
     pub(crate) type Hook = Arc<dyn Fn() + Send + Sync>;
 
+    // Synchronous by construction (the accept-loop hook fires from a
+    // dedicated handler thread): the process-global slot stays a
+    // `std::sync::Mutex` test fake under the plan's sanctioned
+    // cfg(test)-helper survivor class.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn slot() -> &'static Mutex<Option<Hook>> {
         static HOOK: OnceLock<Mutex<Option<Hook>>> = OnceLock::new();
         HOOK.get_or_init(|| Mutex::new(None))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub(crate) fn set(hook: Hook) {
         *slot().lock().expect("owner connection hook lock") = Some(hook);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub(crate) fn clear() {
         *slot().lock().expect("owner connection hook lock") = None;
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub(crate) fn active() -> Option<Hook> {
         slot().lock().expect("owner connection hook lock").clone()
     }
@@ -521,7 +533,7 @@ struct ServerState {
     /// Daemon-owned production Zone resource plane. It is absent only while
     /// trusted bundle/storage admission is incomplete; public resource
     /// requests fail closed rather than falling back to the legacy path.
-    resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
+    resource_plane: Arc<tokio::sync::Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
     #[cfg(not(test))]
     /// Persistent daemon-owned ShellSession Process authority.
     shell_authority: Arc<DaemonShellAuthority>,
@@ -531,19 +543,20 @@ struct ServerState {
     /// Listener loops for the daemon-owned interaction ComponentSession
     /// sockets.  Their stop handle is retained so shutdown closes admission
     /// before runtime finalization.
-    interaction_listeners: Arc<Mutex<Option<interaction_composition::InteractionListenerSet>>>,
+    interaction_listeners: Arc<tokio::sync::Mutex<Option<interaction_composition::InteractionListenerSet>>>,
     /// Bounded execution-target bindings for qualified ShellSession resources.
     /// The provider may remove a killed session before a retry arrives, so the
     /// daemon keeps recent exact target bindings independently of provider
     /// lists.
-    typed_shell_session_targets:
-        Arc<Mutex<d2bd_runtime::typed_shell_targets::TypedShellSessionTargetCache>>,
+    typed_shell_session_targets: Arc<
+        tokio::sync::Mutex<d2bd_runtime::typed_shell_targets::TypedShellSessionTargetCache>,
+    >,
     /// Authoritative Zone index for daemon-side coordination state. USBIP
     /// reconciliation, force-stop generations, and activation staging all
     /// resolve through this index; no process-global lock carries that state.
-    zone_coordinator: Arc<Mutex<ZoneCoordinator>>,
+    zone_coordinator: Arc<tokio::sync::Mutex<ZoneCoordinator>>,
     /// Daemon-owned typed Guest configuration staging state.
-    config_staging: Arc<Mutex<d2b_provider_config_nixos::ConfigStagingStore>>,
+    config_staging: Arc<tokio::sync::Mutex<d2b_provider_config_nixos::ConfigStagingStore>>,
     /// One shared authenticated ComponentSession per Guest target. Typed
     /// health, activation, and Resource API callers must not race by opening
     /// independent sessions with the same reconnect generation.
@@ -560,15 +573,16 @@ struct ServerState {
     /// Per-VM console session table (ring buffers and drainer tasks) for
     /// `d2b console <vm>`. Sessions are created on first Attach and persist
     /// until the daemon restarts or the VM stops.
-    console_sessions: Arc<Mutex<console_session::ConsoleSessionTable>>,
-    security_key_sessions: Arc<parking_lot::Mutex<d2b_provider_device_security_key::SkSessionTable>>,
+    console_sessions: Arc<tokio::sync::Mutex<console_session::ConsoleSessionTable>>,
+    security_key_sessions: Arc<tokio::sync::Mutex<d2b_provider_device_security_key::SkSessionTable>>,
     unsafe_local_helpers: Arc<d2bd_runtime::unsafe_local_helper::HelperRegistry>,
     /// Per-Zone v3 resource planes (U9/U10): the new runtime the Resource
     /// API routes converted types to. Parked here so `open_resource_plane`
     /// publishes them and the resource runtime reaches each plane's
     /// client + hub for the manager-backed API backend.
-    v3_planes:
-        std::sync::Arc<parking_lot::Mutex<HashMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>>>>,
+    v3_planes: std::sync::Arc<
+        tokio::sync::Mutex<HashMap<String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>>>,
+    >,
 }
 
 /// Closed failures while composing one Zone-owned Gateway Guest route.
@@ -706,18 +720,20 @@ pub(crate) struct ZoneLinkGatewayComposition {
     parent_zone_uid: ResourceUid,
     child_zone_uid: ResourceUid,
     controller_generation: ZoneLinkControllerGeneration,
-    reconnect_generation: Mutex<ReconnectGeneration>,
+    reconnect_generation: tokio::sync::Mutex<ReconnectGeneration>,
     required_capability: ZoneRouteCapability,
     policy_revision: ZoneRevision,
     cursor_owner: ZoneLinkOwnerProof,
-    controller: Mutex<ZoneLinkController>,
-    route_engine: Mutex<ZoneRouteEngine>,
+    controller: tokio::sync::Mutex<ZoneLinkController>,
+    route_engine: tokio::sync::Mutex<ZoneRouteEngine>,
     resolver: ZoneEntrypointResolver,
-    gateway_session:
-        Mutex<Option<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>>>,
-    route_admission_authority: Mutex<Option<d2b_bus::session::RuntimeRouteAdmissionAuthority>>,
-    gateway_guest: Mutex<Option<CommittedGuestSessionTarget>>,
-    last_gateway_guest: Mutex<Option<CommittedGuestSessionTarget>>,
+    gateway_session: tokio::sync::Mutex<
+        Option<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>>,
+    >,
+    route_admission_authority:
+        tokio::sync::Mutex<Option<d2b_bus::session::RuntimeRouteAdmissionAuthority>>,
+    gateway_guest: tokio::sync::Mutex<Option<CommittedGuestSessionTarget>>,
+    last_gateway_guest: tokio::sync::Mutex<Option<CommittedGuestSessionTarget>>,
 }
 
 impl std::fmt::Debug for ZoneLinkGatewayComposition {
@@ -848,17 +864,17 @@ impl ZoneLinkGatewayComposition {
             parent_zone_uid: parent_uid,
             child_zone_uid: child_uid,
             controller_generation,
-            reconnect_generation: Mutex::new(reconnect_generation),
+            reconnect_generation: tokio::sync::Mutex::new(reconnect_generation),
             required_capability,
             policy_revision,
             cursor_owner: owner.clone(),
-            controller: Mutex::new(controller),
-            route_engine: Mutex::new(ZoneRouteEngine::new(parent_path)),
+            controller: tokio::sync::Mutex::new(controller),
+            route_engine: tokio::sync::Mutex::new(ZoneRouteEngine::new(parent_path)),
             resolver: ZoneEntrypointResolver::new(topology),
-            gateway_session: Mutex::new(None),
-            route_admission_authority: Mutex::new(None),
-            gateway_guest: Mutex::new(None),
-            last_gateway_guest: Mutex::new(None),
+            gateway_session: tokio::sync::Mutex::new(None),
+            route_admission_authority: tokio::sync::Mutex::new(None),
+            gateway_guest: tokio::sync::Mutex::new(None),
+            last_gateway_guest: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -881,11 +897,17 @@ impl ZoneLinkGatewayComposition {
 
     /// Return the child-local controller session state.
     fn session_state(&self) -> d2b_provider_zone_link::zone_links::ZoneLinkSessionState {
-        self.controller
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .handler()
-            .session_state()
+        // Synchronous caller: non-blocking `try_lock` per plan U4. A
+        // collision (another composition op mid-critical-section,
+        // sub-microsecond) answers with the bootstrap-handshake state,
+        // which every caller treats as "do not disturb": the establish
+        // path refuses it and the fence path skips the disconnect-event
+        // side effect. R13: the std poison-recovery read became this
+        // contention-only refusal surface; tokio mutexes do not poison.
+        let Ok(controller) = self.controller.try_lock() else {
+            return d2b_provider_zone_link::zone_links::ZoneLinkSessionState::IKpsk2;
+        };
+        controller.handler().session_state()
     }
 
     /// Apply one committed child-local controller event and release effects.
@@ -895,8 +917,8 @@ impl ZoneLinkGatewayComposition {
     ) -> Result<Vec<ZoneLinkEffect>, ZoneLinkError> {
         let mut controller = self
             .controller
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .try_lock()
+            .map_err(|_| ZoneLinkError::ReconcileInFlight)?;
         let pass = controller.handler_mut().begin(event)?;
         let proof = controller.handler_mut().commit(pass)?;
         controller.handler_mut().release_effects(proof)
@@ -910,8 +932,8 @@ impl ZoneLinkGatewayComposition {
         issuer: impl FnOnce(ZoneLinkRouteAdmissionRequest) -> Result<T, ZoneLinkError>,
     ) -> Result<T, ZoneLinkError> {
         self.controller
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .try_lock()
+            .map_err(|_| ZoneLinkError::ReconcileInFlight)?
             .issue_route_admission(request, issuer)
     }
 
@@ -921,17 +943,24 @@ impl ZoneLinkGatewayComposition {
         &self,
         observation: d2b_provider_zone_link::zonelink::ZoneLinkCursorRecord,
     ) -> d2b_provider_zone_link::zonelink::ZoneLinkAdoption {
-        self.controller
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self
+            .controller
+            .try_lock()
+            .expect("test composition controller is uncontended")
             .adopt_cursor([observation])
     }
 
     fn reconnect_generation(&self) -> ReconnectGeneration {
-        *self
-            .reconnect_generation
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        // Synchronous caller: non-blocking `try_lock` per plan U4. A
+        // collision answers with the maximum generation, which every live
+        // session generation compares below - so every bind and admission
+        // refuses fail-closed until the busy section clears (R13: the std
+        // poison-recovery read became this contention-only refusal surface).
+        let Ok(generation) = self.reconnect_generation.try_lock() else {
+            return ReconnectGeneration::new(u64::MAX)
+                .expect("u64::MAX is a valid nonzero generation");
+        };
+        *generation
     }
 
     /// Bind the host-side authenticated Gateway Guest session and its
@@ -955,47 +984,46 @@ impl ZoneLinkGatewayComposition {
         if session_generation < current_generation {
             return Err(ZoneLinkGatewayCompositionError::InvalidIdentity);
         }
-        let previous_session = self
-            .gateway_session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        let previous_authority = self
-            .route_admission_authority
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
+        // Non-blocking `try_lock` (synchronous surface, plan U4): a collision
+        // leaves the composition untouched, so the session is still bound -
+        // the accurate `SessionAlreadyBound` refusal, and the caller retries
+        // on the next session event. The guards are held for the restore
+        // path so a taken session is never lost to an interleaved op.
+        let Ok(mut previous_slot) = self.gateway_session.try_lock() else {
+            return Err(ZoneLinkGatewayCompositionError::SessionAlreadyBound);
+        };
+        let previous_session = previous_slot.take();
+        let Ok(mut previous_authority_slot) = self.route_admission_authority.try_lock() else {
+            *previous_slot = previous_session;
+            return Err(ZoneLinkGatewayCompositionError::SessionAlreadyBound);
+        };
+        let previous_authority = previous_authority_slot.take();
         let previous_is_live = previous_session
             .as_ref()
             .is_some_and(|previous| previous.route_binding().liveness().is_live());
         if previous_is_live && session_generation == current_generation {
             if let Some(previous_session) = previous_session {
-                *self
-                    .gateway_session
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(previous_session);
+                *previous_slot = Some(previous_session);
             }
             if let Some(previous_authority) = previous_authority {
-                *self
-                    .route_admission_authority
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(previous_authority);
+                *previous_authority_slot = Some(previous_authority);
             }
+            drop(previous_slot);
+            drop(previous_authority_slot);
             return Err(ZoneLinkGatewayCompositionError::SessionAlreadyBound);
         }
         if let Some(previous_authority) = previous_authority {
             previous_authority.revoke();
         }
         drop(previous_session);
+        drop(previous_slot);
+        drop(previous_authority_slot);
         if session_generation > current_generation {
             self.apply_event(ZoneLinkEvent::SessionGenerationAdvanced {
                 reconnect_generation: session_generation,
             })
             .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
-            *self
-                .reconnect_generation
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = session_generation;
+            *lock_sync(&self.reconnect_generation) = session_generation;
         }
         self.establish_authenticated_controller_session(
             session_generation,
@@ -1019,14 +1047,8 @@ impl ZoneLinkGatewayComposition {
             Arc::new(unix_now_millis),
         )
         .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
-        *self
-            .gateway_session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(session);
-        *self
-            .route_admission_authority
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(authority);
+        *lock_sync(&self.gateway_session) = Some(session);
+        *lock_sync(&self.route_admission_authority) = Some(authority);
         Ok(())
     }
 
@@ -1040,8 +1062,8 @@ impl ZoneLinkGatewayComposition {
         }
         if self
             .controller
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .try_lock()
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?
             .handler()
             .record()
             .enrollment()
@@ -1096,8 +1118,8 @@ impl ZoneLinkGatewayComposition {
         }
         let mut controller = self
             .controller
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .try_lock()
+            .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
         if !controller.cursor_authority().adoption().is_adopted() {
             let cursor = controller.handler().record().cursor();
             if !controller
@@ -1114,9 +1136,13 @@ impl ZoneLinkGatewayComposition {
     }
 
     fn has_gateway_session(&self) -> bool {
-        self.gateway_session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        // Non-blocking `try_lock` (plan U4): a collision reports "no live
+        // session" fail-closed, so the route is denied and the caller
+        // re-checks on the next request.
+        let Ok(session) = self.gateway_session.try_lock() else {
+            return false;
+        };
+        session
             .as_ref()
             .is_some_and(|session| session.route_binding().liveness().is_live())
     }
@@ -1124,26 +1150,31 @@ impl ZoneLinkGatewayComposition {
     fn gateway_session(
         &self,
     ) -> Option<Arc<d2bd_runtime::guest_component_session::GuestComponentSessionClient>> {
-        self.gateway_session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        let Ok(session) = self.gateway_session.try_lock() else {
+            return None;
+        };
+        session.clone()
     }
 
     fn fence_gateway_session(&self) {
+        // Non-blocking `try_lock` per plan U4: a collision skips that one
+        // fence step fail-closed - the next fence or session event re-runs
+        // it, and a route that needs the fenced authority is refused in the
+        // meantime (R13: the std poison-recovery path had the same
+        // recoverable shape; tokio mutexes do not poison).
         if let Some(authority) = self
             .route_admission_authority
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
+            .try_lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
         {
             authority.revoke();
         }
         let had_session = self
             .gateway_session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
+            .try_lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
             .is_some();
         if had_session
             && self.session_state() == d2b_provider_zone_link::zone_links::ZoneLinkSessionState::Ready
@@ -1154,10 +1185,9 @@ impl ZoneLinkGatewayComposition {
                 "zone-link session disconnect event rejected by zone-link state machine"
             );
         }
-        self.gateway_guest
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
+        if let Ok(mut guest) = self.gateway_guest.try_lock() {
+            guest.take();
+        }
     }
 
     fn reset_gateway_guest_identity(&self) -> Result<(), ZoneLinkGatewayCompositionError> {
@@ -1165,37 +1195,31 @@ impl ZoneLinkGatewayComposition {
         self.apply_event(ZoneLinkEvent::Revoke)
             .map(|_| ())
             .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
-        *self
-            .reconnect_generation
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = ReconnectGeneration::new(1)
+        *lock_sync(&self.reconnect_generation) = ReconnectGeneration::new(1)
             .map_err(|_| ZoneLinkGatewayCompositionError::InvalidIdentity)?;
         Ok(())
     }
 
     fn set_gateway_guest(&self, gateway_guest: CommittedGuestSessionTarget) {
-        *self
-            .last_gateway_guest
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gateway_guest.clone());
-        *self
-            .gateway_guest
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gateway_guest);
+        // Required writes: the bounded spin seat preserves the blocking-wait
+        // semantics (the holder's section is sub-microsecond), so a busy
+        // composition never silently drops a guest-identity write.
+        *lock_sync(&self.last_gateway_guest) = Some(gateway_guest.clone());
+        *lock_sync(&self.gateway_guest) = Some(gateway_guest);
     }
 
     fn gateway_guest(&self) -> Option<CommittedGuestSessionTarget> {
-        self.gateway_guest
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        let Ok(guest) = self.gateway_guest.try_lock() else {
+            return None;
+        };
+        guest.clone()
     }
 
     fn last_gateway_guest(&self) -> Option<CommittedGuestSessionTarget> {
-        self.last_gateway_guest
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        let Ok(guest) = self.last_gateway_guest.try_lock() else {
+            return None;
+        };
+        guest.clone()
     }
 
     /// Consume one runtime-issued admission for a child-Zone request.
@@ -1232,8 +1256,8 @@ impl ZoneLinkGatewayComposition {
             .issue_route_admission(request, |request| {
                 let authority = self
                     .route_admission_authority
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    .try_lock()
+                    .map_err(|_| ZoneLinkError::RouteAdmissionBindingInvalid)?;
                 authority
                     .as_ref()
                     .ok_or(ZoneLinkError::RouteAdmissionBindingInvalid)?
@@ -1261,10 +1285,12 @@ impl ZoneLinkGatewayComposition {
             ZoneRouteRequest::new(self.resolver.topology().local_root().clone(), target_zone)
                 .with_admission(admission);
         let now = unix_now_seconds();
-        self.route_engine
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .decide_authenticated_edge_route(
+        let Ok(mut route_engine) = self.route_engine.try_lock() else {
+            return ZoneRouteDecision::Denied {
+                reason: ZoneRouteFailClosedReason::PolicyDenial,
+            };
+        };
+        route_engine.decide_authenticated_edge_route(
                 &self.edge,
                 ZoneRouteCapabilitySet::new(vec![self.required_capability.clone()])
                     .expect("one required capability is within the contract bound"),
@@ -1458,8 +1484,8 @@ mod zone_link_gateway_composition_tests {
         assert!(
             composition
                 .controller
-                .lock()
-                .unwrap()
+                .try_lock()
+                .expect("test composition controller is uncontended")
                 .cursor_authority()
                 .adoption()
                 .is_adopted()
@@ -1693,7 +1719,10 @@ mod zone_link_gateway_composition_tests {
         assert!(composition.gateway_guest().is_some());
         composition.fence_gateway_session();
         assert!(composition.gateway_guest().is_none());
-        *composition.reconnect_generation.lock().unwrap() = ReconnectGeneration::new(7).unwrap();
+        *composition
+            .reconnect_generation
+            .try_lock()
+            .expect("test composition generation is uncontended") = ReconnectGeneration::new(7).unwrap();
         composition.reset_gateway_guest_identity().unwrap();
         assert_eq!(composition.reconnect_generation().get(), 1);
     }
@@ -1772,7 +1801,7 @@ const PROCESS_RUNTIME_FINALIZER: &str = "process-runtime.d2bus.org/cleanup";
 #[derive(Clone)]
 struct DaemonShellAuthority {
     ledger: Arc<ShellAuthorityLedger>,
-    resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
+    resource_plane: Arc<tokio::sync::Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>,
 }
 
 impl std::fmt::Debug for DaemonShellAuthority {
@@ -1782,7 +1811,7 @@ impl std::fmt::Debug for DaemonShellAuthority {
 }
 
 impl DaemonShellAuthority {
-    fn new(resource_plane: Arc<Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>) -> Self {
+    fn new(resource_plane: Arc<tokio::sync::Mutex<Option<Arc<resource_runtime::ResourcePlane>>>>) -> Self {
         Self {
             ledger: Arc::new(ShellAuthorityLedger::new()),
             resource_plane,
@@ -1802,9 +1831,12 @@ impl DaemonShellAuthority {
         &self,
         zone: &ZoneId,
     ) -> Result<Arc<DaemonResourceApiClient>, ShellTerminalError> {
+        // Synchronous caller (a dedicated handler thread): non-blocking
+        // `try_lock` per plan U4; a collision fails closed with the same
+        // `SupervisorAmbiguous` refusal the poison path produced.
         let plane = self
             .resource_plane
-            .lock()
+            .try_lock()
             .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?
             .clone()
             .ok_or(ShellTerminalError::SupervisorAmbiguous)?;
@@ -3157,7 +3189,7 @@ fn production_process_resource_port(
     };
     let Some(client) = state
         .resource_plane
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
         .and_then(|plane| plane.zone(&zone).ok())
@@ -3509,7 +3541,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         unsafe_local_helper_uids,
     ));
     #[cfg(not(test))]
-    let resource_plane = Arc::new(Mutex::new(None));
+    let resource_plane = Arc::new(tokio::sync::Mutex::new(None));
     let state = ServerState {
         daemon_uid: runtime_identity.daemon_uid.as_raw(),
         config,
@@ -3523,7 +3555,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
             crate::exec_session::ExecSessionCaps::default(),
         )),
-        console_sessions: Arc::new(Mutex::new(
+        console_sessions: Arc::new(tokio::sync::Mutex::new(
             crate::console_session::ConsoleSessionTable::default(),
         )),
         conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(
@@ -3539,21 +3571,21 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         #[cfg(not(test))]
         resource_plane: Arc::clone(&resource_plane),
         #[cfg(test)]
-        resource_plane: Arc::new(Mutex::new(None)),
+        resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
         #[cfg(not(test))]
         shell_authority: Arc::new(DaemonShellAuthority::new(Arc::clone(&resource_plane))),
         interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-        interaction_listeners: Arc::new(Mutex::new(None)),
+        interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
         typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
         zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-        config_staging: Arc::new(Mutex::new(Default::default())),
+        config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
         guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        security_key_sessions: Arc::new(parking_lot::Mutex::new(
+        security_key_sessions: Arc::new(tokio::sync::Mutex::new(
             d2b_provider_device_security_key::SkSessionTable::default(),
         )),
         unsafe_local_helpers: Arc::clone(&unsafe_local_helpers),
-        v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+        v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
     if let Some(helper_listener) = unsafe_local_helper_listener {
         std::thread::Builder::new()
@@ -3613,7 +3645,9 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             if let Err(error) = d2bd_runtime::zone_authority::register_authoritative_zones(
                 &state.zone_coordinator,
                 &resolver,
-            ) {
+            )
+            .await
+            {
                 tracing::error!(
                     error,
                     "trusted bundle did not populate the Zone authority index; Zone coordination will fail closed",
@@ -3642,15 +3676,13 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 }
                             })?;
                         }
-                        if let Ok(mut slot) = state.resource_plane.lock() {
-                            *slot = Some(Arc::clone(&plane));
+                        {
+                            // tokio::sync does not poison (plan U10): the
+                            // poison-refusal arm is gone, and the await owns
+                            // the guard for the two assignments only.
+                            *state.resource_plane.lock().await = Some(Arc::clone(&plane));
                             startup_resource_plane_ready =
                                 plane.ready_zone_count() == plane.zone_ids().len();
-                        } else {
-                            return Err(TypedError::InternalIo {
-                                context: "publish resource plane".to_owned(),
-                                detail: "resource-plane state lock unavailable".to_owned(),
-                            });
                         }
                         let mut runtimes = InteractionRuntime::new();
                         let mut listener_set: Option<
@@ -3744,10 +3776,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                             }
                             if let Some(listeners) = listener_set {
                                 let paths = listeners.paths().to_owned();
-                                *state
-                                    .interaction_listeners
-                                    .lock()
-                                    .expect("interaction listener lock") = Some(listeners);
+                                *state.interaction_listeners.lock().await = Some(listeners);
                                 tracing::info!(
                                     listener_count = paths.len(),
                                     "ComponentSession listeners ready",
@@ -4683,6 +4712,7 @@ async fn drain_v3_providers(state: &ServerState) {
     let mut planes: Vec<(String, std::sync::Arc<crate::resource_plane_v3::ResourcePlaneV3>)> = state
         .v3_planes
         .lock()
+        .await
         .iter()
         .map(|(zone, plane)| (zone.clone(), std::sync::Arc::clone(plane)))
         .collect();
@@ -4705,11 +4735,7 @@ async fn drain_v3_providers(state: &ServerState) {
 }
 
 async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedError> {
-    if let Some(listeners) = state
-        .interaction_listeners
-        .lock()
-        .expect("interaction listener lock")
-        .take()
+    if let Some(listeners) = state.interaction_listeners.lock().await.take()
     {
         listeners.stop();
     }
@@ -5087,9 +5113,12 @@ fn current_runner_lifecycle_identity(
     ResourceGeneration,
     u64,
 )> {
-    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
+    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    ))
         .ok()?;
-    let plane = state.resource_plane.lock().ok()?.clone()?;
+    let plane = state.resource_plane.try_lock().ok()?.clone()?;
     let runtime = plane.zone(&zone).ok()?;
     let target = ResourceRef::parse(&format!("Guest/{vm}")).ok()?;
     let (zone_uid, guest_uid, guest_generation, provider_generation) =
@@ -5774,7 +5803,7 @@ fn process_resource_execution_ref_from_resource(
         })?;
     let client = state
         .resource_plane
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
         .and_then(|plane| plane.zone(&zone).ok())
@@ -6029,7 +6058,7 @@ fn dispatch_config_nixos_service_request(
         })?;
     let plane = state
         .resource_plane
-        .lock()
+        .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
         })?
@@ -6074,7 +6103,7 @@ fn dispatch_config_nixos_service_request(
                 })?;
             let response = state
                 .config_staging
-                .lock()
+                .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
                 })?
@@ -6095,7 +6124,7 @@ fn dispatch_config_nixos_service_request(
                 })?;
             let response = state
                 .config_staging
-                .lock()
+                .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
                 })?
@@ -6112,7 +6141,7 @@ fn dispatch_config_nixos_service_request(
                 })?;
             let response = state
                 .config_staging
-                .lock()
+                .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
                 })?
@@ -6133,7 +6162,7 @@ fn dispatch_config_nixos_service_request(
                 })?;
             let response = state
                 .config_staging
-                .lock()
+                .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
                 })?
@@ -6154,7 +6183,7 @@ fn dispatch_config_nixos_service_request(
                 })?;
             let response = state
                 .config_staging
-                .lock()
+                .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
                 })?
@@ -6346,7 +6375,7 @@ fn classify_gateway_zone_request(
 ) -> Result<GatewayZoneRequestRoute, resource_runtime::ResourceRuntimeError> {
     let plane = state
         .resource_plane
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
@@ -6444,7 +6473,7 @@ fn admit_gateway_zone_request(
 ) -> Result<Value, resource_runtime::ResourceRuntimeError> {
     let plane = state
         .resource_plane
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
@@ -6575,9 +6604,9 @@ fn bind_plane_guest_target(
     let zone = session.identity().zone().as_str().to_owned();
     let plane = state
         .v3_planes
-        .lock()
-        .get(&zone)
-        .map(std::sync::Arc::clone);
+        .try_lock()
+        .ok()
+        .and_then(|planes| planes.get(&zone).map(std::sync::Arc::clone));
     let Some(plane) = plane else {
         tracing::warn!(zone = %zone, "guest target bind skipped: Zone v3 plane unavailable");
         return;
@@ -6613,9 +6642,9 @@ fn unbind_plane_guest_target(
     let zone = session.identity().zone().as_str().to_owned();
     let plane = state
         .v3_planes
-        .lock()
-        .get(&zone)
-        .map(std::sync::Arc::clone);
+        .try_lock()
+        .ok()
+        .and_then(|planes| planes.get(&zone).map(std::sync::Arc::clone));
     let Some(plane) = plane else {
         return;
     };
@@ -7310,7 +7339,7 @@ fn authoritative_unsafe_local_resource_identity(
 ) -> Result<ZoneResourceIdentity, resource_runtime::ResourceRuntimeError> {
     let plane = state
         .resource_plane
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
@@ -7368,7 +7397,7 @@ fn resolve_resource_runtime(
     };
     let plane = state
         .resource_plane
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
         .ok_or(resource_runtime::ResourceRuntimeError::PlaneUnavailable)?;
@@ -7388,7 +7417,7 @@ fn resolve_typed_shell_runtime(
     let runtime = resolve_resource_runtime(state, request)?;
     let root = state
         .resource_plane
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
         .and_then(|plane| plane.topology_root().cloned())
@@ -7952,7 +7981,7 @@ fn dispatch_local_vm_launcher(
     ensure_vm_runtime_capability(state, vm, RuntimeCapabilityGate::Exec, "launch")?;
     let root_zone = state
         .resource_plane
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
         .and_then(|plane| plane.topology_root().cloned())
@@ -8305,23 +8334,23 @@ mod workload_observability_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(Default::default())),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            console_sessions: Arc::new(Mutex::new(console_session::ConsoleSessionTable::default())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(console_session::ConsoleSessionTable::default())),
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         };
         (state, dir)
     }
@@ -8467,6 +8496,7 @@ mod workload_observability_tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn captured_events(state: &ServerState) -> Vec<Value> {
         state
             .daemon_audit
@@ -8830,6 +8860,25 @@ mod workload_observability_tests {
     }
 }
 
+/// Lock the daemon console-session table for one console operation.
+///
+/// Synchronous caller (the public-socket dispatch path): non-blocking
+/// `try_lock` per plan U4. A collision (another console op mid-critical-
+/// section, sub-microsecond) refuses the operation fail-closed instead of
+/// parking the handler thread; the client retries, exactly like the
+/// console's own session-stale refusals. R13: the std lock's poison panic
+/// became this typed refusal-surface; tokio mutexes do not poison.
+fn console_sessions_table<'a>(
+    state: &'a ServerState,
+) -> Result<tokio::sync::MutexGuard<'a, console_session::ConsoleSessionTable>, TypedError> {
+    state
+        .console_sessions
+        .try_lock()
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "console session table unavailable".to_owned(),
+        })
+}
+
 fn dispatch_console(
     state: &ServerState,
     peer: &PeerIdentity,
@@ -8879,7 +8928,7 @@ fn dispatch_console(
 
             // Ensure a session exists; create one on first attach.
             {
-                let mut table = state.console_sessions.lock().unwrap();
+                let mut table = console_sessions_table(state)?;
                 if !table.has_session(vm) {
                     let session = create_console_session_for_vm(state, vm, provider_kind)?;
                     table.register_session(vm.clone(), session);
@@ -8887,10 +8936,7 @@ fn dispatch_console(
             }
 
             // Attach the client, recording the peer uid for ownership checks.
-            let attach_result = state
-                .console_sessions
-                .lock()
-                .unwrap()
+            let attach_result = console_sessions_table(state)?
                 .attach(vm, peer.uid)
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "console: failed to allocate secure session handle".to_owned(),
@@ -8911,7 +8957,7 @@ fn dispatch_console(
         }
 
         ConsoleOp::ReadOutput(args) => {
-            let table = state.console_sessions.lock().unwrap();
+            let table = console_sessions_table(state)?;
             check_console_ownership(&table, &args.session, peer.uid, is_admin, "readOutput")?;
             let output = table
                 .read_output(&args.session, args.offset, args.max_len)
@@ -8934,13 +8980,10 @@ fn dispatch_console(
                 }
             })?;
             {
-                let table = state.console_sessions.lock().unwrap();
+                let table = console_sessions_table(state)?;
                 check_console_ownership(&table, &args.session, peer.uid, is_admin, "writeStdin")?;
             }
-            let accepted = state
-                .console_sessions
-                .lock()
-                .unwrap()
+            let accepted = console_sessions_table(state)?
                 .write_stdin(&args.session, bytes)
                 .ok_or(TypedError::ConsoleSessionStale)?;
             ConsoleOpResponse::WriteStdin(ConsoleControlResult {
@@ -8953,13 +8996,10 @@ fn dispatch_console(
             // UART consoles do not support resize; this is a best-effort hint.
             let _ = args.size;
             {
-                let table = state.console_sessions.lock().unwrap();
+                let table = console_sessions_table(state)?;
                 check_console_ownership(&table, &args.session, peer.uid, is_admin, "resize")?;
             }
-            let exists = state
-                .console_sessions
-                .lock()
-                .unwrap()
+            let exists = console_sessions_table(state)?
                 .ring_notify(&args.session)
                 .is_some();
             if !exists {
@@ -8974,13 +9014,10 @@ fn dispatch_console(
         ConsoleOp::Wait(args) => {
             // Wait until EOF with optional timeout.
             {
-                let table = state.console_sessions.lock().unwrap();
+                let table = console_sessions_table(state)?;
                 check_console_ownership(&table, &args.session, peer.uid, is_admin, "wait")?;
             }
-            let exited = state
-                .console_sessions
-                .lock()
-                .unwrap()
+            let exited = console_sessions_table(state)?
                 .read_output(&args.session, 0, 0)
                 .map(|o| o.snap.map(|s| s.is_eof).unwrap_or(false))
                 .ok_or(TypedError::ConsoleSessionStale)?;
@@ -8995,14 +9032,14 @@ fn dispatch_console(
             // session.  A stale handle (already closed or expired) still
             // returns closed=false below, which is idempotent and harmless.
             {
-                let table = state.console_sessions.lock().unwrap();
+                let table = console_sessions_table(state)?;
                 // If the handle is unknown it was already closed; allow the
                 // idempotent path to proceed regardless of uid.
                 if table.client_owner_uid(&args.session).is_some() {
                     check_console_ownership(&table, &args.session, peer.uid, is_admin, "close")?;
                 }
             }
-            let closed = state.console_sessions.lock().unwrap().close(&args.session);
+            let closed = console_sessions_table(state)?.close(&args.session);
             ConsoleOpResponse::Close(ConsoleCloseResult {
                 session: args.session,
                 closed,
@@ -9023,7 +9060,10 @@ fn resolve_console_provider_kind(
     let resolver = load_bundle_resolver(state)
         .map_err(|_| TypedError::ConsoleVmNotFound { vm: vm.to_owned() })?;
 
-    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
+    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    ))
         .map_err(|_| TypedError::ConsoleVmNotFound { vm: vm.to_owned() })?;
     let resource = resolver
         .find_guest_resource(&zone, vm)
@@ -9200,7 +9240,10 @@ fn guest_runtime_provider_ref<'a>(
     resolver: &'a BundleResolver,
     vm: &str,
 ) -> Option<&'a str> {
-    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
+    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    ))
         .ok()?;
     resolver
         .find_guest_resource(&zone, vm)?
@@ -9213,7 +9256,10 @@ fn guest_runtime_provider_ref<'a>(
 /// v2 manifest's `env` surface. Returns `None` when the zone is unknown,
 /// the Guest resource is absent, or the spec carries no `env` key.
 fn guest_runtime_env(state: &ServerState, resolver: &BundleResolver, vm: &str) -> Option<String> {
-    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
+    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    ))
         .ok()?;
     let resource = resolver.find_guest_resource(&zone, vm)?;
     resource
@@ -10040,10 +10086,10 @@ impl RunnerLookup for PidfdRunnerLookup {
 /// daemon's zone coordinator bound the VM to (the same plane zones the
 /// composition point published to the rendezvous).
 fn kernel_zone_for_vm(state: &ServerState, vm: &str) -> Result<String, String> {
-    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
-    )
+    ))
     .map_err(|error| format!("zone lookup for {vm} failed: {error}"))?;
     Ok(zone.as_str().to_owned())
 }
@@ -10818,8 +10864,9 @@ pub(crate) async fn connect_guest_component_session_for_guest_with_mode(
     let plane = state
         .resource_plane
         .lock()
-        .ok()
-        .and_then(|plane| plane.clone())
+        .await
+        .as_ref()
+        .cloned()
         .ok_or_else(|| "guest-session:resource-plane-unavailable".to_owned())?;
     let runtime = plane
         .zone(target.zone())
@@ -10963,6 +11010,7 @@ pub(crate) async fn ensure_guest_target_session(
     let plane = state
         .v3_planes
         .lock()
+        .await
         .get(zone.as_str())
         .map(std::sync::Arc::clone)
         .ok_or_else(|| "guest-session:zone-plane-unavailable".to_owned())?;
@@ -10981,8 +11029,8 @@ pub(crate) async fn ensure_guest_target_session(
     let runtime = state
         .resource_plane
         .lock()
-        .ok()
-        .and_then(|plane| plane.clone())
+        .await
+        .as_ref()
         .and_then(|plane| plane.zone(zone).ok())
         .ok_or_else(|| "guest-session:zone-runtime-unavailable".to_owned())?;
     let target = resolve_committed_guest_session_target(&runtime, guest_ref)
@@ -11099,6 +11147,7 @@ pub(crate) async fn binding_guest_mount_ready(
     let directory = state
         .v3_planes
         .lock()
+        .await
         .get(zone.as_str())
         .map(|plane| std::sync::Arc::clone(plane.targets()));
     let Some(directory) = directory else {
@@ -11254,10 +11303,15 @@ mod guest_target_session_tests {
     /// Capture everything one action emits with the daemon's default filter
     /// applied (`main.rs` initializes `info`): an event below that level never
     /// reaches the host journal, where the Guest console is forwarded.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn capture_journal_output(action: impl FnOnce()) -> String {
         #[derive(Clone)]
         struct Buffer(Arc<std::sync::Mutex<Vec<u8>>>);
 
+        // Synchronous by construction (the tracing writer surface is sync):
+        // stays a `std::sync::Mutex` test fake under the plan's sanctioned
+        // cfg(test)-helper survivor class.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         impl std::io::Write for Buffer {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
                 self.0.lock().expect("journal buffer").extend_from_slice(bytes);
@@ -11388,7 +11442,10 @@ fn read_guest_config_typed(
     zone: &ZoneId,
     vm: &str,
 ) -> Result<d2b_provider_config_nixos::ConfigSyncResponse, TypedError> {
-    if d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
+    if block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    ))
         .ok()
         .as_ref()
         != Some(zone)
@@ -11623,7 +11680,7 @@ fn shell_resource_client(
 ) -> Result<(ZoneId, Arc<DaemonResourceApiClient>), TypedError> {
     let zone = state
         .resource_plane
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
         .and_then(|plane| plane.topology_root().cloned())
@@ -12344,7 +12401,7 @@ fn guest_shell_session(
         .ok_or_else(shell_capability_failed)?;
     let root_zone = state
         .resource_plane
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
         .and_then(|plane| plane.topology_root().cloned())
@@ -12509,7 +12566,10 @@ fn remember_typed_shell_session_target(
     name: &public_wire::ShellName,
     target: &str,
 ) {
-    if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
+    // Synchronous caller: non-blocking `try_lock` per plan U4 (the cache seat
+    // is a tokio mutex in the converted d2bd-runtime); a collision skips the
+    // cache update fail-closed - the caller's next list pass re-caches.
+    if let Ok(mut sessions) = state.typed_shell_session_targets.try_lock() {
         sessions.remember((peer_uid, name.as_str().to_owned()), target.to_owned());
     }
 }
@@ -12519,7 +12579,7 @@ fn forget_typed_shell_session_target(
     peer_uid: u32,
     name: &public_wire::ShellName,
 ) {
-    if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
+    if let Ok(mut sessions) = state.typed_shell_session_targets.try_lock() {
         sessions.forget(&(peer_uid, name.as_str().to_owned()));
     }
 }
@@ -12541,7 +12601,7 @@ fn cache_unambiguous_typed_shell_session_targets(
             conflicts.insert(name);
         }
     }
-    if let Ok(mut sessions) = state.typed_shell_session_targets.lock() {
+    if let Ok(mut sessions) = state.typed_shell_session_targets.try_lock() {
         for name in &conflicts {
             sessions.forget(&(peer_uid, name.clone()));
         }
@@ -12588,7 +12648,7 @@ fn cached_typed_shell_session_target(
 ) -> Option<String> {
     state
         .typed_shell_session_targets
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|mut sessions| sessions.cached(&(peer_uid, name.as_str().to_owned())))
 }
@@ -12613,7 +12673,7 @@ fn reserve_typed_shell_session_create(
 fn typed_shell_session_target_cache_len(state: &ServerState) -> usize {
     state
         .typed_shell_session_targets
-        .lock()
+        .try_lock()
         .map(|sessions| sessions.len())
         .unwrap_or(0)
 }
@@ -12622,7 +12682,7 @@ fn typed_shell_session_target_cache_len(state: &ServerState) -> usize {
 fn typed_shell_session_target_cache_recency_len(state: &ServerState) -> usize {
     state
         .typed_shell_session_targets
-        .lock()
+        .try_lock()
         .map(|sessions| sessions.recency_len())
         .unwrap_or(0)
 }
@@ -14395,32 +14455,36 @@ async fn open_resource_plane(
             plane_v3
         };
         let plane_v3 = std::sync::Arc::new(plane_v3);
-        rendezvous.publish(_zone.as_str(), plane_v3.provider_runtime());
+        rendezvous
+            .publish(_zone.as_str(), plane_v3.provider_runtime())
+            .await;
         // The U10 family seam: the broker kernel socket, the daemon's caller
         // role, the Zone's trusted bundle, and the daemon-side runner lookup
         // the family handlers invoke kernels through and validate against.
         // Wired once per Zone alongside the provider publication; a Zone
         // whose seam was never wired serves forwarded family operations
         // without a kernel leg (they refuse when their handler needs one).
-        rendezvous.set_kernel_seam(
-            _zone.as_str(),
-            KernelCaller {
-                socket_path: broker_socket_path(state),
-                caller_role: BrokerCallerRole::AdminUid {
-                    uid: state.daemon_uid,
+        rendezvous
+            .set_kernel_seam(
+                _zone.as_str(),
+                KernelCaller {
+                    socket_path: broker_socket_path(state),
+                    caller_role: BrokerCallerRole::AdminUid {
+                        uid: state.daemon_uid,
+                    },
+                    bundle: Arc::new(resolver.clone()),
+                    runner_lookup: Some(Arc::new(PidfdRunnerLookup {
+                        table: Arc::clone(&state.pidfd_table),
+                    })),
                 },
-                bundle: Arc::new(resolver.clone()),
-                runner_lookup: Some(Arc::new(PidfdRunnerLookup {
-                    table: Arc::clone(&state.pidfd_table),
-                })),
-            },
-        );
+            )
+            .await;
         v3_planes.insert(_zone.as_str().to_owned(), plane_v3);
     }
     // U14: publish the complete table before any Zone activates; the
     // manager-backed API service resolves the Zone's client + watch hub here.
     {
-        let mut parked = state.v3_planes.lock();
+        let mut parked = state.v3_planes.lock().await;
         *parked = v3_planes.into_iter().collect();
     }
 
@@ -14913,11 +14977,7 @@ async fn record_authoritative_resource_plane_audit(
 }
 
 async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Error> {
-    let plane = state
-        .resource_plane
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take());
+    let plane = state.resource_plane.lock().await.take();
     if let Some(plane) = plane {
         let zones = plane.zone_ids();
         match Arc::try_unwrap(plane) {
@@ -14931,10 +14991,7 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                     )
                     .await?;
                 }
-                match state.resource_plane.lock() {
-                    Ok(mut slot) => *slot = Some(Arc::new(plane)),
-                    Err(_) => std::mem::forget(plane),
-                }
+                *state.resource_plane.lock().await = Some(Arc::new(plane));
             }
             Ok(mut plane) => match plane.shutdown().await {
                 Ok(()) => {
@@ -14958,10 +15015,7 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                         )
                         .await?;
                     }
-                    match state.resource_plane.lock() {
-                        Ok(mut slot) => *slot = Some(Arc::new(plane)),
-                        Err(_) => std::mem::forget(plane),
-                    }
+                    *state.resource_plane.lock().await = Some(Arc::new(plane));
                     tracing::warn!("resource plane still has live request owners during shutdown");
                 }
                 Err(error) => {
@@ -14978,10 +15032,7 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                 }
             },
             Err(plane) => {
-                match state.resource_plane.lock() {
-                    Ok(mut slot) => *slot = Some(plane),
-                    Err(_) => std::mem::forget(plane),
-                }
+                *state.resource_plane.lock().await = Some(plane);
                 for zone in &zones {
                     record_authoritative_resource_plane_audit(
                         state,
@@ -15042,7 +15093,7 @@ fn network_tap_context_for_vm(
     resolver: &BundleResolver,
     vm_name: &str,
 ) -> Option<d2b_contracts_broker::broker_wire::NetworkTapContext> {
-    let plane = state.resource_plane.lock().ok()?.clone()?;
+    let plane = state.resource_plane.try_lock().ok()?.clone()?;
     let mut resolved = None;
     for zone in plane.zone_ids() {
         let Ok(runtime) = plane.zone(&zone) else {
@@ -15160,7 +15211,10 @@ struct VmStartRunner<'a> {
 impl VmStartRunner<'_> {
     fn sync_store_view(&self, vm: &str) -> Result<(), String> {
         let zone =
-            d2bd_runtime::zone_authority::authoritative_zone_for_vm(&self.state.zone_coordinator, vm)
+            block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+            &self.state.zone_coordinator,
+            vm,
+        ))
                 .map_err(|_| "store-view-zone-unavailable".to_owned())?;
         let intent = resolve_store_view_intent_for_guest(self.resolver, &zone, vm)?;
         match dispatch_broker_request_as(
@@ -15679,11 +15733,14 @@ fn reconcile_display_before_vm_start(
     if !dag.nodes.iter().any(is_durable_wayland_process_node) {
         return Ok(());
     }
-    let zone = d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
+    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    ))
         .map_err(|_| "display-session-zone-unavailable".to_owned())?;
     let plane = state
         .resource_plane
-        .lock()
+        .try_lock()
         .map_err(|_| "display-resource-plane-unavailable".to_owned())?
         .clone()
         .ok_or_else(|| "display-resource-plane-unavailable".to_owned())?;
@@ -15919,14 +15976,19 @@ struct ShutdownDegradedMarker {
 }
 
 fn force_shutdown_generation(state: &ServerState, vm: &str) -> u64 {
-    let Ok(zone) =
-        d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
-    else {
+    // The zone authority seat is async (plan U17); this caller is synchronous
+    // (the shutdown handler threads), so the short lookup rides the existing
+    // bridge, exactly like the other async hops in this path (removed at U13
+    // when the chain converts to async end-to-end).
+    let Ok(zone) = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    )) else {
         return 0;
     };
     state
         .zone_coordinator
-        .lock()
+        .try_lock()
         .ok()
         .and_then(|coordinator| coordinator.snapshot(&zone).ok())
         .and_then(|snapshot| snapshot.force_shutdown_generation())
@@ -15934,16 +15996,17 @@ fn force_shutdown_generation(state: &ServerState, vm: &str) -> u64 {
 }
 
 fn note_force_shutdown_request(state: &ServerState, vm: &str) {
-    let Ok(zone) =
-        d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, vm)
-    else {
+    let Ok(zone) = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        vm,
+    )) else {
         tracing::warn!(
             vm = %vm,
             "force shutdown request ignored because the VM has no authoritative Zone binding",
         );
         return;
     };
-    let Ok(mut coordinator) = state.zone_coordinator.lock() else {
+    let Ok(mut coordinator) = state.zone_coordinator.try_lock() else {
         tracing::warn!(vm = %vm, "force shutdown request ignored because Zone state is unavailable");
         return;
     };
@@ -18664,14 +18727,16 @@ fn provider_lifecycle_authorization(
         ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| TypedError::InternalConfig {
             detail: "Guest lifecycle target is invalid".to_owned(),
         })?;
-    let zone =
-        d2bd_runtime::zone_authority::authoritative_zone_for_vm(&state.zone_coordinator, guest)
-            .map_err(|_| TypedError::InternalConfig {
-                detail: "Guest lifecycle Zone identity is unavailable".to_owned(),
-            })?;
+    let zone = block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+        &state.zone_coordinator,
+        guest,
+    ))
+    .map_err(|_| TypedError::InternalConfig {
+        detail: "Guest lifecycle Zone identity is unavailable".to_owned(),
+    })?;
     let plane = state
         .resource_plane
-        .lock()
+        .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "Guest lifecycle resource plane is unavailable".to_owned(),
         })?
@@ -19537,7 +19602,14 @@ fn dispatch_broker_vm_stop_with_timeout_as_inner(
         }) {
             Ok(report) => report,
             Err(response) => {
-                state.security_key_sessions.lock().stop_vm(&request.vm);
+                if let Ok(mut sessions) = state.security_key_sessions.try_lock() {
+                    sessions.stop_vm(&request.vm);
+                } else {
+                    tracing::warn!(
+                        vm = %request.vm,
+                        "security-key session table busy; stop-vm cleanup skipped"
+                    );
+                }
                 return Ok(response);
             }
         };
@@ -19550,7 +19622,14 @@ fn dispatch_broker_vm_stop_with_timeout_as_inner(
         }
     }
 
-    state.security_key_sessions.lock().stop_vm(&request.vm);
+    if let Ok(mut sessions) = state.security_key_sessions.try_lock() {
+        sessions.stop_vm(&request.vm);
+    } else {
+        tracing::warn!(
+            vm = %request.vm,
+            "security-key session table busy; stop-vm cleanup skipped"
+        );
+    }
 
     let _mguard = state.pidfd_table.mutation_guard();
     if let Err(error) = state.pidfd_table.snapshot() {
@@ -19591,11 +19670,15 @@ fn dispatch_broker_vm_stop_with_timeout_as_inner(
         summary.push_str(&format!("; provider shutdown outcomes: {labels}"));
     }
     summary.push_str(&format!(" ({})", drained_roles.join(", ")));
-    state
-        .console_sessions
-        .lock()
-        .unwrap()
-        .remove_session(&request.vm);
+    match console_sessions_table(state) {
+        Ok(mut table) => {
+            table.remove_session(&request.vm);
+        }
+        Err(_) => tracing::warn!(
+            vm = %request.vm,
+            "console session removal skipped: session table busy",
+        ),
+    }
     Ok(applied_response(VERB, summary))
 }
 
@@ -19874,8 +19957,26 @@ struct HostActivationPendingMarker {
 }
 
 struct ActivationLockGuard {
-    coordinator: Arc<Mutex<ZoneCoordinator>>,
+    coordinator: Arc<tokio::sync::Mutex<ZoneCoordinator>>,
     zone: ZoneId,
+}
+
+/// Acquire a `tokio::sync::Mutex` from a synchronous context without ever
+/// depending on an ambient runtime.
+///
+/// This is the `authority_persistence` lock-seat shape (plan U17): the
+/// blocking seat (`blocking_lock`) panics inside a tokio runtime, and the
+/// activation staging runs in async contexts, so a bounded `try_lock` spin
+/// preserves the old blocking-wait semantics without parking an executor
+/// worker. Every protected critical section here is a sub-microsecond
+/// `ZoneCoordinator` call.
+fn lock_sync<T>(mutex: &tokio::sync::Mutex<T>) -> tokio::sync::MutexGuard<'_, T> {
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return guard,
+            Err(_) => std::hint::spin_loop(),
+        }
+    }
 }
 
 impl ActivationLockGuard {
@@ -19886,9 +19987,8 @@ impl ActivationLockGuard {
 
 impl Drop for ActivationLockGuard {
     fn drop(&mut self) {
-        if let Ok(mut coordinator) = self.coordinator.lock() {
-            let _ = coordinator.finish_activation(&self.zone);
-        }
+        let mut coordinator = lock_sync(&self.coordinator);
+        let _ = coordinator.finish_activation(&self.zone);
     }
 }
 
@@ -19896,10 +19996,10 @@ fn try_acquire_activation_lock(
     state: &ServerState,
     vm: &str,
 ) -> Result<ActivationLockGuard, Value> {
-    let zone = match d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+    let zone = match block_on_future(d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
         vm,
-    ) {
+    )) {
         Ok(zone) => zone,
         Err(_) => {
             return Err(invalid_request_response_with_summary(
@@ -19910,7 +20010,10 @@ fn try_acquire_activation_lock(
         }
     };
     let coordinator = Arc::clone(&state.zone_coordinator);
-    let acquired = match coordinator.lock() {
+    // Synchronous caller: non-blocking `try_lock` per plan U4; a collision
+    // (another Zone op mid-critical-section, sub-microsecond) refuses with
+    // the same `ZoneNotRegistered` the poison-fail-closed path produced.
+    let acquired = match coordinator.try_lock() {
         Ok(mut coordinator) => coordinator.begin_activation(&zone),
         Err(_) => Err(CoordinatorError::ZoneNotRegistered),
     };
@@ -19943,7 +20046,7 @@ fn stage_configuration_ordinal(
 ) -> Result<(), CoordinatorError> {
     state
         .zone_coordinator
-        .lock()
+        .try_lock()
         .map_err(|_| CoordinatorError::ZoneNotRegistered)?
         .stage_configuration_ordinal(zone, ordinal)
 }
@@ -20000,9 +20103,11 @@ fn restore_configuration_staging_on_startup(state: &ServerState) {
         let Some(ordinal) = marker.generation_number else {
             continue;
         };
-        let Ok(zone) = d2bd_runtime::zone_authority::authoritative_zone_for_vm(
-            &state.zone_coordinator,
-            &marker.vm,
+        let Ok(zone) = block_on_future(
+            d2bd_runtime::zone_authority::authoritative_zone_for_vm(
+                &state.zone_coordinator,
+                &marker.vm,
+            ),
         ) else {
             tracing::warn!(
                 vm = %marker.vm,
@@ -20100,7 +20205,7 @@ fn dispatch_live_guest_activation_resource(
     let zone = guard.zone().clone();
     let plane = state
         .resource_plane
-        .lock()
+        .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
         })?
@@ -21056,7 +21161,7 @@ mod public_status_tests {
             exec_sessions: Arc::new(exec_session::SessionTable::new(
                 exec_session::ExecSessionCaps::default(),
             )),
-            console_sessions: Arc::new(Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
@@ -21065,22 +21170,22 @@ mod public_status_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(Default::default())),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         };
         (state, dir)
     }
@@ -22607,6 +22712,10 @@ pub(crate) mod detached_exec_routing_tests {
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
+    // Synchronous by construction (the process-global peer-injection slot is
+    // a d2bd-runtime std test seat): stays under the plan's sanctioned
+    // cfg(test)-helper survivor class.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl PeerOverrideEnv {
         fn launcher() -> Self {
             let lock = TEST_PEER_OVERRIDE_LOCK
@@ -22622,6 +22731,7 @@ pub(crate) mod detached_exec_routing_tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl Drop for PeerOverrideEnv {
         fn drop(&mut self) {
             *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = None;
@@ -23013,7 +23123,7 @@ pub(crate) mod detached_exec_routing_tests {
             broker_reap_log,
             metrics_registry: Arc::new(d2bd_runtime::metrics::Registry::new()),
             exec_sessions: Arc::new(exec_session::SessionTable::new(caps)),
-            console_sessions: Arc::new(Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
@@ -23022,22 +23132,22 @@ pub(crate) mod detached_exec_routing_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(Default::default())),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -23118,25 +23228,25 @@ mod accept_loop_concurrency_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(Default::default())),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            console_sessions: Arc::new(Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
                 crate::console_session::ConsoleSessionTable::new(),
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         };
         (state, dir)
     }
@@ -23191,6 +23301,10 @@ mod accept_loop_concurrency_tests {
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
+    // Synchronous by construction (the process-global peer-injection slot is
+    // a d2bd-runtime std test seat): stays under the plan's sanctioned
+    // cfg(test)-helper survivor class.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl PeerOverrideEnv {
         fn admin() -> Self {
             let lock = TEST_PEER_OVERRIDE_LOCK
@@ -23261,6 +23375,7 @@ mod accept_loop_concurrency_tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl Drop for PeerOverrideEnv {
         fn drop(&mut self) {
             *TEST_PEER_OVERRIDE.lock().unwrap_or_else(|p| p.into_inner()) = None;
@@ -23305,6 +23420,7 @@ mod accept_loop_concurrency_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn process_dispatch_returns_to_the_accept_loop_and_a_second_request_is_served() {
         use std::sync::{Condvar, Mutex};
 
@@ -23845,7 +23961,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
-            console_sessions: Arc::new(Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
@@ -23854,22 +23970,22 @@ mod broker_dispatch_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(Default::default())),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -23905,7 +24021,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
-            console_sessions: Arc::new(Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
@@ -23914,22 +24030,22 @@ mod broker_dispatch_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(Default::default())),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -25152,7 +25268,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
-            console_sessions: Arc::new(Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
@@ -25161,22 +25277,22 @@ mod broker_dispatch_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(Default::default())),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         };
         let server_socket_path = socket_path.clone();
         let broker = thread::spawn(move || {
@@ -25417,7 +25533,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
-            console_sessions: Arc::new(Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
@@ -25426,22 +25542,22 @@ mod broker_dispatch_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(Default::default())),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         };
 
         let listener = socket(
@@ -25730,7 +25846,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
-            console_sessions: Arc::new(Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
@@ -25739,22 +25855,22 @@ mod broker_dispatch_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(Default::default())),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         };
         let opener = RecordingOpener::new();
         adopt_orphaned_runners_on_startup_with(&state, &store, &FixedProcReader, &opener)
@@ -28054,7 +28170,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
-            console_sessions: Arc::new(Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
@@ -28063,22 +28179,22 @@ mod broker_dispatch_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(Default::default())),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         };
 
         // Emit the same event that the timeout handler in
@@ -28688,6 +28804,7 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn concurrent_typed_shell_creates_reserve_one_uid_name_and_release() {
         use std::sync::Barrier;
 
@@ -29187,7 +29304,7 @@ mod broker_dispatch_tests {
             exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
                 crate::exec_session::ExecSessionCaps::default(),
             )),
-            console_sessions: Arc::new(Mutex::new(
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
                 crate::console_session::ConsoleSessionTable::default(),
             )),
             conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
@@ -29196,24 +29313,24 @@ mod broker_dispatch_tests {
                 d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
             ),
             provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
-            resource_plane: Arc::new(Mutex::new(None)),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
             interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
-            interaction_listeners: Arc::new(Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
             typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
             zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
-            config_staging: Arc::new(Mutex::new(
+            config_staging: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_config_nixos::ConfigStagingStore::default(),
             )),
             guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            security_key_sessions: Arc::new(parking_lot::Mutex::new(
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
                 d2b_provider_device_security_key::SkSessionTable::default(),
             )),
             unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
                 0,
                 [],
             )),
-            v3_planes: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         };
 
         let response = dispatch_broker_vm_start(

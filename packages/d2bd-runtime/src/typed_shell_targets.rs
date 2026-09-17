@@ -1,4 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 const MAX_TYPED_SHELL_SESSION_TARGETS: usize = 256;
 
@@ -68,11 +70,19 @@ impl TypedShellSessionTargetCache {
         self.recency.len()
     }
 
+    /// Reserve one create seat per (uid, name).
+    ///
+    /// U17 sync seat: `try_lock` fails closed when the cache mutex is
+    /// momentarily held (every protected critical section is a
+    /// sub-microsecond set/map operation), mirroring the fail-closed
+    /// `None` the poisoned std seat produced. `blocking_lock` is unusable
+    /// here: concurrent create handlers also run on tokio runtime threads,
+    /// where it panics (see the `lock_sync` seat in authority_persistence).
     pub fn reserve(
         cache: &Arc<Mutex<Self>>,
         key: (u32, String),
     ) -> Option<TypedShellSessionCreateReservation> {
-        let mut guard = cache.lock().ok()?;
+        let mut guard = cache.try_lock().ok()?;
         if !guard.create_reservations.insert(key.clone()) {
             return None;
         }
@@ -101,8 +111,23 @@ impl TypedShellSessionCreateReservation {
 
 impl Drop for TypedShellSessionCreateReservation {
     fn drop(&mut self) {
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.create_reservations.remove(&self.key);
+        // A dropped reservation MUST release its create seat, so unlike
+        // `reserve` this cannot fail closed (a leaked seat would block
+        // every future create of the same uid/name). `blocking_lock` is
+        // unusable: the reservation is released from dedicated request
+        // threads AND tokio runtime contexts, where blocking_lock panics.
+        // This is the `lock_sync` seat from authority_persistence.rs:
+        // try_lock plus a bounded spin, safe in both contexts, correct
+        // because the release critical section is a single
+        // sub-microsecond BTreeSet remove.
+        loop {
+            match self.cache.try_lock() {
+                Ok(mut cache) => {
+                    cache.create_reservations.remove(&self.key);
+                    return;
+                }
+                Err(_) => std::hint::spin_loop(),
+            }
         }
     }
 }
@@ -113,4 +138,61 @@ pub fn new_cache() -> Arc<Mutex<TypedShellSessionTargetCache>> {
 
 pub fn max_entries() -> usize {
     MAX_TYPED_SHELL_SESSION_TARGETS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reserve_admits_one_create_seat_per_uid_name_and_drop_releases() {
+        let cache = new_cache();
+        let first = TypedShellSessionTargetCache::reserve(&cache, (7, "primary".to_owned()))
+            .expect("first seat");
+        assert!(
+            TypedShellSessionTargetCache::reserve(&cache, (7, "primary".to_owned())).is_none(),
+            "duplicate uid/name must conflict"
+        );
+        let _other_uid =
+            TypedShellSessionTargetCache::reserve(&cache, (8, "primary".to_owned()))
+                .expect("different uid admitted");
+        let _other_name =
+            TypedShellSessionTargetCache::reserve(&cache, (7, "secondary".to_owned()))
+                .expect("different name admitted");
+        drop(first);
+        assert!(
+            TypedShellSessionTargetCache::reserve(&cache, (7, "primary".to_owned())).is_some(),
+            "drop must release the seat"
+        );
+    }
+
+    #[tokio::test]
+    async fn reservation_release_works_inside_a_tokio_runtime() {
+        // `blocking_lock` panics on a runtime worker thread; the drop
+        // release must reach the cache through the spin seat instead.
+        let cache = new_cache();
+        let seat = TypedShellSessionTargetCache::reserve(&cache, (7, "primary".to_owned()))
+            .expect("seat");
+        drop(seat);
+        assert!(
+            TypedShellSessionTargetCache::reserve(&cache, (7, "primary".to_owned())).is_some(),
+            "release inside a runtime must not panic or leak the seat"
+        );
+    }
+
+    #[test]
+    fn cache_remembers_caches_and_forgets_exact_targets() {
+        let cache = new_cache();
+        let mut guard = cache.blocking_lock();
+        assert!(guard.is_empty());
+        guard.remember((7, "primary".to_owned()), "tools.host.d2b".to_owned());
+        assert_eq!(
+            guard.cached(&(7, "primary".to_owned())).as_deref(),
+            Some("tools.host.d2b")
+        );
+        assert_eq!(guard.len(), 1);
+        guard.forget(&(7, "primary".to_owned()));
+        assert!(guard.cached(&(7, "primary".to_owned())).is_none());
+        assert!(guard.is_empty());
+    }
 }

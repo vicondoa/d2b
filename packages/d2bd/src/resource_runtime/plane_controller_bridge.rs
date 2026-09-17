@@ -161,13 +161,13 @@ impl ControllerPlaneView for ManagerControllerPlaneView {
 /// controller-session path sees manager-served rows no matter when the
 /// composition publishes them.
 pub(crate) struct PublishedPlaneControllerView {
-    planes: Arc<parking_lot::Mutex<HashMap<String, Arc<crate::resource_plane_v3::ResourcePlaneV3>>>>,
+    planes: Arc<tokio::sync::Mutex<HashMap<String, Arc<crate::resource_plane_v3::ResourcePlaneV3>>>>,
     zone: ZoneId,
 }
 
 impl PublishedPlaneControllerView {
     pub(crate) fn new(
-        planes: Arc<parking_lot::Mutex<HashMap<String, Arc<crate::resource_plane_v3::ResourcePlaneV3>>>>,
+        planes: Arc<tokio::sync::Mutex<HashMap<String, Arc<crate::resource_plane_v3::ResourcePlaneV3>>>>,
         zone: ZoneId,
     ) -> Self {
         Self { planes, zone }
@@ -177,7 +177,7 @@ impl PublishedPlaneControllerView {
 #[async_trait]
 impl ControllerPlaneView for PublishedPlaneControllerView {
     async fn process_view(&self, process_ref: &ResourceRef) -> Result<Option<ResourceView>, ResourceError> {
-        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+        let Some(plane) = self.planes.lock().await.get(self.zone.as_str()).cloned() else {
             return Ok(None);
         };
         ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())
@@ -189,7 +189,7 @@ impl ControllerPlaneView for PublishedPlaneControllerView {
         &self,
         resource_type: &str,
     ) -> Result<Vec<ResourceView>, ResourceError> {
-        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+        let Some(plane) = self.planes.lock().await.get(self.zone.as_str()).cloned() else {
             return Ok(Vec::new());
         };
         ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())
@@ -198,7 +198,7 @@ impl ControllerPlaneView for PublishedPlaneControllerView {
     }
 
     async fn all_rows(&self) -> Result<Vec<ResourceView>, ResourceError> {
-        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+        let Some(plane) = self.planes.lock().await.get(self.zone.as_str()).cloned() else {
             return Ok(Vec::new());
         };
         ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())
@@ -207,7 +207,7 @@ impl ControllerPlaneView for PublishedPlaneControllerView {
     }
 
     async fn all_rows_in_zone(&self, zone: &str) -> Result<Vec<ResourceView>, ResourceError> {
-        let Some(plane) = self.planes.lock().get(self.zone.as_str()).cloned() else {
+        let Some(plane) = self.planes.lock().await.get(self.zone.as_str()).cloned() else {
             return Ok(Vec::new());
         };
         ManagerControllerPlaneView::new(plane.client().clone(), self.zone.clone())

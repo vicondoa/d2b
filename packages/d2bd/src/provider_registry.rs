@@ -9,7 +9,7 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc, RwLock,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -568,18 +568,18 @@ enum ProviderRuntimeState {
 /// Daemon-owned Provider composition and lifecycle routing state.
 #[derive(Debug)]
 pub struct ProviderRuntime {
-    state: RwLock<ProviderRuntimeState>,
-    process_providers: RwLock<Option<Arc<ProductionProcessProviders>>>,
+    state: tokio::sync::RwLock<ProviderRuntimeState>,
+    process_providers: tokio::sync::RwLock<Option<Arc<ProductionProcessProviders>>>,
 }
 
 impl ProviderRuntime {
     /// Start unavailable until a trusted Provider catalog is supplied.
     pub fn new() -> Self {
         Self {
-            state: RwLock::new(ProviderRuntimeState::Refused(
+            state: tokio::sync::RwLock::new(ProviderRuntimeState::Refused(
                 ProviderCompositionError::ProviderNotRegistered,
             )),
-            process_providers: RwLock::new(None),
+            process_providers: tokio::sync::RwLock::new(None),
         }
     }
 
@@ -608,13 +608,13 @@ impl ProviderRuntime {
             }
         }
         Ok(Self {
-            state: RwLock::new(ProviderRuntimeState::Active(ActiveProviderRuntime {
+            state: tokio::sync::RwLock::new(ProviderRuntimeState::Active(ActiveProviderRuntime {
                 zone: zone.clone(),
                 registry: ProviderRegistryManager::new(registry),
                 routes: route_index,
                 lifecycle: ProviderLifecycleDispatch::new(zone),
             })),
-            process_providers: RwLock::new(None),
+            process_providers: tokio::sync::RwLock::new(None),
         })
     }
 
@@ -624,7 +624,7 @@ impl ProviderRuntime {
         providers: Arc<ProductionProcessProviders>,
     ) -> Result<(), ProviderCompositionError> {
         self.process_providers
-            .write()
+            .try_write()
             .map_err(|_| ProviderCompositionError::StateUnavailable)
             .map(|mut current| {
                 *current = Some(providers);
@@ -634,7 +634,7 @@ impl ProviderRuntime {
     /// Whether the fixed process Provider path is composed and available.
     pub fn process_providers_ready(&self) -> bool {
         self.process_providers
-            .read()
+            .try_read()
             .map(|providers| providers.is_some())
             .unwrap_or(false)
     }
@@ -642,7 +642,7 @@ impl ProviderRuntime {
     /// Borrow the daemon-owned process Provider composition.
     pub fn process_providers(&self) -> Option<Arc<ProductionProcessProviders>> {
         self.process_providers
-            .read()
+            .try_read()
             .ok()
             .and_then(|providers| providers.clone())
     }
@@ -650,7 +650,7 @@ impl ProviderRuntime {
     /// Number of Provider descriptors in the active registry.
     pub fn registered_provider_count(&self) -> usize {
         self.state
-            .read()
+            .try_read()
             .ok()
             .and_then(|state| match &*state {
                 ProviderRuntimeState::Active(active) => {
@@ -674,7 +674,7 @@ impl ProviderRuntime {
     ) -> Result<ProviderRuntimeDispatch<P::Output>, ProviderEffectError> {
         let state = self
             .state
-            .read()
+            .try_read()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let ProviderRuntimeState::Active(active) = &*state else {
             return match &*state {
@@ -729,7 +729,7 @@ impl ProviderRuntime {
         let (operation, idempotency_key, authorization) = intent;
         let state = self
             .state
-            .read()
+            .try_read()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let ProviderRuntimeState::Active(active) = &*state else {
             return Err(ProviderEffectError::RegistryUnavailable);
@@ -773,7 +773,7 @@ impl ProviderRuntime {
     ) -> Result<bool, ProviderEffectError> {
         let state = self
             .state
-            .read()
+            .try_read()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let ProviderRuntimeState::Active(active) = &*state else {
             return Err(ProviderEffectError::RegistryUnavailable);
@@ -814,7 +814,7 @@ impl ProviderRuntime {
         let (provider_assignment_generation, policy_revision) = revision;
         let state = self
             .state
-            .read()
+            .try_read()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let ProviderRuntimeState::Active(active) = &*state else {
             return Err(ProviderEffectError::RegistryUnavailable);

@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{
     ResourceBundleGenerationId, ResourceUid, ZoneId, storage::ZoneStoreStorageRow,
@@ -10,6 +10,7 @@ use d2b_contracts_zone_session::v3::resource_bundle::{
 use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core_controller::coordinator::{CoordinatorError, ZoneCoordinator};
 use sha2::{Digest, Sha256};
+use tokio::sync::Mutex;
 
 /// Prefix reserved for the durable all-Zone publication operation.
 pub const ZONE_GENERATION_PUBLICATION_OPERATION_PREFIX: &str = "zone-generation-publication:";
@@ -173,6 +174,10 @@ pub fn complete_generation_set_digest(
         .map_err(|_| ZoneAuthorityError::BundleGenerationInvalid)
 }
 
+/// Create the process-local authoritative Zone coordinator behind a
+/// `tokio::sync::Mutex` (plan U17). The awaitable entry points in this
+/// module hold the guard only across synchronous `ZoneCoordinator` calls;
+/// the guard is never held across an await point.
 pub fn new_coordinator() -> Arc<Mutex<ZoneCoordinator>> {
     Arc::new(Mutex::new(ZoneCoordinator::new()))
 }
@@ -185,14 +190,16 @@ pub fn authoritative_zone_ids(resolver: &BundleResolver) -> Result<BTreeSet<Zone
     Ok(zones)
 }
 
-pub fn register_authoritative_zones(
+/// Register every authoritative Zone in the resolver and bind each manifest
+/// VM to the Zone named by its environment (U17 async seat: the
+/// `tokio::sync::Mutex` is acquired with `.lock().await` and released
+/// before the next await point).
+pub async fn register_authoritative_zones(
     coordinator: &Arc<Mutex<ZoneCoordinator>>,
     resolver: &BundleResolver,
 ) -> Result<(), &'static str> {
     #[allow(unused_mut)]
-    let mut coordinator = coordinator
-        .lock()
-        .map_err(|_| "zone coordinator lock unavailable")?;
+    let mut coordinator = coordinator.lock().await;
     for zone in authoritative_zone_ids(resolver)? {
         let _ = coordinator.register_zone(zone);
     }
@@ -208,14 +215,14 @@ pub fn register_authoritative_zones(
     Ok(())
 }
 
-pub fn authoritative_zone_for_vm(
+/// Resolve a trusted VM resource to its authoritative Zone (U17 async seat:
+/// `.lock().await`, released before the next await point).
+pub async fn authoritative_zone_for_vm(
     coordinator: &Arc<Mutex<ZoneCoordinator>>,
     vm: &str,
 ) -> Result<ZoneId, CoordinatorError> {
     #[allow(unused_mut)]
-    let mut coordinator = coordinator
-        .lock()
-        .map_err(|_| CoordinatorError::ZoneNotRegistered)?;
+    let mut coordinator = coordinator.lock().await;
     if let Ok(zone) = coordinator.zone_for_vm(vm) {
         return Ok(zone.clone());
     }
@@ -395,5 +402,72 @@ mod tests {
             complete_generation_set_digest(&zones, &first),
             complete_generation_set_digest(&zones, &changed)
         );
+    }
+
+    // Fixtures mirror the kernel_module_check.rs test builder (U17-landed);
+    // baseline-vms.json carries exactly two VMs, both with `env: "work"`.
+    const HOST_JSON_FIXTURE: &str =
+        include_str!("../../../tests/fixtures/deny-unknown/host-valid.json");
+    const MANIFEST_FIXTURE: &str =
+        include_str!("../../../tests/golden/manifest_v04/baseline-vms.json");
+
+    fn resolver_with_work_zone() -> d2b_core::bundle_resolver::BundleResolver {
+        let host: d2b_core::host::HostJson =
+            serde_json::from_str(HOST_JSON_FIXTURE).expect("host fixture parses");
+        let manifest = d2b_core::manifest_v04::ManifestV04::from_slice(MANIFEST_FIXTURE.as_bytes())
+            .expect("manifest fixture parses");
+        let processes = d2b_core::processes::ProcessesJson {
+            schema_version: "v3".to_owned(),
+            vms: Vec::new(),
+        };
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174002").expect("zone uid");
+        let zone_bundle =
+            serde_json::to_vec(&bundle("work", &uid)).expect("zone bundle serializes");
+        d2b_core::bundle_resolver::BundleResolver::from_artifacts_with_zone_resource_bundles(
+            d2b_core::bundle::Bundle {
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                realm_workloads_launcher_v2_path: None,
+                generation: d2b_core::bundle::BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: Some("2025-01-01T00:00:00Z".to_owned()),
+                },
+                bundle_hash: None,
+                artifact_hashes: None,
+            },
+            host,
+            processes,
+            manifest,
+            BTreeMap::from([("work".to_owned(), zone_bundle)]),
+        )
+    }
+
+    #[tokio::test]
+    async fn coordinator_registers_authoritative_zones_and_resolves_vm_bindings() {
+        let coordinator = new_coordinator();
+        let resolver = resolver_with_work_zone();
+        register_authoritative_zones(&coordinator, &resolver)
+            .await
+            .expect("authoritative zones register");
+        let corp = authoritative_zone_for_vm(&coordinator, "corp-vm")
+            .await
+            .expect("corp-vm resolves");
+        assert_eq!(corp.as_str(), "work");
+        let net = authoritative_zone_for_vm(&coordinator, "sys-work-net")
+            .await
+            .expect("sys-work-net resolves");
+        assert_eq!(net.as_str(), "work");
+    }
+
+    #[tokio::test]
+    async fn coordinator_auto_registers_vm_as_zone_when_unbound() {
+        let coordinator = new_coordinator();
+        let zone = authoritative_zone_for_vm(&coordinator, "corp-vm")
+            .await
+            .expect("test-support auto-register");
+        assert_eq!(zone.as_str(), "corp-vm");
     }
 }

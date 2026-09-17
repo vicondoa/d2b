@@ -12,7 +12,6 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -621,7 +620,7 @@ pub trait ProviderLifecycleEffectPort {
 #[derive(Debug)]
 pub struct ProviderLifecycleDispatch {
     zone: ZoneId,
-    mutations: Mutex<BTreeMap<String, LifecycleMutation>>,
+    mutations: tokio::sync::Mutex<BTreeMap<String, LifecycleMutation>>,
     state_path: Option<PathBuf>,
     next_desired_generation: AtomicU64,
 }
@@ -701,7 +700,7 @@ impl ProviderLifecycleDispatch {
     pub fn new(zone: ZoneId) -> Self {
         Self {
             zone,
-            mutations: Mutex::new(BTreeMap::new()),
+            mutations: tokio::sync::Mutex::new(BTreeMap::new()),
             state_path: None,
             next_desired_generation: AtomicU64::new(0),
         }
@@ -787,11 +786,11 @@ impl ProviderLifecycleDispatch {
         }
         let dispatcher = Self {
             zone,
-            mutations: Mutex::new(mutations),
+            mutations: tokio::sync::Mutex::new(mutations),
             state_path: Some(state_path),
             next_desired_generation: AtomicU64::new(next_desired_generation),
         };
-        if let Ok(mut state) = dispatcher.mutations.lock() {
+        if let Ok(mut state) = dispatcher.mutations.try_lock() {
             dispatcher.retain_live(&mut state);
             dispatcher.persist_locked(&state)?;
         } else {
@@ -831,7 +830,7 @@ impl ProviderLifecycleDispatch {
         }
         let mut mutations = self
             .mutations
-            .lock()
+            .try_lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let now = now_ms();
         self.retain_live(&mut mutations);
@@ -968,7 +967,7 @@ impl ProviderLifecycleDispatch {
     fn remove(&self, request: &GuestLifecycleRequest) -> Result<(), ProviderEffectError> {
         let mut mutations = self
             .mutations
-            .lock()
+            .try_lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let previous = mutations.clone();
         let (authorization, operation, desired_generation, status) = mutations
@@ -1011,7 +1010,7 @@ impl ProviderLifecycleDispatch {
     ) -> Result<bool, ProviderEffectError> {
         let mut mutations = self
             .mutations
-            .lock()
+            .try_lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let previous = mutations.clone();
         let (authorization, operation, desired_generation, status) = mutations
@@ -1074,7 +1073,7 @@ impl ProviderLifecycleDispatch {
     ) -> Result<bool, ProviderEffectError> {
         let mut mutations = self
             .mutations
-            .lock()
+            .try_lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         let latest_generation = latest_generation_for_identity(&mutations, request.authorization());
         let Some(mutation) = mutations.get_mut(request.idempotency_key()) else {
@@ -1092,7 +1091,7 @@ impl ProviderLifecycleDispatch {
     }
 
     fn release_execution(&self, request: &GuestLifecycleRequest) {
-        if let Ok(mut mutations) = self.mutations.lock()
+        if let Ok(mut mutations) = self.mutations.try_lock()
             && let Some(mutation) = mutations.get_mut(request.idempotency_key())
             && mutation_has_identity(mutation, request.authorization())
             && mutation.operation == request.operation()
@@ -1125,7 +1124,7 @@ impl ProviderLifecycleDispatch {
         }
         let mut mutations = self
             .mutations
-            .lock()
+            .try_lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         self.retain_live(&mut mutations);
         let Some(mutation) = mutations.get(request.idempotency_key()) else {
@@ -1151,7 +1150,7 @@ impl ProviderLifecycleDispatch {
     ) -> Result<Option<GuestLifecycleOperation>, ProviderEffectError> {
         let mut mutations = self
             .mutations
-            .lock()
+            .try_lock()
             .map_err(|_| ProviderEffectError::StateUnavailable)?;
         self.retain_live(&mut mutations);
         let latest = mutations
@@ -1466,6 +1465,7 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use super::*;
     use d2b_contracts_resource::v3::{
         ResourceGeneration, ResourceRef, ZoneRevision, identity::ReconnectGeneration,
@@ -1923,7 +1923,7 @@ mod tests {
             Ok(EffectDispatch::Dispatched(1))
         );
         {
-            let mut mutations = dispatch.mutations.lock().expect("mutation lock");
+            let mut mutations = dispatch.mutations.try_lock().expect("mutation lock");
             mutations
                 .get_mut("durable-stop")
                 .expect("applied stop")
@@ -2210,9 +2210,7 @@ mod tests {
             Ok(LifecycleDispatch::Dispatch)
         );
         assert_eq!(
-            dispatch
-                .mutations
-                .lock()
+            dispatch.mutations.try_lock()
                 .expect("mutation lock")
                 .get("new-admission")
                 .map(|mutation| mutation.desired_generation),
@@ -2498,7 +2496,7 @@ mod tests {
             .expect("long-running effect entered");
 
         {
-            let mut mutations = dispatch.mutations.lock().expect("mutation lock");
+            let mut mutations = dispatch.mutations.try_lock().expect("mutation lock");
             let mutation = mutations
                 .get_mut("ttl-running")
                 .expect("executing mutation");

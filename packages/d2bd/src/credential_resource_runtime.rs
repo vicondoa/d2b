@@ -194,7 +194,7 @@ impl CredentialSession for ComponentCredentialSession {
 /// Registered Credential sessions keyed by provider ref, each carrying the
 /// reconnect generation recorded at registration time. Newer generations
 /// replace older ones; observed staleness is rejected.
-type CredentialSessionMap = std::sync::Mutex<
+type CredentialSessionMap = tokio::sync::Mutex<
     std::collections::BTreeMap<ResourceRef, (ReconnectGeneration, Arc<dyn CredentialSession>)>,
 >;
 
@@ -216,7 +216,7 @@ impl CredentialSessionRegistry {
         }
         let mut sessions = self
             .sessions
-            .lock()
+            .try_lock()
             .map_err(|_| CredentialResourceRuntimeError::Revocation)?;
         if sessions
             .get(&provider_ref)
@@ -233,7 +233,7 @@ impl CredentialSessionRegistry {
         provider_ref: &ResourceRef,
         session_generation: ReconnectGeneration,
     ) {
-        if let Ok(mut sessions) = self.sessions.lock()
+        if let Ok(mut sessions) = self.sessions.try_lock()
             && sessions
                 .get(provider_ref)
                 .is_some_and(|(generation, _)| *generation == session_generation)
@@ -258,7 +258,7 @@ struct RegistryCredentialSession {
 #[async_trait]
 impl CredentialSession for RegistryCredentialSession {
     fn session_generation(&self) -> Option<ReconnectGeneration> {
-        self.sessions.lock().ok().and_then(|sessions| {
+        self.sessions.try_lock().ok().and_then(|sessions| {
             sessions
                 .get(&self.provider_ref)
                 .map(|(generation, _)| *generation)
@@ -275,7 +275,7 @@ impl CredentialSession for RegistryCredentialSession {
         let current = self
             .sessions
             .lock()
-            .map_err(|_| CredentialResourceRuntimeError::Revocation)?
+            .await
             .get(&self.provider_ref)
             .map(|(generation, session)| (*generation, Arc::clone(session)));
         match current {
@@ -524,7 +524,7 @@ mod tests {
             scoped.revoke_credential(&request).await.unwrap(),
             CredentialRevocationOutcome::Revoked
         );
-        assert_eq!(driver.requests.lock().unwrap().len(), 1);
+        assert_eq!(driver.requests.try_lock().unwrap().len(), 1);
 
         // A rejoin registers the new generation; the retired generation can
         // no longer revoke (R28), and the same durable request re-issued
@@ -554,7 +554,7 @@ mod tests {
                 .unwrap(),
             CredentialRevocationOutcome::Revoked
         );
-        let rejoined = rejoined_driver.requests.lock().unwrap();
+        let rejoined = rejoined_driver.requests.try_lock().unwrap();
         assert_eq!(rejoined.len(), 1);
         assert_eq!(rejoined[0].0, request.operation_id());
         assert_eq!(rejoined[0].2, 10);
@@ -665,7 +665,7 @@ mod tests {
             tokio::sync::Mutex<std::collections::VecDeque<Vec<u8>>>,
             tokio::sync::Notify,
         )>,
-        requests: std::sync::Arc<std::sync::Mutex<Vec<(String, String, u64)>>>,
+        requests: std::sync::Arc<tokio::sync::Mutex<Vec<(String, String, u64)>>>,
     }
 
     impl FakeCredentialDriver {
@@ -676,7 +676,7 @@ mod tests {
                     tokio::sync::Mutex::new(std::collections::VecDeque::new()),
                     tokio::sync::Notify::new(),
                 )),
-                requests: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+                requests: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
             }
         }
     }
@@ -708,7 +708,7 @@ mod tests {
                 .find(|value| value.key == "d2b.credential.session-generation")
                 .and_then(|value| value.value.parse::<u64>().ok())
                 .expect("provider route session generation");
-            self.requests.lock().unwrap().push((
+            self.requests.try_lock().unwrap().push((
                 typed.operation_id().to_owned(),
                 typed.idempotency_key().to_owned(),
                 session_generation,

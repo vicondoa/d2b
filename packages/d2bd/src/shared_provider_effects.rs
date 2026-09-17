@@ -21,7 +21,7 @@
 //! got from `/status/phase`. The driver never sees either.
 
 use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use d2b_contracts::types::{BundleOpId, VmId};
@@ -196,9 +196,9 @@ pub(crate) struct ProductionSharedProviderEffects {
     controller_generation: ControllerGeneration,
     /// Zone-wide USBIP authority ledger (old `usbip_ledger`), shared by every
     /// USBIP Service and Binding dispatcher in the zone.
-    usbip_ledger: Arc<Mutex<crate::usbip_production::AuthorityLedger>>,
+    usbip_ledger: Arc<tokio::sync::Mutex<crate::usbip_production::AuthorityLedger>>,
     /// Zone-wide activated USBIP services (old `usbip_services`).
-    usbip_services: Arc<Mutex<BTreeSet<ResourceUid>>>,
+    usbip_services: Arc<tokio::sync::Mutex<BTreeSet<ResourceUid>>>,
 }
 
 impl ProductionSharedProviderEffects {
@@ -212,14 +212,16 @@ impl ProductionSharedProviderEffects {
             zone,
             controller_generation,
             usbip_ledger: crate::usbip_production::new_authority_ledger(),
-            usbip_services: Arc::new(Mutex::new(BTreeSet::new())),
+            usbip_services: Arc::new(tokio::sync::Mutex::new(BTreeSet::new())),
         }
     }
 
     fn runtime(&self) -> Result<Arc<ZoneResourceRuntime>, SharedProviderEffectError> {
+        // Synchronous caller: non-blocking `try_lock` per plan U4. A
+        // collision reports Unavailable (fail-closed), never a stall.
         self.state
             .resource_plane
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&self.zone).ok()))
             .ok_or(SharedProviderEffectError::Unavailable)
@@ -1027,8 +1029,9 @@ impl ProductionSharedProviderEffects {
             .state
             .resource_plane
             .lock()
-            .ok()
-            .and_then(|plane| plane.clone())
+            .await
+            .as_ref()
+            .map(Arc::clone)
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let occupancy = observe_host_network()
             .await
@@ -2017,7 +2020,7 @@ impl ProductionSharedProviderEffects {
                 if self
                     .usbip_services
                     .lock()
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?
+                    .await
                     .contains(&request.uid)
                 {
                     return Ok(SharedProviderEffectOutcome::phase(
@@ -2034,10 +2037,7 @@ impl ProductionSharedProviderEffects {
                 lifecycle
                     .activate(zone_opted_in, zone_uid, &mut port)
                     .map_err(|_| SharedProviderEffectError::Unavailable)?;
-                self.usbip_services
-                    .lock()
-                    .map_err(|_| SharedProviderEffectError::Unavailable)?
-                    .insert(request.uid.clone());
+                self.usbip_services.lock().await.insert(request.uid.clone());
                 Ok(SharedProviderEffectOutcome::phase(
                     SharedProviderEffectPhase::Ready,
                 ))
@@ -2699,8 +2699,9 @@ impl ProductionSharedProviderEffects {
             .state
             .resource_plane
             .lock()
-            .ok()
-            .and_then(|plane| plane.clone());
+            .await
+            .as_ref()
+            .map(Arc::clone);
         if let (Some(zone_uid), Some(plane)) = (zone_uid, plane) {
             plane
                 .network_admission_index()
@@ -2808,10 +2809,7 @@ impl ProductionSharedProviderEffects {
         supervisor
             .finalize(&mut port)
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        self.usbip_services
-            .lock()
-            .map_err(|_| SharedProviderEffectError::Unavailable)?
-            .remove(&request.uid);
+        self.usbip_services.lock().await.remove(&request.uid);
         Ok(SharedProviderFinalize::Complete)
     }
 
