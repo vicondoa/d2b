@@ -221,6 +221,7 @@ impl core::fmt::Debug for SystemBridgeBackend {
 }
 
 impl BridgeBackend for SystemBridgeBackend {
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn read_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<BridgeReadback, NetworkOpError> {
         let output = ip_command(&[
             "-d",
@@ -344,6 +345,7 @@ impl BridgeBackend for SystemBridgeBackend {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn ip_command(args: &[&str]) -> Result<std::process::Output, NetworkOpError> {
     Command::new("/run/current-system/sw/bin/ip")
         .args(args)
@@ -362,12 +364,14 @@ fn run_ip(args: &[&str]) -> Result<(), NetworkOpError> {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_trimmed(path: &Path) -> Result<String, NetworkOpError> {
     fs::read_to_string(path)
         .map(|value| value.trim().to_owned())
         .map_err(|_| NetworkOpError::BridgeBackend)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn write_fixed(path: &Path, value: &str) -> Result<(), NetworkOpError> {
     fs::write(path, value).map_err(|_| NetworkOpError::BridgeBackend)
 }
@@ -397,6 +401,7 @@ pub struct PersistentTapRealization {
     pub deleted: bool,
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn realization_root(state_dir: &Path) -> Result<PathBuf, NetworkOpError> {
     let root = state_dir.join("network-attachments");
     let metadata = match fs::symlink_metadata(&root) {
@@ -417,6 +422,7 @@ fn realization_root(state_dir: &Path) -> Result<PathBuf, NetworkOpError> {
 }
 
 /// Persist one v3 TAP realization after the kernel link is created.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn persist_persistent_tap_realization(
     state_dir: &Path,
     request: &CreatePersistentTapRequest,
@@ -544,6 +550,7 @@ fn validate_persistent_tap_identity(
 }
 
 /// Remove a v3 realization after the broker confirms TAP deletion.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn remove_persistent_tap_realization(
     state_dir: &Path,
     attachment_id: &ResourceUid,
@@ -578,6 +585,7 @@ pub fn remove_persistent_tap_realization(
 
 /// Retain a deletion tombstone so duplicate or lost-response cleanup remains
 /// idempotent after the kernel TAP has already been removed.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn mark_persistent_tap_realization_deleted(
     state_dir: &Path,
     attachment_id: &ResourceUid,
@@ -725,6 +733,7 @@ fn realization_marker_matches(realization: &PersistentTapRealization) -> bool {
 }
 
 /// Load a realization from a broker-owned, fd-safe state row.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn load_persistent_tap_realization(
     state_dir: &Path,
     request: &DeletePersistentTapRequest,
@@ -768,6 +777,7 @@ impl PersistentTapBackend for SystemPersistentTapBackend {
         }
     }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn tap_ownership_marker(&self, ifname: &str) -> Result<Option<String>, NetworkOpError> {
         Ok(
             std::fs::read_to_string(PathBuf::from("/sys/class/net").join(ifname).join("ifalias"))
@@ -1040,6 +1050,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn v3_realization_persists_and_removes_after_fenced_cleanup() {
         let root = std::env::current_dir()
             .unwrap()
@@ -1124,6 +1135,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn v3_realization_reclaims_stale_temp_and_rejects_conflicting_row() {
         let root = std::env::current_dir()
             .unwrap()
@@ -1190,6 +1202,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn deleted_realization_tombstone_makes_duplicate_cleanup_idempotent() {
         let root = std::env::current_dir()
             .unwrap()

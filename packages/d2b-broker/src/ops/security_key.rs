@@ -108,6 +108,7 @@ pub(crate) fn validate_device_authority(
 ///
 /// Raw `hidraw-N` identifiers are deliberately rejected. Resolution is
 /// limited to the trusted vendor/product/serial selector registry.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub(crate) fn resolve_selector(
     selector_id: &str,
     selectors: &[SecurityKeySelector],
@@ -181,6 +182,7 @@ pub(crate) fn resolve_selector(
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn hidraw_identity(path: &Path) -> Option<(u16, u16, Option<String>)> {
     let mut current = std::fs::canonicalize(path.join("device")).ok()?;
     for _ in 0..8 {
@@ -197,6 +199,7 @@ fn hidraw_identity(path: &Path) -> Option<(u16, u16, Option<String>)> {
     None
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_hex_attr(path: &Path) -> Option<u16> {
     let value = std::fs::read_to_string(path).ok()?;
     let value = value.trim();
@@ -209,6 +212,7 @@ fn is_fido_device(sysfs_entry: &Path) -> bool {
     fido_device_match(sysfs_entry).is_some()
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn fido_device_match(sysfs_entry: &Path) -> Option<bool> {
     let rdesc_path = sysfs_entry.join("device/report_descriptor");
     match std::fs::read(&rdesc_path) {
@@ -221,6 +225,7 @@ fn fido_device_match(sysfs_entry: &Path) -> Option<bool> {
 }
 
 /// Open the hidraw node with pre- and post-open safety checks.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub(crate) fn open_and_validate_hidraw(
     path: &Path,
     descriptor_verified: bool,
@@ -322,6 +327,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn trusted_selector_resolves_one_fido_hidraw_and_refuses_ambiguity() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path().join("hidraw");
@@ -414,6 +420,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn is_fido_device_rejects_readable_non_fido_descriptor_without_group_fallback() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let device_dir = tmp.path().join("hidraw0/device");
@@ -431,6 +438,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn is_fido_device_accepts_readable_fido_descriptor() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let device_dir = tmp.path().join("hidraw0/device");

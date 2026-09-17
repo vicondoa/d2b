@@ -7,9 +7,9 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
 
 use d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse;
 use d2b_contracts_broker::host_generation::{
@@ -23,7 +23,9 @@ use d2b_host::host_generation::{
 use sha2::{Digest, Sha256};
 
 const JOURNAL_DIR: &str = "host-generation-handoffs";
-static HANDOFF_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+/// Per-state-dir flock file serializing handoff apply/replay across
+/// threads and processes (plan KD1: no surviving `std::sync::Mutex`).
+const HANDOFF_LOCK_FILE: &str = ".host-generation-handoff.lock";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct JournalEntry {
@@ -107,6 +109,7 @@ impl ActivationHelperEffect {
 }
 
 impl HandoffEffect for ActivationHelperEffect {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn execute(
         &self,
         request: &ApplyHostGenerationHandoff,
@@ -172,6 +175,7 @@ impl HandoffEffect for ActivationHelperEffect {
 /// This is used before a host-generation handoff is activated. The helper
 /// remains the sole authority for catalog, store-path, and package-digest
 /// validation.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn validate_artifact_with_helper(
     helper_path: &Path,
     artifact_id: &ArtifactId,
@@ -204,16 +208,36 @@ pub fn validate_artifact_with_helper(
     Ok(output.status.success() && response.valid)
 }
 
+/// Acquire the per-state-dir handoff serialization lock.
+///
+/// `flock(2)` on a dedicated lock file: the held fd is the lock (plan
+/// KD1 - no surviving `std::sync::Mutex`), and the same file excludes
+/// concurrent writers across processes as well as threads. The fd stays
+/// owned by the caller for the whole apply/replay critical section.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn acquire_handoff_lock(
+    state_dir: &Path,
+) -> Result<nix::fcntl::Flock<std::fs::File>, HandoffOperationError> {
+    fs::create_dir_all(state_dir).map_err(HandoffOperationError::Io)?;
+    let path = state_dir.join(HANDOFF_LOCK_FILE);
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .write(true)
+        .open(&path)
+        .map_err(HandoffOperationError::Io)?;
+    nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusive)
+        .map_err(|(_, err)| HandoffOperationError::Io(io::Error::from(err)))
+}
+
 /// Apply or replay one broker-owned generation handoff using a typed effect.
 pub fn apply_with_effect<E: HandoffEffect>(
     state_dir: &Path,
     request: &ApplyHostGenerationHandoff,
     effect: &E,
 ) -> Result<ApplyHostGenerationHandoffResponse, HandoffOperationError> {
-    let lock = HANDOFF_LOCK.get_or_init(|| Mutex::new(()));
-    let _guard = lock
-        .lock()
-        .map_err(|_| HandoffOperationError::JournalMismatch)?;
+    let _lock = acquire_handoff_lock(state_dir)?;
     apply_locked(state_dir, request, effect)
 }
 
@@ -238,6 +262,7 @@ pub fn apply(
     apply_with_effect(state_dir, request, &SuccessfulHandoffEffect)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn apply_locked<E: HandoffEffect>(
     state_dir: &Path,
     request: &ApplyHostGenerationHandoff,
@@ -363,6 +388,7 @@ fn journal_path(directory: &Path, request: &ApplyHostGenerationHandoff) -> PathB
     directory.join(format!("{name}.json"))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn persist(
     path: &Path,
     request: &ApplyHostGenerationHandoff,
@@ -388,6 +414,7 @@ fn persist(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn sync_parent(path: &Path) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     File::open(parent)?.sync_all()
@@ -420,6 +447,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn handoff_is_replay_safe_and_source_retirement_is_terminal() {
         let directory = PathBuf::from("target").join(format!(
             "d2b-handoff-{}-{}",

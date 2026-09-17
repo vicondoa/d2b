@@ -185,6 +185,7 @@ struct RouteOwnershipRecord {
     provenance: d2b_contracts_resource::v3::NetworkProvenance,
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn ensure_route_ledger_root(root: &Path) -> Result<(), ApplyWithPreflightError> {
     match fs::symlink_metadata(root) {
         Ok(metadata) => {
@@ -222,6 +223,7 @@ fn ensure_route_ledger_root(root: &Path) -> Result<(), ApplyWithPreflightError> 
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn acquire_route_ledger_lock(root: &Path) -> Result<fs::File, ApplyWithPreflightError> {
     let path = root.join(".lock");
     let file = fs::OpenOptions::new()
@@ -249,6 +251,7 @@ fn acquire_route_ledger_lock(root: &Path) -> Result<fs::File, ApplyWithPreflight
     Ok(file)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_route_record(path: &Path) -> Result<Option<RouteOwnershipRecord>, ApplyWithPreflightError> {
     match fs::OpenOptions::new()
         .read(true)
@@ -276,6 +279,7 @@ fn read_route_record(path: &Path) -> Result<Option<RouteOwnershipRecord>, ApplyW
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn write_route_record(
     path: &Path,
     record: &RouteOwnershipRecord,
@@ -320,6 +324,7 @@ fn write_route_record(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn remove_route_record(path: &Path) -> Result<(), ApplyWithPreflightError> {
     match fs::remove_file(path) {
         Ok(()) => {
@@ -397,6 +402,7 @@ fn map_live_route_error(err: LiveHandlerError) -> ApplyWithPreflightError {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_existing_routes(
     ip_binary: &Path,
     intent: &ResolvedRouteIntent,
@@ -595,6 +601,7 @@ mod tests {
         )
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fake_ip(root: &std::path::Path, routes: &str) -> std::path::PathBuf {
         std::fs::create_dir_all(root).unwrap();
         let path = root.join("ip");
@@ -629,6 +636,7 @@ mod tests {
         .unwrap();
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn cleanup_route_test(root: &std::path::Path) {
         let _ = std::fs::remove_dir_all(root);
     }
@@ -751,6 +759,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn mismatched_route_record_is_unchanged_on_replace_and_delete() {
         let root = std::env::current_dir()
             .unwrap()

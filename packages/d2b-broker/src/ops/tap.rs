@@ -336,6 +336,7 @@ pub fn live_create_persistent_tap(
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn existing_persistent_tap(
     intent: &d2b_core::bundle_resolver::ResolvedTapIntent,
 ) -> Result<Option<LiveCreateTapOutcome>, super::OpError> {
@@ -571,6 +572,7 @@ fn expected_tap_marker(intent: &d2b_core::bundle_resolver::ResolvedTapIntent) ->
     format!("d2b managed: {}", intent.ownership_marker)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn ensure_bridge_owned(
     intent: &d2b_core::bundle_resolver::ResolvedTapIntent,
 ) -> Result<(), super::OpError> {
@@ -604,6 +606,7 @@ fn set_tap_ownership_marker(
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd, super::OpError> {
     let ip = ip_binary_path();
     let create_args = build_macvtap_link_add_args(intent);
@@ -649,6 +652,7 @@ pub fn live_create_macvtap_fd(intent: &ResolvedMacvtapIntent) -> Result<OwnedFd,
     Ok(file.into())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn open_macvtap_device_with_udev_wait(tap_path: &Path) -> Result<std::fs::File, super::OpError> {
     let mut last_error = None;
     for _ in 0..100 {
@@ -697,6 +701,7 @@ fn macvtap_device_path(ifindex: u32) -> PathBuf {
     PathBuf::from(format!("/dev/tap{ifindex}"))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn validate_existing_macvtap(
     ip: &Path,
     intent: &ResolvedMacvtapIntent,
@@ -788,6 +793,7 @@ fn attach_tap_to_bridge(
     run_ip_link(&ip, &["link", "set", "dev", tap_ifname.as_str(), "up"])
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn run_ip_link(ip: &Path, args: &[&str]) -> Result<(), super::OpError> {
     let output = Command::new(ip)
         .args(args)
@@ -849,6 +855,7 @@ struct LiveBridgePortTarget {
     bridge_marker: Option<String>,
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn live_set_bridge_port_flags(
     _executor: &dyn ReconcileExecutor,
     _resolver: &BundleResolver,
@@ -1034,6 +1041,7 @@ fn ip_binary_path() -> PathBuf {
 /// workspace does not currently wire `rtnetlink` directly, but `ip link
 /// ... type bridge_slave ...` emits the same `RTM_SETLINK`
 /// `IFLA_PROTINFO` updates without reaching into `/sys`.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn apply_bridge_port_flags_via_ip(
     ip_binary: &Path,
     port: &str,
@@ -1064,6 +1072,7 @@ fn apply_bridge_port_flags_via_ip(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_bridge_port_flags_via_ip(
     ip_binary: &Path,
     port: &str,

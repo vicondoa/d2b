@@ -351,6 +351,7 @@ impl SystemLiveExec {
 }
 
 impl ReconcileExecutor for SystemReconcileExecutor {
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn apply_nft_script(&self, nft_binary: &Path, script: &str) -> Result<(), ReconcileExecError> {
         if !nft_binary
             .to_str()
@@ -406,6 +407,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         Ok(())
     }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn write_sysctl(&self, key: &str, value: &str) -> Result<(), ReconcileExecError> {
         if key.is_empty() {
             return Err(ReconcileExecError::InvalidInput {
@@ -513,6 +515,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         })
     }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn ip_route(
         &self,
         ip_binary: &Path,
@@ -565,6 +568,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         Ok(())
     }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn run_usbip(
         &self,
         usbip_binary: &Path,
@@ -617,6 +621,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         Ok(())
     }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn shutdown_usbip_streams(
         &self,
         sysfs_root: &Path,
@@ -672,6 +677,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         materialize_store_view(intent)
     }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn run_ssh_keygen(
         &self,
         key_path: &Path,
@@ -783,6 +789,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn run_modprobe(module: &str) -> Result<(), ReconcileExecError> {
     let modprobe = env::var("D2B_MODPROBE_PATH")
         .unwrap_or_else(|_| "/run/current-system/sw/bin/modprobe".to_owned());
@@ -850,6 +857,7 @@ fn map_hardlink_farm_error(error: HardlinkFarmError) -> ReconcileExecError {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn run_usbip_driver_isolated(
     usbip_binary: &Path,
     subcommand: UsbipSubcommand,
@@ -921,6 +929,7 @@ fn run_usbip_driver_isolated(
     }))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn run_usbip_driver_helper_once(
     usbip_binary: &Path,
     subcommand: UsbipSubcommand,
@@ -1004,6 +1013,7 @@ fn usbip_driver_timeout_remediation(subcommand: UsbipSubcommand, killed: bool) -
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn spawn_bounded_stderr_reader(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -1027,12 +1037,14 @@ fn spawn_bounded_stderr_reader(mut pipe: impl Read + Send + 'static) -> mpsc::Re
     rx
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn collect_bounded_child_stderr(stderr_rx: Option<mpsc::Receiver<String>>) -> String {
     stderr_rx
         .and_then(|rx| rx.recv_timeout(USBIP_DRIVER_STDERR_DRAIN_GRACE).ok())
         .unwrap_or_default()
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_usbip_status(path: &Path) -> Result<String, ReconcileExecError> {
     match std::fs::read_to_string(path) {
         Ok(raw) => Ok(raw.trim().to_owned()),
@@ -1051,6 +1063,7 @@ fn read_usbip_status(path: &Path) -> Result<String, ReconcileExecError> {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn wait_usbip_stream_fd_release(
     sysfs_root: &Path,
     bus_id: &str,
@@ -1152,6 +1165,7 @@ fn parse_fingerprint(stdout: &[u8]) -> Result<String, ReconcileExecError> {
         })
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn file_owner(path: &Path) -> Option<(u32, u32)> {
     std::fs::metadata(path)
         .ok()
@@ -1259,21 +1273,26 @@ mod fake {
         pub fn new() -> Self {
             Self::default()
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn take_log(&self) -> Vec<ReconcileOp> {
             std::mem::take(&mut *self.log.lock().unwrap())
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn fail_wait_usbip_stream_fd_release(&self, error: ReconcileExecError) {
             *self.wait_usbip_stream_fd_release_error.lock().unwrap() = Some(error);
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn fail_run_usbip(&self, error: ReconcileExecError) {
             *self.run_usbip_error.lock().unwrap() = Some(error);
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub fn bind_creates_regular_driver(&self, sysfs_root: PathBuf, bus_id: String) {
             *self.bind_creates_regular_driver.lock().unwrap() = Some((sysfs_root, bus_id));
         }
     }
 
     impl ReconcileExecutor for FakeReconcileExecutor {
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn apply_nft_script(
             &self,
             nft_binary: &Path,
@@ -1285,6 +1304,7 @@ mod fake {
             });
             Ok(())
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_sysctl(&self, key: &str, value: &str) -> Result<(), ReconcileExecError> {
             self.log.lock().unwrap().push(ReconcileOp::WriteSysctl {
                 key: key.to_owned(),
@@ -1292,6 +1312,7 @@ mod fake {
             });
             Ok(())
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_atomic_file(
             &self,
             path: &Path,
@@ -1309,6 +1330,7 @@ mod fake {
                 .insert(path.to_path_buf(), contents.to_vec());
             Ok(())
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write_path_value(&self, path: &Path, value: &str) -> Result<(), ReconcileExecError> {
             self.log.lock().unwrap().push(ReconcileOp::WritePathValue {
                 path: path.to_path_buf(),
@@ -1320,6 +1342,7 @@ mod fake {
                 .insert(path.to_path_buf(), value.as_bytes().to_vec());
             Ok(())
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn read_path_value(&self, path: &Path) -> Result<String, ReconcileExecError> {
             let bytes = self
                 .file_values
@@ -1336,6 +1359,7 @@ mod fake {
                 detail: err.to_string(),
             })
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn shutdown_usbip_streams(
             &self,
             sysfs_root: &Path,
@@ -1350,6 +1374,7 @@ mod fake {
                 });
             Ok(())
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn wait_usbip_stream_fd_release(
             &self,
             sysfs_root: &Path,
@@ -1372,6 +1397,7 @@ mod fake {
             }
             Ok(())
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn ip_route(
             &self,
             ip_binary: &Path,
@@ -1385,6 +1411,7 @@ mod fake {
             });
             Ok(())
         }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn run_usbip(
             &self,
             usbip_binary: &Path,
@@ -1426,6 +1453,7 @@ mod fake {
             Ok(())
         }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn run_ssh_keygen(
             &self,
             key_path: &Path,
@@ -1546,6 +1574,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn system_write_atomic_file_round_trip_in_tempdir() {
         use tempfile::tempdir;
         let dir = tempdir().unwrap();
@@ -1567,6 +1596,7 @@ mod tests {
         assert_eq!(IpRouteVerb::Replace.as_str(), "replace");
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_stream_test_root(name: &str) -> PathBuf {
         let root = std::env::current_dir()
             .expect("cwd")
@@ -1577,6 +1607,7 @@ mod tests {
         root
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_unbind_helper_script(name: &str, body: &str) -> PathBuf {
         let root = std::env::current_dir()
             .expect("cwd")
@@ -1602,6 +1633,7 @@ mod tests {
         helper
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn run_usbip_helper_once_retry_text_busy(
         helper: &Path,
         subcommand: UsbipSubcommand,
@@ -1620,6 +1652,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn system_shutdown_usbip_streams_writes_sockfd_down_when_used() {
         let root = usbip_stream_test_root("used");
         let device = root.join("1-2");
@@ -1639,6 +1672,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn system_shutdown_usbip_streams_skips_available_device() {
         let root = usbip_stream_test_root("available");
         let device = root.join("1-2");
@@ -1658,6 +1692,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn system_waits_for_usbip_stream_fd_release_before_unbind() {
         let root = usbip_stream_test_root("release");
         let device = root.join("1-2");
@@ -1672,6 +1707,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_stream_fd_release_timeout_is_fail_closed() {
         let root = usbip_stream_test_root("release-timeout");
         let device = root.join("1-2");
@@ -1746,6 +1782,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_unbind_helper_drains_large_stderr_without_timeout() {
         let helper = usbip_unbind_helper_script(
             "large-stderr",
@@ -1790,6 +1827,7 @@ exit 7
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn usbip_bind_uses_bounded_driver_helper() {
         let helper = usbip_unbind_helper_script(
             "bind-ok",

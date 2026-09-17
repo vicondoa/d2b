@@ -580,6 +580,7 @@ fn reserve_declared_blocks_after_mkfs(file: &File, spec: &ResolvedDiskInitOp) ->
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn run_mkfs_ext4_on_fd_with(file: &File, display_path: &Path, tool: &MkfsTool) -> io::Result<()> {
     let target = fd_target_path(file);
     let mut last_spawn_error = None;
@@ -785,6 +786,7 @@ fn validate_or_repair_existing_with(
 /// and ext4/proven-empty validation.
 ///
 /// Returns an `io::Error` on any failure.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn disk_init_one(spec: &ResolvedDiskInitOp) -> io::Result<DiskInitOutcome> {
     validate_target_path(&spec.target_path)?;
     if spec.if_absent {
@@ -923,6 +925,7 @@ mod tests {
         }
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fake_mkfs_tool(scratch: &Path) -> MkfsTool {
         let script = scratch.join("fake-mkfs-ext4");
         fs::write(
@@ -942,6 +945,7 @@ mod tests {
         }
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn failing_mkfs_tool(scratch: &Path, stderr: &str) -> MkfsTool {
         let script = scratch.join("failing-mkfs-ext4");
         fs::write(
@@ -958,6 +962,7 @@ mod tests {
         }
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn create_regular_image(path: &Path, size: u64, mode: u32) -> File {
         use std::os::unix::fs::OpenOptionsExt;
         let file = fs::OpenOptions::new()
@@ -977,6 +982,7 @@ mod tests {
             .unwrap();
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn retry_on_transient_lease_contention<T>(
         mut f: impl FnMut() -> io::Result<T>,
     ) -> io::Result<T> {
@@ -998,6 +1004,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn create_and_format_creates_ext4_image_when_absent() {
         let scratch = scratch_root();
         let target = scratch
@@ -1034,6 +1041,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn existing_valid_ext4_image_skips() {
         let scratch = scratch_root();
         let target = scratch.join("store-overlay.img");
@@ -1055,6 +1063,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn existing_sparse_unformatted_image_is_repaired() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1073,6 +1082,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn existing_zero_length_unformatted_image_is_resized_and_repaired() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1093,6 +1103,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn existing_non_ext4_with_data_fails_closed() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1117,6 +1128,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn existing_ext4_wrong_mode_is_repaired() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1142,6 +1154,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn existing_sparse_wrong_mode_repairs_posture_then_formats() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1162,6 +1175,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn existing_hardlinked_image_fails_closed_before_posture_repair() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1183,6 +1197,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn path_identity_check_refuses_rename_swap() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1208,6 +1223,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn mkfs_failure_includes_bounded_stderr() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1231,6 +1247,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn existing_symlink_fails_closed_at_open() {
         let scratch = scratch_root();
         let real = scratch.join("real.img");
@@ -1248,6 +1265,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn parent_symlink_component_fails_closed() {
         let scratch = scratch_root();
         let real_dir = scratch.join("real");
@@ -1270,6 +1288,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fifo_target_fails_closed_without_blocking() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1290,6 +1309,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn ext4_magic_is_little_endian_at_fixed_offset() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1307,6 +1327,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn synced_sparse_blocks_zero_is_empty_evidence() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1320,6 +1341,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn synced_allocated_blocks_are_data_evidence() {
         use std::io::Write as _;
         let scratch = scratch_root();
@@ -1336,6 +1358,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fd_target_points_at_broker_proc_fd() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1349,6 +1372,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn repair_lock_serializes_second_fd() {
         let scratch = scratch_root();
         let target = scratch.join("var.img");
@@ -1418,6 +1442,7 @@ mod tests {
     /// inode. By re-opening with O_NOFOLLOW we ensure a concurrent
     /// attacker cannot redirect us to a sensitive target.
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn post_mkfs_reopen_refuses_symlink() {
         use std::os::unix::fs::OpenOptionsExt;
         let scratch = scratch_root();

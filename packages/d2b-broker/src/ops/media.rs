@@ -1002,6 +1002,7 @@ impl QmpClient {
         Self::connect_with_timeout(path, Duration::from_secs(5))
     }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn connect_with_timeout(path: &Path, timeout: Duration) -> Result<Self, MediaOpError> {
         let vm = path
             .parent()
@@ -1041,6 +1042,7 @@ impl QmpClient {
         &self.vm
     }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn execute(
         &mut self,
         command: &str,
@@ -1475,6 +1477,7 @@ fn access_mode(source: &QemuMediaSourceIntent) -> MediaAccessMode {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_usb_identity(
     sysfs_root: &Path,
     by_id_root: &Path,
@@ -1527,10 +1530,12 @@ fn read_usb_identity(
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_trimmed(path: &Path) -> io::Result<String> {
     std::fs::read_to_string(path).map(|value| value.trim().to_owned())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn collect_block_devices_under(path: &Path, depth: u8, out: &mut BTreeSet<String>) {
     if depth > 12 {
         return;
@@ -1561,6 +1566,7 @@ fn collect_block_devices_under(path: &Path, depth: u8, out: &mut BTreeSet<String
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn by_id_names_for_block(
     by_id_root: &Path,
     block_device: &str,
@@ -1590,6 +1596,7 @@ fn by_id_names_for_block(
     Ok(names)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn preflight_identity_not_busy(
     sysfs_root: &Path,
     identity: &UsbPhysicalIdentity,
@@ -1614,6 +1621,7 @@ fn preflight_identity_not_busy(
     )))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn holder_names_for_block_and_children(sysfs_root: &Path, block_device: &str) -> Vec<String> {
     let block_dir = d2b_host::media::sysfs_block_device_dir(sysfs_root, block_device);
     let mut holders = Vec::new();
@@ -1632,6 +1640,7 @@ fn holder_names_for_block_and_children(sysfs_root: &Path, block_device: &str) ->
     holders
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn append_holder_names(holder_dir: &Path, block_name: &str, holders: &mut Vec<String>) {
     let Some(entries) = std::fs::read_dir(holder_dir).ok() else {
         return;
@@ -1741,6 +1750,7 @@ fn validate_image_path_shape(path: &Path) -> Result<(), MediaOpError> {
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn validate_image_parent_dirs(path: &Path) -> Result<(), MediaOpError> {
     let parent = path
         .parent()
@@ -1798,6 +1808,7 @@ fn validate_image_file_metadata(stat: &libc::stat) -> Result<(), MediaOpError> {
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn preflight_image_not_in_use(sysfs_root: &Path, image_path: &Path) -> Result<(), MediaOpError> {
     let mounts =
         std::fs::read_to_string("/proc/mounts").map_err(|err| MediaOpError::Io(err.to_string()))?;
@@ -1837,6 +1848,7 @@ fn unescape_proc_mount_field(value: &str) -> String {
         .replace("\\134", "\\")
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn image_has_loop_backing(sysfs_root: &Path, image_path: &Path) -> Result<bool, MediaOpError> {
     let block_root = sysfs_root.join("block");
     let entries = std::fs::read_dir(&block_root)
@@ -1889,6 +1901,7 @@ fn write_registry_record(
     write_registry_record_at_root(&root, record, 0, 0)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn write_registry_record_at_root(
     root: &Path,
     record: &MediaRegistryRecord,
@@ -1965,6 +1978,7 @@ fn write_redacted_registry_index(
     write_redacted_registry_index_at_path(&path, records)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn write_redacted_registry_index_at_path(
     path: &Path,
     records: &[MediaRegistryRecord],
@@ -2015,6 +2029,7 @@ fn qemu_media_identity_hash(by_id_names: &[String]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_registry_record(
     resolver: &BundleResolver,
     vm: &str,
@@ -2034,6 +2049,7 @@ fn read_all_registry_records(
     read_all_registry_records_at_root(&root)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_all_registry_records_at_root(
     root: &Path,
 ) -> Result<Vec<MediaRegistryRecord>, MediaOpError> {
@@ -2075,6 +2091,7 @@ fn write_runtime_udev_rules(
     write_runtime_udev_rules_at_path(&path, records)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn write_runtime_udev_rules_at_path(
     path: &Path,
     records: &[MediaRegistryRecord],
@@ -2117,6 +2134,7 @@ fn escape_udev_value(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn reload_udev_rules() -> bool {
     let binary = std::env::var_os("D2B_BROKER_UDEVADM_BINARY")
         .map(PathBuf::from)
@@ -2196,6 +2214,7 @@ mod tests {
         }
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_usb_candidate_fixture(
         sysfs_root: &Path,
         by_id_root: &Path,
@@ -2224,6 +2243,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qmp_attach_sends_fd_and_device_commands() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
@@ -2285,6 +2305,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qmp_detach_removes_device_blocks_and_fdset() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
@@ -2330,6 +2351,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qmp_detach_reconciles_missed_device_deleted_event() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
@@ -2377,6 +2399,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qmp_detach_is_idempotent_when_media_nodes_are_already_absent() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
@@ -2418,6 +2441,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qmp_detach_fails_closed_when_block_node_remains_after_error() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
@@ -2458,6 +2482,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qmp_attached_media_refs_ignore_non_d2b_and_invalid_opaque_values() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
@@ -2488,6 +2513,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qmp_boot_path_attaches_media_and_continues_vm() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
@@ -2539,6 +2565,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qmp_lifecycle_sends_powerdown_status_and_quit_as_typed_ops() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
@@ -2595,6 +2622,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn qmp_reader_rejects_oversized_response_before_json_parse() {
         let dir = qmp_tempdir();
         let socket = dir.path().join("qmp.sock");
@@ -2627,6 +2655,7 @@ mod tests {
         server.join().expect("fake qmp server joins");
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_qmp_greeting_and_capabilities(
         writer: &mut UnixStream,
         reader: &mut BufReader<UnixStream>,
@@ -2647,6 +2676,7 @@ mod tests {
         writer.write_all(b"\n").expect("capabilities newline");
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn expect_qmp_command(
         writer: &mut UnixStream,
         reader: &mut BufReader<UnixStream>,
@@ -2662,6 +2692,7 @@ mod tests {
         writer.write_all(b"\n").expect("command newline");
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn expect_qmp_command_error(
         writer: &mut UnixStream,
         reader: &mut BufReader<UnixStream>,
@@ -2681,6 +2712,7 @@ mod tests {
         writer.write_all(b"\n").expect("command error newline");
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn expect_qmp_query_named_block_nodes(
         writer: &mut UnixStream,
         reader: &mut BufReader<UnixStream>,
@@ -2711,6 +2743,7 @@ mod tests {
         );
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn expect_qmp_query_status_with(
         writer: &mut UnixStream,
         reader: &mut BufReader<UnixStream>,
@@ -2729,6 +2762,7 @@ mod tests {
         writer.write_all(b"\n").expect("query-status newline");
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn expect_qmp_query_fdsets_with(
         writer: &mut UnixStream,
         reader: &mut BufReader<UnixStream>,
@@ -2757,6 +2791,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn registry_writes_runtime_only_root_private_modes() {
         let dir = tempfile::tempdir().expect("registry tempdir");
         let root = dir.path().join("registry");
@@ -2795,6 +2830,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn runtime_udev_rules_are_root_private_and_cover_partitions() {
         let dir = tempfile::tempdir().expect("udev tempdir");
         let path = dir
@@ -3013,6 +3049,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn declared_selector_artifacts_write_registry_index_and_udev_rules() {
         let dir = tempfile::tempdir().expect("boot artifacts tempdir");
         let registry_root = dir.path().join("registry");
@@ -3154,6 +3191,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn image_mount_and_loop_preflights_detect_busy_paths() {
         let image = Path::new("/var/lib/d2b/images/space image.img");
         assert!(image_path_mounted_in_proc_mounts(
@@ -3174,6 +3212,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn image_metadata_rejects_non_root_owner_or_writable_mode() {
         let file = std::fs::File::open("/etc/hosts").expect("/etc/hosts");
         let mut stat = crate::sys::path_safe::fstat_fd(file.as_fd()).expect("stat /etc/hosts");
@@ -3194,6 +3233,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn image_fd_locking_fails_when_already_locked() {
         let dir = tempfile::tempdir().expect("image tempdir");
         let path = dir.path().join("installer.img");

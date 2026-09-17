@@ -189,6 +189,7 @@ fn canonical_host_runtime_path(path: &Path) -> PathBuf {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_legacy_nft_hash_sidecar(path: &Path) -> Result<Option<String>, ReconcileExecError> {
     match fs::read(path) {
         Ok(bytes) => {
@@ -793,6 +794,7 @@ impl std::fmt::Debug for ProjectionLock {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn acquire_projection_lock() -> Result<ProjectionLock, ProjectionMutationError> {
     let path = persisted_nft_hash_path();
     if let Some(parent) = path.parent() {
@@ -818,6 +820,7 @@ fn acquire_projection_lock() -> Result<ProjectionLock, ProjectionMutationError> 
     Ok(ProjectionLock(file))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_live_table_json_optional(
     nft_binary: &Path,
     family: &str,
@@ -1003,6 +1006,7 @@ mod tests {
     }
 
     impl TestDir {
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn new(prefix: &str) -> Self {
             use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1024,6 +1028,7 @@ mod tests {
     }
 
     impl Drop for TestDir {
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
@@ -1420,6 +1425,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_persisted_nft_hash_reads_host_runtime_hash() {
         let root = TestDir::new("nft-host-runtime");
         let runtime_path = root.join("host-runtime.json");
@@ -1443,6 +1449,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn read_persisted_nft_hash_falls_back_to_legacy_sidecar() {
         let root = TestDir::new("nft-sidecar-fallback");
         let runtime_path = root.join("host-runtime.json");

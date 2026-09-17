@@ -490,6 +490,7 @@ enum CleanupError {
     Io { swept_count: u32 },
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn cleanup_store_view_inner(
     store_root: &Path,
     retained_ids: &[String],
@@ -541,6 +542,7 @@ fn cleanup_store_view_inner(
     Ok(swept)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn live_pool_may_be_served(store_root: &Path, vm: &str) -> bool {
     let live = hardlink_farm::live_dir(store_root).display().to_string();
     let Ok(entries) = std::fs::read_dir("/proc") else {
@@ -565,6 +567,7 @@ fn live_pool_may_be_served(store_root: &Path, vm: &str) -> bool {
     false
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn prune_generation_dir(
     generations_dir: &Path,
     retained: &std::collections::BTreeSet<&str>,
@@ -587,6 +590,7 @@ fn prune_generation_dir(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn prune_gcroots(
     gcroots: &Path,
     retained: &std::collections::BTreeSet<&str>,
@@ -612,6 +616,7 @@ fn prune_gcroots(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn remove_path(path: &Path) -> std::io::Result<()> {
     let meta = std::fs::symlink_metadata(path)?;
     if meta.is_dir() {
@@ -635,6 +640,7 @@ fn posture_error(stage: ErrorStage, err: PostureError) -> StoreSyncError {
     )
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
     std::fs::create_dir_all(farm_root).map_err(|err| {
         StoreSyncError::at(
@@ -700,6 +706,7 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::tempdir;
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn build_fake_closure(root: &std::path::Path, n: usize) -> Vec<PathBuf> {
         let src = root.join("nix-store-mock");
         std::fs::create_dir_all(&src).unwrap();
@@ -713,6 +720,7 @@ mod tests {
         out
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn intent_with(
         root: &std::path::Path,
         vm: &str,
@@ -736,6 +744,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn happy_path_populates_split_layout_and_swaps_currents() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "alpha", 7, 2);
@@ -834,6 +843,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn guest_meta_excludes_host_only_fields() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "zeta", 9, 1);
@@ -867,6 +877,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn second_sync_same_closure_takes_fast_path() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "omega", 4, 2);
@@ -891,6 +902,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fast_path_repairs_live_marker_posture() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "alpha", 7, 1);
@@ -910,6 +922,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn non_fast_sync_sweeps_stale_live_entries_when_not_served() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "theta", 8, 1);
@@ -928,6 +941,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn farm_shares_inodes_with_source_no_recursive_chown() {
         let tmp = tempdir().unwrap();
         let intent = intent_with(tmp.path(), "beta", 3, 1);

@@ -819,6 +819,7 @@ fn marker_file_present(paths: &SwtpmDirPaths) -> Result<bool, &'static str> {
 /// marker exists, `Ok(Some(_))` for a valid marker, and a path-free
 /// `previously-provisioned-swtpm-state-missing` slug for ANY tamper
 /// (symlink, non-regular, foreign owner/mode, parse/vm mismatch).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_marker(
     marker_dir_fd: &OwnedFd,
     paths: &SwtpmDirPaths,
@@ -873,6 +874,7 @@ fn read_marker(
 /// Atomically write the per-VM marker as `O_EXCL` (never overwrite an
 /// existing marker), root:root 0600, with a parent fsync for
 /// durability.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn write_marker(
     marker_dir_fd: &OwnedFd,
     paths: &SwtpmDirPaths,
@@ -1057,6 +1059,7 @@ mod tests {
     }
 
     impl Scratch {
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn new(label: &str) -> Self {
             let unique = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1099,6 +1102,7 @@ mod tests {
 
         /// Create the (sticky 3770) per-VM root the broker expects to
         /// already exist (PrepareStateDir made it).
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn make_per_vm_root(&self, paths: &SwtpmDirPaths) {
             fs::create_dir_all(&paths.per_vm_root).unwrap();
             fs::set_permissions(&paths.per_vm_root, fs::Permissions::from_mode(0o3770)).unwrap();
@@ -1226,11 +1230,13 @@ mod tests {
     }
 
     impl Drop for Scratch {
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn mode_of(p: &Path) -> u32 {
         fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777
     }
@@ -1258,6 +1264,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn raced_fresh_create_fails_closed_instead_of_adopting() {
         // A role UID with rwx on the sticky per-VM root can race a `swtpm`
         // entry into existence between the broker's absence pre-check and its
@@ -1281,6 +1288,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn existing_correct_with_acl_drift_reconciles_and_preserves_contents() {
         let s = Scratch::new("reconcile");
         let paths = s.paths("beta");
@@ -1317,6 +1325,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn existing_dir_without_marker_requires_core_migration_decision() {
         let s = Scratch::new("upgrade");
         let paths = s.paths("gamma");
@@ -1333,6 +1342,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fresh_create_with_legacy_source_requires_adoption_without_mutation() {
         let s = Scratch::new("fresh-legacy");
         let paths = s.paths("gamma-fresh");
@@ -1351,6 +1361,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn wrong_owner_dir_fails_closed() {
         let s = Scratch::new("wrongowner");
         let paths = s.paths("delta");
@@ -1371,6 +1382,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn symlink_swtpm_dir_fails_closed() {
         let s = Scratch::new("symlink");
         let paths = s.paths("epsilon");
@@ -1385,6 +1397,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn non_directory_swtpm_path_fails_closed() {
         let s = Scratch::new("nondir");
         let paths = s.paths("zeta");
@@ -1397,6 +1410,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn marker_present_dir_absent_fails_closed() {
         let s = Scratch::new("markerorphan");
         let paths = s.paths("eta");
@@ -1411,6 +1425,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn marker_present_empty_replacement_ino_mismatch_fails_closed() {
         let s = Scratch::new("inoswap");
         let paths = s.paths("theta");
@@ -1444,6 +1459,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn runtime_dir_posture_untouched_and_stale_socket_removed() {
         let s = Scratch::new("runtime");
         let paths = s.paths("kappa");
@@ -1488,6 +1504,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn sticky_parent_blocks_non_owner_replacement_or_skips() {
         // The per-VM root is mode 3770 (setgid + sticky) on the base
         // branch so a NON-owner role uid cannot rename/replace the

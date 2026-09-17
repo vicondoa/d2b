@@ -81,6 +81,7 @@ pub fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf {
     path
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn apply_sysctl_intents(
     req: &ApplySysctlRequest,
 ) -> Result<Vec<ApplySysctlOutcome>, ApplySysctlError> {
@@ -180,6 +181,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_sysctl_value(key: &str) -> Result<String, ApplyWithReadbackError> {
     let path = proc_sys_path(key);
     fs::read_to_string(&path).map_err(|err| ApplyWithReadbackError::ReadbackIo {
@@ -218,6 +220,7 @@ mod tests {
     use super::*;
     use crate::ops::exec_reconcile::{FakeReconcileExecutor, ReconcileOp};
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn scratch() -> PathBuf {
         let dir = crate::test_scratch_root()
             .join("test-scratch")
@@ -248,6 +251,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn apply_writes_value_and_returns_outcome() {
         let dir = scratch();
         let leaf = dir.join("net/ipv6/conf/x");
@@ -270,6 +274,7 @@ mod tests {
     }
 
     #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn drift_after_write_fails_closed() {
         let dir = scratch();
         let leaf = dir.join("net/ipv6/conf/x");
