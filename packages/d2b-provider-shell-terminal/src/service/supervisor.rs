@@ -1,9 +1,7 @@
 //! Per-session terminal supervisor contracts.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Mutex,
-};
+use std::collections::{BTreeMap, BTreeSet};
+use tokio::sync::Mutex;
 
 use d2b_contracts_resource::v3::{
     ResourceRef,
@@ -409,8 +407,11 @@ impl ShellAuthorityLedger {
         Self::default()
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, AuthorityState>, ShellTerminalError> {
-        self.state.lock().map_err(|_| {
+    fn lock(&self) -> Result<tokio::sync::MutexGuard<'_, AuthorityState>, ShellTerminalError> {
+        // The `ShellAuthorityPort` contract is synchronous, so this sync
+        // surface uses `try_lock` fail-closed per U4: a briefly contended
+        // ledger reports capacity-exceeded rather than parking the caller.
+        self.state.try_lock().map_err(|_| {
             warn!(
                 provider = "shell-terminal",
                 "authority state lock poisoned; reporting capacity-exceeded"
@@ -877,7 +878,7 @@ impl InMemoryShellAuthority {
         session_name: &str,
     ) -> Option<SupervisorProcessResource> {
         self.supervisor_processes
-            .lock()
+            .try_lock()
             .ok()
             .and_then(|processes| processes.get(session_name).cloned())
     }
@@ -890,7 +891,7 @@ impl InMemoryShellAuthority {
         let value = SupervisorProcessResource::from_session(session);
         let mut processes = self
             .supervisor_processes
-            .lock()
+            .try_lock()
             .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?;
         if let Some(existing) = processes.get(session.name()) {
             if existing != &value {
@@ -911,7 +912,7 @@ impl InMemoryShellAuthority {
             return Err(ShellTerminalError::CapacityExceeded);
         }
         self.supervisor_processes
-            .lock()
+            .try_lock()
             .map_err(|_| ShellTerminalError::SupervisorAmbiguous)?
             .remove(session.name());
         Ok(())
