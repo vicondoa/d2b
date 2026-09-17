@@ -175,6 +175,10 @@ const EXPECTED_KEY_MODE: u32 = 0o0400;
 /// `keys_dir` is the absolute path to
 /// `/var/lib/d2b/vms/<vm>/sshd-host-keys`. The `vm` argument is
 /// carried only for tracing/diagnostic context.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn check_sshd_host_keys(vm: &str, keys_dir: &Path) -> Result<(), SshdHostKeyDrift> {
     // Step 1: lstat the directory itself - refuse symlinks.
     let dir_meta = match fs::symlink_metadata(keys_dir) {
@@ -335,6 +339,7 @@ mod tests {
     /// uid/gid will be the current test process's uid/gid (almost
     /// certainly NOT 0). Callers can override expectations or
     /// override owner checks via the helpers below.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn make_keys_dir(root: &Path) -> (PathBuf, PathBuf) {
         let dir = root.join("sshd-host-keys");
         fs::create_dir_all(&dir).expect("create keys dir");
@@ -367,6 +372,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn symlink_directory_is_drift() {
         let tmp = tempfile::tempdir().unwrap();
         let target = tmp.path().join("real");
@@ -381,6 +387,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn non_directory_path_is_drift() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("sshd-host-keys");
@@ -393,6 +400,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn empty_keys_dir_is_ok() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("sshd-host-keys");
@@ -406,6 +414,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn ignores_pub_keys_and_unrelated_files() {
         let tmp = tempfile::tempdir().unwrap();
         let (dir, _key) = make_keys_dir(tmp.path());
@@ -456,6 +465,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn wrong_mode_is_drift() {
         // We can always exercise mode drift by chmod'ing the key.
         // This depends on the owner check NOT firing first - so it
@@ -483,6 +493,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn symlink_key_is_drift() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("sshd-host-keys");

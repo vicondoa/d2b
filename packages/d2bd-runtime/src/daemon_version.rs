@@ -93,6 +93,10 @@ pub struct SystemFilesystemReader {
 }
 
 impl FilesystemReader for SystemFilesystemReader {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "synchronous path"
+    )]
     fn read_version_file(&self) -> Result<Option<DaemonVersionFile>, String> {
         match std::fs::read_to_string(&self.version_file_path) {
             Ok(content) => {
@@ -105,6 +109,10 @@ impl FilesystemReader for SystemFilesystemReader {
         }
     }
 
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "synchronous path"
+    )]
     fn read_on_disk_binary_path(&self) -> Result<Option<String>, String> {
         match std::fs::canonicalize(&self.install_path) {
             Ok(p) => Ok(Some(p.to_string_lossy().into_owned())),
@@ -171,6 +179,7 @@ mod tests {
     }
 
     impl FakeFs {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_version_running(path: &str) -> Self {
             let me = Self::default();
             *me.version.lock().unwrap() = Some(Ok(Some(DaemonVersionFile {
@@ -181,15 +190,18 @@ mod tests {
             })));
             me
         }
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_on_disk(self, path: &str) -> Self {
             *self.on_disk.lock().unwrap() = Some(Ok(Some(path.to_owned())));
             self
         }
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_no_version_file(self) -> Self {
             *self.version.lock().unwrap() = Some(Ok(None));
             *self.on_disk.lock().unwrap() = Some(Ok(Some("ignored".to_owned())));
             self
         }
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_unparseable_version(self) -> Self {
             *self.version.lock().unwrap() =
                 Some(Err("parsing /run/d2b/version: expected JSON".to_owned()));
@@ -198,6 +210,7 @@ mod tests {
     }
 
     impl FilesystemReader for FakeFs {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn read_version_file(&self) -> Result<Option<DaemonVersionFile>, String> {
             self.version
                 .lock()
@@ -205,6 +218,7 @@ mod tests {
                 .clone()
                 .expect("fake fs configured for version")
         }
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn read_on_disk_binary_path(&self) -> Result<Option<String>, String> {
             self.on_disk.lock().unwrap().clone().unwrap_or(Ok(None))
         }

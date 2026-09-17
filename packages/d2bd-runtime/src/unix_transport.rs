@@ -19,6 +19,10 @@ use crate::typed_error::TypedError;
 
 const REJECTION_DRAIN_DEADLINE: Duration = Duration::from_millis(10);
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn connect_seqpacket(path: &Path) -> Result<OwnedFd, TypedError> {
     let fd = socket(
         AddressFamily::Unix,
@@ -158,6 +162,10 @@ pub fn write_frame(socket: &impl AsRawFd, body: &[u8]) -> Result<(), TypedError>
     write_frame_with_fds(socket, body, &[])
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn write_frame_with_fds(
     socket: &impl AsRawFd,
     body: &[u8],
@@ -191,6 +199,10 @@ pub fn write_frame_with_fds(
     Ok(())
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn read_frame(socket: &impl AsRawFd) -> Result<Vec<u8>, TypedError> {
     let mut buffer = vec![0u8; crate::wire::MAX_FRAME_SIZE + 5];
     let read = recv(socket.as_raw_fd(), &mut buffer, MsgFlags::empty()).map_err(|err| {
@@ -260,6 +272,10 @@ pub fn duplicate_fd_cloexec(fd: RawFd, context: &str) -> Result<OwnedFd, TypedEr
     Ok(duplicated)
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
     let mut buffer = vec![0u8; crate::wire::MAX_FRAME_SIZE + 5];
     let mut iov = [IoSliceMut::new(&mut buffer)];

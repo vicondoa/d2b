@@ -42,6 +42,10 @@ pub fn apply_overrides(config: &mut DaemonConfig, options: &ServeOptions) {
     }
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn maybe_write_state_restore_report(options: &ServeOptions) -> Result<(), TypedError> {
     let Some(report_path) = options.test_state_restore_report_path.as_ref() else {
         return Ok(());

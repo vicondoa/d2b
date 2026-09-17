@@ -20,6 +20,10 @@ pub fn resolve_bundle_artifact_path(base_dir: &Path, raw_path: &str) -> PathBuf 
     }
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn load_json<T>(path: &Path) -> Result<T, TypedError>
 where
     T: for<'de> Deserialize<'de>,
@@ -47,6 +51,10 @@ pub fn load_manifest(
         })
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn read_trimmed_file(path: &Path, context: &str) -> Result<String, TypedError> {
     fs::read_to_string(path)
         .map(|content| content.trim().to_owned())

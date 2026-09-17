@@ -6,8 +6,9 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
+use tokio::sync::Mutex;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::resource_proto as wire;
@@ -490,8 +491,10 @@ impl GuestResourceStore {
     }
 
     fn resource_count(&self) -> usize {
+        // Sync-by-construction caller (Debug::fmt): try_lock fails closed
+        // instead of parking the calling thread on the async mutex.
         self.state
-            .lock()
+            .try_lock()
             .map(|state| state.resources.len())
             .unwrap_or(0)
     }
@@ -653,7 +656,7 @@ impl GuestResourceStore {
                 let body = opened.into_body();
                 let mut state = state
                     .lock()
-                    .map_err(|_| Self::unavailable("guest-target-store-poisoned"))?;
+                    .await;
                 let mut resources = state.resources.clone();
                 let next_revision = state
                     .revision
@@ -761,7 +764,7 @@ impl ResourceStoreBackend for GuestResourceStore {
         let state = self
             .state
             .lock()
-            .map_err(|_| Self::unavailable("guest-target-store-poisoned"))?;
+            .await;
         let resource = state
             .resources
             .get(&request.target)
@@ -790,7 +793,7 @@ impl ResourceStoreBackend for GuestResourceStore {
         let state = self
             .state
             .lock()
-            .map_err(|_| Self::unavailable("guest-target-store-poisoned"))?;
+            .await;
         let mut resources = state
             .resources
             .values()
@@ -1422,6 +1425,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn target_local_store_rejects_schema_reads_for_zone_types() {
         let zone = ZoneId::parse("work").expect("zone");
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("store UID");
@@ -1451,6 +1455,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn target_local_store_rejects_watches_for_zone_types() {
         let zone = ZoneId::parse("work").expect("zone");
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("store UID");
@@ -1485,6 +1490,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn target_local_store_refuses_watch_instead_of_naming_a_stream() {
         let zone = ZoneId::parse("work").expect("zone");
         let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("store UID");

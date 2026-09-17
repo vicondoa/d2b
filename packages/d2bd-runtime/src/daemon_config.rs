@@ -226,6 +226,10 @@ pub fn shutdown_degraded_report_path(daemon_state_dir: &Path) -> PathBuf {
     daemon_state_dir.join("shutdown-degraded.json")
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn persist_json_report(path: &Path, json: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -359,6 +363,10 @@ pub fn banner_note() -> String {
         .to_owned()
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn load_config(path: &Path) -> Result<DaemonConfig, TypedError> {
     if !path.exists() {
         return Ok(DaemonConfig::default());
@@ -378,6 +386,10 @@ pub struct LoadedRealmControllersConfig {
     pub summary: RealmControllerMetadataSummary,
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn load_realm_controllers_config(
     path: &Path,
 ) -> Result<Option<LoadedRealmControllersConfig>, TypedError> {
@@ -406,6 +418,10 @@ pub struct LoadedRealmIdentityConfig {
     pub summary: RealmIdentityConfigSummary,
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn load_realm_identity_config(
     path: &Path,
 ) -> Result<Option<LoadedRealmIdentityConfig>, TypedError> {
@@ -540,6 +556,7 @@ mod config_loading_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_config_strictly_parses_realm_controller_path() {
         let root = temp_root();
         let config_path = root.path().join("daemon-config.json");
@@ -630,6 +647,7 @@ mod config_loading_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_realm_controller_loader_handles_missing_and_validates_metadata() {
         let root = temp_root();
         let missing_path = root.path().join("missing-realm-controllers.json");
@@ -675,6 +693,7 @@ mod config_loading_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn daemon_realm_identity_loader_handles_missing_and_validates_metadata_only() {
         let root = temp_root();
         let missing_path = root.path().join("missing-realm-identity.json");

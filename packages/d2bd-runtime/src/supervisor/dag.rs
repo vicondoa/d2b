@@ -473,7 +473,7 @@ mod tests {
         DagEdge, NodeId, ProcessNode, ProcessRole, VmProcessDag, VmProcessInvariants,
     };
     use std::sync::Arc;
-    use std::sync::Mutex;
+    use tokio::sync::Mutex;
 
     fn dummy_profile() -> d2b_core::processes::RoleProfile {
         d2b_core::test_support::RoleProfileBuilder::new()
@@ -746,7 +746,9 @@ mod tests {
         }
 
         fn observed_order(&self) -> Vec<String> {
-            self.spawn_order.lock().unwrap().clone()
+            // Sync read after the executor's awaits have finished: try_lock
+            // fails closed instead of parking the worker on the async mutex.
+            self.spawn_order.try_lock().map(|g| g.clone()).unwrap_or_default()
         }
     }
 
@@ -759,8 +761,8 @@ mod tests {
             _readiness: &[ReadinessPredicate],
             _budget: NodeBudget,
         ) -> Result<(), String> {
-            self.spawn_order.lock().unwrap().push(node.id.0.clone());
-            if let Some(reason) = self.failures.lock().unwrap().get(&node.id.0) {
+            self.spawn_order.lock().await.push(node.id.0.clone());
+            if let Some(reason) = self.failures.lock().await.get(&node.id.0) {
                 return Err(reason.clone());
             }
             Ok(())
@@ -774,7 +776,9 @@ mod tests {
 
     impl FakeSplitRunner {
         fn observed_order(&self) -> Vec<String> {
-            self.spawn_order.lock().unwrap().clone()
+            // Sync read after the executor's awaits have finished: try_lock
+            // fails closed instead of parking the worker on the async mutex.
+            self.spawn_order.try_lock().map(|g| g.clone()).unwrap_or_default()
         }
     }
 
@@ -787,7 +791,7 @@ mod tests {
             _readiness: &[ReadinessPredicate],
             _budget: NodeBudget,
         ) -> Result<(), String> {
-            self.spawn_order.lock().unwrap().push(node.id.0.clone());
+            self.spawn_order.lock().await.push(node.id.0.clone());
             Ok(())
         }
 
@@ -797,7 +801,7 @@ mod tests {
             node: &ProcessNode,
             _budget: NodeBudget,
         ) -> Result<(), String> {
-            self.spawn_order.lock().unwrap().push(node.id.0.clone());
+            self.spawn_order.lock().await.push(node.id.0.clone());
             Ok(())
         }
 
@@ -813,6 +817,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn executor_runs_all_nodes_in_topo_order_on_success() {
         let runner = FakeRunner::default();
         let observed = {
@@ -839,6 +844,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn executor_fail_fast_skips_remaining_nodes() {
         let runner = FakeRunner::with_failure("virtiofsd-ro-store", "virtiofs ready timeout");
         let executor = DagExecutor::new(runner);
@@ -876,6 +882,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn executor_propagates_topo_error() {
         let dag = VmProcessDag {
             workload_identity: None,
@@ -895,6 +902,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn budget_threaded_to_runner() {
         // Verify the with_budget constructor wires the custom budget
         // through to the runner.
@@ -912,7 +920,7 @@ mod tests {
                 _readiness: &[ReadinessPredicate],
                 budget: NodeBudget,
             ) -> Result<(), String> {
-                *self.captured.lock().unwrap() = Some(budget);
+                *self.captured.lock().await = Some(budget);
                 Ok(())
             }
         }
@@ -937,6 +945,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn split_readiness_passes_when_process_alive_but_api_slow() {
         let runner = FakeSplitRunner {
             spawn_order: Mutex::new(Vec::new()),
@@ -969,6 +978,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn no_wait_api_stops_after_split_node_even_when_later_readiness_exists() {
         let mut dag = split_readiness_dag();
         dag.nodes.push(dummy_node(
@@ -1006,6 +1016,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn split_readiness_strict_fails_on_api_timeout() {
         let runner = FakeSplitRunner {
             spawn_order: Mutex::new(Vec::new()),

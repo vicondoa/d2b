@@ -40,6 +40,10 @@ pub fn public_request_resolver_load(
     }
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn public_pending_restart(manifest_entry: &Value) -> bool {
     let Some(state_dir) = manifest_entry.get("stateDir").and_then(Value::as_str) else {
         return false;
@@ -50,6 +54,10 @@ pub fn public_pending_restart(manifest_entry: &Value) -> bool {
     matches!((current, booted), (Some(current), Some(booted)) if current != booted)
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn public_guest_closure_out_path(
     manifest_entry: &Value,
     lifecycle: &Value,
@@ -317,6 +325,10 @@ pub fn qemu_media_qmp_socket(node: &ProcessNode) -> Option<String> {
     })
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn qemu_media_unix_socket_listening(path: &str) -> bool {
     const SO_ACCEPTCON: &str = "00010000";
     let Ok(contents) = fs::read_to_string("/proc/net/unix") else {
@@ -343,6 +355,7 @@ mod tests {
     use std::fs::{self, File};
     use std::os::fd::OwnedFd;
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn current_process_entry() -> PidfdEntry {
         let pid = std::process::id() as i32;
         let stat = fs::read_to_string(format!("/proc/{pid}/stat")).expect("read current stat");

@@ -407,6 +407,10 @@ pub const SYS_MODULE_DIR: &str = "/sys/module";
 /// empty (the worst case is an unnecessary warning, not a silent skip).
 /// Operators on hosts where `/proc` is unavailable can short-circuit
 /// with `D2B_SKIP_KERNEL_MODULE_CHECK`.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn run_kernel_module_check(resolver: &BundleResolver) -> ModuleCheckReport {
     // Step 1+2: /proc/modules union /sys/module.
     if let Err(error) = std::fs::read_to_string(PROC_MODULES_PATH) {
@@ -777,6 +781,7 @@ mod tests {
     /// sources, so a built-in virtio module appearing only in the sysfs
     /// dir must not be reported as missing.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn builtin_virtio_module_in_sys_module_dir_is_detected_as_present() {
         use d2b_host::modules::read_loaded_modules_at;
         use std::fs;

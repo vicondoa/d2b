@@ -334,6 +334,7 @@ mod tests {
     /// `gather()` must pid-match the peeked notification against the
     /// currently-registered pid before treating it as terminal.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stale_same_role_reap_for_different_pid_does_not_fast_fail_live_runner() {
         use crate::supervisor::pidfd_table::{BrokerReapLog, PidfdEntry, PidfdTable};
         use d2b_contracts_broker::broker_wire::{ChildExitStatus, ChildReapedNotification};

@@ -2777,9 +2777,10 @@ mod tests {
         .expect("async authoritative append");
 
         let today = utc_date_string();
-        let content = std::fs::read_to_string(
+        let content = tokio::fs::read_to_string(
             dir.path().join(format!("daemon-events-{today}.jsonl")),
         )
+        .await
         .expect("read jsonl file");
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(

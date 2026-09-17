@@ -165,6 +165,10 @@ impl Default for PublicStatusReadModel {
     }
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn public_artifact_fingerprint(
     artifacts: &ArtifactPaths,
     pidfd_generation: u64,
@@ -181,6 +185,10 @@ pub fn public_artifact_fingerprint(
     })
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 fn file_fingerprint(path: &Path) -> Result<FileFingerprint, TypedError> {
     let metadata = fs::metadata(path).map_err(|error| TypedError::InternalIo {
         context: format!("fingerprint {}", path.display()),

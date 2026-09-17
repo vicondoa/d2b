@@ -569,7 +569,7 @@ mod wait_for_one_shot_exit_tests {
         let pid = child.id();
 
         // Give 'sleep 0' a moment to exit and become a zombie.
-        std::thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // The zombie's /proc/<pid>/stat is still present with 'Z' state
         // and the original starttime; read it now.
@@ -601,7 +601,7 @@ mod wait_for_one_shot_exit_tests {
         let pid = child.id();
 
         // Give the child a moment to be scheduled.
-        std::thread::sleep(Duration::from_millis(10));
+        tokio::time::sleep(Duration::from_millis(10)).await;
 
         let start_ticks = read_start_time_ticks(pid);
 
@@ -707,7 +707,7 @@ mod async_readiness_tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn the_async_wait_times_out_named() {
         let path = std::env::temp_dir().join(format!("d2b-absent-{}.sock", std::process::id()));
-        let _ = std::fs::remove_file(&path);
+        let _ = tokio::fs::remove_file(&path).await;
         let predicates = [ReadinessPredicate::UnixSocketExists(
             path.to_string_lossy().into_owned(),
         )];

@@ -294,6 +294,7 @@ impl AdmissionBudget {
     }
 
     /// Reserve one reconnect attempt inside the fixed sliding window.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn try_admit_reconnect(&self, now: Instant) -> Result<AdmissionPermit, AdmissionError> {
         let mut history = self
             .counters
@@ -895,6 +896,7 @@ impl AssignmentState {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn install_permit(&self, permit: AdmissionPermit) -> Result<(), DeploymentError> {
         let mut slot = self
             .permit
@@ -904,6 +906,7 @@ impl AssignmentState {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn revoke(&self) {
         self.active.store(false, Ordering::Release);
         if let Some(permit) = self.permit.lock().ok().and_then(|mut slot| slot.take()) {
@@ -1042,6 +1045,7 @@ impl Drop for ControllerAssignmentLease {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn unregister_controller_assignment(
     assignments: &Mutex<BTreeMap<ControllerAssignmentIdentity, Arc<AssignmentState>>>,
     controllers: &Mutex<BTreeMap<ResourceRef, Arc<Mutex<ControllerRecord>>>>,
@@ -1072,6 +1076,7 @@ fn unregister_controller_assignment(
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn unregister_assignment(
     registry: &Mutex<BTreeMap<ControllerAssignmentKey, Arc<AssignmentState>>>,
     key: &ControllerAssignmentKey,
@@ -1126,6 +1131,7 @@ impl ProviderDeployment {
     ///
     /// The controller reservation is acquired before inserting any assignment
     /// record, so a flood cannot allocate unbounded per-controller state.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn admit_assignment(
         &self,
         key: ControllerAssignmentKey,
@@ -1157,6 +1163,7 @@ impl ProviderDeployment {
     ///
     /// A controller's authenticated session has a separate generation, so
     /// controller records must be selected by their target generation.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn revoke_session(&self, session_generation: u64) -> Result<usize, DeploymentError> {
         if session_generation == 0 {
             return Err(DeploymentError::GenerationZero);
@@ -1212,6 +1219,7 @@ impl ProviderDeployment {
     }
 
     /// Revoke every assignment before replacing the target's generation.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn revoke_target(&self, target: &ResourceRef) -> Result<usize, DeploymentError> {
         let mut assignments = self
             .assignments
@@ -1256,6 +1264,7 @@ impl ProviderDeployment {
 
     /// Revoke every assignment and controller instance for one Provider
     /// generation before a Provider replacement is admitted.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn revoke_provider(
         &self,
         provider: &ResourceRef,
@@ -1309,6 +1318,7 @@ impl ProviderDeployment {
         Ok(count)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn active_assignments(&self) -> Result<usize, DeploymentError> {
         let assignments = self
             .assignments
@@ -1323,6 +1333,7 @@ impl ProviderDeployment {
     }
 
     /// Return the number of active controller ResourceClient assignments.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn active_controller_assignments(&self) -> Result<usize, DeploymentError> {
         let assignments = self
             .controller_assignments
@@ -1340,6 +1351,7 @@ impl ProviderDeployment {
     /// no process is spawned until [`Self::begin_controller_launch`] is
     /// admitted by the fixed Process adapter.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn create_controller_process(
         &self,
         zone: ZoneId,
@@ -1460,6 +1472,7 @@ impl ProviderDeployment {
     }
 
     /// Return the current lifecycle phase for one controller Process.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn controller_phase(&self, process_ref: &ResourceRef) -> Option<ControllerProcessPhase> {
         self.controllers
             .lock()
@@ -1468,6 +1481,7 @@ impl ProviderDeployment {
             .and_then(|record| record.lock().ok().map(|record| record.phase))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn controller_session_is_active(
         &self,
         process_ref: &ResourceRef,
@@ -1493,6 +1507,7 @@ impl ProviderDeployment {
 
     /// Return the signed target-local controller Process resources currently
     /// owned by this deployment.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn controller_processes(&self) -> Result<Vec<ControllerProcessResource>, DeploymentError> {
         let records = self
             .controllers
@@ -1513,6 +1528,7 @@ impl ProviderDeployment {
     }
 
     /// Borrow one signed target-local controller Process resource.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn controller_process(
         &self,
         process_ref: &ResourceRef,
@@ -1524,6 +1540,7 @@ impl ProviderDeployment {
     }
 
     /// Begin one target-local controller launch after target readiness passed.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn begin_controller_launch(
         &self,
         process_ref: &ResourceRef,
@@ -1551,6 +1568,7 @@ impl ProviderDeployment {
     }
 
     /// Record a fixed Process adapter launch receipt.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn controller_launch_succeeded(
         &self,
         process_ref: &ResourceRef,
@@ -1578,6 +1596,7 @@ impl ProviderDeployment {
     }
 
     /// Record a restart adoption receipt for an existing controller Process.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn controller_adopted(
         &self,
         process_ref: &ResourceRef,
@@ -1612,6 +1631,7 @@ impl ProviderDeployment {
 
     /// Return a failed controller launch to Pending, or quarantine it when
     /// the Process adapter cannot establish an unambiguous identity.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn controller_launch_failed(
         &self,
         process_ref: &ResourceRef,
@@ -1637,6 +1657,7 @@ impl ProviderDeployment {
 
     /// Quarantine a controller whose restart adoption found ambiguous
     /// process identity. Quarantine retains the finalizer and blocks cleanup.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn quarantine_controller(&self, process_ref: &ResourceRef) -> Result<(), DeploymentError> {
         let record = self.controller_record(process_ref)?;
         let mut record = record
@@ -1649,6 +1670,7 @@ impl ProviderDeployment {
     }
 
     /// Whether the controller Process finalizer is still retained.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn controller_finalizer_held(&self, process_ref: &ResourceRef) -> Option<bool> {
         self.controllers
             .lock()
@@ -1658,6 +1680,7 @@ impl ProviderDeployment {
     }
 
     /// Admit a controller's separate authenticated ComponentSession.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn admit_controller_session(
         &self,
         binding: ControllerSessionBinding,
@@ -1715,6 +1738,7 @@ impl ProviderDeployment {
     }
 
     /// Admit one ResourceClient only after the controller session is ready.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn admit_controller_assignment(
         &self,
         request: ControllerAssignmentRequest,
@@ -1812,6 +1836,7 @@ impl ProviderDeployment {
     }
 
     /// Revoke every controller assignment and session bound to one session.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn revoke_controller_session(
         &self,
         process_ref: &ResourceRef,
@@ -1841,6 +1866,7 @@ impl ProviderDeployment {
     }
 
     /// Record one child resource under the controller's finalizer owner.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn record_controller_child(
         &self,
         process_ref: &ResourceRef,
@@ -1870,6 +1896,7 @@ impl ProviderDeployment {
     }
 
     /// Adopt verified children or quarantine ambiguous observations.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn adopt_controller_children(
         &self,
         process_ref: &ResourceRef,
@@ -1905,6 +1932,7 @@ impl ProviderDeployment {
     }
 
     /// Remove one child only after exact adopted identity and terminal state.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn remove_controller_child(
         &self,
         process_ref: &ResourceRef,
@@ -1929,6 +1957,7 @@ impl ProviderDeployment {
     }
 
     /// Prepare controller cleanup without releasing its finalizer.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn prepare_controller_cleanup(
         &self,
         process_ref: &ResourceRef,
@@ -1964,6 +1993,7 @@ impl ProviderDeployment {
     }
 
     /// Complete cleanup and clear the finalizer only for the named owner.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn complete_controller_cleanup(
         &self,
         process_ref: &ResourceRef,
@@ -1990,6 +2020,7 @@ impl ProviderDeployment {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn controller_record(
         &self,
         process_ref: &ResourceRef,
@@ -2171,6 +2202,7 @@ fn digest_is_zero(value: &str) -> bool {
         .is_some_and(|digest| digest.bytes().all(|byte| byte == b'0'))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn revoke_record_assignments(
     assignments: &Mutex<BTreeMap<ControllerAssignmentIdentity, Arc<AssignmentState>>>,
     record: &mut ControllerRecord,
@@ -2198,6 +2230,7 @@ fn revoke_record_assignments(
     Ok(count)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn revoke_record_assignments_all(
     assignments: &Mutex<BTreeMap<ControllerAssignmentIdentity, Arc<AssignmentState>>>,
     record: &mut ControllerRecord,

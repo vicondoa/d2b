@@ -134,6 +134,7 @@ pub fn connect_component_session_vsock_for_tests(
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn connect_component_session_vsock_inner(
     socket_path: &Path,
     state_root: &Path,
@@ -218,6 +219,7 @@ fn current_gid_for_tests() -> u32 {
     nix::unistd::getgid().as_raw()
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn validate_socket_path(
     socket_path: &Path,
     state_root: &Path,
@@ -305,6 +307,7 @@ fn validate_directory_chain(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn validate_directory_metadata(
     path: &Path,
     directory_policy: DirectoryPolicy,
@@ -326,6 +329,7 @@ fn validate_directory_metadata(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn validate_root_owned_directory(path: &Path) -> Result<(), ComponentSessionTransportFailure> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|_| ComponentSessionTransportFailure::StateRootInvalid)?;
@@ -344,6 +348,7 @@ fn has_parent_dir(path: &Path) -> bool {
         .any(|component| matches!(component, Component::ParentDir))
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_connect_ack(
     stream: &mut Socket,
     deadline: Instant,
@@ -429,6 +434,7 @@ mod tests {
         connect_component_session_vsock_for_tests(path, root, Duration::from_millis(100))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fake_ch<F>(path: &Path, responder: F) -> thread::JoinHandle<Vec<u8>>
     where
         F: FnOnce(&mut UnixStream) + Send + 'static,
@@ -454,6 +460,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn connects_with_exact_handshake_and_connect_id() {
         let root = state_root();
         let socket = socket_path(&root);
@@ -492,6 +499,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn production_directory_policy_rejects_wrong_owner_and_world_write() {
         let root = state_root();
         let metadata = fs::symlink_metadata(root.path()).expect("metadata");
@@ -547,6 +555,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn rejects_regular_file_socket_path() {
         let root = state_root();
         let socket = socket_path(&root);
@@ -558,6 +567,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn rejects_peer_credential_mismatch() {
         let root = state_root();
         let socket = socket_path(&root);
@@ -630,6 +640,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn rejects_malformed_ack() {
         let root = state_root();
         let socket = socket_path(&root);
@@ -644,6 +655,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn rejects_non_numeric_connect_id() {
         let root = state_root();
         let socket = socket_path(&root);
@@ -658,6 +670,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn rejects_ack_eof() {
         let root = state_root();
         let socket = socket_path(&root);
@@ -670,6 +683,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn rejects_overlong_ack() {
         let root = state_root();
         let socket = socket_path(&root);
@@ -686,6 +700,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn rejects_ack_timeout() {
         let root = state_root();
         let socket = socket_path(&root);
@@ -703,6 +718,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn slow_drip_ack_respects_single_setup_deadline() {
         let root = state_root();
         let socket = socket_path(&root);
@@ -726,6 +742,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn uses_base_socket_not_port_suffixed_socket() {
         let root = state_root();
         let base = socket_path(&root);

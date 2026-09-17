@@ -288,6 +288,7 @@ mod tests {
     }
 
     impl ChStatsSource for StubSource {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn scrape(&self, input: &ChVmInput) -> ChVmStats {
             self.0
                 .lock()

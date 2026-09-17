@@ -434,6 +434,7 @@ impl PidfdTable {
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn wait_terminated(
         &self,
         vm: &str,
@@ -604,6 +605,7 @@ impl PidfdTable {
         write_snapshot(&self.state_path, &persisted)
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn restore_from_disk(state_path: &Path) -> Result<Self, PidfdTableError> {
         let table = Self::new(state_path.to_path_buf());
         if !state_path.exists() {
@@ -670,6 +672,7 @@ pub fn force_signal_eperm_for_tests(vm: &str, role: &str, enabled: bool) {
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn write_snapshot(path: &Path, snapshot: &PersistedPidfdTable) -> Result<(), PidfdTableError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| PidfdTableError::SnapshotFailed {
@@ -767,6 +770,7 @@ fn reopen_persisted_entry(record: &PersistedPidfdEntry) -> Result<Option<PidfdEn
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_proc_start_time(pid: i32) -> Result<Option<u64>, String> {
     let path = format!("/proc/{pid}/stat");
     match fs::read_to_string(&path) {
@@ -837,6 +841,7 @@ mod tests {
         child: Child,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl ChildGuard {
         fn new(child: Child) -> Self {
             Self { child }
@@ -851,6 +856,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl Drop for ChildGuard {
         fn drop(&mut self) {
             if let Ok(None) = self.child.try_wait() {
@@ -860,6 +866,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fresh_state_path(test_name: &str) -> PathBuf {
         let root = crate::test_scratch_root().join("pidfd-table-tests");
         fs::create_dir_all(&root).expect("create pidfd-table-tests dir");
@@ -1129,6 +1136,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn register_signal_snapshot_roundtrip() {
         let state_path = fresh_state_path("signal-roundtrip");
         let table = PidfdTable::new(state_path.clone());
@@ -1174,6 +1182,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn restore_drops_stale_esrch_entries() {
         let state_path = fresh_state_path("restore-drops-stale-esrch");
         write_snapshot(
@@ -1200,6 +1209,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn wait_terminated_times_out_for_running_child() {
         let table = PidfdTable::new(fresh_state_path("wait-terminated-timeout"));
         let child = ChildGuard::new(
@@ -1247,6 +1257,7 @@ mod tests {
     /// status via `waitid(P_PIDFD, WEXITED)` and the daemon having
     /// recorded the corresponding `ChildReaped` notification.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn wait_terminated_echild_uses_broker_reap_log() {
         use d2b_contracts_broker::broker_wire::{
             ChildExitKind, ChildExitStatus, ChildReapedNotification,
@@ -1369,6 +1380,7 @@ mod tests {
     /// Post-fix behavior: each thread writes to a unique
     /// .tmp.<pid>.<seq> path; all 8 snapshot() calls succeed.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn snapshot_under_concurrent_load_succeeds() {
         let tmpdir = mktemp_dir();
         let state_path = tmpdir.join("pidfd-table.json");
@@ -1457,6 +1469,7 @@ mod tests {
     /// B's entry. The guard makes register+snapshot atomic per op, so the
     /// final persisted snapshot is the union of every VM's entries.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn concurrent_different_vm_register_and_snapshot_under_guard_loses_no_entries() {
         let tmpdir = mktemp_dir();
         let state_path = tmpdir.join("pidfd-table.json");
@@ -1497,6 +1510,7 @@ mod tests {
         assert_eq!(persisted.entries.len(), 4, "no entries lost or duplicated");
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn mktemp_dir() -> PathBuf {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();

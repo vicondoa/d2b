@@ -564,6 +564,7 @@ mod tests {
         fn is_running(&self, vm: &str, role: &str) -> bool {
             self.running.contains(&(vm.to_owned(), role.to_owned()))
         }
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn spawn(&self, spec: &PerEnvUsbipdSpec) -> PerEnvUsbipdOutcome {
             self.calls
                 .lock()

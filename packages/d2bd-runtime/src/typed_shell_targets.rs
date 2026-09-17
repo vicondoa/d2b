@@ -167,6 +167,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn reservation_release_works_inside_a_tokio_runtime() {
         // `blocking_lock` panics on a runtime worker thread; the drop
         // release must reach the cache through the spin seat instead.

@@ -53,6 +53,85 @@ pub const COMPONENT_SESSION_ATTEMPT_CAP: Duration = Duration::from_secs(3);
 /// Backoff between bounded ComponentSession readiness attempts.
 pub const COMPONENT_SESSION_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
+/// Dedicated bounded worker for the blocking Guest ComponentSession connect
+/// probe.
+///
+/// `component_session_vsock::connect_component_session_vsock` is a
+/// synchronous syscall sequence (connect + SO_PEERCRED + CONNECT/ACK with a
+/// per-call deadline). `tokio::task::spawn_blocking` is banned (plan KD2), so
+/// the probe runs on one dedicated bounded worker in the d2b-core
+/// `loader_worker` shape (plan R4): a blocking `sync_channel` recv on the
+/// worker's own thread with `tokio::sync::oneshot` replies. Admission is a
+/// non-blocking `try_send`; a saturated queue refuses with
+/// [`ConnectProbeRefusal::Busy`] instead of growing threads or parking the
+/// caller's executor, and a worker that never started refuses with
+/// [`ConnectProbeRefusal::Unavailable`].
+const MAX_CONNECT_PROBE_QUEUE_DEPTH: usize = 16;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectProbeRefusal {
+    /// The bounded queue is full: the caller must retry rather than wait.
+    Busy,
+    /// The connect probe worker is not running.
+    Unavailable,
+}
+
+type ConnectProbeJob = Box<dyn FnOnce() + Send + 'static>;
+
+/// One dedicated worker thread with its own bounded queue.
+struct ConnectProbeWorker {
+    sender: std::sync::mpsc::SyncSender<ConnectProbeJob>,
+}
+
+fn start_connect_probe_worker() -> Option<ConnectProbeWorker> {
+    let (sender, receiver) =
+        std::sync::mpsc::sync_channel::<ConnectProbeJob>(MAX_CONNECT_PROBE_QUEUE_DEPTH);
+    std::thread::Builder::new()
+        .name("d2b-guest-connect-probe".to_owned())
+        .spawn(move || {
+            // The sanctioned R4 channel boundary: a blocking `sync_channel`
+            // recv on the worker's own dedicated thread, with
+            // `tokio::sync::oneshot` replies (plan R4 / KTD3).
+            #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+            while let Ok(job) = receiver.recv() {
+                job();
+            }
+        })
+        .ok()
+        .map(|_| ConnectProbeWorker { sender })
+}
+
+/// The connect-probe seat, started on first use.
+static CONNECT_PROBE_WORKER: std::sync::LazyLock<Option<ConnectProbeWorker>> =
+    std::sync::LazyLock::new(start_connect_probe_worker);
+
+/// Run one connect probe on the bounded worker seat. The caller's executor is
+/// never parked: admission is a non-blocking `try_send` and the result is
+/// awaited from the worker.
+async fn run_connect_probe(
+    probe: impl FnOnce() -> ComponentSessionTransportProbeResult + Send + 'static,
+) -> Result<ComponentSessionTransportProbeResult, ConnectProbeRefusal> {
+
+    let (reply, outcome) = tokio::sync::oneshot::channel();
+    let admitted = CONNECT_PROBE_WORKER
+        .as_ref()
+        .ok_or(ConnectProbeRefusal::Unavailable)?
+        .sender
+        .try_send(Box::new(move || {
+            // A panicking probe drops the reply sender, so the waiter sees
+            // `Unavailable` instead of hanging on a dead worker.
+
+
+            let result = probe();
+            let _ = reply.send(result);
+        }));
+    match admitted {
+        Ok(()) => outcome.await.map_err(|_| ConnectProbeRefusal::Unavailable),
+        Err(std::sync::mpsc::TrySendError::Full(_)) => Err(ConnectProbeRefusal::Busy),
+        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => Err(ConnectProbeRefusal::Unavailable),
+    }
+}
+
 /// Host-published, non-secret identity needed to reconnect to one Guest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -71,6 +150,7 @@ pub struct GuestComponentSessionDescriptor {
 
 impl GuestComponentSessionDescriptor {
     /// Read and validate a host-published descriptor from one state root.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn read_from_state_root(
         state_root: impl AsRef<Path>,
     ) -> Result<Self, GuestComponentSessionError> {
@@ -157,6 +237,7 @@ pub struct GuestComponentSessionConfig {
 
 impl GuestComponentSessionConfig {
     /// Resolve the descriptor and enrolled keys from one validated state root.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn from_state_root(
         state_root: impl AsRef<Path>,
         endpoint: GuestComponentSessionEndpoint,
@@ -222,7 +303,7 @@ impl GuestComponentSessionClient {
         local_private: Secret32,
         guest_public: [u8; 32],
     ) -> Result<Self, GuestComponentSessionClientError> {
-        let connected = tokio::task::spawn_blocking(move || {
+        let connected = run_connect_probe(Box::new(move || {
             connect_component_session_vsock(
                 &endpoint.socket_path,
                 &endpoint.state_root,
@@ -232,7 +313,7 @@ impl GuestComponentSessionClient {
                 endpoint.expected_peer_gid,
                 endpoint.setup_timeout,
             )
-        })
+        }))
         .await
         .map_err(|_| GuestComponentSessionClientError::Transport)?;
         let connected = match connected {
@@ -559,6 +640,7 @@ fn read_public_key(path: &Path) -> Result<[u8; 32], GuestComponentSessionError> 
     Ok(bytes)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_key_bytes(path: &Path) -> Result<Vec<u8>, GuestComponentSessionError> {
     let metadata =
         fs::symlink_metadata(path).map_err(|_| GuestComponentSessionError::KeyUnavailable)?;
@@ -606,6 +688,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn descriptor_rejects_hardlinked_state_files() {
         let root = std::env::current_dir()
             .expect("test working directory")
@@ -625,6 +708,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn config_rejects_a_state_root_that_differs_from_the_endpoint_root() {
         let root = std::env::current_dir()
             .expect("test working directory")

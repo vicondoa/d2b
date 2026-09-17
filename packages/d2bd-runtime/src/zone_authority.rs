@@ -446,6 +446,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn coordinator_registers_authoritative_zones_and_resolves_vm_bindings() {
         let coordinator = new_coordinator();
         let resolver = resolver_with_work_zone();
@@ -463,6 +464,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn coordinator_auto_registers_vm_as_zone_when_unbound() {
         let coordinator = new_coordinator();
         let zone = authoritative_zone_for_vm(&coordinator, "corp-vm")

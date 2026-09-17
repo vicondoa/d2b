@@ -123,6 +123,7 @@ pub fn resolve_unsafe_local_helper_uids(
     Ok(uids.into_iter().collect())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn validate_lock_parent(
     lock_path: &Path,
     identity: &RuntimeIdentity,
@@ -194,6 +195,7 @@ pub fn validate_lock_parent(
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn ensure_locks_dir(path: &Path, identity: &RuntimeIdentity) -> Result<(), TypedError> {
     fs::create_dir_all(path).map_err(|err| TypedError::InternalIo {
         context: format!("create locks dir {}", path.display()),
@@ -212,6 +214,7 @@ pub fn ensure_locks_dir(path: &Path, identity: &RuntimeIdentity) -> Result<(), T
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn acquire_state_lock(path: &Path, identity: &RuntimeIdentity) -> Result<File, TypedError> {
     let file = OpenOptions::new()
         .create(true)
@@ -255,6 +258,7 @@ pub fn acquire_state_lock(path: &Path, identity: &RuntimeIdentity) -> Result<Fil
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Socket, TypedError> {
     if let Ok(metadata) = fs::symlink_metadata(path) {
         if metadata.file_type().is_socket() {
@@ -438,6 +442,7 @@ pub fn drop_privileges_if_root(identity: &RuntimeIdentity) -> Result<(), TypedEr
 /// to stderr and non-fatal - the absence of the version file
 /// surfaces in the CLI as `DaemonRestartStatus::DaemonNotRunning`,
 /// which is a reasonable degraded shape.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn write_daemon_version_file(config: &DaemonConfig) {
     let binary_path = match std::env::current_exe().and_then(std::fs::canonicalize) {
         Ok(p) => p.to_string_lossy().into_owned(),
@@ -566,6 +571,7 @@ mod sd_notify_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn sd_notify_status_sends_abstract_datagram() {
         let name = unique_abstract_name("notify");
         let fd = socket(
@@ -626,6 +632,7 @@ mod runtime_acl_tests {
 
     static SCRATCH_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn scratch_dir(_tag: &str) -> PathBuf {
         let nonce = SCRATCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("nlr-{}-{nonce}", std::process::id()));
@@ -665,6 +672,7 @@ mod runtime_acl_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn bind_public_socket_chgrps_to_public_socket_gid_even_when_non_root() {
         // Under the production unit the daemon never runs as root,
         // so the previous `if geteuid().is_root()` gate around the
@@ -744,6 +752,7 @@ mod runtime_acl_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn bind_public_socket_skips_chown_in_test_mode() {
         // The test-only path (`expect_root_owned_parent=false`) must
         // skip the chown so plain `cargo test` runs that do not
@@ -770,6 +779,7 @@ mod runtime_acl_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn validate_lock_parent_accepts_production_tmpfile_shape() {
         // Production posture: `d /run/d2b 1770 root d2b -` with
         // ACLs (g::r-x, u:d2bd:rwx, m::rwx). The validator expects
@@ -788,6 +798,7 @@ mod runtime_acl_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn validate_lock_parent_rejects_wrong_mode_in_production() {
         // 0o700 (the old `/run/d2b/locks` mode) is not acceptable
         // for `/run/d2b` itself because launcher users could not
@@ -810,6 +821,7 @@ mod runtime_acl_tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn validate_lock_parent_test_mode_accepts_either_0755_or_0750_or_0770() {
         // Test mode (`expect_root_owned_parent=false`) accepts 0o755,
         // 0o750, and 0o770 because ad-hoc cargo-test scratch dirs may

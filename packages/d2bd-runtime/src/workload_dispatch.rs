@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    sync::{Mutex, OnceLock},
+    sync::{LazyLock, Mutex},
     time::{Duration, Instant},
 };
 
@@ -173,10 +173,15 @@ const ACTIVE_LAUNCH_RETENTION: Duration = Duration::from_secs(45);
 const COMMITTED_LAUNCH_RETENTION: Duration = Duration::from_secs(300);
 
 fn launch_ledger() -> &'static Mutex<BTreeMap<(u32, String), LaunchLedgerEntry>> {
-    static LEDGER: OnceLock<Mutex<BTreeMap<(u32, String), LaunchLedgerEntry>>> = OnceLock::new();
-    LEDGER.get_or_init(|| Mutex::new(BTreeMap::new()))
+    static LEDGER: LazyLock<Mutex<BTreeMap<(u32, String), LaunchLedgerEntry>>> =
+        LazyLock::new(|| Mutex::new(BTreeMap::new()));
+    &LEDGER
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn begin_launch(
     requester_uid: u32,
     operation_id: &str,
@@ -230,6 +235,10 @@ pub fn begin_launch(
     Ok(LaunchLedgerBegin::New)
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn complete_launch(requester_uid: u32, operation_id: &str) {
     if let Some(entry) = launch_ledger()
         .lock()
@@ -241,6 +250,10 @@ pub fn complete_launch(requester_uid: u32, operation_id: &str) {
     }
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn abort_launch(requester_uid: u32, operation_id: &str) {
     launch_ledger()
         .lock()

@@ -291,7 +291,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingResourcePort {
-        created: std::sync::Mutex<Vec<ResourceRef>>,
+        created: tokio::sync::Mutex<Vec<ResourceRef>>,
     }
 
     #[async_trait]
@@ -301,7 +301,7 @@ mod tests {
             execution_ref: &ResourceRef,
             _spec: &ExecStartSpec,
         ) -> Result<EphemeralProcessHandle, ExecEstablishError> {
-            self.created.lock().unwrap().push(execution_ref.clone());
+            self.created.lock().await.push(execution_ref.clone());
             EphemeralProcessHandle::new(
                 ResourceRef::parse("EphemeralProcess/run").unwrap(),
                 3,
@@ -321,6 +321,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn resource_exec_connector_creates_and_attaches_one_ephemeral_process() {
         let port = RecordingResourcePort::default();
         let connector =

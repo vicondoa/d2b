@@ -174,6 +174,7 @@ pub trait ProcReader: Send + Sync {
 pub struct SystemProcReader;
 
 impl ProcReader for SystemProcReader {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn proc_starttime(&self, pid: i32) -> Result<Option<u64>, String> {
         let path = format!("/proc/{pid}/stat");
         match std::fs::read_to_string(&path) {
@@ -489,6 +490,7 @@ impl FilesystemSnapshotStore {
 }
 
 impl SnapshotStore for FilesystemSnapshotStore {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn upsert(&self, record: &RunnerSnapshotRecord) -> Result<(), SnapshotStoreError> {
         let path = self.file_path(&record.vm, &record.role_id);
         let parent = path.parent().expect("file_path has a parent");
@@ -537,6 +539,7 @@ impl SnapshotStore for FilesystemSnapshotStore {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn get(
         &self,
         vm: &str,
@@ -561,6 +564,7 @@ impl SnapshotStore for FilesystemSnapshotStore {
             })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn remove(&self, vm: &str, role_id: &str) -> Result<(), SnapshotStoreError> {
         let path = self.file_path(vm, role_id);
         match std::fs::remove_file(&path) {
@@ -573,6 +577,7 @@ impl SnapshotStore for FilesystemSnapshotStore {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn list(&self) -> Result<Vec<RunnerSnapshotRecord>, SnapshotStoreError> {
         let mut records = Vec::new();
         if !self.root.exists() {
@@ -637,6 +642,7 @@ impl InMemorySnapshotStore {
 }
 
 impl SnapshotStore for InMemorySnapshotStore {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn upsert(&self, record: &RunnerSnapshotRecord) -> Result<(), SnapshotStoreError> {
         self.inner
             .lock()
@@ -645,6 +651,7 @@ impl SnapshotStore for InMemorySnapshotStore {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn get(
         &self,
         vm: &str,
@@ -658,6 +665,7 @@ impl SnapshotStore for InMemorySnapshotStore {
             .cloned())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn remove(&self, vm: &str, role_id: &str) -> Result<(), SnapshotStoreError> {
         self.inner
             .lock()
@@ -666,6 +674,7 @@ impl SnapshotStore for InMemorySnapshotStore {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn list(&self) -> Result<Vec<RunnerSnapshotRecord>, SnapshotStoreError> {
         Ok(self.inner.lock().unwrap().values().cloned().collect())
     }
@@ -945,6 +954,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn filesystem_store_get_rejects_malformed_snapshot() {
         let dir = tempdir().unwrap();
         let path = snapshot_path(dir.path(), "corp-vm", "ch");
@@ -962,6 +972,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn filesystem_store_get_maps_read_failure_to_io() {
         let dir = tempdir().unwrap();
         let path = snapshot_path(dir.path(), "corp-vm", "ch");
@@ -998,6 +1009,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn filesystem_store_list_skips_non_runtime_files() {
         let dir = tempdir().unwrap();
         let vm_dir = dir.path().join("corp-vm");
@@ -1118,6 +1130,7 @@ mod tests {
         outcomes: std::sync::Mutex<HashMap<i32, Result<(), String>>>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl FakeOpener {
         fn new() -> Self {
             Self {
@@ -1135,6 +1148,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl PidfdOpener for FakeOpener {
         fn open_pidfd(
             &self,
@@ -1251,6 +1265,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl PidfdOpener for RecordingOpener {
         fn open_pidfd(
             &self,
@@ -1274,6 +1289,7 @@ mod tests {
     /// perform the post-open re-verification that closes the
     /// pid-reuse race.
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn reconcile_and_adopt_passes_expected_start_time_to_opener() {
         let snaps = vec![sample("corp-vm", "ch", 4242, 987_654_321)];
         let mut reader = FakeProcReader::default();

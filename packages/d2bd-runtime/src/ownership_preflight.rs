@@ -501,6 +501,7 @@ mod tests {
     /// test process, the preflight returns Clean (after the
     /// non-resolvable owner principals are skipped with warn logs).
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn provisioned_state_dir_with_unresolvable_principals_is_clean() {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();

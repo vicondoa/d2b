@@ -51,6 +51,10 @@ pub async fn shutdown_vm(socket: &Path, timeout: Duration) -> Result<(), ChApiEr
         .map(|_| ())
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 pub fn blocking_get_json(
     socket: &Path,
     path: &str,
@@ -100,7 +104,7 @@ async fn request(
     timeout: Duration,
 ) -> Result<Vec<u8>, ChApiError> {
     let op = async {
-        let stream = UnixStream::connect(socket)
+        let stream = tokio::net::UnixStream::connect(socket)
             .await
             .map_err(|err| ChApiError::Unavailable(classify_io_error(err)))?;
         write_all(&stream, http_request(method, path).as_bytes()).await?;
@@ -156,6 +160,10 @@ async fn read_async_capped(stream: &UnixStream) -> Result<Vec<u8>, ChApiError> {
     }
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 fn read_blocking_capped(stream: &mut StdUnixStream) -> Result<Vec<u8>, ChApiError> {
     let mut raw = Vec::with_capacity(2048);
     let mut buf = [0u8; 2048];
@@ -229,6 +237,7 @@ mod tests {
     use std::thread;
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn blocking_read_rejects_oversized_response() {
         let (mut reader, mut writer) = StdUnixStream::pair().expect("unix pair");
         let writer_thread = thread::spawn(move || {

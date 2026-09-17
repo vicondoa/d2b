@@ -214,6 +214,7 @@ impl HelperRegistry {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn accept_loop(self: Arc<Self>, listener: Socket) {
         loop {
             match listener.accept() {
@@ -285,6 +286,7 @@ impl HelperRegistry {
             .copied()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn dispatch_launch(
         &self,
         requester_uid: u32,
@@ -692,6 +694,7 @@ fn complete_pending(
     })
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn bind_helper_socket(
     path: &Path,
     socket_gid: Gid,
@@ -745,6 +748,7 @@ fn effective_socket_buffers_sufficient(send: usize, receive: usize) -> bool {
         && receive >= MIN_EFFECTIVE_HELPER_SOCKET_BUFFER_BYTES
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn send_frame<T: Serialize>(socket: &Socket, frame: &T) -> Result<(), HelperRegistryError> {
     let payload = serde_json::to_vec(frame).map_err(|_| HelperRegistryError::InvalidFrame)?;
     if payload.len() > MAX_HELPER_FRAME_SIZE {
@@ -762,6 +766,7 @@ fn send_frame<T: Serialize>(socket: &Socket, frame: &T) -> Result<(), HelperRegi
     Ok(())
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn receive_frame<T: serde::de::DeserializeOwned>(
     socket: &Socket,
     encoded: &mut [u8],
@@ -863,6 +868,7 @@ fn wait_for_connection_event(
     Err(HelperRegistryError::Io)
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn signal_outbound(outbound_wakeup: &UnixStream) -> Result<(), HelperRegistryError> {
     let mut outbound_wakeup = outbound_wakeup;
     loop {
@@ -875,6 +881,7 @@ fn signal_outbound(outbound_wakeup: &UnixStream) -> Result<(), HelperRegistryErr
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn drain_outbound_wakeup(outbound_wakeup: &UnixStream) -> Result<(), HelperRegistryError> {
     let mut outbound_wakeup = outbound_wakeup;
     let mut buffer = [0u8; MAX_HELPER_QUEUE_DEPTH];
@@ -1516,6 +1523,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn registered_helper_dispatches_correlated_launch_without_uid_in_frame() {
         if unistd::getuid().is_root() {
             return;
@@ -1641,6 +1649,7 @@ mod tests {
         assert_eq!(registry.last_failure(1000, &editor), None);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn register_helper(registry: Arc<HelperRegistry>, generation: u64) -> Socket {
         let uid = unistd::getuid().as_raw();
         let (server, client) = seqpacket_pair();

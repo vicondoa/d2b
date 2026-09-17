@@ -106,6 +106,7 @@ where
     }
 
     /// Reset the stream after owner cancellation or a disconnected peer.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn cancel(&self, runtime: &tokio::runtime::Handle) -> Result<(), TypedError> {
         runtime
             .block_on(self.client.cancel())
@@ -127,6 +128,7 @@ impl<D> ShellBackend for ComponentSessionShellBackend<D>
 where
     D: d2b_session::ComponentSessionDriver + 'static,
 {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn handle_op(
         &self,
         runtime: &tokio::runtime::Handle,
@@ -211,6 +213,7 @@ where
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn close_attachment(
         &self,
         runtime: &tokio::runtime::Handle,
@@ -227,6 +230,7 @@ where
         })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn cancel_attachment(
         &self,
         runtime: &tokio::runtime::Handle,

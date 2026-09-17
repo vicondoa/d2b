@@ -219,6 +219,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn terminal_backend_trait_covers_shared_ops_without_exec_wire() {
         let backend = FakeBackend;
         let write = backend

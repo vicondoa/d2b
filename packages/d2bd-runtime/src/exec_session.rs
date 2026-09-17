@@ -2258,7 +2258,6 @@ mod tests {
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl Clock for FakeClock {
         fn now(&self) -> Instant {
             *self.now.lock().unwrap()

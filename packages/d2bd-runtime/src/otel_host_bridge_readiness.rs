@@ -103,6 +103,7 @@ static TEST_CONFIG_OVERRIDE: std::sync::OnceLock<std::sync::Mutex<Option<Readine
 /// The override is consulted by [`ReadinessWaitConfig::for_dispatch`] in
 /// `#[cfg(test)]` builds only.
 #[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 pub fn set_test_readiness_config(cfg: Option<ReadinessWaitConfig>) {
     let cell = TEST_CONFIG_OVERRIDE.get_or_init(|| std::sync::Mutex::new(None));
     *cell.lock().expect("test readiness config mutex") = cfg;
@@ -233,13 +234,22 @@ impl ReadinessWaitConfig {
     /// `unsafe` in Rust 1.81+).
     pub fn for_dispatch() -> Self {
         #[cfg(any(test, feature = "test-support"))]
-        if let Some(cell) = TEST_CONFIG_OVERRIDE.get()
-            && let Ok(guard) = cell.lock()
-            && let Some(cfg) = guard.clone()
-        {
+        if let Some(cfg) = Self::test_config_override() {
             return cfg;
         }
         Self::from_env()
+    }
+
+    /// Read the test-only config override cell, when installed.
+    ///
+    /// Shared by [`Self::for_dispatch`] so the std mutex access stays in
+    /// one cfg-gated helper (test-support only code, plan R11).
+    #[cfg(any(test, feature = "test-support"))]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn test_config_override() -> Option<ReadinessWaitConfig> {
+        let cell = TEST_CONFIG_OVERRIDE.get()?;
+        let guard = cell.lock().ok()?;
+        guard.clone()
     }
 
     /// Build a config from already-resolved raw override strings. The
@@ -378,6 +388,10 @@ impl OtelHostBridgeProbeSource for PidfdAndSocketProbeSource<'_> {
     }
 }
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "synchronous path"
+)]
 fn path_exists(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }

@@ -158,7 +158,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingResourcePort {
-        calls: std::sync::Mutex<Vec<&'static str>>,
+        calls: tokio::sync::Mutex<Vec<&'static str>>,
     }
 
     #[async_trait]
@@ -169,7 +169,7 @@ mod tests {
             _spec: &ExecStartSpec,
         ) -> Result<ExecDetachedCreateResult, ExecOpError> {
             assert_eq!(execution_ref.resource_type().as_str(), "Guest");
-            self.calls.lock().unwrap().push("create");
+            self.calls.lock().await.push("create");
             Ok(ExecDetachedCreateResult {
                 exec_id: "resource-id".to_owned(),
                 state: ExecState::Created,
@@ -180,7 +180,7 @@ mod tests {
             &self,
             _execution_ref: &ResourceRef,
         ) -> Result<ExecDetachedListResult, ExecOpError> {
-            self.calls.lock().unwrap().push("list");
+            self.calls.lock().await.push("list");
             Ok(ExecDetachedListResult { execs: Vec::new() })
         }
 
@@ -189,7 +189,7 @@ mod tests {
             process_ref: &ResourceRef,
         ) -> Result<ExecDetachedStatusResult, ExecOpError> {
             assert_eq!(process_ref.resource_type().as_str(), "EphemeralProcess");
-            self.calls.lock().unwrap().push("status");
+            self.calls.lock().await.push("status");
             Ok(ExecDetachedStatusResult {
                 exec_id: process_ref.name().as_str().to_owned(),
                 state: ExecState::Running,
@@ -210,7 +210,7 @@ mod tests {
             _stderr_offset: Option<u64>,
             _max_len: Option<u64>,
         ) -> Result<ExecDetachedLogsResult, ExecOpError> {
-            self.calls.lock().unwrap().push("logs");
+            self.calls.lock().await.push("logs");
             Ok(ExecDetachedLogsResult {
                 exec_id: "resource-id".to_owned(),
                 stdout_base64: String::new(),
@@ -238,7 +238,7 @@ mod tests {
             &self,
             _process_ref: &ResourceRef,
         ) -> Result<ExecDetachedKillResult, ExecOpError> {
-            self.calls.lock().unwrap().push("kill");
+            self.calls.lock().await.push("kill");
             Ok(ExecDetachedKillResult {
                 exec_id: "resource-id".to_owned(),
                 result: ExecDetachedKillOutcome::Cancelling,
@@ -248,6 +248,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn resource_detached_client_routes_lifecycle_by_resource_ref() {
         let port = RecordingResourcePort::default();
         let client =
