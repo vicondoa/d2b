@@ -486,6 +486,8 @@ impl_has_error!(
 // CRUD through the manager-backed service
 // ---------------------------------------------------------------------------
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn create_get_update_delete_round_trip_through_the_manager() {
     let fixture = manager_fixture().await;
@@ -565,6 +567,7 @@ async fn create_get_update_delete_round_trip_through_the_manager() {
 /// uid from `metadata.uid`, and `ResourceUid`'s redacted `Display` is never
 /// data. A round trip through an API-created row cannot catch this - those
 /// rows persist envelope-shaped bytes and already carry their uid.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn spec_shaped_row_serves_its_stable_uid() {
     let fixture = manager_fixture().await;
@@ -951,6 +954,7 @@ fn every_converted_type_projects_a_strict_wire_view() {
 /// path serves the committed row, and the only refusal shape it can render is
 /// the manager's own honest absence - never the legacy `WrongPlane` plane
 /// error (the fence lives on the legacy facade, not on the authority).
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn every_converted_type_is_served_by_the_manager_path() {
     use crate::ResourceStoreBackend;
@@ -1144,6 +1148,7 @@ fn converted_type_status_layers_round_trip_through_their_typed_decoders() {
 /// confirmation. A caller that re-introduces its own envelope or status
 /// assembly diverges from `manager_row_stored` here and fails, whatever the
 /// shapes it invents.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn every_api_read_path_serves_the_canonical_projection() {
     use d2b_resource_runtime::manager::ResourceView;
@@ -1322,6 +1327,8 @@ async fn every_api_read_path_serves_the_canonical_projection() {
     fixture.manager_actor.get_cell().stop(None);
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn exact_revision_precondition_rejects_a_stale_generation() {
     let fixture = manager_fixture().await;
@@ -1359,6 +1366,8 @@ async fn exact_revision_precondition_rejects_a_stale_generation() {
 // Authorization: allow/deny from the fixture matrix
 // ---------------------------------------------------------------------------
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn authorization_denies_operations_outside_the_fixture_matrix() {
     let fixture = manager_fixture().await;
@@ -1400,6 +1409,8 @@ async fn authorization_denies_operations_outside_the_fixture_matrix() {
     fixture.manager_actor.get_cell().stop(None);
 }
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn admission_subjects_are_constructed_for_all_three_surfaces() {
     let fixture = manager_fixture().await;
@@ -1431,6 +1442,8 @@ async fn admission_subjects_are_constructed_for_all_three_surfaces() {
 // LIST snapshot revision, paging, and WATCH refusal (unit-scale F4, R23/R24)
 // ---------------------------------------------------------------------------
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn list_returns_snapshot_revision_and_watch_refuses_until_wired() {
     let fixture = manager_fixture().await;
@@ -1479,6 +1492,7 @@ async fn list_returns_snapshot_revision_and_watch_refuses_until_wired() {
 /// A continuation cursor drives the next page: the request cursor selects
 /// the rows after the last one returned, `truncated` is true only while a
 /// remainder exists, and the final page carries no cursor.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn list_pages_with_a_continuation_cursor() {
     let fixture = manager_fixture().await;
@@ -1545,6 +1559,7 @@ async fn list_pages_with_a_continuation_cursor() {
 /// and each filter's values), so a client echoing its own query with the sets
 /// reordered - or repeated - resumes its sequence instead of being refused as
 /// a foreign cursor.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn list_cursor_accepts_a_reordered_echo_of_the_same_selectors() {
     let fixture = manager_fixture().await;
@@ -1611,6 +1626,7 @@ async fn list_cursor_accepts_a_reordered_echo_of_the_same_selectors() {
 
 /// A cursor that cannot be honoured is refused with a typed error - a
 /// foreign-selector cursor must not silently restart the sequence at page 1.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn list_refuses_a_cursor_it_cannot_honour() {
     let fixture = manager_fixture().await;
@@ -1664,6 +1680,7 @@ async fn list_refuses_a_cursor_it_cannot_honour() {
 /// An owner-scoped LIST matches the manager's owned children: the row's real
 /// ownership is projected into the store shape, so `owner.resourceUid` and
 /// `owner.resourceRef` return the owner's rows instead of an empty page.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn list_owner_filters_match_manager_owned_children() {
     let fixture = manager_fixture().await;
@@ -1751,6 +1768,8 @@ fn host_spec() -> Vec<u8> {
 // No status write path from API status updates
 // ---------------------------------------------------------------------------
 
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn api_status_updates_have_no_persistent_write_path() {
     let fixture = manager_fixture().await;

@@ -457,7 +457,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::BTreeSet, sync::Mutex};
+    use std::collections::BTreeSet;
 
     use d2b_contracts_resource::v3::identity::{
         AuthenticatedSubjectContext as SessionClaims, BindingDigest, EvidenceClass, Locality,
@@ -729,20 +729,23 @@ mod tests {
     }
 
     struct RecordingStore {
-        calls: Arc<Mutex<Vec<DispatchObservation>>>,
+        calls: Arc<tokio::sync::Mutex<Vec<DispatchObservation>>>,
         acceptor: MutationSealAcceptor,
     }
 
     impl RecordingStore {
         fn new(
-            calls: Arc<Mutex<Vec<DispatchObservation>>>,
+            calls: Arc<tokio::sync::Mutex<Vec<DispatchObservation>>>,
             acceptor: MutationSealAcceptor,
         ) -> Arc<Self> {
             Arc::new(Self { calls, acceptor })
         }
 
         fn record(&self, observation: DispatchObservation) {
-            self.calls.lock().unwrap().push(observation);
+            // Sync helper called from async trait fns: non-blocking try_lock
+            // fails closed (plan U4 sync-consumer pattern); single-threaded
+            // tests see no contention.
+            self.calls.try_lock().unwrap().push(observation);
         }
     }
 
@@ -896,7 +899,7 @@ mod tests {
 
     #[derive(Debug)]
     struct RecordingUpgrade {
-        calls: Arc<Mutex<Vec<DispatchObservation>>>,
+        calls: Arc<tokio::sync::Mutex<Vec<DispatchObservation>>>,
     }
 
     impl UpgradeDispatcher for RecordingUpgrade {
@@ -904,7 +907,7 @@ mod tests {
             &self,
             request: AuthorizedUpgrade,
         ) -> Result<UpgradeResult, d2b_contracts_resource::v3::ResourceError> {
-            self.calls.lock().unwrap().push(DispatchObservation::one(
+            self.calls.lock().await.push(DispatchObservation::one(
                 ApiMethod::Upgrade,
                 &request.operation.operation_id,
                 &request.zone,
@@ -998,11 +1001,11 @@ mod tests {
     /// A recording adapter paired with the observation log it appends to.
     type RecordingAdapter = (
         Arc<ResourceBusAdapter<RecordingStore, RecordingUpgrade>>,
-        Arc<Mutex<Vec<DispatchObservation>>>,
+        Arc<tokio::sync::Mutex<Vec<DispatchObservation>>>,
     );
 
     fn recording_adapter() -> RecordingAdapter {
-        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let context = subject(Locality::Local, EvidenceClass::UnixPeer);
         let catalog = ApiCatalog::standard();
         let role = CompiledRole::new(
@@ -1252,6 +1255,8 @@ mod tests {
         assert!(!client_debug.contains(MARKER), "{client_debug}");
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn authenticated_thirteen_method_adapter_pins_dispatch_targets_counts_and_sentinels() {
         let ctx = context();
@@ -1534,7 +1539,7 @@ mod tests {
                 None,
             ),
         ];
-        assert_eq!(*calls.lock().unwrap(), expected);
+        assert_eq!(*calls.lock().await, expected);
     }
 
     #[test]

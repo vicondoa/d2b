@@ -2271,10 +2271,7 @@ mod tests {
     use super::*;
     use std::{
         collections::BTreeMap,
-        sync::{
-            Mutex,
-            atomic::{AtomicU64, AtomicUsize, Ordering},
-        },
+        sync::atomic::{AtomicU64, AtomicUsize, Ordering},
     };
 
     use d2b_contracts_resource::v3::identity::{
@@ -2309,34 +2306,34 @@ mod tests {
 
     struct FakeStore {
         debug_marker: &'static str,
-        mode: Mutex<CommitMode>,
+        mode: tokio::sync::Mutex<CommitMode>,
         commits: AtomicUsize,
         mutation_count: AtomicUsize,
         configuration_revision: AtomicU64,
-        commit_resources: Mutex<Vec<StoredResource>>,
-        schema_response: Mutex<Option<StoredSchema>>,
-        last_canonical_resource: Mutex<Option<Vec<u8>>>,
-        last_resource_uid: Mutex<Option<ResourceUid>>,
-        last_payload_digest: Mutex<Option<String>>,
-        uid_index: Mutex<BTreeMap<ResourceUid, ResourceRef>>,
-        acceptor: Mutex<Option<MutationSealAcceptor>>,
+        commit_resources: tokio::sync::Mutex<Vec<StoredResource>>,
+        schema_response: tokio::sync::Mutex<Option<StoredSchema>>,
+        last_canonical_resource: tokio::sync::Mutex<Option<Vec<u8>>>,
+        last_resource_uid: tokio::sync::Mutex<Option<ResourceUid>>,
+        last_payload_digest: tokio::sync::Mutex<Option<String>>,
+        uid_index: tokio::sync::Mutex<BTreeMap<ResourceUid, ResourceRef>>,
+        acceptor: tokio::sync::Mutex<Option<MutationSealAcceptor>>,
     }
 
     impl FakeStore {
         fn new(mode: CommitMode) -> Self {
             Self {
                 debug_marker: "",
-                mode: Mutex::new(mode),
+                mode: tokio::sync::Mutex::new(mode),
                 commits: AtomicUsize::new(0),
                 mutation_count: AtomicUsize::new(0),
                 configuration_revision: AtomicU64::new(0),
-                commit_resources: Mutex::new(Vec::new()),
-                schema_response: Mutex::new(None),
-                last_canonical_resource: Mutex::new(None),
-                last_resource_uid: Mutex::new(None),
-                last_payload_digest: Mutex::new(None),
-                uid_index: Mutex::new(BTreeMap::new()),
-                acceptor: Mutex::new(None),
+                commit_resources: tokio::sync::Mutex::new(Vec::new()),
+                schema_response: tokio::sync::Mutex::new(None),
+                last_canonical_resource: tokio::sync::Mutex::new(None),
+                last_resource_uid: tokio::sync::Mutex::new(None),
+                last_payload_digest: tokio::sync::Mutex::new(None),
+                uid_index: tokio::sync::Mutex::new(BTreeMap::new()),
+                acceptor: tokio::sync::Mutex::new(None),
             }
         }
 
@@ -2387,7 +2384,7 @@ mod tests {
         ) -> Result<StoredSchema, StoreError> {
             self.schema_response
                 .lock()
-                .unwrap()
+                .await
                 .clone()
                 .ok_or_else(Self::unavailable)
         }
@@ -2396,7 +2393,7 @@ mod tests {
             &self,
             mutation: d2b_contracts_resource::v3::SealedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
-            let acceptor = self.acceptor.lock().unwrap();
+            let acceptor = self.acceptor.lock().await;
             let Some(acceptor) = acceptor.as_ref() else {
                 return Err(Self::unavailable());
             };
@@ -2409,24 +2406,24 @@ mod tests {
                 Ordering::SeqCst,
             );
             let first = mutations.first();
-            *self.last_canonical_resource.lock().unwrap() =
+            *self.last_canonical_resource.lock().await =
                 first.and_then(|prepared| prepared.mutation().canonical_resource.clone());
-            *self.last_resource_uid.lock().unwrap() =
+            *self.last_resource_uid.lock().await =
                 first.and_then(|prepared| prepared.resource_uid().cloned());
-            *self.last_payload_digest.lock().unwrap() =
+            *self.last_payload_digest.lock().await =
                 first.and_then(|prepared| prepared.payload_digest().map(str::to_owned));
-            match *self.mode.lock().unwrap() {
+            match *self.mode.lock().await {
                 CommitMode::Success => {
                     if let Some(prepared) = first
                         && let Some(uid) = prepared.resource_uid()
                     {
                         self.uid_index
                             .lock()
-                            .unwrap()
+                            .await
                             .insert(uid.clone(), prepared.mutation().target.clone());
                     }
                     Ok(StoreCommitResult {
-                        resources: self.commit_resources.lock().unwrap().clone(),
+                        resources: self.commit_resources.lock().await.clone(),
                         revision: ZoneRevision::new(9),
                     })
                 }
@@ -2580,7 +2577,9 @@ mod tests {
         let acceptor = authorizer
             .take_store_seal(test_store_identity())
             .expect("test authorizer receives a store seal");
-        *store.acceptor.lock().unwrap() = Some(acceptor);
+        // Sync test helper: non-blocking try_lock fails closed (plan U4
+        // sync-consumer pattern); single-threaded tests see no contention.
+        *store.acceptor.try_lock().unwrap() = Some(acceptor);
         ResourceService::new(store, authorizer).unwrap()
     }
 
@@ -2592,7 +2591,7 @@ mod tests {
         let acceptor = authorizer
             .take_store_seal(test_store_identity())
             .expect("test authorizer receives a store seal");
-        *store.acceptor.lock().unwrap() = Some(acceptor);
+        *store.acceptor.try_lock().unwrap() = Some(acceptor);
         ResourceService::with_upgrade(store, authorizer, upgrade).unwrap()
     }
 
@@ -2711,6 +2710,8 @@ mod tests {
         assert_eq!(result.unwrap_err(), StoreBindingError);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn native_authorization_precedes_body_validation() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -2729,6 +2730,8 @@ mod tests {
         assert_eq!(store.commits.load(Ordering::SeqCst), 0);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn owner_reference_requires_an_independent_read_grant() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -2753,6 +2756,8 @@ mod tests {
         assert_eq!(store.commits.load(Ordering::SeqCst), 0);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn malformed_and_oversize_envelopes_never_reach_the_store() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -2775,6 +2780,8 @@ mod tests {
         assert_eq!(store.commits.load(Ordering::SeqCst), 0);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn store_receives_canonical_create_body_without_uid_or_fake_index_entry() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -2795,7 +2802,7 @@ mod tests {
         let stored = store
             .last_canonical_resource
             .lock()
-            .unwrap()
+            .await
             .clone()
             .expect("store received canonical bytes");
         assert_eq!(stored, canonical_create);
@@ -2808,16 +2815,18 @@ mod tests {
             panic!("store received a resource body without metadata");
         };
         assert!(!metadata.contains_key("uid"));
-        assert!(store.last_resource_uid.lock().unwrap().is_none());
+        assert!(store.last_resource_uid.lock().await.is_none());
         let expected_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_create);
         assert_eq!(
-            store.last_payload_digest.lock().unwrap().as_deref(),
+            store.last_payload_digest.lock().await.as_deref(),
             Some(expected_digest.as_str())
         );
-        assert!(store.uid_index.lock().unwrap().is_empty());
+        assert!(store.uid_index.lock().await.is_empty());
         assert_eq!(store.commits.load(Ordering::SeqCst), 1);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn create_rejects_every_caller_supplied_uid_field() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -2883,6 +2892,8 @@ mod tests {
         }
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn unknown_protobuf_fields_are_rejected_after_authorization() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -2901,6 +2912,8 @@ mod tests {
         assert_eq!(store.commits.load(Ordering::SeqCst), 0);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn conflict_returns_only_safe_revision_metadata() {
         let store = Arc::new(FakeStore::new(CommitMode::Conflict));
@@ -2924,6 +2937,8 @@ mod tests {
         assert!(response.resource.is_none());
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn conflict_hides_revision_without_read_authority() {
         let store = Arc::new(FakeStore::new(CommitMode::Conflict));
@@ -2944,6 +2959,8 @@ mod tests {
         assert!(response.resource.is_none());
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn batch_conflict_reports_the_stale_mutation_ordinal() {
         let store = Arc::new(FakeStore::new(CommitMode::Conflict));
@@ -2969,6 +2986,8 @@ mod tests {
         assert_eq!(error.current_revision, Some(8));
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn status_owner_generation_is_checked_after_authorization() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -2987,6 +3006,8 @@ mod tests {
         assert_eq!(store.commits.load(Ordering::SeqCst), 0);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalizers_are_separate_and_batch_is_one_admitted_commit() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -3018,6 +3039,8 @@ mod tests {
         assert_eq!(store.configuration_revision.load(Ordering::SeqCst), 6);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn mixed_zone_batch_is_rejected_before_admission() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -3263,13 +3286,15 @@ mod tests {
         assert_eq!(error.kind(), ResourceErrorKind::AuthorizationDenied);
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn batch_and_schema_responses_enforce_the_byte_limit() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
         store
             .commit_resources
             .lock()
-            .unwrap()
+            .await
             .extend((0..2).map(|_| stored_resource(MAX_RESPONSE_CANONICAL_BYTES / 2)));
         let batch_service = checked_service(Arc::clone(&store), authorizer([ResourceVerb::Delete]));
         let mut batch = wire::CommitBatchRequest::new();
@@ -3285,7 +3310,7 @@ mod tests {
         assert!(response.resources.is_empty());
 
         let schema_store = Arc::new(FakeStore::new(CommitMode::Success));
-        *schema_store.schema_response.lock().unwrap() = Some(StoredSchema {
+        *schema_store.schema_response.lock().await = Some(StoredSchema {
             resource_type: ResourceTypeName::parse("Host").unwrap(),
             canonical_json: vec![b'x'; MAX_RESPONSE_CANONICAL_BYTES],
             payload_digest: format!("sha256:{}", "1".repeat(64)),
@@ -3305,6 +3330,8 @@ mod tests {
         assert!(response.schema.is_none());
     }
 
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn upgrade_response_enforces_the_byte_limit() {
         #[derive(Debug)]

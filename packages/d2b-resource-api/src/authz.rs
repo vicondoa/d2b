@@ -1466,6 +1466,9 @@ impl NativeAuthorizer {
     }
 
     pub(super) fn take_store_binding(&self) -> Result<StoreAdmissionBinding, StoreBindingError> {
+        // Synchronous authorizer surface (no async form); the critical
+        // section is a short take with no suspension point (plan R11).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut binding = self.store_binding.lock().map_err(|_| StoreBindingError)?;
         if !binding
             .as_ref()
@@ -1491,6 +1494,10 @@ impl NativeAuthorizer {
     {
         let slot = store.slot();
         let zone = store.zone().clone();
+        // Synchronous authorizer surface (no async form); the critical
+        // section is a short slot check plus issuer install with no
+        // suspension point (plan R11).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let mut issuer =
             self.store_seal
                 .lock()
@@ -1697,12 +1704,17 @@ impl NativeAuthorizer {
     }
 
     fn read_policy(&self) -> RwLockReadGuard<'_, Option<Arc<PolicySet>>> {
+        // Synchronous authorizer surface: every authorize/replace path is a
+        // brief non-suspending critical section over the in-memory policy
+        // snapshot (plan R11; U18 sync-surface precedent).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         self.policy
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn write_policy(&self) -> RwLockWriteGuard<'_, Option<Arc<PolicySet>>> {
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         self.policy
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -2660,6 +2672,10 @@ mod tests {
     }
 
     #[test]
+    // Plain #[test] harness: the test deliberately drives real threads and
+    // blocking channel handshakes to assert lock linearization, with no
+    // runtime; sanctioned cfg(test) helper per plan R11.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn replacement_and_permit_minting_are_linearized() {
         use std::sync::mpsc::{self, TryRecvError};
 

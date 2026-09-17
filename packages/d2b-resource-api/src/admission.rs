@@ -369,6 +369,10 @@ impl StoreAdmissionBinding {
     }
 
     pub(super) fn seal(&self, body: MutationSealBody) -> Result<SealedMutation, StoreError> {
+        // Synchronous admission surface (no async form): the critical section
+        // is a short issuer lookup plus a pure crypto seal with no suspension
+        // point (plan R11 inventory; U18 sync-surface precedent).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let issuer_guard = self.seal_issuer.lock().map_err(|_| {
             StoreError::new(
                 StoreErrorKind::InternalIntegrityFailure,
@@ -391,6 +395,9 @@ impl StoreAdmissionBinding {
     }
 
     pub(super) fn has_seal_issuer(&self) -> bool {
+        // Synchronous admission surface (no async form); fail-closed on
+        // poisoning (plan R11 inventory).
+        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         self.seal_issuer
             .lock()
             .map(|issuer| issuer.is_some())
