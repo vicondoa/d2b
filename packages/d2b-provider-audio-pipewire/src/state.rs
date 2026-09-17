@@ -83,6 +83,11 @@ pub struct AudioStateLock {
     _file: File,
 }
 
+// Synchronous path: OFD locking is an fcntl boundary with no async form,
+// and the daemon's audio dispatch consumes this state I/O synchronously
+// (its U10 conversion is not landed). The lock is held only for the
+// duration of one small state-file read or write.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn acquire_audio_state_lock(
     lock_path: &Path,
     exclusive: bool,
@@ -148,6 +153,10 @@ pub fn read_audio_state_locked(
     read_audio_state_unlocked(state_path)
 }
 
+// Synchronous path: short state-file read at the same sync boundary as
+// the OFD lock above - the daemon's audio dispatch calls this without a
+// runtime, so the async filesystem interface has no reachable caller.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_audio_state_unlocked(state_path: &Path) -> Result<AudioPolicyState, AudioStateIoError> {
     let bytes = match std::fs::read(state_path) {
         Ok(b) => b,
@@ -178,6 +187,11 @@ pub fn write_audio_state_locked(
     write_audio_state_unlocked(state_path, state)
 }
 
+// Synchronous path: atomic state-file write (temp file + fsync + rename)
+// at the same sync boundary as the OFD lock above - the daemon's audio
+// dispatch calls this without a runtime, so the async filesystem
+// interface has no reachable caller.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn write_audio_state_unlocked(
     state_path: &Path,
     state: &AudioPolicyState,

@@ -2,6 +2,10 @@ use d2b_provider_audio_pipewire::{
     AudioGrant, AudioPolicyState, LevelPercent, read_audio_state_locked, write_audio_state_locked,
 };
 
+// Plain #[test] helper (no async runtime): the state I/O under test is a
+// synchronous boundary (see src/state.rs), so the fixture drives the
+// blocking filesystem call synchronously.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn ofd_read_write_roundtrip() {
     let dir = tempfile::tempdir().expect("tempdir");

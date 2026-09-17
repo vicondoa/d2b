@@ -286,11 +286,17 @@ impl<M: AudioMediator> AudioBindingController<M> {
     }
 
     /// Return the active microphone lease for status and recovery.
+    ///
+    /// Synchronous public surface (the daemon's resource runtime calls it
+    /// without a runtime): the shared arbiter is reached through the U4
+    /// non-blocking `try_lock` form. A collision - another binding's
+    /// sub-microsecond bookkeeping on the same Service arbiter - reports no
+    /// active lease and the caller re-checks on the next reconcile.
     pub fn active_microphone_lease(&self) -> Option<AudioLeaseId> {
-        match self.microphone.lock() {
-            Ok(arbiter) => arbiter.active(),
-            Err(poisoned) => poisoned.into_inner().active(),
-        }
+        let Ok(arbiter) = self.microphone.try_lock() else {
+            return None;
+        };
+        arbiter.active()
     }
 
     /// Reconcile one binding without opening a host handle itself.
@@ -318,9 +324,12 @@ impl<M: AudioMediator> AudioBindingController<M> {
 
         if binding.grants.mic == AudioGrant::On {
             let already_active = self.active_microphone_lease() == Some(lease);
-            let decision = match self.microphone.lock() {
+            let decision = match self.microphone.try_lock() {
                 Ok(mut arbiter) => arbiter.request(lease),
-                Err(poisoned) => poisoned.into_inner().request(lease),
+                // U4 fail-closed: a busy shared arbiter refuses the request
+                // rather than parking the caller's thread. The binding stays
+                // muted and the next reconcile retries arbitration.
+                Err(_) => MicDecision::QueueFull,
             };
             microphone = Some(decision);
             match decision {
@@ -350,19 +359,14 @@ impl<M: AudioMediator> AudioBindingController<M> {
                             "microphone grant mediation failed for binding"
                         );
                         if !already_active {
-                            match self.microphone.lock() {
-                                Ok(mut arbiter) => {
-                                    arbiter.release(lease);
-                                }
-                                Err(poisoned) => {
-                                    poisoned.into_inner().release(lease);
-                                }
+                            // U4 fail-closed: a busy arbiter skips this
+                            // rollback; the next reconcile re-arbitrates and
+                            // the lease is never granted without an effect.
+                            if let Ok(mut arbiter) = self.microphone.try_lock() {
+                                arbiter.release(lease);
                             }
-                        } else {
-                            match self.microphone.lock() {
-                                Ok(mut arbiter) => arbiter.requeue_active(lease),
-                                Err(poisoned) => poisoned.into_inner().requeue_active(lease),
-                            }
+                        } else if let Ok(mut arbiter) = self.microphone.try_lock() {
+                            arbiter.requeue_active(lease);
                         }
                         AudioControllerError::Mediator(error)
                     })?;
@@ -647,9 +651,10 @@ impl<M: AudioMediator> AudioBindingController<M> {
                 error = %error,
                 "promoted microphone activation mediation failed"
             );
-            match self.microphone.lock() {
-                Ok(mut arbiter) => arbiter.requeue_active(lease),
-                Err(poisoned) => poisoned.into_inner().requeue_active(lease),
+            // U4 fail-closed: a busy arbiter skips the requeue; the next
+            // reconcile re-arbitrates the still-pending lease.
+            if let Ok(mut arbiter) = self.microphone.try_lock() {
+                arbiter.requeue_active(lease);
             }
             return Err(AudioControllerError::Mediator(error));
         }
@@ -683,13 +688,10 @@ impl<M: AudioMediator> AudioBindingController<M> {
         lease: AudioLeaseId,
     ) -> Result<Option<AudioLeaseId>, AudioControllerError> {
         if self.active_microphone_lease() != Some(lease) {
-            match self.microphone.lock() {
-                Ok(mut arbiter) => {
-                    arbiter.release(lease);
-                }
-                Err(poisoned) => {
-                    poisoned.into_inner().release(lease);
-                }
+            // U4 fail-closed: a busy arbiter defers the queue cleanup; the
+            // next reconcile/finalize for this lease retries the release.
+            if let Ok(mut arbiter) = self.microphone.try_lock() {
+                arbiter.release(lease);
             }
             return Ok(None);
         }
@@ -704,16 +706,14 @@ impl<M: AudioMediator> AudioBindingController<M> {
                 AudioControllerError::Mediator(error)
             })?;
         self.microphone_effect_applied = false;
-        let next = match self.microphone.lock() {
+        // U4 fail-closed: a busy arbiter defers the handoff; the caller's
+        // next reconcile/finalize retries the release and promotion.
+        let next = match self.microphone.try_lock() {
             Ok(mut arbiter) => {
                 arbiter.release(lease);
                 arbiter.next_lease()
             }
-            Err(poisoned) => {
-                let mut arbiter = poisoned.into_inner();
-                arbiter.release(lease);
-                arbiter.next_lease()
-            }
+            Err(_) => None,
         };
         let Some(next) = next else {
             return Ok(None);
@@ -728,9 +728,10 @@ impl<M: AudioMediator> AudioBindingController<M> {
                 error = %error,
                 "promoted microphone activation mediation failed during release"
             );
-            match self.microphone.lock() {
-                Ok(mut arbiter) => arbiter.requeue_active(next),
-                Err(poisoned) => poisoned.into_inner().requeue_active(next),
+            // U4 fail-closed: a busy arbiter skips the requeue; the next
+            // reconcile re-arbitrates the still-pending lease.
+            if let Ok(mut arbiter) = self.microphone.try_lock() {
+                arbiter.requeue_active(next);
             }
             return Err(AudioControllerError::Mediator(error));
         }

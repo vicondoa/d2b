@@ -2,7 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 /// Opaque operation-scoped audio lease identity.
@@ -36,11 +36,16 @@ pub struct MicrophoneArbiter {
 }
 
 /// Shared microphone authority for all bindings of one AudioService.
-pub type SharedMicrophoneArbiter = Arc<Mutex<MicrophoneArbiter>>;
+///
+/// The async mutex backs this shared table so no executor worker ever parks
+/// on it; the controller's synchronous public surface (consumed by the
+/// daemon's resource runtime) reaches it through the U4 non-blocking
+/// `try_lock` form.
+pub type SharedMicrophoneArbiter = Arc<tokio::sync::Mutex<MicrophoneArbiter>>;
 
 /// Construct a shared microphone authority with the provider's queue bound.
 pub fn shared_microphone_arbiter(max_queue: usize) -> SharedMicrophoneArbiter {
-    Arc::new(Mutex::new(MicrophoneArbiter::new(max_queue)))
+    Arc::new(tokio::sync::Mutex::new(MicrophoneArbiter::new(max_queue)))
 }
 
 impl MicrophoneArbiter {
