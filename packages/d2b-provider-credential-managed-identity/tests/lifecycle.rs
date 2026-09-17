@@ -68,6 +68,7 @@ fn duplicate_acquire_is_idempotent() {
     assert_eq!(client.issue_calls.load(Ordering::SeqCst), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn concurrent_acquires_issue_once() {
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -158,6 +159,7 @@ impl BlockingClient {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn release(&self) {
         let wakers = {
             let mut state = self.state.lock().unwrap();
@@ -175,9 +177,10 @@ impl ManagedIdentityCredentialClient for BlockingClient {
         Box::pin(async { Ok(ManagedIdentityClientState::Ready) })
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn issue_lease(
         &self,
-        request: &ManagedIdentityLeaseRequest,
+        request:&ManagedIdentityLeaseRequest,
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseGrant> {
         let call = self.issue_calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {

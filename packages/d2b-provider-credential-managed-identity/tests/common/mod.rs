@@ -75,11 +75,13 @@ impl FakeClient {
 }
 
 impl ManagedIdentityCredentialClient for FakeClient {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn state(&self) -> ManagedIdentityFuture<'_, ManagedIdentityClientState> {
         let state = *self.state.lock().unwrap();
         Box::pin(async move { Ok(state) })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn issue_lease(
         &self,
         request: &ManagedIdentityLeaseRequest,
@@ -124,18 +126,20 @@ impl ManagedIdentityCredentialClient for FakeClient {
         })
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn inspect_lease(
         &self,
-        _lease: &ManagedIdentityLeaseRef,
+        _lease:&ManagedIdentityLeaseRef,
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseInspection> {
         self.inspect_calls.fetch_add(1, Ordering::SeqCst);
         let inspection = self.inspection.lock().unwrap().clone().unwrap();
         Box::pin(async move { Ok(inspection) })
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn refresh_lease(
         &self,
-        lease: &ManagedIdentityLeaseRef,
+        lease:&ManagedIdentityLeaseRef,
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseRenewal> {
         self.refresh_calls.fetch_add(1, Ordering::SeqCst);
         let expiry = self
@@ -163,9 +167,10 @@ impl ManagedIdentityCredentialClient for FakeClient {
         })
     }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn revoke_lease(
         &self,
-        _lease: &ManagedIdentityLeaseRef,
+        _lease:&ManagedIdentityLeaseRef,
     ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseRevocation> {
         self.revoke_calls.fetch_add(1, Ordering::SeqCst);
         let error = *self.revoke_error.lock().unwrap();

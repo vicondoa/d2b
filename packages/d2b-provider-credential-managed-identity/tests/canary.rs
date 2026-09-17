@@ -16,6 +16,7 @@ use d2b_contracts_resource::v3::ResourceRef;
 
 use common::{ProviderHarness, admitted, setup};
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() {
     let nonce = format!("{:x}", std::process::id());

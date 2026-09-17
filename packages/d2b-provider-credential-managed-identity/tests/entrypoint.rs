@@ -15,6 +15,7 @@ fn scrub_ambient_environment(command: &mut Command) -> &mut Command {
     command
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn controller_entrypoint_refuses_without_authenticated_registration() {
     let mut command = Command::new(env!("CARGO_BIN_EXE_d2b-managed-identity-controller"));
@@ -24,6 +25,7 @@ fn controller_entrypoint_refuses_without_authenticated_registration() {
     assert!(!output.status.success());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn agent_entrypoint_refuses_without_authenticated_registration() {
     let mut command = Command::new(env!("CARGO_BIN_EXE_d2b-managed-identity-agent"));

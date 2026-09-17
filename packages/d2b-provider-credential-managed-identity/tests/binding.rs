@@ -312,6 +312,7 @@ fn authorization_subject_must_match_authenticated_session() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn expired_sessions_and_leases_fail_closed() {
     let (provider, client) = setup();
@@ -378,6 +379,7 @@ fn expired_sessions_and_leases_fail_closed() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn expired_lease_reacquire_replaces_predecessor_before_refresh() {
     let (provider, client) = setup();
@@ -656,6 +658,7 @@ fn inspect_returns_terminal_metadata_without_reopening_a_revoked_lease() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn inspect_returns_client_discovered_terminal_metadata() {
     let (provider, client) = setup();
@@ -688,6 +691,7 @@ fn inspect_returns_client_discovered_terminal_metadata() {
     assert_eq!(response.metadata.state, CredentialLeaseState::Revoked);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn invalid_issue_grant_is_revoked_before_acquire_returns_error() {
     let (provider, client) = setup();
@@ -724,6 +728,7 @@ fn invalid_issue_grant_is_revoked_before_acquire_returns_error() {
     assert!(provider.export_checkpoints().unwrap().is_empty());
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn unresolved_issue_cleanup_is_checkpointed_without_shadowing_reacquire() {
     let (provider, client) = setup();
@@ -776,6 +781,7 @@ fn unresolved_issue_cleanup_is_checkpointed_without_shadowing_reacquire() {
     assert_eq!(restored.export_checkpoints().unwrap().len(), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn unresolved_refresh_cleanup_is_checkpointed_and_finalized() {
     let (provider, client) = setup();
@@ -830,6 +836,7 @@ fn unresolved_refresh_cleanup_is_checkpointed_and_finalized() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn cleanup_only_records_do_not_consume_restore_capacity() {
     let (provider, client) = setup_with_max_leases(1);
@@ -869,6 +876,7 @@ fn cleanup_only_records_do_not_consume_restore_capacity() {
     assert_eq!(restored.export_checkpoints().unwrap().len(), 2);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn cleanup_only_records_do_not_open_a_spare_live_lease_slot() {
     let (provider, client) = setup_with_max_leases(1);
@@ -927,6 +935,7 @@ fn cleanup_only_records_do_not_open_a_spare_live_lease_slot() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn session_expiry_reacquire_revokes_the_previous_handle() {
     let (provider, client) = setup();

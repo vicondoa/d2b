@@ -67,7 +67,7 @@ impl ManagedIdentityCredentialProvider {
         let key = request.credential_ref().to_canonical_string();
         let now = Self::now_unix_ms();
         let rotation_generation = {
-            let mut leases = self.leases.lock().map_err(|_| invariant())?;
+            let mut leases = self.leases.lock().await;
             Self::mark_expired_locked(&mut leases, now);
             let records = leases.get(&key);
             if let Some(records) = records
@@ -124,7 +124,7 @@ impl ManagedIdentityCredentialProvider {
             prior_generation.checked_add(1).ok_or_else(invariant)?
         };
         let stale_records = {
-            let leases = self.leases.lock().map_err(|_| invariant())?;
+            let leases = self.leases.lock().await;
             leases
                 .get(&key)
                 .into_iter()
@@ -154,7 +154,7 @@ impl ManagedIdentityCredentialProvider {
                     CredentialOutcomeCode::AlreadyRevoked
                 }
             };
-            let mut leases = self.leases.lock().map_err(|_| invariant())?;
+            let mut leases = self.leases.lock().await;
             let records = leases.get_mut(&key).ok_or_else(invariant)?;
             let record = records
                 .iter_mut()
@@ -190,7 +190,7 @@ impl ManagedIdentityCredentialProvider {
                     .await);
             }
         };
-        let mut leases = self.leases.lock().map_err(|_| invariant())?;
+        let mut leases = self.leases.lock().await;
         let records = leases.entry(key).or_default();
         records.retain(|record| {
             !Self::same_owner(
@@ -233,7 +233,7 @@ impl ManagedIdentityCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         let record = {
-            let mut leases = self.leases.lock().map_err(|_| invariant())?;
+            let mut leases = self.leases.lock().await;
             Self::mark_expired_locked(&mut leases, Self::now_unix_ms());
             let records = leases.get(&key).ok_or_else(expired)?;
             let record = records
@@ -260,7 +260,8 @@ impl ManagedIdentityCredentialProvider {
                 &record,
                 inspection.state,
                 CredentialOutcomeCode::Success,
-            )?;
+            )
+            .await?;
             tracing::warn!(
                 provider = crate::PROVIDER_REF,
                 resource = %key,
@@ -275,7 +276,8 @@ impl ManagedIdentityCredentialProvider {
                 &record,
                 CredentialLeaseState::Expired,
                 CredentialOutcomeCode::Success,
-            )?;
+            )
+            .await?;
             tracing::warn!(
                 provider = crate::PROVIDER_REF,
                 resource = %key,
@@ -312,7 +314,8 @@ impl ManagedIdentityCredentialProvider {
                     .await);
             }
         };
-        self.replace_record(&key, &record, request.idempotency_key(), metadata.clone())?;
+        self.replace_record(&key, &record, request.idempotency_key(), metadata.clone())
+            .await?;
         Ok(CredentialResponse::RefreshToken(DeliveryResponse {
             metadata,
             delivery_session_params: delivery,
@@ -332,7 +335,7 @@ impl ManagedIdentityCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         let record = {
-            let mut leases = self.leases.lock().map_err(|_| invariant())?;
+            let mut leases = self.leases.lock().await;
             Self::mark_expired_locked(&mut leases, Self::now_unix_ms());
             let records = leases.get(&key).ok_or_else(expired)?;
             records
@@ -367,7 +370,8 @@ impl ManagedIdentityCredentialProvider {
         let mut metadata = record.metadata.clone();
         metadata.state = CredentialLeaseState::Revoked;
         metadata.outcome = outcome;
-        self.replace_record(&key, &record, request.idempotency_key(), metadata.clone())?;
+        self.replace_record(&key, &record, request.idempotency_key(), metadata.clone())
+            .await?;
         Ok(CredentialResponse::RevokeToken(MetadataResponse { metadata }))
     }
 
@@ -384,7 +388,7 @@ impl ManagedIdentityCredentialProvider {
         let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         let record = {
-            let mut leases = self.leases.lock().map_err(|_| invariant())?;
+            let mut leases = self.leases.lock().await;
             Self::mark_expired_locked(&mut leases, Self::now_unix_ms());
             let records = leases.get(&key).ok_or_else(expired)?;
             let record = records
@@ -428,7 +432,8 @@ impl ManagedIdentityCredentialProvider {
         {
             metadata.state = CredentialLeaseState::Expired;
         }
-        self.replace_record(&key, &record, request.idempotency_key(), metadata.clone())?;
+        self.replace_record(&key, &record, request.idempotency_key(), metadata.clone())
+            .await?;
         Ok(CredentialResponse::InspectMetadata(MetadataResponse { metadata }))
     }
 
@@ -459,38 +464,27 @@ impl ManagedIdentityCredentialProvider {
             session_expires_at_unix_ms: session.expires_at_unix_ms(),
             cleanup_only: true,
         };
-        match self.leases.lock() {
-            Ok(mut leases) => {
-                let records = leases
-                    .entry(request.credential_ref().to_canonical_string())
-                    .or_default();
-                if let Some(existing) = records
-                    .iter_mut()
-                    .find(|existing| Self::same_record_identity(existing, &unresolved))
-                {
-                    *existing = unresolved;
-                } else {
-                    records.push(unresolved);
-                }
-                tracing::warn!(
-                    provider = crate::PROVIDER_REF,
-                    resource = %request.credential_ref().to_canonical_string(),
-                    "managed-identity uncommitted lease cleanup deferred to cleanup-only record",
-                );
-                error
-            }
-            Err(_) => {
-                tracing::error!(
-                    provider = crate::PROVIDER_REF,
-                    resource = %request.credential_ref().to_canonical_string(),
-                    "managed-identity lease store poisoned while tracking unresolved lease",
-                );
-                invariant()
-            }
+        let mut leases = self.leases.lock().await;
+        let records = leases
+            .entry(request.credential_ref().to_canonical_string())
+            .or_default();
+        if let Some(existing) = records
+            .iter_mut()
+            .find(|existing| Self::same_record_identity(existing, &unresolved))
+        {
+            *existing = unresolved;
+        } else {
+            records.push(unresolved);
         }
+        tracing::warn!(
+            provider = crate::PROVIDER_REF,
+            resource = %request.credential_ref().to_canonical_string(),
+            "managed-identity uncommitted lease cleanup deferred to cleanup-only record",
+        );
+        error
     }
 
-    fn update_state(
+    async fn update_state(
         &self,
         key: &str,
         record: &LeaseRecord,
@@ -501,16 +495,17 @@ impl ManagedIdentityCredentialProvider {
         metadata.state = state;
         metadata.outcome = outcome;
         self.replace_record(key, record, &record.idempotency_key, metadata)
+            .await
     }
 
-    fn replace_record(
+    async fn replace_record(
         &self,
         key: &str,
         old: &LeaseRecord,
         idempotency_key: &str,
         metadata: d2b_contracts_provider::v3::credential::CredentialMetadata,
     ) -> Result<(), CredentialServiceError> {
-        let mut leases = self.leases.lock().map_err(|_| invariant())?;
+        let mut leases = self.leases.lock().await;
         let records = leases.get_mut(key).ok_or_else(invariant)?;
         let record = records
             .iter_mut()

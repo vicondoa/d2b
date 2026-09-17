@@ -819,7 +819,7 @@ impl ManagedIdentityCredentialProviderFactory {
             placement: self.placement,
             consumer_ref: self.consumer_ref,
             client: self.client,
-            leases: Mutex::new(BTreeMap::new()),
+            leases: tokio::sync::Mutex::new(BTreeMap::new()),
             mutation_gate: Mutex::new(()),
             async_mutation_gate: tokio::sync::Mutex::new(()),
         }
@@ -900,7 +900,7 @@ pub struct ManagedIdentityCredentialProvider {
     placement: ManagedIdentityPlacement,
     consumer_ref: ResourceRef,
     client: Arc<dyn ManagedIdentityCredentialClient>,
-    leases: Mutex<BTreeMap<String, Vec<LeaseRecord>>>,
+    leases: tokio::sync::Mutex<BTreeMap<String, Vec<LeaseRecord>>>,
     mutation_gate: Mutex<()>,
     async_mutation_gate: tokio::sync::Mutex<()>,
 }
@@ -1272,12 +1272,23 @@ impl ManagedIdentityCredentialProvider {
     }
 
     /// Export bounded, non-secret lease checkpoints for a restart.
+    ///
+    /// Synchronous surface (consumed from sync call sites off the async
+    /// dispatch path): non-blocking `try_lock` per plan U4, refusing with
+    /// `ProviderUnavailable` on a collision instead of parking the caller's
+    /// thread. The async half holds the `tokio` lock across awaits, so a
+    /// blocking lock here could park a controller thread arbitrarily long.
     pub fn export_checkpoints(
         &self,
     ) -> Result<Vec<ManagedIdentityLeaseCheckpoint>, CredentialServiceError> {
-        let leases = self.leases.lock().map_err(|_| {
-            CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-        })?;
+        let leases = match self.leases.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::ProviderUnavailable,
+                ));
+            }
+        };
         Ok(leases
             .iter()
             .flat_map(|(credential_ref, records)| {
@@ -1355,9 +1366,16 @@ impl ManagedIdentityCredentialProvider {
             }
         }
         let _mutation = self.mutation_guard()?;
-        let mut leases = self.leases.lock().map_err(|_| {
-            CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-        })?;
+        // Synchronous surface: non-blocking `try_lock` per plan U4 (see
+        // `export_checkpoints` for why a blocking lock is unacceptable here).
+        let mut leases = match self.leases.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                return Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::ProviderUnavailable,
+                ));
+            }
+        };
         let mut next = leases.clone();
         for records in next.values_mut() {
             Self::deduplicate_records(records);
@@ -1438,10 +1456,17 @@ impl ManagedIdentityCredentialProvider {
         }
         let deadline = Self::operation_deadline(deadline_unix_ms)?;
         let _mutation = self.mutation_guard()?;
+        // Synchronous surface: non-blocking `try_lock` per plan U4 (see
+        // `export_checkpoints` for why a blocking lock is unacceptable here).
         let owned = {
-            let mut leases = self.leases.lock().map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-            })?;
+            let mut leases = match self.leases.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    return Err(CredentialServiceError::new(
+                        CredentialServiceErrorCode::ProviderUnavailable,
+                    ));
+                }
+            };
             Self::mark_expired_locked(&mut leases, now);
             leases
                 .iter()
@@ -1477,9 +1502,14 @@ impl ManagedIdentityCredentialProvider {
                 metadata: metadata.clone(),
             };
             let _ = Self::poll_client_sync(self.client.revoke_lease(&lease), deadline)?;
-            let mut leases = self.leases.lock().map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-            })?;
+            let mut leases = match self.leases.try_lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    return Err(CredentialServiceError::new(
+                        CredentialServiceErrorCode::ProviderUnavailable,
+                    ));
+                }
+            };
             let records = leases.get_mut(&credential_ref).ok_or_else(invariant)?;
             for record in records {
                 if record.metadata == metadata

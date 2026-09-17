@@ -18,6 +18,7 @@ use d2b_provider_credential_managed_identity::{
 
 use common::{Admission, ProviderHarness, admitted, request, setup};
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn unavailable_maps_to_provider_unavailable_without_fallback() {
     let (provider, client) = setup();
@@ -67,6 +68,7 @@ fn sign_challenge_is_schema_invalid_before_client_use() {
     assert_eq!(client.issue_calls.load(Ordering::SeqCst), 0);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn client_call_stops_at_request_deadline() {
     let client = Arc::new(NeverClient {
