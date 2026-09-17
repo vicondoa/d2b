@@ -349,6 +349,10 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
     }
 
     /// Rehydrate adopted source and sink ownership from the host boundary.
+    // The supervisor is sync public surface: d2bd's sync effect-port trait
+    // impls (SourceProcessEffectPort/NotificationProcessEffectPort) call
+    // it off any executor; it has no async form.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn recover(
         &self,
         zone: &ZoneId,
@@ -384,6 +388,10 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
     }
 
     /// Apply one plan and issue a receipt only after every host effect succeeds.
+    // The supervisor is sync public surface: d2bd's sync effect-port trait
+    // impls (SourceProcessEffectPort/NotificationProcessEffectPort) call
+    // it off any executor; it has no async form.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn apply(
         &self,
         plan: &NotificationLifecyclePlan,
@@ -524,6 +532,10 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
     }
 
     /// Return whether no source or host-sink ownership remains.
+    // The supervisor is sync public surface: d2bd's sync effect-port trait
+    // impls (SourceProcessEffectPort/NotificationProcessEffectPort) call
+    // it off any executor; it has no async form.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn is_drained(&self) -> Result<bool, &'static str> {
         let state = self.state.lock().map_err(|_| {
             warn!(

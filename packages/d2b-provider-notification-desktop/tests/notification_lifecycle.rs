@@ -14,6 +14,7 @@ struct Backend {
 }
 
 impl NotificationLifecycleBackend for Backend {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn start_source(&self, source: &NotificationSourceIdentity) -> Result<(), &'static str> {
         let mut fail = self.fail_source_start_once.lock().unwrap();
         if *fail {
@@ -24,6 +25,7 @@ impl NotificationLifecycleBackend for Backend {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_source(&self, source: &NotificationSourceIdentity) -> Result<(), &'static str> {
         self.sources
             .lock()
@@ -32,11 +34,13 @@ impl NotificationLifecycleBackend for Backend {
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn start_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), &'static str> {
         *self.sink.lock().unwrap() = Some(sink.clone());
         Ok(())
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stop_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), &'static str> {
         let mut active = self.sink.lock().unwrap();
         if active.as_ref() == Some(sink) {
@@ -47,6 +51,7 @@ impl NotificationLifecycleBackend for Backend {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn observe(
         &self,
         _zone: &ZoneId,
@@ -109,6 +114,7 @@ fn supervisor_issues_only_complete_generation_bound_receipts() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn supervisor_rolls_back_partial_effects_for_retry() {
     let backend = Backend::default();
     let fail_source_start_once = backend.fail_source_start_once.clone();
