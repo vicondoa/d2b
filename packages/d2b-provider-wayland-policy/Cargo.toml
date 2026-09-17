@@ -5,8 +5,13 @@ edition = "2024"
 publish = false
 license.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+disallowed_methods = "deny"
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 
 [dependencies]
 async-trait = "0.1"
@@ -22,5 +27,4 @@ thiserror = "2"
 
 [dev-dependencies]
 async-trait = "0.1"
-parking_lot = "0.12"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }

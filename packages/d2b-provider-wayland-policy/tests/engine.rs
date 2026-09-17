@@ -33,7 +33,7 @@ use d2b_resource_runtime::spec_store::EnsureOutcome;
 use d2b_resource_runtime::target::TargetHandle;
 use serde_json::json;
 
-type Log = Arc<parking_lot::Mutex<Vec<String>>>;
+type Log = Arc<tokio::sync::Mutex<Vec<String>>>;
 
 // -- the test type ----------------------------------------------------------
 
@@ -126,7 +126,7 @@ impl InteractionDriverEffects for ScriptedEffects {
         _request: &InteractionEffectRequest<'_>,
     ) -> Result<InteractionEffectOutcome, InteractionEffectError> {
         self.log
-            .lock()
+            .lock().await
             .push(format!("effect:{}", kind.effect_id()));
         if self.ready.load(Ordering::SeqCst) {
             Ok(InteractionEffectOutcome::projection(
@@ -144,7 +144,7 @@ impl InteractionDriverEffects for ScriptedEffects {
         _request: &InteractionEffectRequest<'_>,
     ) -> Result<InteractionFinalize, InteractionEffectError> {
         self.log
-            .lock()
+            .lock().await
             .push(format!("finalize:{}", kind.effect_id()));
         if self.finalize_pending.load(Ordering::SeqCst) {
             Ok(InteractionFinalize::Pending)
@@ -160,23 +160,23 @@ impl InteractionDriverEffects for ScriptedEffects {
 #[derive(Clone)]
 struct RecordingManager {
     log: Log,
-    rows: Arc<parking_lot::Mutex<Vec<StoredDesiredResource>>>,
+    rows: Arc<tokio::sync::Mutex<Vec<StoredDesiredResource>>>,
     parent_uid: [u8; 16],
-    watches: Arc<parking_lot::Mutex<Vec<ResourceKey>>>,
+    watches: Arc<tokio::sync::Mutex<Vec<ResourceKey>>>,
 }
 
 impl RecordingManager {
     fn new(log: Log, parent_uid: [u8; 16]) -> Self {
         Self {
             log,
-            rows: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            rows: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             parent_uid,
-            watches: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            watches: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         }
     }
 
     fn seed_owned(&self, key: ResourceKey, deleting: bool) {
-        self.rows.lock().push(StoredDesiredResource {
+        self.rows.try_lock().expect("fixture rows uncontended").push(StoredDesiredResource {
             key,
             uid: [0x77; 16],
             generation: 1,
@@ -199,9 +199,9 @@ impl ManagerEndpoint for RecordingManager {
     ) -> Result<EnsureOutcome, ResourceError> {
         let key = ResourceKey::new("work", child.type_name.as_str(), child.name.clone());
         self.log
-            .lock()
+            .lock().await
             .push(format!("ensure:{}/{}", key.type_name, key.name));
-        let mut rows = self.rows.lock();
+        let mut rows = self.rows.lock().await;
         match rows.iter_mut().find(|row| row.key == key) {
             Some(row) => {
                 row.generation += 1;
@@ -228,9 +228,9 @@ impl ManagerEndpoint for RecordingManager {
 
     async fn get(&self, key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
         self.log
-            .lock()
+            .lock().await
             .push(format!("get:{}/{}", key.type_name, key.name));
-        Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned())
+        Ok(self.rows.lock().await.iter().find(|row| row.key == *key).cloned())
     }
 
     async fn view(
@@ -243,9 +243,9 @@ impl ManagerEndpoint for RecordingManager {
 
     async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
         self.log
-            .lock()
+            .lock().await
             .push(format!("delete:{}/{}", key.type_name, key.name));
-        if let Some(row) = self.rows.lock().iter_mut().find(|row| row.key == *key) {
+        if let Some(row) = self.rows.lock().await.iter_mut().find(|row| row.key == *key) {
             row.deleting = true;
         }
         Ok(())
@@ -255,10 +255,10 @@ impl ManagerEndpoint for RecordingManager {
         &self,
         owner_uid: [u8; 16],
     ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-        self.log.lock().push("list-owned".to_owned());
+        self.log.lock().await.push("list-owned".to_owned());
         Ok(self
             .rows
-            .lock()
+            .lock().await
             .iter()
             .filter(|row| row.owner_uid == Some(owner_uid))
             .cloned()
@@ -270,12 +270,12 @@ impl ManagerEndpoint for RecordingManager {
         _subscriber: &ResourceKey,
         registration: WatchRegistration,
     ) -> Result<WatchId, ResourceError> {
-        self.log.lock().push(format!(
+        self.log.lock().await.push(format!(
             "watch:{}/{}",
             registration.target.type_name, registration.target.name
         ));
-        self.watches.lock().push(registration.target);
-        Ok(WatchId(self.watches.lock().len() as u64))
+        self.watches.lock().await.push(registration.target);
+        Ok(WatchId(self.watches.lock().await.len() as u64))
     }
 
     async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
@@ -292,7 +292,8 @@ struct RecordingRequeue {
 impl RequeueScheduler for RecordingRequeue {
     fn schedule(&self, _key: ResourceKey, after: Duration) -> RequeueId {
         self.log
-            .lock()
+            .try_lock()
+            .expect("fixture log uncontended")
             .push(format!("requeue:{}ms", after.as_millis()));
         RequeueId(self.schedules.fetch_add(1, Ordering::SeqCst) as u64)
     }
@@ -311,7 +312,7 @@ fn build_fixture(
     row: StoredDesiredResource,
     valid: bool,
 ) -> (Fixture, InteractionDriver<TestType>) {
-    let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let effects = ScriptedEffects::shared(Arc::clone(&log));
     let manager = RecordingManager::new(Arc::clone(&log), row.uid);
     let requeue = RecordingRequeue {
@@ -385,7 +386,7 @@ fn the_decoder_accepts_both_persisted_representations() {
 /// The single-type factory serves exactly its declared type.
 #[test]
 fn the_factory_serves_only_its_declared_type() {
-    let effects = ScriptedEffects::shared(Arc::new(parking_lot::Mutex::new(Vec::new())));
+    let effects = ScriptedEffects::shared(Arc::new(tokio::sync::Mutex::new(Vec::new())));
     let factory = d2b_provider_wayland_policy::InteractionDriverFactory::new(
         InteractionDriverArgs {
             zone: "work".to_owned(),
@@ -404,6 +405,7 @@ fn the_factory_serves_only_its_declared_type() {
 
 // -- validate ---------------------------------------------------------------
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn validate_accepts_the_declared_row_and_refuses_another_zone() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
@@ -423,6 +425,7 @@ async fn validate_accepts_the_declared_row_and_refuses_another_zone() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn validate_refuses_another_resource_type() {
     let mut foreign = row();
@@ -439,6 +442,7 @@ async fn validate_refuses_another_resource_type() {
 
 // -- reconcile --------------------------------------------------------------
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn reconcile_ensures_children_then_runs_the_effect_and_requeues() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
@@ -450,7 +454,7 @@ async fn reconcile_ensures_children_then_runs_the_effect_and_requeues() {
 
     // Every child rides the manager child API before the typed effect, and the
     // not-ready phase requeues on the type's preserved cadence.
-    let log = fixture.log.lock().clone();
+    let log = fixture.log.lock().await.clone();
     let effect_at = log
         .iter()
         .position(|entry| entry == "effect:display-wayland-policy")
@@ -465,6 +469,7 @@ async fn reconcile_ensures_children_then_runs_the_effect_and_requeues() {
     assert!(!status.ready);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn reconcile_projects_ready_status_and_registers_each_watch_once() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
@@ -480,7 +485,7 @@ async fn reconcile_projects_ready_status_and_registers_each_watch_once() {
     let status = fixture.ctx.status::<InteractionDriverStatus>().unwrap();
     assert!(status.ready);
     assert_eq!(status.resource, Some(json!({"phase": "Ready"})));
-    let watches = fixture.manager.watches.lock();
+    let watches = fixture.manager.watches.lock().await;
     let mut unique = watches.clone();
     unique.sort_by(|left, right| {
         (left.type_name.as_str(), left.name.as_str())
@@ -492,6 +497,7 @@ async fn reconcile_projects_ready_status_and_registers_each_watch_once() {
     assert_eq!(watches.len(), 3);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn reconcile_retires_obsolete_children_endpoint_first() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
@@ -509,7 +515,7 @@ async fn reconcile_retires_obsolete_children_endpoint_first() {
         .await
         .expect("reconcile");
 
-    let log = fixture.log.lock().clone();
+    let log = fixture.log.lock().await.clone();
     let deletes = log
         .iter()
         .filter(|entry| entry.starts_with("delete:"))
@@ -525,13 +531,14 @@ async fn reconcile_retires_obsolete_children_endpoint_first() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn reconcile_has_no_spawn_surface_beyond_the_manager_child_api() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
     ResourceDriver::reconcile(&mut driver, &mut fixture.ctx)
         .await
         .expect("reconcile");
-    let log = fixture.log.lock().clone();
+    let log = fixture.log.lock().await.clone();
     assert!(
         log.iter().all(|entry| entry.starts_with("ensure:")
             || entry.starts_with("delete:")
@@ -545,6 +552,7 @@ async fn reconcile_has_no_spawn_surface_beyond_the_manager_child_api() {
 
 // -- recover ----------------------------------------------------------------
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn recover_adopts_when_every_desired_child_is_owned_and_missing_otherwise() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
@@ -570,6 +578,7 @@ async fn recover_adopts_when_every_desired_child_is_owned_and_missing_otherwise(
 
 // -- finalize and delete ----------------------------------------------------
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn finalize_finalizes_owned_children_before_the_provider_stage() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
@@ -586,7 +595,7 @@ async fn finalize_finalizes_owned_children_before_the_provider_stage() {
         driver.classify_error(&failure).class(),
         FailureClass::Retryable
     );
-    let log = fixture.log.lock().clone();
+    let log = fixture.log.lock().await.clone();
     assert!(
         log.iter().any(|entry| entry == "delete:Process/worker"),
         "the owned child is nudged through its own finalize-before-delete pass: {log:?}"
@@ -597,20 +606,21 @@ async fn finalize_finalizes_owned_children_before_the_provider_stage() {
     );
 
     // The child row retires: the same pass converges with no Provider stage.
-    fixture.manager.rows.lock().clear();
+    fixture.manager.rows.lock().await.clear();
     ResourceDriver::finalize(&mut driver, &mut fixture.ctx)
         .await
         .expect("converged once the child retired");
     assert!(
         !fixture
             .log
-            .lock()
+            .lock().await
             .iter()
             .any(|entry| entry.starts_with("finalize:")),
         "finalize runs no Provider effect"
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn delete_runs_the_provider_stage_then_retires_every_owned_child() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
@@ -625,7 +635,7 @@ async fn delete_runs_the_provider_stage_then_retires_every_owned_child() {
         .await
         .expect("delete");
 
-    let log = fixture.log.lock().clone();
+    let log = fixture.log.lock().await.clone();
     assert_eq!(log[0], "finalize:display-wayland-policy");
     assert_eq!(
         log.iter()
@@ -639,6 +649,7 @@ async fn delete_runs_the_provider_stage_then_retires_every_owned_child() {
     );
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn delete_is_retryable_while_the_provider_stage_is_pending() {
     let (mut fixture, mut driver) = build_fixture(row(), true);
@@ -657,7 +668,7 @@ async fn delete_is_retryable_while_the_provider_stage_is_pending() {
     assert!(
         !fixture
             .log
-            .lock()
+            .lock().await
             .iter()
             .any(|entry| entry.starts_with("delete:"))
     );
@@ -667,7 +678,7 @@ async fn delete_is_retryable_while_the_provider_stage_is_pending() {
 /// manager's identity, never a spawn payload.
 #[test]
 fn the_driver_registers_the_declared_type_with_the_registry() {
-    let effects = ScriptedEffects::shared(Arc::new(parking_lot::Mutex::new(Vec::new())));
+    let effects = ScriptedEffects::shared(Arc::new(tokio::sync::Mutex::new(Vec::new())));
     let descriptor =
         d2b_provider_wayland_policy::wayland_policy_descriptor(InteractionDriverArgs {
             zone: "work".to_owned(),
