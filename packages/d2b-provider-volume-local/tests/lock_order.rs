@@ -18,12 +18,12 @@ struct Handle {
 
 impl OfdLockHandle for Handle {
     fn release(&mut self) -> Result<(), LockError> {
-        *self.releases.lock().unwrap() += 1;
+        *self.releases.try_lock().unwrap() += 1;
         Ok(())
     }
 
     fn commit_transfer(&mut self) -> Result<(), LockError> {
-        *self.transfers.lock().unwrap() += 1;
+        *self.transfers.try_lock().unwrap() += 1;
         Ok(())
     }
 }
@@ -105,6 +105,6 @@ fn transfer_is_explicit_and_detaches_local_release() {
         .unwrap()
         .commit()
         .unwrap();
-    assert_eq!(*backend.transfers.lock().unwrap(), 1);
-    assert_eq!(*backend.releases.lock().unwrap(), 0);
+    assert_eq!(*backend.transfers.try_lock().unwrap(), 1);
+    assert_eq!(*backend.releases.try_lock().unwrap(), 0);
 }

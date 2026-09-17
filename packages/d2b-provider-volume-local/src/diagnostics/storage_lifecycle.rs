@@ -103,6 +103,9 @@ mod tests {
     }
 
     impl Drop for ZoneNativeFixture {
+        // Remove-On-Drop teardown must run synchronously at the end of the
+        // plain #[test] body; the crate has no async runtime.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self._root);
         }
@@ -115,6 +118,9 @@ mod tests {
         format!("sha256:{hex}")
     }
 
+    // Fixture writer drives blocking fs synchronously from plain #[test] bodies;
+    // the crate has no async runtime.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn write_artifact(path: &Path, bytes: &[u8]) {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create fixture directory");
@@ -249,6 +255,9 @@ mod tests {
 
     /// Build a verifiable one-Zone ("dev") v3 bundle, optionally shipping the
     /// Zone's `storage.json` row, and load it through the production loader.
+    // Fixture builder drives blocking fs synchronously from plain #[test] bodies;
+    // the crate has no async runtime.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn zone_native_fixture(with_storage_row: bool) -> ZoneNativeFixture {
         let zone = "dev";
         let root = std::env::temp_dir().join(format!(
