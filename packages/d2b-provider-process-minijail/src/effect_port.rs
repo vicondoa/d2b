@@ -158,7 +158,7 @@ mod tests {
             &self,
             _ticket: &LaunchTicket,
         ) -> impl Future<Output = Result<LaunchedProcess, ProcessConformanceError>> + Send {
-            self.calls.lock().unwrap().push("spawn");
+            self.calls.try_lock().unwrap().push("spawn");
             std::future::ready(Ok(LaunchedProcess {
                 identity: ProcessIdentityDigest::from_bytes([0x11; 32]),
                 observed: ObservedIdentity::from_verified([
@@ -179,7 +179,7 @@ mod tests {
             _ticket: &LaunchTicket,
         ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send
         {
-            self.calls.lock().unwrap().push("observe");
+            self.calls.try_lock().unwrap().push("observe");
             std::future::ready(Ok(None))
         }
 
@@ -187,7 +187,7 @@ mod tests {
             &self,
             _candidate: &AdoptionCandidate,
         ) -> impl Future<Output = Result<PidfdEvidence, ProcessConformanceError>> + Send {
-            self.calls.lock().unwrap().push("duplicate_pidfd");
+            self.calls.try_lock().unwrap().push("duplicate_pidfd");
             std::future::ready(Ok(PidfdEvidence::held()))
         }
 
@@ -196,7 +196,7 @@ mod tests {
             _identity: &ProcessIdentityDigest,
             _class: StopClass,
         ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send {
-            self.calls.lock().unwrap().push("stop");
+            self.calls.try_lock().unwrap().push("stop");
             std::future::ready(Ok(()))
         }
     }
@@ -216,7 +216,7 @@ mod tests {
             d2b_process_conformance::testing::block_on(adapter.launch(&ticket)).unwrap_err(),
             ProcessConformanceError::InvalidTicket
         );
-        assert!(adapter.0.calls.lock().unwrap().is_empty());
+        assert!(adapter.0.calls.try_lock().unwrap().is_empty());
     }
 
     #[test]
@@ -239,6 +239,6 @@ mod tests {
             .unwrap_err(),
             ProcessConformanceError::IdentityUnverified
         );
-        assert!(adapter.0.calls.lock().unwrap().is_empty());
+        assert!(adapter.0.calls.try_lock().unwrap().is_empty());
     }
 }
