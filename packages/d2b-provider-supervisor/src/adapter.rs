@@ -826,11 +826,37 @@ fn map_error(error: ProcessEffectError) -> ProcessConformanceError {
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU8};
     use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::sync::{LazyLock, Mutex, MutexGuard};
 
     use d2b_process_conformance::testing::{block_on, fixtures};
     use d2b_provider_process::{IdentityBinding, ObservedIdentity, WaitReapOwner};
 
     use super::*;
+
+    /// Serializes the tests that drive a `ProviderSupervisor` blocking pool.
+    ///
+    /// The test harness's `block_on` is a noop-waker spin loop. Each test
+    /// builds its own supervisor with its own bounded deadline queue, but
+    /// running several spin loops in parallel starves the per-pool deadline
+    /// worker threads; a burst of rapid submits then overflows the queue and
+    /// a healthy launch spuriously reports `LaunchFailed`. The lock keeps
+    /// the pool-driving tests sequential so each pool's worker drains on
+    /// time (the broker registry-guard precedent; the pools themselves have
+    /// no shared state — only CPU contention is serialized away).
+    struct PoolTestGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl PoolTestGuard {
+        fn new() -> Self {
+            static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+            Self {
+                _lock: LOCK
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            }
+        }
+    }
 
     /// A resolution refusal is not an ambiguous identity: the effect ports
     /// project `ResolutionFailed` under its own code, so an adopt probe the
@@ -951,6 +977,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn timed_out_launch_is_quarantined_until_late_cleanup_succeeds() {
+        let _guard = PoolTestGuard::new();
         let (backend, started, release, live) = controlled_backend(false);
         let supervisor = ProviderSupervisor::new(backend);
         let worker_supervisor = supervisor.clone();
@@ -991,6 +1018,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn a_late_launch_cleanup_failure_stays_quarantined_and_tracked() {
+        let _guard = PoolTestGuard::new();
         let (backend, started, release, live) = controlled_backend(true);
         let supervisor = ProviderSupervisor::new(backend);
         let worker_supervisor = supervisor.clone();
@@ -1086,6 +1114,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn hung_late_launch_cleanup_is_bounded_and_quarantined() {
+        let _guard = PoolTestGuard::new();
         let (stop_started_sender, stop_started_receiver) = channel();
         let live = Arc::new(AtomicBool::new(false));
         let supervisor = ProviderSupervisor::with_limits(
@@ -1129,6 +1158,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn hung_terminate_is_bounded_and_quarantined() {
+        let _guard = PoolTestGuard::new();
         let (stop_started_sender, stop_started_receiver) = channel();
         let supervisor = ProviderSupervisor::with_limits(
             HungStopBackend {
@@ -1168,6 +1198,7 @@ mod tests {
 
     #[test]
     fn terminal_stops_retire_retained_handles() {
+        let _guard = PoolTestGuard::new();
         let (_unused_sender, release_receiver) = channel();
         let supervisor = ProviderSupervisor::new(ControlledBackend {
             started: Mutex::new(None),
@@ -1187,6 +1218,7 @@ mod tests {
 
     #[test]
     fn terminal_finalization_retires_a_naturally_exited_handle() {
+        let _guard = PoolTestGuard::new();
         let (_unused_sender, release_receiver) = channel();
         let supervisor = ProviderSupervisor::new(ControlledBackend {
             started: Mutex::new(None),
