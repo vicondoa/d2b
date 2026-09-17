@@ -517,6 +517,15 @@ async fn provider_binaries_complete_the_supervised_fd10_session_lifecycle() {
             "Provider/credential-managed-identity",
         ),
     ];
+    if binaries.iter().all(|(path, _)| path.is_none()) {
+        // The binaries live in other provider packages; cargo only supplies
+        // `CARGO_BIN_EXE_*` for the package's own bins, so this supervised
+        // lifecycle contract runs under Bazel (where the paths are
+        // injected). Under plain cargo the test is a no-op rather than a
+        // spurious failure.
+        eprintln!("provider binaries not supplied (Bazel-only test); skipping");
+        return;
+    }
     for (path, provider) in binaries {
         let path = path.expect("binary path supplied by Bazel");
         eprintln!("starting {provider}");
