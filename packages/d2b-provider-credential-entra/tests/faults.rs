@@ -5,6 +5,15 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn block_on<F: Future>(fut: F) -> F::Output {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.handle().block_on(fut)
+}
+
 use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialRequest, CredentialResponse,
     CredentialServiceErrorCode, CredentialSessionBinding, PlacementBinding,
@@ -26,7 +35,7 @@ use common::{
 #[test]
 fn interaction_required_is_unavailable_not_denied() {
     let (provider, client) = setup();
-    *client.state.lock().unwrap() = EntraClientState::InteractionRequired;
+    *client.state.try_lock().unwrap() = EntraClientState::InteractionRequired;
     let server = ProviderHarness::new(provider, admitted());
     assert_eq!(
         server
@@ -402,7 +411,7 @@ fn generation_and_unsupported_operation_fail_closed() {
         provider.validate_endpoint_generation(8).unwrap_err().code(),
         CredentialServiceErrorCode::InvariantFailure
     );
-    *client.issue_error.lock().unwrap() = Some(EntraClientError::GenerationMismatch);
+    *client.issue_error.try_lock().unwrap() = Some(EntraClientError::GenerationMismatch);
     let server = ProviderHarness::new(provider, admitted());
     assert_eq!(
         server
@@ -447,7 +456,7 @@ fn refresh_failure_degrades_only_the_owning_resource_with_bounded_retry() {
             .unwrap(),
         )
         .unwrap();
-    *client.refresh_error.lock().unwrap() = Some(EntraClientError::Unavailable);
+    *client.refresh_error.try_lock().unwrap() = Some(EntraClientError::Unavailable);
 
     for attempt in 0..d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS {
         assert_eq!(
@@ -478,18 +487,18 @@ fn refresh_failure_degrades_only_the_owning_resource_with_bounded_retry() {
         "refresh retry must stop at the bounded attempt ceiling"
     );
     assert_eq!(
-        provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some(d2b_provider_credential_entra::EntraResourceHealth::Degraded)
     );
     assert_eq!(
-        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some((
             d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS,
             d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS,
         ))
     );
     assert_eq!(
-        provider.resource_health(&ResourceRef::parse("Credential/other-entra").unwrap()),
+        block_on(provider.resource_health(&ResourceRef::parse("Credential/other-entra").unwrap())),
         Some(d2b_provider_credential_entra::EntraResourceHealth::Ready)
     );
 }
@@ -522,7 +531,7 @@ fn committed_remote_refresh_metadata_is_adopted_for_later_recovery() {
     );
     assert_eq!(client.refresh_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
-        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some((0, d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS))
     );
 
@@ -550,11 +559,11 @@ fn committed_remote_refresh_metadata_is_adopted_for_later_recovery() {
     };
     assert_eq!(refreshed_metadata.rotation_generation, 2);
     assert_eq!(
-        provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some(d2b_provider_credential_entra::EntraResourceHealth::Ready)
     );
     assert_eq!(
-        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some((0, d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS))
     );
     assert_eq!(client.inspect_calls.load(Ordering::SeqCst), 3);
@@ -577,7 +586,7 @@ fn refresh_rejects_remote_generation_rollback() {
             request("idem-generation-rollback-first-refresh"),
         )
         .unwrap();
-    *client.refresh_generation.lock().unwrap() = 1;
+    *client.refresh_generation.try_lock().unwrap() = 1;
 
     assert_eq!(
         server
@@ -590,7 +599,7 @@ fn refresh_rejects_remote_generation_rollback() {
         CredentialServiceErrorCode::InvariantFailure
     );
     assert_eq!(
-        provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some(d2b_provider_credential_entra::EntraResourceHealth::Degraded)
     );
 }
@@ -605,7 +614,7 @@ fn inspect_persists_remote_revocation_and_degrades_only_that_resource() {
             request("idem-inspect-revoked"),
         )
         .unwrap();
-    *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
+    *client.inspection.try_lock().unwrap() = Some(EntraLeaseInspection {
         state: d2b_contracts_provider::v3::credential::CredentialLeaseState::Revoked,
         source_version: d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
             "entra-source-revoked",
@@ -626,7 +635,7 @@ fn inspect_persists_remote_revocation_and_degrades_only_that_resource() {
         CredentialServiceErrorCode::LeaseRevoked
     );
     assert_eq!(
-        provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some(d2b_provider_credential_entra::EntraResourceHealth::Revoked)
     );
 }
@@ -638,7 +647,7 @@ fn unknown_inspection_is_transient_and_acquire_revokes_before_replacement() {
     server
         .call(CredentialMethod::AcquireToken, request("idem-unknown-base"))
         .unwrap();
-    *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
+    *client.inspection.try_lock().unwrap() = Some(EntraLeaseInspection {
         state: d2b_contracts_provider::v3::credential::CredentialLeaseState::Unknown,
         source_version: d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
             "entra-source-unknown",
@@ -659,7 +668,7 @@ fn unknown_inspection_is_transient_and_acquire_revokes_before_replacement() {
         CredentialServiceErrorCode::InvariantFailure
     );
     assert_eq!(
-        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some((0, d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS))
     );
     server
@@ -683,7 +692,7 @@ fn clock_expired_inspection_is_reclaimed_before_acquire_replacement() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
+    *client.inspection.try_lock().unwrap() = Some(EntraLeaseInspection {
         state: d2b_contracts_provider::v3::credential::CredentialLeaseState::Active,
         source_version: d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
             "entra-source-expired",
@@ -704,7 +713,7 @@ fn clock_expired_inspection_is_reclaimed_before_acquire_replacement() {
         CredentialServiceErrorCode::LeaseExpired
     );
     assert_eq!(
-        provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.resource_health(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some(d2b_provider_credential_entra::EntraResourceHealth::Degraded)
     );
     server
@@ -731,7 +740,7 @@ fn expired_remote_revoke_is_idempotent_for_explicit_revoke() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
+    *client.inspection.try_lock().unwrap() = Some(EntraLeaseInspection {
         state: d2b_contracts_provider::v3::credential::CredentialLeaseState::Active,
         source_version: d2b_contracts_provider::v3::credential::CredentialSourceVersion::parse(
             "entra-source-expired-revoke",
@@ -750,7 +759,7 @@ fn expired_remote_revoke_is_idempotent_for_explicit_revoke() {
             .code(),
         CredentialServiceErrorCode::LeaseExpired
     );
-    *client.revoke_error.lock().unwrap() = Some(EntraClientError::LeaseExpired);
+    *client.revoke_error.try_lock().unwrap() = Some(EntraClientError::LeaseExpired);
 
     let response = server
         .call(
@@ -811,6 +820,7 @@ fn local_revocation_is_terminal_even_when_remote_inspection_is_stale() {
     assert_eq!(client.refresh_calls.load(Ordering::SeqCst), refresh_calls);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn client_call_stops_at_request_deadline() {
     let client = Arc::new(NeverClient {

@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use d2b_contracts_provider::v3::credential::{
     AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
@@ -25,20 +25,20 @@ use d2b_provider_credential_entra::{
 pub const EXPIRY: u64 = 20_000;
 
 pub struct FakeEntraClient {
-    pub state: Mutex<EntraClientState>,
-    pub inspection: Mutex<Option<EntraLeaseInspection>>,
+    pub state: tokio::sync::Mutex<EntraClientState>,
+    pub inspection: tokio::sync::Mutex<Option<EntraLeaseInspection>>,
     pub issue_calls: AtomicUsize,
     pub inspect_calls: AtomicUsize,
     pub refresh_calls: AtomicUsize,
     pub revoke_calls: AtomicUsize,
-    pub refresh_generation: Mutex<u64>,
-    pub issue_generation: Mutex<Option<u64>>,
-    pub issue_expiry: Mutex<Option<u64>>,
-    pub issue_revoke_error: Mutex<Option<EntraClientError>>,
-    pub issue_error: Mutex<Option<EntraClientError>>,
-    pub refresh_error: Mutex<Option<EntraClientError>>,
-    pub revoke_error: Mutex<Option<EntraClientError>>,
-    pub observed_request: Mutex<Option<(String, String, String)>>,
+    pub refresh_generation: tokio::sync::Mutex<u64>,
+    pub issue_generation: tokio::sync::Mutex<Option<u64>>,
+    pub issue_expiry: tokio::sync::Mutex<Option<u64>>,
+    pub issue_revoke_error: tokio::sync::Mutex<Option<EntraClientError>>,
+    pub issue_error: tokio::sync::Mutex<Option<EntraClientError>>,
+    pub refresh_error: tokio::sync::Mutex<Option<EntraClientError>>,
+    pub revoke_error: tokio::sync::Mutex<Option<EntraClientError>>,
+    pub observed_request: tokio::sync::Mutex<Option<(String, String, String)>>,
     pub token_canary: String,
     pub endpoint_canary: String,
     pub cookie_canary: String,
@@ -48,20 +48,20 @@ impl FakeEntraClient {
     pub fn new() -> Self {
         let nonce = format!("{:x}", std::process::id());
         Self {
-            state: Mutex::new(EntraClientState::Ready),
-            inspection: Mutex::new(None),
+            state: tokio::sync::Mutex::new(EntraClientState::Ready),
+            inspection: tokio::sync::Mutex::new(None),
             issue_calls: AtomicUsize::new(0),
             inspect_calls: AtomicUsize::new(0),
             refresh_calls: AtomicUsize::new(0),
             revoke_calls: AtomicUsize::new(0),
-            refresh_generation: Mutex::new(2),
-            issue_generation: Mutex::new(None),
-            issue_expiry: Mutex::new(None),
-            issue_revoke_error: Mutex::new(None),
-            issue_error: Mutex::new(None),
-            refresh_error: Mutex::new(None),
-            revoke_error: Mutex::new(None),
-            observed_request: Mutex::new(None),
+            refresh_generation: tokio::sync::Mutex::new(2),
+            issue_generation: tokio::sync::Mutex::new(None),
+            issue_expiry: tokio::sync::Mutex::new(None),
+            issue_revoke_error: tokio::sync::Mutex::new(None),
+            issue_error: tokio::sync::Mutex::new(None),
+            refresh_error: tokio::sync::Mutex::new(None),
+            revoke_error: tokio::sync::Mutex::new(None),
+            observed_request: tokio::sync::Mutex::new(None),
             token_canary: format!("entra-token-canary-{nonce}"),
             endpoint_canary: format!("entra-endpoint-canary-{nonce}"),
             cookie_canary: format!("entra-cookie-canary-{nonce}"),
@@ -71,31 +71,31 @@ impl FakeEntraClient {
 
 impl EntraCredentialClient for FakeEntraClient {
     fn state(&self) -> EntraFuture<'_, EntraClientState> {
-        let state = *self.state.lock().unwrap();
-        Box::pin(async move { Ok(state) })
+        let state = &self.state;
+        Box::pin(async move { Ok(*state.lock().await) })
     }
 
     fn issue_lease(&self, request: &EntraLeaseRequest) -> EntraFuture<'_, EntraLeaseGrant> {
         self.issue_calls.fetch_add(1, Ordering::SeqCst);
-        let error = *self.issue_error.lock().unwrap();
-        let state = *self.state.lock().unwrap();
-        let expiry = self
-            .issue_expiry
-            .lock()
-            .unwrap()
-            .unwrap_or(request.requested_expiry_unix_ms());
-        let generation = self.issue_generation.lock().unwrap().unwrap_or(1);
-        let issue_revoke_error = *self.issue_revoke_error.lock().unwrap();
-        let token = self.token_canary.clone();
-        let endpoint = self.endpoint_canary.clone();
-        *self.observed_request.lock().unwrap() = Some((
-            request.credential_ref().to_canonical_string(),
-            request.operation_id().to_owned(),
-            request.idempotency_key().to_owned(),
-        ));
         let inspection = &self.inspection;
         let revoke_error_slot = &self.revoke_error;
+        let token = self.token_canary.clone();
+        let endpoint = self.endpoint_canary.clone();
+        let credential = request.credential_ref().to_canonical_string();
+        let operation_id = request.operation_id().to_owned();
+        let idempotency_key = request.idempotency_key().to_owned();
+        let requested_expiry = request.requested_expiry_unix_ms();
         Box::pin(async move {
+            let error = *self.issue_error.lock().await;
+            let state = *self.state.lock().await;
+            let expiry = (*self.issue_expiry.lock().await).unwrap_or(requested_expiry);
+            let generation = (*self.issue_generation.lock().await).unwrap_or(1);
+            let issue_revoke_error = *self.issue_revoke_error.lock().await;
+            *self.observed_request.lock().await = Some((
+                credential,
+                operation_id,
+                idempotency_key,
+            ));
             if state == EntraClientState::InteractionRequired {
                 return Err(EntraClientError::InteractionRequired);
             }
@@ -103,7 +103,7 @@ impl EntraCredentialClient for FakeEntraClient {
                 return Err(error);
             }
             if let Some(error) = issue_revoke_error {
-                *revoke_error_slot.lock().unwrap() = Some(error);
+                *revoke_error_slot.lock().await = Some(error);
             }
             let grant = EntraLeaseGrant {
                 lease_handle: CredentialLeaseHandle::parse(&token).unwrap(),
@@ -111,7 +111,7 @@ impl EntraCredentialClient for FakeEntraClient {
                 rotation_generation: generation,
                 expires_at_unix_ms: expiry,
             };
-            *inspection.lock().unwrap() = Some(EntraLeaseInspection {
+            *inspection.lock().await = Some(EntraLeaseInspection {
                 state: CredentialLeaseState::Active,
                 source_version: grant.source_version.clone(),
                 rotation_generation: grant.rotation_generation,
@@ -126,17 +126,17 @@ impl EntraCredentialClient for FakeEntraClient {
         if lease.endpoint_generation() != 7 {
             return Box::pin(async { Err(EntraClientError::GenerationMismatch) });
         }
-        let inspection = self.inspection.lock().unwrap().clone().unwrap();
-        Box::pin(async move { Ok(inspection) })
+        let inspection = &self.inspection;
+        Box::pin(async move { Ok((*inspection.lock().await).clone().unwrap()) })
     }
 
     fn refresh_lease(&self, lease: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRenewal> {
         self.refresh_calls.fetch_add(1, Ordering::SeqCst);
-        let error = *self.refresh_error.lock().unwrap();
         let expiry = lease.metadata().expires_at_unix_ms;
-        let generation = *self.refresh_generation.lock().unwrap();
         let inspection = &self.inspection;
         Box::pin(async move {
+            let error = *self.refresh_error.lock().await;
+            let generation = *self.refresh_generation.lock().await;
             if let Some(error) = error {
                 return Err(error);
             }
@@ -146,7 +146,7 @@ impl EntraCredentialClient for FakeEntraClient {
                 rotation_generation: generation,
                 expires_at_unix_ms: expiry,
             };
-            *inspection.lock().unwrap() = Some(EntraLeaseInspection {
+            *inspection.lock().await = Some(EntraLeaseInspection {
                 state: CredentialLeaseState::Active,
                 source_version: grant.source_version.clone(),
                 rotation_generation: grant.rotation_generation,
@@ -158,8 +158,8 @@ impl EntraCredentialClient for FakeEntraClient {
 
     fn revoke_lease(&self, _lease: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRevocation> {
         self.revoke_calls.fetch_add(1, Ordering::SeqCst);
-        let error = *self.revoke_error.lock().unwrap();
         Box::pin(async move {
+            let error = *self.revoke_error.lock().await;
             if let Some(error) = error {
                 return Err(error);
             }

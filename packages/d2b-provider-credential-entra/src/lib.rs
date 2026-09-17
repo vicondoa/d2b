@@ -15,8 +15,6 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
-use std::task::{Context, Poll, Wake, Waker};
-use std::thread::{self, Thread};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use d2b_contracts_provider::v3::credential::{
@@ -873,9 +871,9 @@ impl EntraCredentialProviderFactory {
             placement: self.placement,
             consumer_ref: self.consumer_ref,
             client: self.client,
-            leases: Mutex::new(BTreeMap::new()),
-            cleanup_leases: Mutex::new(BTreeMap::new()),
-            lifecycle: Mutex::new(BTreeMap::new()),
+            leases: tokio::sync::Mutex::new(BTreeMap::new()),
+            cleanup_leases: tokio::sync::Mutex::new(BTreeMap::new()),
+            lifecycle: tokio::sync::Mutex::new(BTreeMap::new()),
             mutation_gate: Mutex::new(()),
             async_mutation_gate: tokio::sync::Mutex::new(()),
         }
@@ -929,9 +927,9 @@ pub struct EntraCredentialProvider {
     placement: EntraPlacement,
     consumer_ref: ResourceRef,
     client: Arc<dyn EntraCredentialClient>,
-    leases: Mutex<BTreeMap<String, LeaseRecord>>,
-    cleanup_leases: Mutex<BTreeMap<String, Vec<LeaseRecord>>>,
-    lifecycle: Mutex<BTreeMap<String, EntraLifecycleState>>,
+    leases: tokio::sync::Mutex<BTreeMap<String, LeaseRecord>>,
+    cleanup_leases: tokio::sync::Mutex<BTreeMap<String, Vec<LeaseRecord>>>,
+    lifecycle: tokio::sync::Mutex<BTreeMap<String, EntraLifecycleState>>,
     mutation_gate: Mutex<()>,
     async_mutation_gate: tokio::sync::Mutex<()>,
 }
@@ -983,75 +981,68 @@ impl EntraCredentialProvider {
     }
 
     /// Return the active lease count without exposing lease identity.
-    pub fn active_lease_count(&self) -> u32 {
-        let primary = self
-            .leases
-            .lock()
-            .map(|leases| {
-                leases
-                    .values()
-                    .filter(|record| record.metadata.state == CredentialLeaseState::Active)
-                    .count()
-            })
-            .unwrap_or(0);
-        let cleanup = self
-            .cleanup_leases
-            .lock()
-            .map(|leases| {
-                leases
-                    .values()
-                    .flatten()
-                    .filter(|record| record.metadata.state == CredentialLeaseState::Active)
-                    .count()
-            })
-            .unwrap_or(0);
+    pub async fn active_lease_count(&self) -> u32 {
+        let primary = {
+            let leases = self.leases.lock().await;
+            leases
+                .values()
+                .filter(|record| record.metadata.state == CredentialLeaseState::Active)
+                .count()
+        };
+        let cleanup = {
+            let leases = self.cleanup_leases.lock().await;
+            leases
+                .values()
+                .flatten()
+                .filter(|record| record.metadata.state == CredentialLeaseState::Active)
+                .count()
+        };
         (primary + cleanup) as u32
     }
 
     /// Return the typed health of one Credential resource.
-    pub fn resource_health(&self, credential_ref: &ResourceRef) -> Option<EntraResourceHealth> {
+    pub async fn resource_health(&self, credential_ref: &ResourceRef) -> Option<EntraResourceHealth> {
         let key = credential_ref.to_canonical_string();
-        self.cleanup_leases
+        if let Some(health) = self
+            .cleanup_leases
             .lock()
-            .ok()
-            .and_then(|leases| {
-                leases
-                    .get(&key)
-                    .and_then(|records| records.first())
-                    .map(|record| record.health)
-            })
-            .or_else(|| {
-                self.leases
-                    .lock()
-                    .ok()
-                    .and_then(|leases| leases.get(&key).map(|record| record.health))
-            })
+            .await
+            .get(&key)
+            .and_then(|records| records.first())
+            .map(|record| record.health)
+        {
+            return Some(health);
+        }
+        self.leases
+            .lock()
+            .await
+            .get(&key)
+            .map(|record| record.health)
     }
 
     /// Return the bounded refresh retry position for one Credential resource.
-    pub fn refresh_retry_state(&self, credential_ref: &ResourceRef) -> Option<(u16, u16)> {
+    pub async fn refresh_retry_state(&self, credential_ref: &ResourceRef) -> Option<(u16,u16)> {
         let key = credential_ref.to_canonical_string();
-        self.cleanup_leases
+        if let Some(retry) = self
+            .cleanup_leases
             .lock()
-            .ok()
-            .and_then(|leases| {
-                leases
-                    .get(&key)
-                    .and_then(|records| records.first())
-                    .map(|record| (record.refresh_attempts, MAX_REFRESH_ATTEMPTS))
-            })
-            .or_else(|| {
-                self.leases.lock().ok().and_then(|leases| {
-                    leases
-                        .get(&key)
-                        .map(|record| (record.refresh_attempts, MAX_REFRESH_ATTEMPTS))
-                })
-            })
+            .await
+            .get(&key)
+            .and_then(|records| records.first())
+            .map(|record| (record.refresh_attempts, MAX_REFRESH_ATTEMPTS))
+        {
+            return Some(retry);
+        }
+        self.leases
+            .lock()
+            .await
+            .get(&key)
+            .map(|record| (record.refresh_attempts, MAX_REFRESH_ATTEMPTS))
     }
 
     /// Revoke all handles owned by one Credential before finalization clears
     /// its Provider finalizer.
-    pub fn revoke_owned_handles(
+    pub async fn revoke_owned_handles(
         &self,
         credential_ref: &ResourceRef,
         deadline_ms: u64,
@@ -1061,12 +1052,12 @@ impl EntraCredentialProvider {
                 CredentialServiceErrorCode::Malformed,
             ));
         }
-        let _mutation = self.mutation_guard()?;
+        let _mutation = self.async_mutation_gate.lock().await;
         let key = credential_ref.to_canonical_string();
         let already_finalized = self
             .lifecycle
             .lock()
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .await
             .get(&key)
             == Some(&EntraLifecycleState::Finalized);
         if already_finalized {
@@ -1078,27 +1069,25 @@ impl EntraCredentialProvider {
         let deadline = Self::operation_deadline(deadline_ms)?;
         self.lifecycle
             .lock()
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .await
             .insert(key.clone(), EntraLifecycleState::Draining);
         let primary = self
             .leases
             .lock()
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .await
             .get(&key)
             .cloned();
         let cleanup = self
             .cleanup_leases
             .lock()
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .await
             .get(&key)
             .cloned()
             .unwrap_or_default();
         if primary.is_none() && cleanup.is_empty() {
             self.lifecycle
                 .lock()
-                .map_err(|_| {
-                    CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-                })?
+                .await
                 .insert(key, EntraLifecycleState::Finalized);
             return Ok(EntraOwnedHandleCleanup {
                 revoked: 0,
@@ -1115,7 +1104,11 @@ impl EntraCredentialProvider {
                 metadata: record.metadata.clone(),
                 endpoint_generation: self.placement.endpoint_generation(),
             };
-            if let Err(error) = Self::poll_client_sync(self.client.revoke_lease(&lease), deadline)
+            if let Err(error) = crate::service::await_client(
+                self.client.revoke_lease(&lease),
+                deadline,
+            )
+            .await
                 && !matches!(
                     error.code(),
                     CredentialServiceErrorCode::LeaseExpired
@@ -1131,10 +1124,8 @@ impl EntraCredentialProvider {
             }
             revoked += 1;
         }
-        if primary.is_some() {
-            let mut leases = self.leases.lock().map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-            })?;
+if primary.is_some() {
+            let mut leases = self.leases.lock().await;
             if let Some(record) = leases.get_mut(&key) {
                 record.metadata.state = CredentialLeaseState::Revoked;
                 record.metadata.outcome = CredentialOutcomeCode::Revoked;
@@ -1145,11 +1136,11 @@ impl EntraCredentialProvider {
         }
         self.cleanup_leases
             .lock()
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .await
             .remove(&key);
         self.lifecycle
             .lock()
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .await
             .insert(key, EntraLifecycleState::Finalized);
         Ok(EntraOwnedHandleCleanup {
             revoked,
@@ -1240,45 +1231,6 @@ impl EntraCredentialProvider {
         }
     }
 
-    pub(crate) fn poll_client_sync<T: Send>(
-        mut future: EntraFuture<'_, T>,
-        deadline: Instant,
-    ) -> Result<T, CredentialServiceError> {
-        struct ThreadWake(Thread);
-        impl Wake for ThreadWake {
-            fn wake(self: Arc<Self>) {
-                self.0.unpark();
-            }
-
-            fn wake_by_ref(self: &Arc<Self>) {
-                self.0.unpark();
-            }
-        }
-        let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
-        let mut context = Context::from_waker(&waker);
-        loop {
-            if Instant::now() >= deadline {
-                return Err(CredentialServiceError::new(
-                    CredentialServiceErrorCode::DeadlineExceeded,
-                ));
-            }
-            match future.as_mut().poll(&mut context) {
-                Poll::Ready(result) => return result.map_err(Self::map_client_error),
-                Poll::Pending => {
-                    let remaining =
-                        deadline
-                            .checked_duration_since(Instant::now())
-                            .ok_or_else(|| {
-                                CredentialServiceError::new(
-                                    CredentialServiceErrorCode::DeadlineExceeded,
-                                )
-                            })?;
-                    thread::park_timeout(remaining);
-                }
-            }
-        }
-    }
-
     pub(crate) fn map_client_error(error: EntraClientError) -> CredentialServiceError {
         tracing::warn!(
             provider = crate::PROVIDER_REF,
@@ -1335,11 +1287,11 @@ impl EntraCredentialProvider {
         })
     }
 
-    pub(crate) fn ensure_lifecycle_active(&self, key: &str) -> Result<(), CredentialServiceError> {
+    pub(crate) async fn ensure_lifecycle_active(&self, key: &str) -> Result<(), CredentialServiceError> {
         if self
             .lifecycle
             .lock()
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
+            .await
             .contains_key(key)
         {
             return Err(CredentialServiceError::new(
@@ -1349,7 +1301,7 @@ impl EntraCredentialProvider {
         Ok(())
     }
 
-    pub(crate) fn adopt_committed_refresh(
+    pub(crate) async fn adopt_committed_refresh(
         &self,
         key: &str,
         idempotency_key: &str,
@@ -1366,9 +1318,7 @@ impl EntraCredentialProvider {
                 return Ok(false);
             }
         };
-        let mut leases = self.leases.lock().map_err(|_| {
-            CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-        })?;
+let mut leases = self.leases.lock().await;
         let Some(record) = leases.get_mut(key) else {
             tracing::warn!(
                 provider = crate::PROVIDER_REF,
@@ -1384,9 +1334,8 @@ impl EntraCredentialProvider {
         Ok(true)
     }
 
-    pub(crate) fn record_refresh_failure(&self, key: &str) {
-        if let Ok(mut leases) = self.leases.lock()
-            && let Some(record) = leases.get_mut(key)
+    pub(crate) async fn record_refresh_failure(&self, key: &str) {
+        if let Some(record) = self.leases.lock().await.get_mut(key)
         {
             record.refresh_attempts = record
                 .refresh_attempts

@@ -51,7 +51,7 @@ fn process_unique_entra_secret_and_identity_canaries_are_absent_from_rendered_su
         CredentialSourceVersion::parse(&client.endpoint_canary).unwrap()
     );
     assert_eq!(
-        client.observed_request.lock().unwrap().as_ref(),
+        client.observed_request.try_lock().unwrap().as_ref(),
         Some(&(
             credential_ref.clone(),
             operation_id.clone(),
@@ -79,7 +79,7 @@ fn process_unique_entra_secret_and_identity_canaries_are_absent_from_rendered_su
     )
     .unwrap();
     let (error_provider, error_client) = setup();
-    *error_client.issue_error.lock().unwrap() =
+    *error_client.issue_error.try_lock().unwrap() =
         Some(d2b_provider_credential_entra::EntraClientError::Unavailable);
     let error = ProviderHarness::new(error_provider, admitted())
         .call(
@@ -99,7 +99,7 @@ fn process_unique_entra_secret_and_identity_canaries_are_absent_from_rendered_su
         CredentialServiceErrorCode::ProviderUnavailable
     );
     assert_eq!(
-        error_client.observed_request.lock().unwrap().as_ref(),
+        error_client.observed_request.try_lock().unwrap().as_ref(),
         Some(&(
             credential_ref.clone(),
             operation_id.clone(),
@@ -107,7 +107,7 @@ fn process_unique_entra_secret_and_identity_canaries_are_absent_from_rendered_su
         ))
     );
     let (ambiguous_provider, ambiguous_client) = setup();
-    *ambiguous_client.issue_error.lock().unwrap() =
+    *ambiguous_client.issue_error.try_lock().unwrap() =
         Some(d2b_provider_credential_entra::EntraClientError::CompletionUnknown);
     let ambiguous_error = ProviderHarness::new(ambiguous_provider, admitted())
         .call(

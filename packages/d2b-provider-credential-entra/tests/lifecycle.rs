@@ -7,6 +7,15 @@ use std::task::{Poll, Waker};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn block_on<F: Future>(fut: F) -> F::Output {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.handle().block_on(fut)
+}
+
 use d2b_contracts_provider::v3::credential::{
     CredentialLeaseHandle, CredentialMethod, CredentialRequest, CredentialResponse,
     CredentialServiceErrorCode, CredentialSourceVersion, PlacementBinding,
@@ -54,6 +63,7 @@ fn acquire_refresh_revoke_and_inspect_use_the_identity_guest_client() {
     assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[test]
 fn concurrent_acquires_issue_once() {
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -135,39 +145,36 @@ fn finalization_revokes_owned_handles_before_clearing_provider_state() {
         .as_millis() as u64
         - 1;
     assert_eq!(
-        provider
-            .revoke_owned_handles(
-                &ResourceRef::parse("Credential/work-entra").unwrap(),
-                stale_deadline,
-            )
-            .unwrap_err()
-            .code(),
+        block_on(provider.revoke_owned_handles(
+            &ResourceRef::parse("Credential/work-entra").unwrap(),
+            stale_deadline,
+        ))
+        .unwrap_err()
+        .code(),
         CredentialServiceErrorCode::DeadlineExceeded
     );
-    assert_eq!(provider.active_lease_count(), 1);
+    assert_eq!(block_on(provider.active_lease_count()), 1);
     assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 0);
 
-    let cleanup = provider
-        .revoke_owned_handles(
-            &ResourceRef::parse("Credential/work-entra").unwrap(),
-            15_000,
-        )
-        .unwrap();
+    let cleanup = block_on(provider.revoke_owned_handles(
+        &ResourceRef::parse("Credential/work-entra").unwrap(),
+        15_000,
+    ))
+    .unwrap();
 
     assert_eq!(cleanup.revoked, 1);
     assert_eq!(cleanup.remaining, 0);
     assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
-        provider.active_lease_count(),
+        block_on(provider.active_lease_count()),
         0,
         "finalization must not clear state before owned revocation"
     );
-    let retry = provider
-        .revoke_owned_handles(
-            &ResourceRef::parse("Credential/work-entra").unwrap(),
-            stale_deadline,
-        )
-        .unwrap();
+    let retry = block_on(provider.revoke_owned_handles(
+        &ResourceRef::parse("Credential/work-entra").unwrap(),
+        stale_deadline,
+    ))
+    .unwrap();
     assert_eq!(retry.revoked, 0);
     assert_eq!(retry.remaining, 0);
 }
@@ -186,7 +193,7 @@ fn finalization_accepts_a_remote_lease_that_already_expired() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    *client.inspection.lock().unwrap() = Some(EntraLeaseInspection {
+    *client.inspection.try_lock().unwrap() = Some(EntraLeaseInspection {
         state: d2b_contracts_provider::v3::credential::CredentialLeaseState::Active,
         source_version: CredentialSourceVersion::parse("entra-source-expired-finalize").unwrap(),
         rotation_generation: 1,
@@ -202,14 +209,13 @@ fn finalization_accepts_a_remote_lease_that_already_expired() {
             .code(),
         CredentialServiceErrorCode::LeaseExpired
     );
-    *client.revoke_error.lock().unwrap() = Some(EntraClientError::LeaseExpired);
+    *client.revoke_error.try_lock().unwrap() = Some(EntraClientError::LeaseExpired);
 
-    let cleanup = provider
-        .revoke_owned_handles(
-            &ResourceRef::parse("Credential/work-entra").unwrap(),
-            15_000,
-        )
-        .unwrap();
+    let cleanup = block_on(provider.revoke_owned_handles(
+        &ResourceRef::parse("Credential/work-entra").unwrap(),
+        15_000,
+    ))
+    .unwrap();
     assert_eq!(cleanup.revoked, 1);
     assert_eq!(cleanup.remaining, 0);
     assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
@@ -225,12 +231,11 @@ fn finalized_credential_cannot_mint_again() {
             request("idem-finalize-once"),
         )
         .unwrap();
-    provider
-        .revoke_owned_handles(
-            &ResourceRef::parse("Credential/work-entra").unwrap(),
-            15_000,
-        )
-        .unwrap();
+    block_on(provider.revoke_owned_handles(
+        &ResourceRef::parse("Credential/work-entra").unwrap(),
+        15_000,
+    ))
+    .unwrap();
 
     assert_eq!(
         server
@@ -255,16 +260,15 @@ fn draining_credential_cannot_mint_while_revocation_retries() {
             request("idem-draining-before-revoke"),
         )
         .unwrap();
-    *client.revoke_error.lock().unwrap() = Some(EntraClientError::Unavailable);
+    *client.revoke_error.try_lock().unwrap() = Some(EntraClientError::Unavailable);
 
     assert_eq!(
-        provider
-            .revoke_owned_handles(
-                &ResourceRef::parse("Credential/work-entra").unwrap(),
-                15_000,
-            )
-            .unwrap_err()
-            .code(),
+        block_on(provider.revoke_owned_handles(
+            &ResourceRef::parse("Credential/work-entra").unwrap(),
+            15_000,
+        ))
+        .unwrap_err()
+        .code(),
         CredentialServiceErrorCode::ProviderUnavailable
     );
     assert_eq!(
@@ -291,8 +295,8 @@ fn failed_replacement_acquire_tracks_an_uncommitted_grant_until_cleanup() {
             request("idem-before-uncommitted-grant"),
         )
         .unwrap();
-    *client.issue_expiry.lock().unwrap() = Some(0);
-    *client.issue_revoke_error.lock().unwrap() = Some(EntraClientError::Unavailable);
+    *client.issue_expiry.try_lock().unwrap() = Some(0);
+    *client.issue_revoke_error.try_lock().unwrap() = Some(EntraClientError::Unavailable);
 
     assert_eq!(
         server
@@ -305,9 +309,9 @@ fn failed_replacement_acquire_tracks_an_uncommitted_grant_until_cleanup() {
         CredentialServiceErrorCode::InvariantFailure
     );
     assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(provider.active_lease_count(), 2);
+    assert_eq!(block_on(provider.active_lease_count()), 2);
     assert_eq!(
-        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some((3, 3))
     );
     assert_eq!(
@@ -322,16 +326,15 @@ fn failed_replacement_acquire_tracks_an_uncommitted_grant_until_cleanup() {
     );
     assert_eq!(client.issue_calls.load(Ordering::SeqCst), 2);
 
-    *client.revoke_error.lock().unwrap() = None;
-    let cleanup = provider
-        .revoke_owned_handles(
-            &ResourceRef::parse("Credential/work-entra").unwrap(),
-            15_000,
-        )
-        .unwrap();
+    *client.revoke_error.try_lock().unwrap() = None;
+    let cleanup = block_on(provider.revoke_owned_handles(
+        &ResourceRef::parse("Credential/work-entra").unwrap(),
+        15_000,
+    ))
+    .unwrap();
     assert_eq!(cleanup.revoked, 2);
     assert_eq!(cleanup.remaining, 0);
-    assert_eq!(provider.active_lease_count(), 0);
+    assert_eq!(block_on(provider.active_lease_count()), 0);
     assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 3);
 }
 
@@ -345,7 +348,7 @@ fn ambiguous_replacement_keeps_the_previous_lease_until_explicit_retry() {
             request("idem-before-ambiguous-replacement"),
         )
         .unwrap();
-    *client.issue_error.lock().unwrap() = Some(EntraClientError::CompletionUnknown);
+    *client.issue_error.try_lock().unwrap() = Some(EntraClientError::CompletionUnknown);
 
     assert_eq!(
         server
@@ -357,7 +360,7 @@ fn ambiguous_replacement_keeps_the_previous_lease_until_explicit_retry() {
             .code(),
         CredentialServiceErrorCode::InvariantFailure
     );
-    assert_eq!(provider.active_lease_count(), 1);
+    assert_eq!(block_on(provider.active_lease_count()), 1);
     assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 0);
     assert_eq!(
         server
@@ -371,7 +374,7 @@ fn ambiguous_replacement_keeps_the_previous_lease_until_explicit_retry() {
     );
     assert_eq!(client.issue_calls.load(Ordering::SeqCst), 2);
     assert_eq!(
-        provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap()),
+        block_on(provider.refresh_retry_state(&ResourceRef::parse("Credential/work-entra").unwrap())),
         Some((0, d2b_provider_credential_entra::MAX_REFRESH_ATTEMPTS))
     );
     assert!(matches!(
@@ -395,7 +398,7 @@ fn ambiguous_replacement_keeps_the_previous_lease_until_explicit_retry() {
     );
     assert_eq!(client.issue_calls.load(Ordering::SeqCst), 2);
 
-    *client.issue_error.lock().unwrap() = None;
+    *client.issue_error.try_lock().unwrap() = None;
     assert!(matches!(
         server
             .call(
@@ -407,12 +410,11 @@ fn ambiguous_replacement_keeps_the_previous_lease_until_explicit_retry() {
     ));
     assert_eq!(client.revoke_calls.load(Ordering::SeqCst), 1);
 
-    let cleanup = provider
-        .revoke_owned_handles(
-            &ResourceRef::parse("Credential/work-entra").unwrap(),
-            15_000,
-        )
-        .unwrap();
+    let cleanup = block_on(provider.revoke_owned_handles(
+        &ResourceRef::parse("Credential/work-entra").unwrap(),
+        15_000,
+    ))
+    .unwrap();
     assert_eq!(cleanup.revoked, 1);
 }
 
@@ -438,7 +440,10 @@ impl BlockingClient {
             issue_calls: AtomicUsize::new(0),
         }
     }
+}
 
+impl BlockingClient {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn release(&self) {
         let wakers = {
             let mut state = self.state.lock().unwrap();
@@ -456,6 +461,7 @@ impl EntraCredentialClient for BlockingClient {
         Box::pin(async { Ok(EntraClientState::Ready) })
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn issue_lease(&self, request: &EntraLeaseRequest) -> EntraFuture<'_, EntraLeaseGrant> {
         let call = self.issue_calls.fetch_add(1, Ordering::SeqCst);
         if call == 0 {
