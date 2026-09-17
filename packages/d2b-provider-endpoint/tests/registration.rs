@@ -88,6 +88,7 @@ fn descriptor() -> d2b_resource_types::DriverDescriptor {
 /// The declaration registers the one type it serves and carries the
 /// declaration the plane resolves roles, the CLI noun surface, and the
 /// registry coverage check against.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn descriptor_declares_and_registers_the_endpoint_type() {
     let descriptor = descriptor();
@@ -149,6 +150,7 @@ async fn descriptor_declares_and_registers_the_endpoint_type() {
 
 /// One driver per resource type: a second registration for the same type is
 /// refused without clobbering the first.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn a_second_registration_of_the_type_is_refused() {
     let mut providers = ProviderDirectory::new();
@@ -167,6 +169,7 @@ async fn a_second_registration_of_the_type_is_refused() {
 
 /// The declared mask carries the presence obligation: once the plane is
 /// open, this driver can no longer arrive.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn the_declaration_cannot_be_registered_after_the_plane_opens() {
     let mut providers = ProviderDirectory::new();

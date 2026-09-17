@@ -821,6 +821,7 @@ mod tests {
 
     // -- realize happy path ----------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_realizes_the_socket_through_a_long_effect() {
         let fake = FakeSocketEffects::new();
@@ -876,6 +877,7 @@ mod tests {
 
     // -- recover: adopt a realized socket ----------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_a_realized_socket() {
         let fake = FakeSocketEffects::new();
@@ -890,6 +892,7 @@ mod tests {
 
     // -- finalize: owned children retire before the socket teardown ----------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_socket_teardown() {
         let manager = DeadManager::with_owned(StoredDesiredResource {
@@ -926,6 +929,7 @@ mod tests {
 
     // -- delete: endpoint-first teardown leg --------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_removes_the_socket_before_any_worker_teardown() {
         let fake = FakeSocketEffects::new();
@@ -949,6 +953,7 @@ mod tests {
 
     // -- shape guard -----------------------------------------------------------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn non_virtiofsd_shapes_are_rejected_at_validate() {
         // The virtiofsd endpoint on a transport the family does not realize.
@@ -973,6 +978,7 @@ mod tests {
         assert_eq!(failure.class(), FailureClass::Terminal);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn malformed_spec_decodes_to_a_terminal_failure() {
         let row = StoredDesiredResource {
@@ -1112,6 +1118,7 @@ mod tests {
     /// Process producer, and with the owner-scoped host-local posture - not
     /// every device-shaped Endpoint, and not a declared purpose on another
     /// class or producer type.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn device_worker_look_alikes_stay_refused() {
         let server = "swtpm-tpm-socket";
@@ -1159,6 +1166,7 @@ mod tests {
     /// producer and locality that role is committed with - not every
     /// control-shaped Endpoint, and not either role's purpose on the other
     /// role's producer.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn look_alike_control_endpoints_stay_refused() {
         let guest = "Guest/acceptance-guest";
@@ -1232,6 +1240,7 @@ mod tests {
     /// driver admits both (their row's actor owns the status the guest's
     /// provider controller gates on) and runs the same
     /// validate/recover/reconcile/delete verbs as any other admitted shape.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn guest_control_shapes_realize_through_the_endpoint_verbs() {
         for purpose in ["ch-api", "guest-control"] {
