@@ -18,7 +18,7 @@ D2B_MAKE_BAZEL_TARGETS := \
 	test-performance-budgets test-drift test-policy test-changelog
 D2B_MAKE_LOCAL_TARGETS := \
 	check-clippy check-ci test-integration test-host-integration perf \
-	pre-tag smoke-lite heavy-check heavy-flake-check check-async-gate
+	pre-tag smoke-lite heavy-check heavy-flake-check check-async-gate check-census
 # Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
 D2B_MAKE_UTILITY_TARGETS := changelog-fold generate
 
@@ -85,7 +85,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-performance-budgets \
         test-drift test-policy test-changelog \
         test-integration test-host-integration perf \
-        heavy-check heavy-flake-check check-async-gate \
+        heavy-check heavy-flake-check check-async-gate check-census \
         generate \
         clean
 
@@ -366,6 +366,16 @@ perf:
 ## calls inside async contexts.
 check-async-gate:
 	$(D2B_BAZEL_TEST) //bazel/checks/policy:check-async-gate
+
+## check-census - blocking-API census gate (plan R15): runs the per-crate
+## census (lexical meter for free functions, clippy-derived counts for
+## instance-method classes) and fails when any covered crate's count for any
+## deny-entry class - including the no-new-spawn_blocking guard - exceeds its
+## committed baseline in packages/xtask/data/blocking-census-baseline.json.
+## Re-baseline with `cargo xtask blocking-census --json <path>` after a
+## conversion lands; the baseline change ships in the same commit.
+check-census:
+	cd $(CURDIR) && cargo run -p xtask -- blocking-census --check packages/xtask/data/blocking-census-baseline.json
 
 ## heavy-check - the complete Layer-1 check.
 heavy-check:

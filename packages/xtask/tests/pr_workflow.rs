@@ -12,6 +12,7 @@ const REQUIRED_AGGREGATE_JOBS: &[&str] = &[
     "nix-realized",
     "nix-aarch64",
     "fixtures-proofs",
+    "census",
 ];
 
 fn workflow() -> String {

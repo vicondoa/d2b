@@ -211,7 +211,7 @@ fn main() -> std::process::ExitCode {
         [command] if command == "deadcode-check" => deadcode::run(),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|blocking-census|check-async-gate [<paths>...]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|blocking-census [<crate-path>...] [--json <path>] [--check <baseline.json>]|check-async-gate [<paths>...]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -219,13 +219,40 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run_blocking_census(args: &[String]) -> std::process::ExitCode {
-    if !args.is_empty() {
-        eprintln!("usage: cargo xtask blocking-census");
-        return std::process::ExitCode::FAILURE;
+    let mut crate_paths = Vec::new();
+    let mut json_out: Option<PathBuf> = None;
+    let mut baseline: Option<PathBuf> = None;
+    let usage = "usage: cargo xtask blocking-census [<crate-path>...] [--json <baseline.json>] [--check <baseline.json>]";
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--json" => {
+                let Some(path) = iter.next() else {
+                    eprintln!("{usage}");
+                    return std::process::ExitCode::FAILURE;
+                };
+                json_out = Some(PathBuf::from(path));
+            }
+            "--check" => {
+                let Some(path) = iter.next() else {
+                    eprintln!("{usage}");
+                    return std::process::ExitCode::FAILURE;
+                };
+                baseline = Some(PathBuf::from(path));
+            }
+            other => crate_paths.push(other.to_owned()),
+        }
     }
     match repo_root()
         .map_err(|error| error.to_string())
-        .and_then(blocking_census::run)
+        .and_then(|root| {
+            blocking_census::run(
+                root,
+                &crate_paths,
+                json_out.as_deref(),
+                baseline.as_deref(),
+            )
+        })
     {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(message) => {

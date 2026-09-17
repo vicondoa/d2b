@@ -447,13 +447,124 @@ impl Diagnostic {
     }
 }
 
+/// The complete set of sanctioned inline-allow reasons (plan R4/R11; the
+/// clippy.toml header's named list). A per-site `#[allow]`/`#[expect]` of a
+/// banned-API lint whose `reason` is not on this list fails the check, and a
+/// per-site allow without a reason fails the same way. The list extends only
+/// through the plan's exception gate (R11): a change that needs a new reason
+/// changes the lint itself and is approved by the user.
+const SANCTIONED_ALLOW_REASONS: &[&str] = &[
+    // The one sanctioned sync-channel boundary (plan R4): a blocking
+    // `sync_channel` recv on the worker's own dedicated thread with
+    // `tokio::sync::oneshot` replies (d2b-core's loader_worker /
+    // d2b-resource-runtime's spec_store shape).
+    "dedicated bounded worker per plan R4",
+    // A genuinely synchronous path in production that has no async form.
+    "synchronous path",
+    // A command-line-only path that never runs on an executor worker.
+    "CLI-only path",
+    // A plain `#[test]` helper (no runtime) that must drive blocking work
+    // synchronously.
+    "cfg(test) helper",
+];
+
+/// One module-level blanket allow of a banned-API lint the policy tolerates
+/// during the conversion window.
+///
+/// The list only shrinks - exactly like [`SHARED_DRIVER_EXEMPTIONS`]: a
+/// blanket allow without an entry is a policy failure, and an entry whose
+/// file no longer carries a blanket allow fails the same way. The change
+/// that replaces a blanket allow with per-site allows deletes its entry in
+/// the same commit.
+#[derive(Debug, Clone, Copy)]
+struct BlanketAllowExemption {
+    /// Repository-relative source path.
+    file: &'static str,
+    /// Why the blanket allow is still sanctioned.
+    reason: &'static str,
+}
+
+const BLANKET_ALLOW_EXEMPTIONS: &[BlanketAllowExemption] = &[BlanketAllowExemption {
+    file: "packages/d2b-broker-composition/src/dependency_surface.rs",
+    reason: "build-time audit tool whose own document/process reads are the synchronous-path class; converts to per-site allows with reasons in the composition crate's sweep",
+}];
+
+/// Fail on every `#[allow]`/`#[expect]` suppression of a banned-API lint
+/// that is not sanctioned (plan R11): a module-level blanket allow always
+/// fails unless it has a shrinking-ratchet entry, and a per-site allow fails
+/// unless its reason is on the sanctioned list. The census inventories the
+/// same suppressions; this check gates them.
+fn check_banned_api_allows(repo_root: &Path) -> Result<(), String> {
+    check_banned_api_allows_with(repo_root, BLANKET_ALLOW_EXEMPTIONS)
+}
+
+/// The same check with the ratchet passed as a parameter, so the tests can
+/// exercise both directions on fixtures.
+fn check_banned_api_allows_with(
+    repo_root: &Path,
+    exemptions: &[BlanketAllowExemption],
+) -> Result<(), String> {
+    let mut violations = Vec::new();
+    let mut blanket_files: BTreeSet<String> = BTreeSet::new();
+    for path in crate::blocking_census::walk_rs(&repo_root.join("packages"))? {
+        let rel = path
+            .strip_prefix(repo_root)
+            .map_err(|_| format!("banned-api-allow: {} outside repo root", path.display()))?
+            .to_string_lossy()
+            .into_owned();
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("banned-api-allow: read {}: {error}", path.display()))?;
+        for site in crate::blocking_census::scan_suppressions(&rel, &text) {
+            if site.blanket {
+                blanket_files.insert(rel.clone());
+                if !exemptions.iter().any(|entry| entry.file == rel) {
+                    violations.push(format!(
+                        "{rel}:{}: blanket allow of {} is not sanctioned; replace it with per-site allows carrying a sanctioned reason",
+                        site.line, site.lint
+                    ));
+                }
+            } else {
+                let reason_ok = site
+                    .reason
+                    .as_deref()
+                    .is_some_and(|reason| SANCTIONED_ALLOW_REASONS.contains(&reason));
+                if !reason_ok {
+                    violations.push(format!(
+                        "{rel}:{}: per-site allow of {} without a sanctioned reason (named list: {})",
+                        site.line,
+                        site.lint,
+                        SANCTIONED_ALLOW_REASONS.join(" | ")
+                    ));
+                }
+            }
+        }
+    }
+    for entry in exemptions {
+        if !blanket_files.contains(entry.file) {
+            violations.push(format!(
+                "{}: blanket-allow exemption is stale - the file no longer carries a blanket allow; delete the exemption in the same change (it sanctioned: {})",
+                entry.file, entry.reason
+            ));
+        }
+    }
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "banned-api allow policy violations:\n{}",
+            violations.join("\n")
+        ))
+    }
+}
+
 /// Check the normative layout of every Provider workspace member, ensure every
 /// Provider-shaped crate on disk is represented by Cargo metadata, fail on
 /// resource knowledge that still lives in a shared crate, fail on a comment
 /// citation that points at a module the tree no longer has, fail on
 /// family-named knowledge in a shared crate against the shrinking ratchet,
-/// pin the generated views to their committed producers, and pin the broker
-/// binary's provider-free manifest.
+/// pin the generated views to their committed producers, pin the broker
+/// binary's provider-free manifest, and fail on unsanctioned
+/// `#[allow]`/`#[expect]` suppressions of banned-API lints.
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let repo_root = repo_root
         .canonicalize()
@@ -465,6 +576,7 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
     check_shared_family_knowledge(&repo_root)?;
     check_generated_provenance(&repo_root)?;
     check_broker_manifest(&repo_root)?;
+    check_banned_api_allows(&repo_root)?;
     check_dangling_citations(&repo_root)
 }
 
@@ -7922,6 +8034,95 @@ mod tests {
             check_shared_family_knowledge(root),
             Ok(()),
             "the committed tree must be exactly the seeded family-knowledge ratchet"
+        );
+    }
+
+    /// A module-level blanket allow of a banned-API lint is reported as a
+    /// blanket allow and fails the policy check (plan R11).
+    #[test]
+    fn a_blanket_allow_of_a_banned_api_lint_fails_policy() {
+        let fixture = Fixture::new("blanket-allow");
+        fs::write(
+            fixture.root.join("packages/d2b-core/src/lib.rs"),
+            "#![allow(clippy::disallowed_methods)]\n",
+        )
+        .unwrap();
+        let error = check_banned_api_allows_with(&fixture.root, &[])
+            .expect_err("blanket allow must fail");
+        assert!(error.contains("blanket allow"), "error: {error}");
+        assert!(error.contains("clippy::disallowed_methods"));
+    }
+
+    /// A per-site inline allow whose reason is not on the named list fails
+    /// the policy check; a reasonless allow fails the same way.
+    #[test]
+    fn a_per_site_allow_with_an_unknown_reason_fails_policy() {
+        let fixture = Fixture::new("unknown-reason");
+        fs::write(
+            fixture.root.join("packages/d2b-core/src/lib.rs"),
+            "#[allow(clippy::disallowed_methods, reason = \"trust me\")]\npub fn f() {}\n",
+        )
+        .unwrap();
+        let error = check_banned_api_allows_with(&fixture.root, &[])
+            .expect_err("unknown reason must fail");
+        assert!(error.contains("without a sanctioned reason"), "error: {error}");
+        assert!(error.contains("dedicated bounded worker per plan R4"), "error: {error}");
+
+        fs::write(
+            fixture.root.join("packages/d2b-core/src/lib.rs"),
+            "#[allow(clippy::disallowed_methods)]\npub fn f() {}\n",
+        )
+        .unwrap();
+        let error = check_banned_api_allows_with(&fixture.root, &[])
+            .expect_err("reasonless allow must fail");
+        assert!(error.contains("without a sanctioned reason"), "error: {error}");
+    }
+
+    /// A per-site allow carrying a sanctioned reason passes the policy
+    /// check, and an `#[expect]` is gated the same way.
+    #[test]
+    fn a_per_site_allow_with_a_sanctioned_reason_passes_policy() {
+        let fixture = Fixture::new("sanctioned-reason");
+        fs::write(
+            fixture.root.join("packages/d2b-core/src/lib.rs"),
+            "#[allow(clippy::disallowed_methods, reason = \"dedicated bounded worker per plan R4\")]\npub fn f() {}\n#[expect(clippy::disallowed_methods, reason = \"cfg(test) helper\")]\npub fn g() {}\n",
+        )
+        .unwrap();
+        assert_eq!(check_banned_api_allows_with(&fixture.root, &[]), Ok(()));
+    }
+
+    /// A blanket allow with a ratchet entry passes, and an entry whose file
+    /// no longer carries a blanket allow is a stale allowance.
+    #[test]
+    fn the_blanket_allow_ratchet_only_shrinks_with_its_blanket_allows() {
+        let fixture = Fixture::new("blanket-ratchet");
+        let lib = fixture.root.join("packages/d2b-core/src/lib.rs");
+        let entry = BlanketAllowExemption {
+            file: "packages/d2b-core/src/lib.rs",
+            reason: "fixture",
+        };
+        fs::write(&lib, "#![allow(clippy::disallowed_methods)]\n").unwrap();
+        assert_eq!(
+            check_banned_api_allows_with(&fixture.root, &[entry]),
+            Ok(()),
+            "a ratcheted blanket allow passes"
+        );
+        fs::write(&lib, "pub fn f() {}\n").unwrap();
+        let error = check_banned_api_allows_with(&fixture.root, &[entry])
+            .expect_err("stale exemption must fail");
+        assert!(error.contains("stale"), "error: {error}");
+    }
+
+    /// The committed tree passes the banned-API allow policy: the one
+    /// blanket allow (the composition audit tool) has its ratchet entry, and
+    /// no per-site allow carries an unsanctioned reason.
+    #[test]
+    fn the_banned_api_allow_policy_matches_the_committed_tree() {
+        let root = repo_root().expect("resolve repository root");
+        assert_eq!(
+            check_banned_api_allows(root),
+            Ok(()),
+            "the committed tree must carry only sanctioned banned-API suppressions"
         );
     }
 }
