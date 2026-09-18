@@ -5,7 +5,6 @@ use std::future::Future;
 use std::io;
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::pin::Pin;
-#[cfg(not(feature = "layer1-bootstrap"))]
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 #[cfg(not(feature = "layer1-bootstrap"))]
 use std::os::unix::fs::FileTypeExt;
