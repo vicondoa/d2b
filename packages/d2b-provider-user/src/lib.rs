@@ -17,6 +17,15 @@
 
 mod driver;
 
+// The scripted UserDriverEffects recording double. Needed both by
+// external crates (d2bd's plane tests, which opt in via the `test-support`
+// feature) and by this crate's own tests. Gating on
+// `any(test, feature = "test-support")` makes it available automatically when
+// compiling this crate's tests, so `cargo test -p d2b-provider-user` works
+// without remembering `--features test-support`.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use driver::{
     UserDriver, UserDriverEffects, UserDriverError, UserDriverFactory, UserDriverStatus,
     user_descriptor, user_spec_decoder,

@@ -2650,36 +2650,7 @@ mod tests {
         .expect("bundle row")
     }
 
-    struct FakeInteractionEffects;
-
-    #[async_trait::async_trait]
-    impl InteractionDriverEffects for FakeInteractionEffects {
-        async fn reconcile(
-            &self,
-            _kind: d2b_provider_wayland_policy::InteractionKind,
-            _request: &d2b_provider_wayland_policy::InteractionEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_wayland_policy::InteractionEffectOutcome,
-            d2b_provider_wayland_policy::InteractionEffectError,
-        > {
-            Ok(d2b_provider_wayland_policy::InteractionEffectOutcome::phase(
-                d2b_provider_wayland_policy::InteractionEffectPhase::Pending,
-            ))
-        }
-
-        async fn finalize(
-            &self,
-            _kind: d2b_provider_wayland_policy::InteractionKind,
-            _request: &d2b_provider_wayland_policy::InteractionEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_wayland_policy::InteractionFinalize,
-            d2b_provider_wayland_policy::InteractionEffectError,
-        > {
-            Ok(d2b_provider_wayland_policy::InteractionFinalize::Complete)
-        }
-    }
-
-    /// Guest effects that stay Pending: the plane tests only need the Guest
+    /// Guest effects that stay Pending:the plane tests only need the Guest
     /// driver registered, never a Guest reaching Ready.
     struct FakeGuestEffects;
 
@@ -2788,7 +2759,7 @@ mod tests {
                     ),
                 },
                 guest_effects: Arc::new(FakeGuestEffects),
-                interaction_effects: Arc::new(FakeInteractionEffects),
+                interaction_effects: d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
                 trusted_context_publication: None,
                 foundation: None,
             },

@@ -138,5 +138,10 @@ d2b-provider-network-local = { path = "../d2b-provider-network-local", version =
 d2b-provider-device = { path = "../d2b-provider-device", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-device-usbip = { path = "../d2b-provider-device-usbip", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-device-security-key = { path = "../d2b-provider-device-security-key", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-host = { path = "../d2b-provider-host", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-user = { path = "../d2b-provider-user", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-provider = { path = "../d2b-provider-provider", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-notification-desktop = { path = "../d2b-provider-notification-desktop", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-wayland-policy = { path = "../d2b-provider-wayland-policy", version = "0.0.0-bootstrap", features = ["test-support"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }

@@ -26,3 +26,6 @@ d2b-provider-process-minijail = { path = "../d2b-provider-process-minijail", ver
 d2b-provider-system-core = { path = "../d2b-provider-system-core", version = "0.0.0-bootstrap" }
  serde_json.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[features]
+test-support = []

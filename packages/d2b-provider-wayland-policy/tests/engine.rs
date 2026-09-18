@@ -8,16 +8,16 @@
 //! crates test their own row vocabulary on top of this.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
 use d2b_provider_wayland_policy::{
     InteractionChildContext, InteractionDriver, InteractionDriverArgs, InteractionDriverEffects,
-    InteractionDriverStatus, InteractionEffectError, InteractionEffectOutcome,
-    InteractionEffectPhase, InteractionEffectRequest, InteractionFinalize, InteractionKind,
-    InteractionSpecEnvelope, InteractionType, key_ref, spec_decoder,
+    InteractionDriverStatus, InteractionEffectError, InteractionKind, InteractionSpecEnvelope,
+    InteractionType, key_ref, spec_decoder,
 };
+use d2b_provider_wayland_policy::test_support::{Log, ScriptedEffects};
 use d2b_resource_runtime::context::{
     ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, SpecDecoder,
     WatchId, WatchRegistration,
@@ -32,8 +32,6 @@ use d2b_resource_runtime::identity::{
 use d2b_resource_runtime::spec_store::EnsureOutcome;
 use d2b_resource_runtime::target::TargetHandle;
 use serde_json::json;
-
-type Log = Arc<tokio::sync::Mutex<Vec<String>>>;
 
 // -- the test type ----------------------------------------------------------
 
@@ -87,70 +85,6 @@ impl InteractionType for TestType {
                 metadata: b"{}".to_vec(),
             },
         ])
-    }
-}
-
-// -- scripted effects -------------------------------------------------------
-
-/// Scripted typed effects over the caller's ordered log, so the tests assert
-/// one sequence across manager calls and Provider effects.
-struct ScriptedEffects {
-    log: Log,
-    ready: AtomicBool,
-    finalize_pending: AtomicBool,
-}
-
-impl ScriptedEffects {
-    fn shared(log: Log) -> Arc<Self> {
-        Arc::new(Self {
-            log,
-            ready: AtomicBool::new(false),
-            finalize_pending: AtomicBool::new(false),
-        })
-    }
-
-    fn make_ready(&self) {
-        self.ready.store(true, Ordering::SeqCst);
-    }
-
-    fn hold_finalize(&self) {
-        self.finalize_pending.store(true, Ordering::SeqCst);
-    }
-}
-
-#[async_trait::async_trait]
-impl InteractionDriverEffects for ScriptedEffects {
-    async fn reconcile(
-        &self,
-        kind: InteractionKind,
-        _request: &InteractionEffectRequest<'_>,
-    ) -> Result<InteractionEffectOutcome, InteractionEffectError> {
-        self.log
-            .lock().await
-            .push(format!("effect:{}", kind.effect_id()));
-        if self.ready.load(Ordering::SeqCst) {
-            Ok(InteractionEffectOutcome::projection(
-                InteractionEffectPhase::Ready,
-                json!({"phase": "Ready"}),
-            ))
-        } else {
-            Ok(InteractionEffectOutcome::phase(InteractionEffectPhase::Pending))
-        }
-    }
-
-    async fn finalize(
-        &self,
-        kind: InteractionKind,
-        _request: &InteractionEffectRequest<'_>,
-    ) -> Result<InteractionFinalize, InteractionEffectError> {
-        self.log
-            .lock().await
-            .push(format!("finalize:{}", kind.effect_id()));
-        if self.finalize_pending.load(Ordering::SeqCst) {
-            Ok(InteractionFinalize::Pending)
-        } else {
-            Ok(InteractionFinalize::Complete)
-        }
     }
 }
 

@@ -773,6 +773,8 @@ mod tests {
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
+    use crate::test_support::RecordingEffects;
+
     use super::{
         PROVIDER_TYPE_NAME, ProviderDriverFactory, ProviderDriverStatus, provider_spec_decoder,
     };
@@ -791,49 +793,7 @@ mod tests {
 
     // -- fakes ---------------------------------------------------------------
 
-    /// Scripted session-evidence port.
-    struct RecordingEffects {
-        calls: Mutex<Vec<&'static str>>,
-        evidence: Mutex<Option<serde_json::Value>>,
-    }
-
-    impl RecordingEffects {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: Mutex::new(Vec::new()),
-                evidence: Mutex::new(None),
-            })
-        }
-
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn call_order(&self) -> Vec<&'static str> {
-            self.calls.lock().expect("calls").clone()
-        }
-
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn set_evidence(&self, evidence: serde_json::Value) {
-            *self.evidence.lock().expect("evidence") = Some(evidence);
-        }
-    }
-
-    impl super::ProviderDriverEffects for RecordingEffects {
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn controller_session_evidence(
-            &self,
-            process_ref: &d2b_contracts_resource::v3::ResourceRef,
-            process_uid: &d2b_contracts_resource::v3::ResourceUid,
-            generation: d2b_contracts_resource::v3::ResourceGeneration,
-        ) -> Option<serde_json::Value> {
-            self.calls.lock().expect("calls").push("controller-session");
-            let mut evidence = self.evidence.lock().expect("evidence").clone()?;
-            evidence["processRef"] = serde_json::Value::String(process_ref.to_canonical_string());
-            evidence["processUid"] = serde_json::Value::String(process_uid.as_str().to_owned());
-            evidence["processGeneration"] = serde_json::Value::from(generation.get());
-            Some(evidence)
-        }
-    }
-
-    /// Recording manager over a scripted row set.
+/// Recording manager over a scripted row set.
     struct RecordingManager {
         calls: Mutex<Vec<String>>,
         rows: Mutex<Vec<StoredDesiredResource>>,

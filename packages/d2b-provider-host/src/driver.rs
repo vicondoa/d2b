@@ -417,14 +417,14 @@ pub fn host_descriptor(effects: Arc<dyn HostDriverEffects>) -> DriverDescriptor 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::Ordering;
 
     use d2b_contracts_resource::v3::{
         ResourcePhase, ResourceRef, ResourceSpec,
         execution_policy::to_base_object,
         host::{HOST_PROVIDER_REF, HostSpec},
     };
-    use d2b_provider_system_core::{HostCapabilityClass, HostObservationReport, HostReconciler};
+    use d2b_provider_system_core::HostCapabilityClass;
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
         WatchRegistration,
@@ -438,67 +438,15 @@ mod tests {
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
+    use crate::test_support::RecordingEffects;
+
     use super::{
         HostDriverEffects, HostDriverFactory, HostDriverStatus, host_descriptor, host_spec_decoder,
     };
 
     // -- fakes ---------------------------------------------------------------
 
-    /// Scripted observation port: records every call order-preservingly and
-    /// can fail the probe.
-    struct RecordingEffects {
-        calls: tokio::sync::Mutex<Vec<String>>,
-        phase: tokio::sync::Mutex<ResourcePhase>,
-        fail: AtomicBool,
-    }
-
-    impl RecordingEffects {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: tokio::sync::Mutex::new(Vec::new()),
-                phase: tokio::sync::Mutex::new(ResourcePhase::Ready),
-                fail: AtomicBool::new(false),
-            })
-        }
-
-        fn call_order(&self) -> Vec<String> {
-            self.calls.try_lock().expect("uncontended test mutex").clone()
-        }
-
-        fn set_phase(&self, phase: ResourcePhase) {
-            *self.phase.try_lock().expect("uncontended test mutex") = phase;
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl HostDriverEffects for RecordingEffects {
-        async fn observe_host(
-            &self,
-            host_ref: &ResourceRef,
-            provider_ref: &ResourceRef,
-            spec: &HostSpec,
-        ) -> Result<HostObservationReport, String> {
-            self.calls.lock().await.push("observe-host".to_owned());
-            if self.fail.load(Ordering::SeqCst) {
-                return Err("the scripted probe refused".to_owned());
-            }
-            let mut status = HostReconciler::new()
-                .reconcile(host_ref, provider_ref, spec)
-                .expect("the scripted host spec is admitted");
-            status.phase = *self.phase.lock().await;
-            Ok(HostObservationReport {
-                status,
-                capabilities: vec![HostCapabilityClass::Kvm],
-                kernel_release: "6.9.0-test".to_owned(),
-                os_name: "Linux".to_owned(),
-                user_manager_available: true,
-                active_process_count: 3,
-                minijail_ready: true,
-            })
-        }
-    }
-
-    /// Recording manager: the family must never mutate children or registers;
+/// Recording manager:the family must never mutate children or registers;
     /// any unexpected manager call fails the test loudly through the recorded
     /// call list.
     struct RecordingManager {

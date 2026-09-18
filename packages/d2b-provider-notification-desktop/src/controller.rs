@@ -1435,6 +1435,7 @@ impl core::fmt::Debug for NotificationController {
 mod tests {
     use super::*;
     use crate::admission::{test_source, test_source_at};
+    use crate::test_support::RecordingEffects;
 
     fn display(state: DisplayDependencyState) -> DisplayDependencyEvidence {
         DisplayDependencyEvidence {
@@ -1684,21 +1685,6 @@ mod tests {
             Err("notification-source-unauthenticated")
         );
         assert!(controller.drain_sources().is_empty());
-    }
-
-    struct RecordingEffects {
-        plans: Vec<SourceReconcileResult>,
-    }
-
-    impl SourceProcessEffectPort for RecordingEffects {
-        fn apply(
-            &mut self,
-            plan: &SourceReconcileResult,
-            _lifecycle: &NotificationLifecyclePlan,
-        ) -> Result<SourceProcessEffectReceipt, &'static str> {
-            self.plans.push(plan.clone());
-            Ok(SourceProcessEffectReceipt::complete(plan))
-        }
     }
 
     #[test]
