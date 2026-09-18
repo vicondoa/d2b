@@ -33,8 +33,9 @@ contracts without USBIP.
 `Provider/device-usbip` is one of the four frozen Device Providers in the
 `ADR-046-resources-device` catalog. It replaces:
 
-- the broker-spawned `RunnerRole::Usbip` backend and proxy runners managed by
-  `packages/d2bd/src/usbipd_perenv_autostart.rs`;
+- the broker-spawned `RunnerRole::Usbip` backend and proxy runners (the
+  d2bd-runtime per-env autostart seam that started them was deleted after
+  the manager-plane cutover);
 - the typed step machine in `packages/d2bd/src/usbip_state_machine.rs`;
 - the reconcile state model in `packages/d2bd/src/usbip_reconcile_state.rs`;
 - the per-env firewall carve-out in `nixos-modules/network.nix` lines 444-461;
@@ -1764,7 +1765,7 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 | `packages/d2b-priv-broker/src/ops/usbip_lock.rs` - OFD lock | Adapter-internal | Lock fd never leaves adapter |
 | `packages/d2b-contract-tests/tests/usbip_policy_network_scoping.rs` | Split into fast Provider `tests/wrong_zone.rs` admission coverage and real `tests/host-integration/usbip-service.nix` firewall coverage | Old duplicate retires only after both successors pass |
 | `nixos-modules/components/usbip.nix` - guest vhci_hcd + tools | Unchanged; guest runtime module stays; host-side bits removed at v3 reset | Remains under runtime-cloud-hypervisor Guest module |
-| `packages/d2bd/src/usbipd_perenv_autostart.rs` - per-env autostart | Delete; replace with one Host backend and one typed TCP 3240 relay Endpoint per Network | No per-env systemd unit and no per-Device port collision |
+| d2bd-runtime per-env autostart (broker-spawned `RunnerRole::Usbip` backend/proxy seams) | Deleted after the manager-plane cutover; replacement is one Host backend and one typed TCP 3240 relay Endpoint per Network | No per-env systemd unit and no per-Device port collision |
 
 ---
 
@@ -1995,26 +1996,29 @@ Required tests:
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-usbip-004 and ADR046-usbip-008; Provider fully wired and validated; daemon cleanup owner |
-| Current source | packages/d2bd/src/usbipd_perenv_autostart.rs, packages/d2bd/src/usbip_state_machine.rs, packages/d2bd/src/usbip_reconcile_state.rs, nixos-modules/network.nix USBIP firewall block, and ProcessRole::Usbip in packages/d2b-core/src/processes.rs |
+| Current source | packages/d2bd/src/usbip_state_machine.rs, packages/d2bd/src/usbip_reconcile_state.rs, nixos-modules/network.nix USBIP firewall block, and ProcessRole::Usbip in packages/d2b-core/src/processes.rs (the d2bd-runtime per-env autostart seam is already deleted) |
 | Reuse action | delete-after-cutover |
 | Destination | packages/d2bd/src/, nixos-modules/network.nix, packages/d2b-core/src/processes.rs |
-| Detailed design | Remove daemon-coupled USBIP after Provider tests and integration tests pass: delete per-env autostart, state machine, and reconcile state modules after migration; remove USBIP firewall block from network.nix; remove ProcessRole::Usbip; run Layer-1 gates and confirm no d2bd or network.nix references remain outside the adapter and contracts. Primary reuse disposition: `delete-after-cutover`. Preserved source-plan detail: delete after Provider replacement reaches parity. |
+| Detailed design | Remove daemon-coupled USBIP after Provider tests and integration tests pass: the per-env autostart module is already deleted; delete state machine and reconcile state modules after migration; remove USBIP firewall block from network.nix; remove ProcessRole::Usbip; run Layer-1 gates and confirm no d2bd or network.nix references remain outside the adapter and contracts. Primary reuse disposition: `delete-after-cutover`. Preserved source-plan detail: delete after Provider replacement reaches parity. |
 | Integration | Provider/device-usbip, core D096/D097 adapters, Nix Device plus provider-neutral USB resource emitter, USBIP authority workers, and Binding-owned children are the sole USBIP lifecycle path after deletion. |
 | Data migration | Full d2b 3.0 reset; no daemon-coupled USBIP runtime state import |
 | Validation | make test-unit and make test-flake plus grep or contract checks for removed symbols and no residual d2bd/network.nix USBIP lifecycle references. |
-| Removal proof | usbipd_perenv_autostart.rs, usbip_state_machine.rs, usbip_reconcile_state.rs, network.nix USBIP firewall block, and ProcessRole::Usbip are deleted after parity. |
+| Removal proof | usbip_state_machine.rs, usbip_reconcile_state.rs, network.nix USBIP firewall block, and ProcessRole::Usbip are deleted after parity; the per-env autostart module is already deleted (`cargo test -p d2bd-runtime` proves the boundary re-pin). |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Deletion sequence:
 1. Confirm Provider tests and integration tests pass.
-2. Delete `packages/d2bd/src/usbipd_perenv_autostart.rs`.
-3. Remove `packages/d2bd/src/usbip_state_machine.rs` and `usbip_reconcile_state.rs`
+2. Remove `packages/d2bd/src/usbip_state_machine.rs` and `usbip_reconcile_state.rs`
    after verifying all logic has been migrated.
-4. Remove USBIP firewall block from `nixos-modules/network.nix`.
-5. Remove `ProcessRole::Usbip` from `packages/d2b-core/src/processes.rs`.
-6. Run `make test-unit` and `make test-flake`; confirm no USBIP references remain in
+3. Remove USBIP firewall block from `nixos-modules/network.nix`.
+4. Remove `ProcessRole::Usbip` from `packages/d2b-core/src/processes.rs`.
+5. Run `make test-unit` and `make test-flake`; confirm no USBIP references remain in
    d2bd or network.nix outside the adapter and contracts.
+
+The former step 2 (per-env autostart) is already done: the d2bd-runtime module
+was deleted, with its lib.rs
+export and runtime-boundary file-table row removed.
 
 ---
 
@@ -2086,14 +2090,16 @@ authority Service plus per-Guest Bindings/projections as needed:
 
 1. Remove `d2b.vms.<vm>.usbip.yubikey` Nix option (deprecated at reset; removed
    now).
-2. Delete `packages/d2bd/src/usbipd_perenv_autostart.rs`.
-3. Delete `packages/d2bd/src/usbip_state_machine.rs` and
+2. Delete `packages/d2bd/src/usbip_state_machine.rs` and
    `usbip_reconcile_state.rs` (logic migrated to Provider crate and adapter).
-4. Remove `ProcessRole::Usbip` from `packages/d2b-core/src/processes.rs`.
-5. Remove USBIP firewall block from `nixos-modules/network.nix`.
-6. Run `make check` (Layer-1 gate); confirm zero remaining references to removed
+3. Remove `ProcessRole::Usbip` from `packages/d2b-core/src/processes.rs`.
+4. Remove USBIP firewall block from `nixos-modules/network.nix`.
+5. Run `make check` (Layer-1 gate); confirm zero remaining references to removed
    symbols from outside `d2b-provider-device-usbip` and `d2b-core/src/device_usbip_adapter.rs`.
-7. Update this dossier's `Supersedes` field to mark all removed targets as `removed`.
+6. Update this dossier's `Supersedes` field to mark all removed targets as `removed`.
+
+The former step 2 (per-env autostart) is already done: the d2bd-runtime module
+was deleted.
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
