@@ -7047,7 +7047,12 @@ impl ControllerSessionCoordinator {
                 "controller session establish timing",
             );
             // The registrar slot restore is infallible (tokio lock, no
-            // poisoning), so the setup is consumed directly below.
+            // poisoning), so the setup is consumed directly below. The slot
+            // must be refilled before the setup is consumed: the system-core
+            // rebind and every later controller enrollment take the same
+            // registrar, and a dropped one leaves the internal session
+            // unrenewable (its renewals refuse `AuthenticationUnavailable`).
+            *self.registrar.lock().await = Some(registrar);
             let setup = setup;
             match setup {
                 Ok((

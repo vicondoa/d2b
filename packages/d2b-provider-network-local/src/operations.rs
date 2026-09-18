@@ -42,7 +42,7 @@ use d2b_resource_types::{
     OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,
     ValidatedPayload,
 };
-use kernel_worker::KernelRefusal;
+use d2b_core::kernel_seat::{self, KernelRefusal};
 
 /// The family's `ApplyNftables` operation (U12).
 pub const APPLY_NFTABLES: &str = "ApplyNftables";
@@ -238,7 +238,7 @@ async fn invoke_kernel_nested(
     let invocation_id = ctx.invocation_id.to_owned();
     let mut chain_identities = ctx.chain_identities.to_vec();
     chain_identities.push(ctx.caller.to_canonical_string());
-    let reply = match kernel_worker::run(move || {
+    let reply = match kernel_seat::run(move || {
         envelope_invoke_kernel(
             &socket_path,
             KERNEL_IO_TIMEOUT,
@@ -1066,94 +1066,3 @@ impl OperationHandler for SeedDnsmasqLeaseHandler {
     }
 }
 
-/// Dedicated bounded worker for broker-kernel round-trips (plan R4/KTD2).
-///
-/// [`crate::operations`]' handlers invoke broker-generic kernel rows over the
-/// broker's origination socket. `d2b_contracts_broker::kernel_client::
-/// envelope_invoke_kernel` performs a blocking Unix SEQPACKET round-trip
-/// (connect, sendmsg with SCM_RIGHTS, poll, recvmsg) and none of that has
-/// an async form in this crate, so async family handlers run it here on one
-/// dedicated bounded worker thread behind a bounded queue: admission is a
-/// non-blocking `try_send` (a saturated queue refuses with
-/// [`KernelRefusal::Busy`]), and the outcome travels back over a
-/// `tokio::sync::oneshot` channel, so the caller's executor is never parked.
-mod kernel_worker {
-    use std::sync::LazyLock;
-    use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
-    use std::thread;
-
-    /// The bound on admitted-but-unstarted kernel jobs, per seat; matches
-    /// the loader shape's bound so a burst of concurrent kernel verbs queues
-    /// without growing threads and a saturated queue refuses the rest.
-    pub const MAX_KERNEL_QUEUE_DEPTH: usize = 16;
-
-    /// Why a kernel job was not admitted.
-    pub enum KernelRefusal {
-        /// The bounded queue is saturated:the caller must retry rather than wait。
-
-        Busy,
-        /// The worker is not running.
-
-        Unavailable,
-    }
-
-    type KernelJob = Box<dyn FnOnce() + Send + 'static>;
-
-    /// One dedicated worker thread with its own bounded queue.
-    struct KernelWorker {
-        sender: SyncSender<KernelJob>,
-    }
-
-    /// Start the named kernel worker; `None` records a worker that could not
-    /// start, so every later call refuses with [`KernelRefusal::Unavailable`]
-    /// instead of retrying a failing spawn.
-    fn start_worker() -> Option<KernelWorker> {
-        let (sender, receiver) = sync_channel::<KernelJob>(MAX_KERNEL_QUEUE_DEPTH);
-        thread::Builder::new()
-            .name("d2b-network-local-kernel".to_owned())
-            .spawn(move || {
-                // The sanctioned R4 channel boundary: a blocking `sync_channel`
-                // recv on the worker's own dedicated thread, with
-                // `tokio::sync::oneshot` replies (plan R4 / KTD3).
-
-                #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
-                while let Ok(job) = receiver.recv() {
-                    job();
-                }
-            })
-            .ok()
-            .map(|_| KernelWorker { sender })
-    }
-
-    /// The kernel round-trip seat, started on first use; `None` records
-    /// a worker that could not start, so every later call refuses instead of
-    /// retrying a failing spawn.
-    static KERNEL_WORKER: LazyLock<Option<KernelWorker>> = LazyLock::new(start_worker);
-
-    /// Run one kernel round-trip job on the dedicated bounded kernel seat.
-    /// The caller's executor is never parked: admission is a non-blocking
-    /// `try_send` and the result is awaited from the worker.
-    pub async fn run<T, F>(job: F) -> Result<T, KernelRefusal>
-    where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
-    {
-        let (reply, outcome) = tokio::sync::oneshot::channel();
-        let admitted = KERNEL_WORKER
-            .as_ref()
-            .ok_or(KernelRefusal::Unavailable)?
-            .sender
-            .try_send(Box::new(move || {
-                // A panicking job drops the reply sender, so the waiter sees
-                // `Unavailable` instead of hanging on a dead worker.
-
-
-                let _ = reply.send(job());
-            }));
-        match admitted {
-            Ok(()) => outcome.await.map_err(|_| KernelRefusal::Unavailable),
-            Err(TrySendError::Full(_)) => Err(KernelRefusal::Busy),
-            Err(TrySendError::Disconnected(_)) => Err(KernelRefusal::Unavailable),
-        }
-    }
-}

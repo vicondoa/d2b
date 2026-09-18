@@ -13,6 +13,7 @@ pub mod error;
 pub mod host;
 pub mod host_generation;
 pub mod host_w3;
+pub mod kernel_seat;
 pub mod loader_worker;
 pub mod manifest_v04;
 pub mod minijail_profile;

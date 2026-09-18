@@ -50,7 +50,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::driver::{PROCESS_FAMILY_EXECUTION_DOMAINS, PROCESS_FAMILY_READS, PROCESS_FAMILY_VERBS};
-use crate::kernel_worker;
+use d2b_core::kernel_seat;
 
 /// The operation the family declares first.
 ///
@@ -310,7 +310,7 @@ async fn invoke_kernel_nested(
     let invocation_id = ctx.invocation_id.to_owned();
     let mut chain_identities = ctx.chain_identities.to_vec();
     chain_identities.push(ctx.caller.to_canonical_string());
-    let reply = kernel_worker::run(move || {
+    let reply = kernel_seat::run(move || {
         envelope_invoke_kernel(
             &socket_path,
             KERNEL_IO_TIMEOUT,
@@ -327,11 +327,11 @@ async fn invoke_kernel_nested(
     })
     .await
     .map_err(|refusal| match refusal {
-        kernel_worker::KernelRefusal::Busy => OperationFailure::with_detail(
+        kernel_seat::KernelRefusal::Busy => OperationFailure::with_detail(
             KERNEL_REFUSED,
             format!("{kernel_operation}: kernel invocation worker busy"),
         ),
-        kernel_worker::KernelRefusal::Unavailable => OperationFailure::with_detail(
+        kernel_seat::KernelRefusal::Unavailable => OperationFailure::with_detail(
             KERNEL_REFUSED,
             format!("{kernel_operation}: kernel invocation worker unavailable"),
         ),
