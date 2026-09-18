@@ -1,3 +1,6 @@
+// Shared harness for the d2bd integration tests: each test binary pulls it in
+// with `mod common;` and uses a subset, so the module-scope dead-code allowance
+// is the honest shape rather than per-item noise.
 #![allow(dead_code)]
 
 use std::fs;

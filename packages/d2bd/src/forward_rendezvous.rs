@@ -345,9 +345,8 @@ impl ForwardRendezvous {
     /// Wire this rendezvous's daemon-side chain audit records to `sink`.
     ///
     /// The daemon calls this once at its composition point; a rendezvous
-    /// without a sink serves without chain records. The seam's consumers
-    /// are its tests and the future composition wiring (U9 note: the
-    /// composition seam owns this call).
+    /// without a sink serves without chain records. The seam has no
+    /// production caller today: its tests are the consumers.
     #[allow(dead_code)]
     pub(crate) async fn set_chain_audit(&self, sink: Arc<dyn ChainAuditSink>) {
         *self.chain_audit.lock().await = Some(sink);
@@ -491,7 +490,7 @@ impl ForwardRendezvous {
     /// process holds no committed rows, so the chain's admission and grants
     /// were decided where the rows live, and this leg enforces the cap and
     /// records the correlation key.
-    #[allow(dead_code)] // U9 seam: its tests drive it; the composition seam owns the production call
+    #[allow(dead_code)] // Test-only: the nested-leg tests drive it; no production caller.
     pub(crate) async fn invoke_nested(
         &self,
         chain: &EvidenceChain,

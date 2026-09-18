@@ -193,8 +193,7 @@ impl EffectServiceBinding {
     /// to re-bind.
     ///
     /// Test-only harness surface (the supervision tests observe the fresh
-    /// generation); no production path reads actor ids. U9+ note: a
-    /// telemetry surface may consume this.
+    /// generation); no production path reads actor ids.
     #[allow(dead_code)]
     pub fn actor_id(&self) -> ractor::ActorId {
         self.actor.get_id()
@@ -204,8 +203,7 @@ impl EffectServiceBinding {
     /// supervisor respawns it from the durable row and bumps the revision.
     ///
     /// Test-only harness surface (the supervision tests kill actors
-    /// mid-call); no production path kills a hosted service. U9+ note: the
-    /// operator control plane may consume this.
+    /// mid-call); no production path kills a hosted service.
     #[allow(dead_code)]
     pub fn kill(&self) {
         self.actor.get_cell().kill();
@@ -359,8 +357,7 @@ pub enum EffectServiceSupervisorMsg {
     ///
     /// Test-only harness surface: the rendezvous resolves by operation
     /// ([`Self::ResolveOperation`]), and the supervision tests resolve by
-    /// name after a kill. U9+ note: a composition/operator dialogue
-    /// re-drives rows by name and consumes this.
+    /// name after a kill.
     #[allow(dead_code)]
     Resolve {
         service: String,

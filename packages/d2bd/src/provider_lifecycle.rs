@@ -514,9 +514,8 @@ impl ProviderSet {
     /// re-creates its drivers from the committed spec row. A provider that
     /// declares a service without a factory refuses startup.
     ///
-    /// Composition feeds this seam when a family declares services (U10
-    /// pilot and later); until then the hosting-site tests are its only
-    /// consumers (U9+ note: the composition seam owns this call).
+    /// Composition feeds this seam when a family declares services; until
+    /// then the hosting-site tests are its only consumers.
     #[allow(dead_code)]
     pub(crate) fn with_effect_service_factory(
         mut self,
@@ -744,9 +743,7 @@ impl ProviderRuntime {
     /// captured `revision()` can refuse stale traffic. The rendezvous
     /// resolves every effect-service dispatch by operation
     /// ([`Self::resolve_effect_service_for_operation`]); name-based
-    /// resolution stays the supervision-test harness surface. U9+ note: a
-    /// composition/operator dialogue re-drives rows by name and consumes
-    /// this.
+    /// resolution stays the supervision-test harness surface.
     #[allow(dead_code)]
     pub(crate) async fn resolve_effect_service(
         &self,
@@ -803,10 +800,9 @@ impl ProviderRuntime {
     /// services. A republish of a live service bumps the generational
     /// binding revision and rebuilds the actor from the new row (KTD5).
     ///
-    /// The republish seam is composition-side; the dialogue that re-drives
-    /// declared rows on a provider-set republish lands with the composition
-    /// work (U10 pilot and later). Until then the hosting-site tests are
-    /// its only consumers (U9+ note: the composition seam owns this call).
+    /// The republish seam is composition-side; until the dialogue that
+    /// re-drives declared rows on a provider-set republish lands, the
+    /// hosting-site tests are its only consumers.
     #[allow(dead_code)]
     pub(crate) async fn publish_effect_service(
         &self,
