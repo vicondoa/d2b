@@ -41,7 +41,6 @@ impl RecordingEffects {
     }
 
     /// Script the phase the next probe reports.
-
     pub fn set_phase(&self, phase: ResourcePhase) {
         *self.phase.try_lock().expect("uncontended test mutex") = phase;
     }

@@ -22,7 +22,6 @@ pub struct RecordingEffects {
     calls: parking_lot::Mutex<Vec<String>>,
     phase: parking_lot::Mutex<ResourcePhase>,
     /// Script whether the next discovery refuses.
-
     pub fail: AtomicBool,
 }
 
@@ -38,13 +37,11 @@ impl RecordingEffects {
     }
 
     /// The observed call labels in arrival order.
-
     pub fn call_order(&self) -> Vec<String> {
         self.calls.lock().clone()
     }
 
     /// Script the phase the next discovery reports.
-
     pub fn set_phase(&self, phase: ResourcePhase) {
         *self.phase.lock() = phase;
     }

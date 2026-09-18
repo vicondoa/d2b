@@ -13,7 +13,6 @@ use std::sync::Mutex;
 use crate::ProviderDriverEffects;
 
 /// Scripted session-evidence port.
-
 pub struct RecordingEffects {
     calls: Mutex<Vec<&'static str>>,
     evidence: Mutex<Option<serde_json::Value>>,
@@ -27,32 +26,26 @@ impl RecordingEffects {
         })
     }
 
-    /// The observed call labelsin arrival order.
-
-    #[allow(clippy::disallowed_methods, reason = "test-support helper")]
+    /// The observed call labels in arrival order.
     pub fn call_order(&self) -> Vec<&'static str> {
-        self.calls.lock().expect("calls").clone()
+        self.calls.try_lock().expect("uncontended test mutex").clone()
     }
 
     /// Script the evidence payload the next read stamps the ticket inputs into.
-
-
-    #[allow(clippy::disallowed_methods, reason = "test-support helper")]
     pub fn set_evidence(&self, evidence: serde_json::Value) {
-        *self.evidence.lock().expect("evidence") = Some(evidence);
+        *self.evidence.try_lock().expect("uncontended test mutex") = Some(evidence);
     }
 }
 
 impl ProviderDriverEffects for RecordingEffects {
-    #[allow(clippy::disallowed_methods, reason = "test-support helper")]
     fn controller_session_evidence(
         &self,
         process_ref: &d2b_contracts_resource::v3::ResourceRef,
         process_uid: &d2b_contracts_resource::v3::ResourceUid,
         generation: d2b_contracts_resource::v3::ResourceGeneration,
     ) -> Option<serde_json::Value> {
-        self.calls.lock().expect("calls").push("controller-session");
-        let mut evidence = self.evidence.lock().expect("evidence").clone()?;
+        self.calls.try_lock().expect("uncontended test mutex").push("controller-session");
+        let mut evidence = self.evidence.try_lock().expect("uncontended test mutex").clone()?;
         evidence["processRef"] = serde_json::Value::String(process_ref.to_canonical_string());
         evidence["processUid"] = serde_json::Value::String(process_uid.as_str().to_owned());
         evidence["processGeneration"] = serde_json::Value::from(generation.get());

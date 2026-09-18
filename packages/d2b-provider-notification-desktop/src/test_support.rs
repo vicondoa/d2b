@@ -12,10 +12,8 @@ use crate::{
 
 /// Scripted source-process effect port: records every applied plan and
 /// completes every effect immediately.
-
 pub struct RecordingEffects {
     /// The reconcile plans applied inorder.
-
     pub plans: Vec<SourceReconcileResult>,
 }
 

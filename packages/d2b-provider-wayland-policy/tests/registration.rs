@@ -2,8 +2,6 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use std::sync::Arc;
-
 use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
 use d2b_provider_wayland_policy::{
     InteractionDriverArgs, InteractionSpecEnvelope, InteractionType,
@@ -19,7 +17,7 @@ fn descriptor() -> d2b_resource_types::DriverDescriptor {
     wayland_policy_descriptor(InteractionDriverArgs {
         zone: "work".to_owned(),
         controller_generation: ControllerGeneration::new(3).expect("generation"),
-        effects: Arc::new(ScriptedEffects::new()),
+        effects: ScriptedEffects::new(),
         behavior: WaylandPolicy,
     })
 }
