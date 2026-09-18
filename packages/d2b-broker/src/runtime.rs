@@ -1669,7 +1669,7 @@ async fn answer_request(
     // The limiter is a `tokio::sync::Mutex` (plan U8); this check runs on
     // the synchronous dispatch workers, which must never block, so it spins
     // on `try_lock` only for the short bounded `check` critical section
-    // (lock_sync pattern — serialize concurrent bursts, never refuse; the
+    // (lock_sync pattern - serialize concurrent bursts, never refuse; the
     // pre-conversion std Mutex::lock serialized the check the same way).
     // The guard MUST be dropped before any audit or dispatch work below:
     // holding it across the forward/nested dispatch would deadlock
@@ -16167,7 +16167,7 @@ mod tests {
     }
 
     /// Clear every process-global broker registry so no state leaks
-    /// between tests. Non-blocking try-lock (plan U8) — a Busy collision
+    /// between tests. Non-blocking try-lock (plan U8) - a Busy collision
     /// is retried by the next guard acquisition.
     fn clear_registry_state() {
         let _ = drain_child_reap_buffer();

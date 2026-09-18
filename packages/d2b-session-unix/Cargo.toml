@@ -35,7 +35,7 @@ zeroize = "1"
 tokio = { workspace = true, features = ["fs", "macros", "net", "rt", "sync", "test-util", "time"] }
 
 # Mirrors the workspace table (kept local because a crate-local [lints]
-# cannot coexist with `workspace = true`): U19 flip per plan KTD5 — the
+# cannot coexist with `workspace = true`): U19 flip per plan KTD5 - the
 # crate's blocking-API census is zero (sanctioned per-site allows only).
 [lints.rust]
 unsafe_code = "forbid"

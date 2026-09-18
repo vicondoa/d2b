@@ -222,7 +222,7 @@ impl ProductionSharedProviderEffects {
         // (microseconds) and the pre-conversion std Mutex::lock serialized
         // instead of refusing, so a collision spins on try_lock (lock_sync
         // pattern, same as the broker rate limiter) rather than failing
-        // closed — concurrent reconcile/attach traffic must be serialized,
+        // closed - concurrent reconcile/attach traffic must be serialized,
         // never refused.
         let plane = loop {
             match self.state.resource_plane.try_lock() {

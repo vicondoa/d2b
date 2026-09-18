@@ -842,7 +842,7 @@ mod tests {
     /// a healthy launch spuriously reports `LaunchFailed`. The lock keeps
     /// the pool-driving tests sequential so each pool's worker drains on
     /// time (the broker registry-guard precedent; the pools themselves have
-    /// no shared state — only CPU contention is serialized away).
+    /// no shared state - only CPU contention is serialized away).
     struct PoolTestGuard {
         _lock: MutexGuard<'static, ()>,
     }
