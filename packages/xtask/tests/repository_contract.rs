@@ -19,8 +19,12 @@ fn repo_file(relative: &str) -> String {
     }
     // Cargo can run the integration tests with the package dir as CWD;
     // resolve from the manifest dir (packages/xtask -> repo root) too.
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    candidates.push(manifest.join("../../").join(relative));
+    // Runtime lookup (not env!): Bazel's process_wrapper forbids embedding
+    // CARGO_MANIFEST_DIR at compile time, and under Bazel it is unset, so
+    // the runfiles candidates above apply instead.
+    if let Ok(manifest) = env::var("CARGO_MANIFEST_DIR") {
+        candidates.push(PathBuf::from(manifest).join("../../").join(relative));
+    }
 
     candidates
         .into_iter()

@@ -86,7 +86,7 @@ KERNEL_OP="open-pidfd"
 DRIVER_DEADLINE_S=${D2B_SEAM_PILOT_DRIVER_DEADLINE_S:-180}
 
 scratch=$(d2b_mktemp .broker-seam-pilot.XXXXXX)
-add_cleanup "${SUDO[@]} rm -rf -- \"$scratch\""
+add_cleanup "${SUDO[*]:+${SUDO[*]} }rm -rf -- \"$scratch\""
 
 broker_socket="$scratch/broker/priv.sock"
 broker_audit_dir="$scratch/broker/audit"
@@ -260,7 +260,7 @@ EOF
     --test-mode
 ) >"$scratch/broker/serve.log" 2>&1 &
 broker_pid=$!
-add_cleanup "${SUDO[@]} kill $broker_pid >/dev/null 2>&1 || true"
+add_cleanup "${SUDO[*]:+${SUDO[*]} }kill $broker_pid >/dev/null 2>&1 || true"
 wait_for_socket "$broker_socket"
 # The root-owned broker socket must admit the unprivileged driver: hand it
 # to the invoking user's group (test-only gate posture).
@@ -289,7 +289,7 @@ kill -0 "$broker_pid" 2>/dev/null || {
     --no-drop-privileges
 ) >"$scratch/daemon/serve.log" 2>&1 &
 daemon_pid=$!
-add_cleanup "${SUDO[@]} kill $daemon_pid >/dev/null 2>&1 || true"
+add_cleanup "${SUDO[*]:+${SUDO[*]} }kill $daemon_pid >/dev/null 2>&1 || true"
 wait_for_socket "$daemon_public_socket"
 wait_for_socket "$forward_socket"
 kill -0 "$daemon_pid" 2>/dev/null || {

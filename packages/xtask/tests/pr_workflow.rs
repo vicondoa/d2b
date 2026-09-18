@@ -33,8 +33,12 @@ fn workflow() -> String {
     // Cargo runs integration tests from the workspace root, but this crate
     // can also be built in contexts where the CWD is the package dir or an
     // execroot; resolve from the manifest dir too (packages/xtask -> root).
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    candidates.push(manifest.join("../../").join(relative));
+    // Runtime lookup (not env!) — Bazel's process_wrapper forbids embedding
+    // CARGO_MANIFEST_DIR at compile time, and under Bazel it is unset, so
+    // the runfiles candidates above apply instead.
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        candidates.push(PathBuf::from(manifest).join("../../").join(relative));
+    }
     for path in candidates {
         if let Ok(workflow) = std::fs::read_to_string(&path) {
             return workflow;
