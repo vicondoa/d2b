@@ -1273,7 +1273,15 @@ pub fn other() {}
 
     #[test]
     fn workspace_member_paths_parse_the_committed_manifest() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        // Runtime lookup (not env!): Bazel's process_wrapper forbids
+        // embedding CARGO_MANIFEST_DIR, and under Bazel the variable is
+        // unset, so this package test resolves the repo root from the
+        // current working directory instead (cargo runs integration tests
+        // from the workspace root).
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok();
+        let root = manifest_dir
+            .map(|dir| Path::new(&dir).join("../.."))
+            .unwrap_or_else(|| std::env::current_dir().expect("current dir"));
         let members = workspace_member_paths(&root).expect("parse root manifest");
         assert!(members.contains("packages/d2b-broker"));
         assert!(members.contains("packages/xtask"));
