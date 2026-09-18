@@ -127,6 +127,7 @@ d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap", features
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-guest = { path = "../d2b-provider-guest", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
 d2b-provider-process = { path = "../d2b-provider-process", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-volume = { path = "../d2b-provider-volume", version = "0.0.0-bootstrap", features = ["test-support"] }

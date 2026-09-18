@@ -1501,11 +1501,11 @@ mod tests {
     use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
-        GUEST_REGISTRATIONS, GUEST_TYPE_NAME, GuestDriver, GuestDriverArgs, GuestDriverEffects,
-        GuestDriverFactory, GuestDriverStatus, GuestEffectError, GuestEffectOutcome,
-        GuestEffectPhase, GuestEffectRequest, GuestFinalizeStage, GuestKind, guest_spec_decoder,
-        view_phase,
+        GUEST_REGISTRATIONS, GUEST_TYPE_NAME, GuestDriver, GuestDriverArgs, GuestDriverFactory,
+        GuestDriverStatus, GuestEffectError, GuestEffectPhase, GuestFinalizeStage, GuestKind,
+        guest_spec_decoder, view_phase,
     };
+    use crate::test_support::ScriptedEffects;
 
     /// The Guest row uid `[0x11; …]`, UUIDv4-shaped once mapped.
     const GUEST_UID_BYTES: [u8; 16] = [
@@ -1518,110 +1518,6 @@ mod tests {
     ];
 
     // -- fakes ---------------------------------------------------------------
-
-    /// One `reconcile` call as the scripted effect observed it.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct EffectObservation {
-        kind: GuestKind,
-        provider_spec: Option<serde_json::Value>,
-        status: Option<serde_json::Value>,
-        children: Vec<(String, String, bool)>,
-    }
-
-    /// Scripted Provider effect port: records every call and answers with the
-    /// configured outcome.
-    struct ScriptedEffects {
-        calls: parking_lot::Mutex<Vec<String>>,
-        /// Optional shared order log (the recording manager's), so tests can
-        /// compare the provider stage against the child mutations.
-        shared: Option<Arc<parking_lot::Mutex<Vec<String>>>>,
-        observations: parking_lot::Mutex<Vec<EffectObservation>>,
-        phase: parking_lot::Mutex<GuestEffectPhase>,
-        projection: parking_lot::Mutex<Option<serde_json::Value>>,
-        finalize: parking_lot::Mutex<GuestFinalizeStage>,
-    }
-
-    impl ScriptedEffects {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
-                shared: None,
-                observations: parking_lot::Mutex::new(Vec::new()),
-                phase: parking_lot::Mutex::new(GuestEffectPhase::Ready),
-                projection: parking_lot::Mutex::new(None),
-                finalize: parking_lot::Mutex::new(GuestFinalizeStage::Complete),
-            })
-        }
-
-        fn with_shared_log(log: Arc<parking_lot::Mutex<Vec<String>>>) -> Arc<Self> {
-            let mut effects = Arc::into_inner(Self::new()).expect("fresh effects");
-            effects.shared = Some(log);
-            Arc::new(effects)
-        }
-
-        fn record(&self, entry: String) {
-            if let Some(shared) = &self.shared {
-                shared.lock().push(entry.clone());
-            }
-            self.calls.lock().push(entry);
-        }
-
-        fn set_projection(&self, projection: Option<serde_json::Value>) {
-            *self.projection.lock() = projection;
-        }
-
-        fn set_finalize(&self, stage: GuestFinalizeStage) {
-            *self.finalize.lock() = stage;
-        }
-
-        fn call_order(&self) -> Vec<String> {
-            self.calls.lock().clone()
-        }
-
-        fn observations(&self) -> Vec<EffectObservation> {
-            self.observations.lock().clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl GuestDriverEffects for ScriptedEffects {
-        async fn reconcile(
-            &self,
-            kind: GuestKind,
-            request: &GuestEffectRequest<'_>,
-        ) -> Result<GuestEffectOutcome, GuestEffectError> {
-            self.record(format!("reconcile:{}", kind.effect_id()));
-            let children = request.children.owned().await?;
-            self.observations.lock().push(EffectObservation {
-                kind,
-                provider_spec: request.provider_spec.clone(),
-                status: request.status.clone(),
-                children: children
-                    .iter()
-                    .map(|child| {
-                        (
-                            child.key.type_name.clone(),
-                            child.key.name.clone(),
-                            child.ready(),
-                        )
-                    })
-                    .collect(),
-            });
-            Ok(GuestEffectOutcome {
-                phase: *self.phase.lock(),
-                resource_projection: self.projection.lock().clone(),
-            })
-        }
-
-        async fn finalize(
-            &self,
-            kind: GuestKind,
-            _request: &GuestEffectRequest<'_>,
-        ) -> Result<GuestFinalizeStage, GuestEffectError> {
-            self.record(format!("finalize:{}", kind.effect_id()));
-            Ok(*self.finalize.lock())
-        }
-    }
 
     /// Recording manager over a scripted row/view set. `ensure_child` commits
     /// (or keeps) the child row and its live view; the child's published

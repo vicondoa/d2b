@@ -28,3 +28,11 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 tracing = "0.1"
 ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
+
+[features]
+test-support = []
+
+[[test]]
+name = "registration"
+path = "tests/registration.rs"
+required-features = ["test-support"]

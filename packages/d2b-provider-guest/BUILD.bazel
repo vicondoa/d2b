@@ -31,6 +31,23 @@ d2b_rust_library(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
+d2b_rust_library(
+    name = "d2b_provider_guest_test_support",
+    srcs = glob(["src/**/*.rs"], allow_empty = True),
+    compile_data = ["Cargo.toml"],
+    crate_features = ["test-support"],
+    crate_name = "d2b_provider_guest",
+    deps = [
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-guest-azure-container-apps:d2b_provider_guest_azure_container_apps_test_support",
+        "//packages/d2b-provider-guest-azure-virtual-machine:d2b_provider_guest_azure_virtual_machine",
+        "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor_test_support",
+        "//packages/d2b-provider-guest-qemu-media:d2b_provider_guest_qemu_media_test_support",
+        "//packages/d2b-resource-runtime:d2b_resource_runtime",
+        "//packages/d2b-resource-types:d2b_resource_types",
+    ] + all_crate_deps(normal = True, cargo_only = True),
+)
+
 d2b_rust_test(
     name = "d2b_provider_guest_test",
     compile_data = ["Cargo.toml"],
@@ -47,7 +64,7 @@ d2b_rust_test(
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
-        ":d2b_provider_guest",
+        ":d2b_provider_guest_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
