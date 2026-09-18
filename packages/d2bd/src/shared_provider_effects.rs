@@ -217,13 +217,22 @@ impl ProductionSharedProviderEffects {
     }
 
     fn runtime(&self) -> Result<Arc<ZoneResourceRuntime>, SharedProviderEffectError> {
-        // Synchronous caller: non-blocking `try_lock` per plan U4. A
-        // collision reports Unavailable (fail-closed), never a stall.
-        self.state
-            .resource_plane
-            .try_lock()
-            .ok()
-            .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&self.zone).ok()))
+        // Synchronous caller on a tokio Mutex (plan U10): the slot's
+        // critical sections are single Assignment/attach operations
+        // (microseconds) and the pre-conversion std Mutex::lock serialized
+        // instead of refusing, so a collision spins on try_lock (lock_sync
+        // pattern, same as the broker rate limiter) rather than failing
+        // closed — concurrent reconcile/attach traffic must be serialized,
+        // never refused.
+        let plane = loop {
+            match self.state.resource_plane.try_lock() {
+                Ok(guard) => break guard,
+                Err(_) => std::hint::spin_loop(),
+            }
+        };
+        plane
+            .as_ref()
+            .and_then(|plane| plane.zone(&self.zone).ok())
             .ok_or(SharedProviderEffectError::Unavailable)
     }
 
