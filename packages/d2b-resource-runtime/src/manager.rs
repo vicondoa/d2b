@@ -374,7 +374,7 @@ pub enum ResourceManagerMsg {
         dependency: ResourceKey,
     },
 
-    // ---- Driver-context routing surface (R2; context.rs ManagerCall) ----
+    // ---- Driver-context routing surface (R2; context.rs ManagerEndpoint) ----
     /// A parent actor ensures an owned child through its context; the reply
     /// fires only after the child's row committed (F1, AE1).
     ChildEnsure {

@@ -31,8 +31,8 @@ pub mod migration;
 pub mod owner_reconcile;
 
 pub use binding_children::{
-    BindingChildMaterializationError, BindingChildReconciler, BindingChildResource,
-    materialize_child_create_payload, observed_child_from_resource, semantic_child_digest,
+    BindingChildMaterializationError, BindingChildResource, materialize_child_create_payload,
+    observed_child_from_resource, semantic_child_digest,
 };
 pub use controller_assignment::{
     AssignmentEpoch, AssignmentError, AssignmentGrantError, AssignmentIdentity, AssignmentPhase,
