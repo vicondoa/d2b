@@ -1667,22 +1667,22 @@ async fn answer_request(
         IpcRatePool::Direct
     };
     // The limiter is a `tokio::sync::Mutex` (plan U8); this check runs on
-    // the synchronous dispatch workers, which must never block, so it takes
-    // the non-blocking `try_lock` and spins until acquired. The critical
-    // section is a single bounded table update (microseconds) and the
-    // pre-conversion `std::sync::Mutex::lock` serialized concurrent
-    // requests rather than refusing them — concurrent spawn bursts (the
-    // host-integration device-worker lanes) must be serialized, never
-    // refused, so a Busy collision retries instead of failing closed
-    // (lock_sync pattern; also correct on runtime threads, where
-    // blocking_lock would panic).
-    let mut limiter = loop {
-        match ipc_rate_limiter.try_lock() {
-            Ok(guard) => break guard,
-            Err(_) => std::hint::spin_loop(),
-        }
+    // the synchronous dispatch workers, which must never block, so it spins
+    // on `try_lock` only for the short bounded `check` critical section
+    // (lock_sync pattern — serialize concurrent bursts, never refuse; the
+    // pre-conversion std Mutex::lock serialized the check the same way).
+    // The guard MUST be dropped before any audit or dispatch work below:
+    // holding it across the forward/nested dispatch would deadlock
+    // concurrent requests against the daemon leg.
+    let rate_allowed = {
+        let mut limiter = loop {
+            match ipc_rate_limiter.try_lock() {
+                Ok(guard) => break guard,
+                Err(_) => std::hint::spin_loop(),
+            }
+        };
+        limiter.check(rate_pool, effective_uid, rate_role, rate_operation)
     };
-    let rate_allowed = limiter.check(rate_pool, effective_uid, rate_role, rate_operation);
     if !rate_allowed {
         if let Err(error) = write_refusal_audit_bounded(
             audit_log,
