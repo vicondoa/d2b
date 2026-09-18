@@ -87,6 +87,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-drift test-policy test-changelog \
         test-integration test-host-integration perf \
         heavy-check heavy-flake-check check-async-gate check-census \
+        check-dead-code \
         generate \
         clean
 

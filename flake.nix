@@ -301,6 +301,9 @@
             jq
             rustup
             shellcheck
+            # The dispatcher re-enters this shell for every classified goal, so a
+            # local goal that needs a scanner (check-dead-code) must find it here.
+            cargo-shear
           ];
           shellHook = ''
             ${mkBazelShellHook (pkgs.lib.makeBinPath [
@@ -316,6 +319,7 @@
               pkgs.jq
               pkgs.rustup
               pkgs.shellcheck
+              pkgs.cargo-shear
             ])}
             echo "d2b Bazel compatibility shell: $(${bazel920}/bin/bazel --version)"
           '';

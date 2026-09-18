@@ -510,8 +510,6 @@ pub enum BindingChildMaterializationError {
     ProcessContractMismatch,
     /// The Endpoint producer differed from the intent.
     ProducerMismatch,
-    /// The complete child set was not supplied exactly once.
-    IncompleteChildSet,
     /// The body was valid JSON but not canonical.
     NonCanonicalResource,
     /// The generic owner planner rejected the desired/observed set.
@@ -528,7 +526,6 @@ impl core::fmt::Display for BindingChildMaterializationError {
             Self::ExecutionTargetMismatch => "binding-child-resource-execution-mismatch",
             Self::ProcessContractMismatch => "binding-child-resource-process-contract-mismatch",
             Self::ProducerMismatch => "binding-child-resource-producer-mismatch",
-            Self::IncompleteChildSet => "binding-child-resource-set-incomplete",
             Self::NonCanonicalResource => "binding-child-resource-not-canonical",
             Self::OwnerReconcile(error) => return write!(formatter, "{error}"),
         })
@@ -671,6 +668,40 @@ mod tests {
                     .unwrap()
                     .to_canonical_string()
             ))
+        );
+    }
+
+    #[test]
+    fn validates_child_resource_identity_and_rejects_mutated_contracts() {
+        let set = child_set();
+        let intent = set.child("guest-agent").unwrap();
+        let resource = child_resource(intent);
+        assert_eq!(resource.intent().resource_ref(), intent.resource_ref());
+        assert_eq!(
+            resource.intent().execution_ref(),
+            &ResourceRef::parse("Guest/dev-vm").unwrap()
+        );
+
+        let reject_spec = |mut spec: serde_json::Value| {
+            let mut invalid =
+                serde_json::from_slice::<serde_json::Value>(resource.canonical_resource()).unwrap();
+            invalid["spec"] = spec.take();
+            let bytes = CanonicalJsonValue::parse(&serde_json::to_vec(&invalid).unwrap())
+                .unwrap()
+                .to_canonical_bytes();
+            BindingChildResource::new(intent.clone(), bytes)
+        };
+
+        let spec = |resource: &BindingChildResource| {
+            serde_json::from_slice::<serde_json::Value>(resource.canonical_resource()).unwrap()
+                ["spec"]
+                .clone()
+        };
+        let mut execution = spec(&resource);
+        execution["executionRef"] = serde_json::Value::String("Guest/other".to_owned());
+        assert_eq!(
+            reject_spec(execution),
+            Err(BindingChildMaterializationError::ExecutionTargetMismatch)
         );
     }
 

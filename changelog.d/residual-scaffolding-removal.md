@@ -10,9 +10,13 @@
   plan unit that has since landed were replaced with the actual state: a test-only
   harness surface with no production caller, or the shared harness every integration
   test pulls in with `mod common;`.
-- The dead-code scan runs from the development shell. `cargo-shear` is provisioned in
-  the `d2b-dev` shell and the `check-dead-code` target joins the local dispatch class,
-  so it enters that shell instead of failing on a missing tool.
+- The dead-code scan is provisioned for local runs. `cargo-shear` ships in the
+  development shell and in the shell the Make dispatcher re-enters for classified
+  goals, and `check-dead-code` is such a goal, so the target finds the scanner
+  instead of failing on a missing tool. `cargo-hawk` stays outside the shell: it
+  needs a nightly toolchain built against rustc internals, which the pinned stable
+  toolchain cannot provide. The scan's remaining findings are the standing
+  pre-existing corpus, so read it as a delta rather than a pass/fail.
 
 ### Removed
 
@@ -26,8 +30,10 @@
   were reworked onto a local endpoint stub with their assertions intact.
 - The resource compiler's `compile_provider_artifact` alias; the canonical
   `compile_artifact` it forwarded to stays.
-- The controller's binding-child reconciler type and its re-export, with the five tests
-  and one helper whose only subject it was.
+- The controller's binding-child reconciler type and its re-export, with the four
+  tests and one helper whose only subject it was. The fifth test named in that
+  group exercised the surviving child-resource constructor instead, so its
+  rejection-path coverage is restored as a focused test of that constructor.
 
 ### Retained (recorded reasons)
 

@@ -63,7 +63,7 @@ d2b_rust_test(
         "//packages/d2b-provider-system-core:d2b_provider_system_core",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
-        ":d2b_provider_user",
+        ":d2b_provider_user_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

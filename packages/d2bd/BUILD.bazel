@@ -156,6 +156,7 @@ d2bd_test_support_deps = [
         "//packages/d2b-provider-provider:d2b_provider_provider",
         "//packages/d2b-provider-observability-otel:d2b_provider_observability_otel",
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
+        "//packages/d2b-provider-guest:d2b_provider_guest",
         "//packages/d2b-provider-guest-qemu-media:d2b_provider_guest_qemu_media",
         "//packages/d2b-provider-credential:d2b_provider_credential",
         "//packages/d2b-provider-credential-entra:d2b_provider_credential_entra",
