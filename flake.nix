@@ -248,6 +248,7 @@
             cargo-nextest
             cargo-deny
             cargo-audit
+            cargo-shear
             # Shell and data tooling used by the gate scripts themselves.
             shellcheck
             jq

@@ -236,6 +236,34 @@ Bazel-backed host-integration lane.
 Hardware and live-host tests remain explicit manual tiers and require the
 matching devices or deployed d2b state.
 
+## Dead-code lane
+
+`make check-dead-code` runs the workspace dead-code gate through the
+`packages/xtask` `deadcode-check` entrypoint. It is not part of `make check`
+or the fixed Layer-1 job set; run it as a local gate when restructuring
+visibility, deleting code, or editing dependency lists.
+
+The scan is three independent passes over the repository-root workspace:
+
+- `cargo hawk check` - dead and overbroad public API (`pub` that can become
+  `pub(crate)`) across the production targets.
+- `cargo shear` - unused `Cargo.toml` dependencies (edition-2024 aware).
+- `cargo check --workspace --all-targets` with
+  `RUSTFLAGS="-A unused -D dead_code"` - the rustc `dead_code` lint isolated
+  as a hard error.
+
+Both external scanners are required, not optional: a missing binary fails the
+gate with an install hint, and that fail-closed behavior is deliberate.
+
+The lane is classified as a local Make goal, so `make check-dead-code` runs
+inside the d2b development shell (`nix develop`), where `cargo-shear` is
+provisioned as a pinned shell package rather than fetched per invocation.
+`cargo-hawk` remains unprovisioned by the shell: it is built against rustc
+internals (`rustc_private`) and only runs with the exact toolchain it was
+built against, so it is not a candidate for a pinned shell package. Run the
+hawk pass with a nightly `rustc_private` toolchain installed outside the
+shell and `cargo-hawk` built against it on PATH.
+
 ## Heavy lanes
 
 Every Layer-2, host-integration, hardware, live, and perf-heavy command

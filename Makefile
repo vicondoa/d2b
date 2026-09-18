@@ -18,7 +18,8 @@ D2B_MAKE_BAZEL_TARGETS := \
 	test-performance-budgets test-drift test-policy test-changelog
 D2B_MAKE_LOCAL_TARGETS := \
 	check-clippy check-ci test-integration test-host-integration perf \
-	pre-tag smoke-lite heavy-check heavy-flake-check check-async-gate check-census
+	pre-tag smoke-lite heavy-check heavy-flake-check check-async-gate check-census \
+	check-dead-code
 # Meta helpers that invoke Bazel directly but are not Layer-1 test aliases.
 D2B_MAKE_UTILITY_TARGETS := changelog-fold generate
 
@@ -140,8 +141,9 @@ check-clippy:
 	RUSTFLAGS= cargo clippy --workspace --all-targets --locked --keep-going
 
 ## check-dead-code - workspace dead-code/visibility/unused-dependency gate
-## (cargo-hawk + cargo-shear + rustc dead_code) via the xtask. Requires
-## cargo-hawk and cargo-shear on PATH (cargo install cargo-hawk cargo-shear).
+## (cargo-hawk + cargo-shear + rustc dead_code) via the xtask. Runs in the
+## d2b dev shell; cargo-shear is provisioned there, cargo-hawk needs a
+## nightly rustc_private toolchain on PATH.
 check-dead-code:
 	cd $(CURDIR) && cargo run -p xtask -- deadcode-check
 
