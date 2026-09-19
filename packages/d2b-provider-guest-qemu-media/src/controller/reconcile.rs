@@ -1,6 +1,7 @@
 //! QEMU media Guest lifecycle controller.
 
 use crate::{
+    MEDIA_CONTRACT_ID,
     adoption::{AdoptionOutcome, ProcessIdentity, verify_identity},
     config::{ProviderConfig, ProviderConfigError},
     controller::process_builder::{PROCESS_TEMPLATE, validate_process_spec},
@@ -374,7 +375,7 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             return Ok(QemuMediaReconcileOutcome::Retry { after_ms: 500 });
         }
         let expected_process = PROCESS_TEMPLATE;
-        DeviceAdmission::validate(&self.guest_ref, device, expected_process, "qemu-media/v1")
+        DeviceAdmission::validate(&self.guest_ref, device, expected_process, MEDIA_CONTRACT_ID)
             .map_err(|error| {
                 tracing::warn!(
                     resource = %self.guest_ref,

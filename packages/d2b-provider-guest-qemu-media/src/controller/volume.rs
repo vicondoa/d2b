@@ -4,7 +4,7 @@ use d2b_contracts_resource::v3::ResourceRef;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::types::validate_token;
+use crate::types::{runtime_volume_name, validate_token};
 
 /// Runtime Volume finalizer.
 pub const RUNTIME_VOLUME_FINALIZER: &str = "runtime-qemu-media.d2bus.org/runtime-volume";
@@ -121,10 +121,9 @@ impl RuntimeVolumeSpec {
         if !validate_token(&zone) {
             return Err(VolumeSpecError::Invalid);
         }
-        let name = format!(
-            "{}-runtime",
-            short_guest_key(&guest_ref.to_canonical_string())
-        );
+        let name = runtime_volume_name(&short_guest_key(
+            &guest_ref.to_canonical_string(),
+        ));
         Ok(Self {
             name,
             zone,
@@ -158,10 +157,9 @@ impl RuntimeVolumeSpec {
 
     /// Validate the canonical runtime Volume shape.
     pub fn validate(&self) -> Result<(), VolumeSpecError> {
-        let expected_name = format!(
-            "{}-runtime",
-            short_guest_key(&self.owner_ref.to_canonical_string())
-        );
+        let expected_name = runtime_volume_name(&short_guest_key(
+            &self.owner_ref.to_canonical_string(),
+        ));
         if self.owner_ref.resource_type().as_str() != "Guest"
             || self.provider_ref.resource_type().as_str() != "Provider"
             || !validate_token(&self.zone)
