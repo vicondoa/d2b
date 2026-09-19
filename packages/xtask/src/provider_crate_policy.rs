@@ -1155,13 +1155,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-resource/src/v3/operations/seal.rs",
         token: "credential_managed_identity",
         family: "credential-managed-identity",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/;the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/operations/seal.rs",
         token: "managed_identity",
         family: "credential-managed-identity",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/;the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
 
 
@@ -1716,7 +1716,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-resource/src/v3/activation_nixos.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/; the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
@@ -1860,19 +1860,19 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/zone_session.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `frozen_tag_and_wire_string_vectors_are_exact` at zone_session.rs:788 pins the wire string d2b.config-nixos.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/mod.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/; the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/mod.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/; the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/mod.rs",
@@ -1884,7 +1884,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the ServicePackage wire string d2b.config-nixos.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/exec_reconcile.rs",
@@ -1896,7 +1896,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/services.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `service_package_wire_values_are_frozen` at services.rs:385 pins V3Service::package() wire d2b.config-nixos.v3;the bus routes an exact closed package and the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
@@ -2052,13 +2052,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "clipboard",
         family: "clipboard-wayland",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the ServicePackage wire string d2b.clipboard.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-zone-session/src/v3/zone_session.rs",
         token: "clipboard",
         family: "clipboard-wayland",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `frozen_tag_and_wire_string_vectors_are_exact` at zone_session.rs:788 pins d2b.clipboard.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
@@ -2900,7 +2900,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "wayland",
         family: "display-wayland",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the AttachmentPurpose wire string wayland and wayland-socket;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/site.rs",
@@ -3182,7 +3182,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/zone_session.rs",
         token: "notification",
         family: "notification-desktop",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `frozen_tag_and_wire_string_vectors_are_exact` at zone_session.rs:788 pins d2b.notification.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
@@ -3194,7 +3194,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "notification",
         family: "notification-desktop",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the ServicePackage wire string d2b.notification.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/audit.rs",
@@ -3338,7 +3338,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the TransportClass wire string cloud-hypervisor-vsock;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_plane_v3.rs",
@@ -3476,7 +3476,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/zone.rs",
         token: "system_core",
         family: "system-core",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `system_core_handler_names_use_exact_hyphenated_wire_values` at zone.rs:530 pins every ZoneHandlerName serde wire string, including system-core-host and system-core-user;the zone-plane status surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/main.rs",
@@ -3639,7 +3639,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "vsock",
         family: "transport-vsock",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the TransportClass wire strings native-vsock and cloud-hypervisor-vsock;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/capability.rs",
@@ -3753,7 +3753,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-resource/src/v3/volume.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/;the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/runtime.rs",
@@ -3843,7 +3843,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-resource/src/v3/activation_nixos.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/; the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     // U6 permanent carve-out: the Process and EphemeralProcess shapes stay
     // in the shared contracts crate. The broker's spawn validation reads the
@@ -3859,13 +3859,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-resource/src/v3/process.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/; the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/process.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/; the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/error.rs",
@@ -3889,13 +3889,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-resource/src/v3/resource_schema.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/; the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/resource_schema.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/; the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
@@ -4271,13 +4271,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/resource_bundle.rs",
         token: "minijail",
         family: "system-minijail",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `declared_process_templates_require_the_system_minijail_provider` at resource_bundle.rs:1127 pins the Provider/system-minijail wire string that the template binding validation enforces;the bundle wire contract is frozen",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-zone-session/src/v3/resource_bundle.rs",
         token: "system_minijail",
         family: "system-minijail",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `declared_process_templates_require_the_system_minijail_provider` at resource_bundle.rs:1127 pins the Provider/system-minijail wire string that the template binding validation enforces;the bundle wire contract is frozen",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
@@ -4685,13 +4685,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-bus/src/session/noise_vectors.rs",
         token: "vsock",
         family: "transport-vsock",
-        retires_with: "R4 zone-plane surface - permanent: TransportClass::NativeVsock is the frozen wire transport class the noise profile table pins",
+        retires_with: "permanent: golden test `exact_nn_kk_and_ikpsk2_vectors_are_frozen` at noise_vectors.rs:252 pins TransportClass::NativeVsock in the Ikpsk2 policy table;the noise handshake vectors are frozen wire",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-bus/src/session/prologue.rs",
         token: "vsock",
         family: "transport-vsock",
-        retires_with: "R4 zone-plane surface - permanent: EvidenceClass::NativeVsock maps the frozen wire transport class label (native-vsock)",
+        retires_with: "permanent: golden test `evidence_class_labels_are_frozen` at prologue.rs:279 pins the EvidenceClass wire label native-vsock;the subject-context digest is frozen wire",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-resource-api/src/authz.rs",
