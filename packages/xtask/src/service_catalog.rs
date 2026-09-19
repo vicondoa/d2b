@@ -38,12 +38,10 @@ struct DeclarationFile {
 }
 
 /// The parsed per-crate catalog inputs, crate name -> declaration.
-
 type CatalogRegistry = BTreeMap<String, DeclarationFile>;
 
 /// Run the catalog's gates: declaration sanity, drift, and regeneration
 /// idempotence. Wired into the layout check after the crate-layout check.
-
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let registry = load(repo_root)?;
@@ -76,7 +74,6 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
 }
 
 /// Regenerate the service-to-provider catalog artifact from the declarations.
-
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     let registry = load(repo_root)?;
@@ -107,7 +104,6 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 /// Read every provider crate's declaration file into a crate-keyed map.
-
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load(repo_root: &Path) -> Result<CatalogRegistry, String> {
     let packages_dir = repo_root.join(PACKAGES_DIR);
@@ -193,7 +189,6 @@ fn declaration_errors(registry: &CatalogRegistry) -> Vec<String> {
 }
 
 /// Emit the generated service-to-provider catalog artifact text.
-
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn render(registry: &CatalogRegistry) -> Result<String, String> {
     let mut out = String::new();
