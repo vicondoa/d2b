@@ -11,7 +11,7 @@
 //!   after it in sorted order, so a new type needs no edit here;
 //! - runs the declaration-to-descriptor parity gate: every crate's
 //!   declaration and its registered descriptor (`resource_type:
-//!   WellKnownType::…` or `descriptor(WellKnownType::…` in the crate's
+//!   WellKnownType::...` or `descriptor(WellKnownType::...` in the crate's
 //!   sources) must agree on the type name, a declaration that omits a type
 //!   its descriptor registers fails naming both, and a type declared by two
 //!   crates fails naming both crates;
@@ -38,7 +38,7 @@ const PROVIDER_PREFIX: &str = "d2b-provider-";
 const DECLARATION_FILE: &str = "resource-types.json";
 
 /// The repository-relative generated artifact path (relative to the source
-/// file that `include!`s it,so `include!("generated/…")` resolves it).
+/// file that `include!`s it,so `include!("generated/...")` resolves it).
 pub(crate) const GENERATED_ARTIFACT: &str =
     "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs";
 
@@ -111,12 +111,11 @@ struct AuthorityRegistry {
 
     declarations: BTreeMap<String, BTreeSet<String>>,
     /// Crate name -> registered descriptor type names (extracted from the
-    /// crate's Rust sources)、“
+    /// crate's Rust sources).
     descriptors: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Run the authority's gates: parity, drift, and regeneration idempotence.
-
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let registry = load(repo_root)?;
@@ -178,8 +177,7 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(vec![artifact_path])
 }
 
-/// Load the declarations and the registered descriptors from the tree.
-
+/// Load the declarations, then the registered descriptors from the tree.
 fn load(repo_root: &Path) -> Result<AuthorityRegistry, String> {
     let declarations = load_declarations(repo_root)?;
     let descriptors = load_descriptors(repo_root, &declarations)?;
@@ -190,7 +188,6 @@ fn load(repo_root: &Path) -> Result<AuthorityRegistry, String> {
 }
 
 /// Read every provider crate's declaration file into a crate-keyed map.
-
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_declarations(repo_root: &Path) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
     let packages_dir = repo_root.join(PACKAGES_DIR);
@@ -334,10 +331,10 @@ fn scan_descriptor_pattern(text: &str, marker: &str, out: &mut BTreeSet<String>)
     while let Some(relative) = rest.find(marker) {
         let after = &rest[relative + marker.len()..];
         let after = after.trim_start();
-        if let Some(ident) = after.strip_prefix("WellKnownType::") {
-            if let Some((ident, _)) = ident.split_once(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')) {
-                out.insert(ident.to_owned());
-            }
+        if let Some(ident) = after.strip_prefix("WellKnownType::")
+            && let Some((ident, _)) = ident.split_once(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+        {
+            out.insert(ident.to_owned());
         }
         rest = after;
     }
@@ -346,7 +343,6 @@ fn scan_descriptor_pattern(text: &str, marker: &str, out: &mut BTreeSet<String>)
 /// The declaration-to-descriptor parity violations: a declared type the
 /// crate's descriptor does not register, a registered type the declaration
 /// omits, and a type declared by two crates.
-
 fn parity_errors(registry: &AuthorityRegistry) -> Vec<String> {
     let mut errors = Vec::new();
     let mut declared_by: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -390,7 +386,7 @@ errors.push(format!(
     errors
 }
 
-/// Emit the generated authority artifact text。
+/// Emit the generated authority artifact text.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn render(registry: &AuthorityRegistry) -> Result<String, String> {
     let mut declared_all = BTreeSet::new();
@@ -403,14 +399,14 @@ fn render(registry: &AuthorityRegistry) -> Result<String, String> {
             entries.push(type_name);
         }
     }
-    entries.extend(declared_all.into_iter());
+    entries.extend(declared_all);
     let mut out = String::new();
 out.push_str("// @generated\n");
     out.push_str("// Provenance:emitted from the per-crate `resource-types.json` declarations\n");
     out.push_str("// by `cargo xtask check-provider-crate-layout --fix`;the layout check's\n");
     out.push_str("// authority drift gate regenerates this file byte-for-byte,and refuses a\n");
     out.push_str("// hand edit.\n");
-    out.push_str("\n");
+    out.push('\n');
     out.push_str("/// The resource types the v3 resource runtime owns end to end (R35/F1\n");
     out.push_str("/// exclusive per-type partition): served only by the per-zone manager plane.\n");
     out.push_str(&format!(
@@ -439,7 +435,6 @@ mod tests {
     use std::fs;
 
     /// A throwaway fixture tree under the OS temp dir.
-
     struct Fixture {
         root: PathBuf,
     }
@@ -457,6 +452,7 @@ mod tests {
             Self { root }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn write(&self, relative: &str, content: &str) {
             let path = self.root.join(relative);
             fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
@@ -475,7 +471,8 @@ mod tests {
     }
 
     impl Drop for Fixture {
-        fn drop(&mut self) {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
     }
@@ -500,7 +497,7 @@ mod tests {
         let fixture = Fixture::new("omitted-type");
         fixture.write_well_known();
         fixture.write(
-            &format!("packages/d2b-provider-zone/resource-types.json"),
+            "packages/d2b-provider-zone/resource-types.json",
             &declaration_json("d2b-provider-zone", &[]),
         );
         fixture.write(
@@ -550,6 +547,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn the_drift_gate_fails_on_a_hand_edit_to_the_generated_artifact() {
         let fixture = Fixture::new("drift");
         fixture.write_well_known();
@@ -572,6 +570,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn regeneration_is_idempotent() {
         let fixture = Fixture::new("idempotent");
         fixture.write_well_known();
