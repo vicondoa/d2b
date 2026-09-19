@@ -26,7 +26,7 @@ d2b_rust_library(
         "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
-    ] + all_crate_deps(normal = True, cargo_only = True),
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 d2b_rust_library(
@@ -41,7 +41,7 @@ d2b_rust_library(
         "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
-    ] + all_crate_deps(normal = True, cargo_only = True),
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 d2b_rust_test(
@@ -54,7 +54,7 @@ d2b_rust_test(
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
         ":d2b_provider_volume_binding",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep
