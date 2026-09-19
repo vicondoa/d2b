@@ -575,9 +575,6 @@ impl PlaneChildMutations {
                 );
                 ChildMutationFailure::Unavailable
             })?;
-        if matches!(target.resource_type().as_str(), "Volume" | "VolumeBinding") {
-            self.refresh_registry().await;
-        }
         Ok(())
     }
 
@@ -632,9 +629,6 @@ impl PlaneChildMutations {
                     _ => ChildMutationFailure::Unavailable,
                 }
             })?;
-        if matches!(target.resource_type().as_str(), "Volume" | "VolumeBinding") {
-            self.refresh_registry().await;
-        }
         match self.lookup(target).await {
             RowLookup::Present { row, .. } => Ok(row),
             RowLookup::Absent { .. } | RowLookup::Unavailable { .. } => {
@@ -643,21 +637,6 @@ impl PlaneChildMutations {
             RowLookup::Error { plane, detail } => {
                 Err(Self::unprojectable_row(target, plane, &detail))
             }
-        }
-    }
-
-    /// Re-register the durable rows the production effects resolve
-    /// per-resource anchors from: the manager is the only writer, so a Volume
-    /// or VolumeBinding committed after the plane's durable load is only
-    /// observable through a reload, and an unregistered Volume root resolves
-    /// as a `volume-anchor` failure forever.
-    async fn refresh_registry(&self) {
-        if let Err(error) = self.plane.reload_registry().await {
-            tracing::warn!(
-                zone = %self.zone.as_str(),
-                error = %error,
-                "child mutation bridge: per-resource anchor reload failed; retrying on the next commit",
-            );
         }
     }
 }

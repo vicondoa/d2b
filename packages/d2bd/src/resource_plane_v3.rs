@@ -32,6 +32,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -78,10 +79,14 @@ use d2b_resource_runtime::manager::{
     DesiredResource, ResourceManager, ResourceManagerArgs, ResourceManagerClient,
     ResourceManagerMsg, ResourceSelector,
 };
+use d2b_resource_runtime::revision::RuntimeRevision;
 use d2b_resource_runtime::spec_store::{SpecSelector, SpecStore, StoredDesiredResource};
 use d2b_resource_runtime::GuestTargetControl;
 use d2b_resource_runtime::target::{TargetDirectory, TargetRef, TargetResolver};
-use d2b_resource_runtime::watch::{DEFAULT_RING_CAPACITY, WatchHub};
+use d2b_resource_runtime::watch::{
+    ChangeSource, DEFAULT_RING_CAPACITY, RevisionExpired, WatchDelivery, WatchHub, WatchRegistration,
+    WatchSelector,
+};
 use d2bd_runtime::resource_runtime_support::NewPlaneReadinessState;
 use d2bd_runtime::target_runtime::DaemonMode;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
@@ -162,6 +167,17 @@ const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 
 /// Bounded wait budget for endpoint socket realization.
 const SOCKET_REALIZE_BUDGET: Duration = Duration::from_secs(5);
+
+/// The anchor projection drain window: one bounded
+/// re-materialization per drain, at most one window after the first notice
+/// of the drain. The window is measured from the first notice, not from the
+/// stream emptying, so a burst coalesces into one re-materialization and
+/// sustained traffic cannot starve it.
+const ANCHOR_DRAIN_WINDOW: Duration = Duration::from_millis(50);
+
+/// Consecutive busy drains before the subscription reports that it is
+/// falling behind: one busy drain is a burst, several in a row is overload.
+const ANCHOR_BUSY_DRAINS_BEFORE_WARN: u64 = 3;
 
 // ---------------------------------------------------------------------------
 // Committed Provider identities (KTD7)
@@ -264,7 +280,7 @@ impl PlaneResourceRegistry {
             let volume_name = inner.volume_names_by_uid.get(volume_uid.as_str()).cloned()?;
             inner.volume_anchors_by_name.get(&volume_name).cloned()
         })
-        .flatten()
+       .flatten()
     }
 
     async fn lookup_socket_target_by_identity(
@@ -272,17 +288,17 @@ impl PlaneResourceRegistry {
         socket: &SocketIdentity,
     ) -> Option<SocketTarget> {
         self.with_inner(|inner| inner.socket_targets_by_identity.get(&socket.to_hex()).cloned())
-            .await
+           .await
     }
 
     async fn lookup_socket_target_by_ref(&self, producer_ref: &ResourceRef) -> Option<SocketTarget> {
         self.with_inner(|inner| {
             inner
-                .socket_targets_by_ref
-                .get(&producer_ref.to_canonical_string())
-                .cloned()
+               .socket_targets_by_ref
+               .get(&producer_ref.to_canonical_string())
+               .cloned()
         })
-        .await
+       .await
     }
 
     /// Attach the durable authority (the plane's spec store) the cache
@@ -351,22 +367,27 @@ impl PlaneResourceRegistry {
     async fn register_volume(&self, volume_uid: &str, volume_name: &str, anchor: VolumeAnchor) {
         self.with_inner(|inner| {
             inner
-                .volume_names_by_uid
-                .entry(volume_uid.to_owned())
-                .or_insert_with(|| volume_name.to_owned());
+               .volume_names_by_uid
+               .entry(volume_uid.to_owned())
+               .or_insert_with(|| volume_name.to_owned());
             inner
-                .volume_anchors_by_name
-                .entry(volume_name.to_owned())
-                .and_modify(|existing| {
+               .volume_anchors_by_name
+               .entry(volume_name.to_owned())
+               .and_modify(|existing| {
                     // A bundle-derived NixClosure identity wins over a
-                    // name-only registration; never downgrade an anchor.
-                    if existing.role.is_none() {
+                    // name-only registration, and a later identity wins over
+                    // an earlier one: an Updated Volume whose attachment moved
+                    // must not keep the previous guest's identity, or every
+                    // later reload would re-register the same stale anchor.
+                    // A name-only anchor still never downgrades one that
+                    // already carries a role.
+                    if anchor.role.is_some() || existing.role.is_none() {
                         *existing = anchor.clone();
                     }
                 })
-                .or_insert(anchor);
+               .or_insert(anchor);
         })
-        .await;
+       .await;
     }
 
     async fn register_binding(
@@ -378,16 +399,16 @@ impl PlaneResourceRegistry {
     ) {
         self.with_inner(|inner| {
             inner
-                .socket_targets_by_identity
-                .insert(socket_hex.to_owned(), target.clone());
+               .socket_targets_by_identity
+               .insert(socket_hex.to_owned(), target.clone());
             inner
-                .socket_targets_by_ref
-                .insert(worker_ref.to_canonical_string(), target.clone());
+               .socket_targets_by_ref
+               .insert(worker_ref.to_canonical_string(), target.clone());
             inner
-                .socket_targets_by_ref
-                .insert(endpoint_ref.to_canonical_string(), target);
+               .socket_targets_by_ref
+               .insert(endpoint_ref.to_canonical_string(), target);
         })
-        .await;
+       .await;
     }
 
     /// Register every durable row this plane serves (U9 open, U10
@@ -405,7 +426,7 @@ impl PlaneResourceRegistry {
                         &row.key.name,
                         volume_anchor_from_row(&row),
                     )
-                    .await;
+                   .await;
                 }
                 "VolumeBinding" => register_binding_row(self, zone_token, &row).await,
                 _ => {}
@@ -426,10 +447,10 @@ impl PlaneResourceRegistry {
     ) {
         self.with_inner(|inner| {
             inner
-                .committed_provider_identities
-                .insert(provider_ref.to_canonical_string(), (uid, generation));
+               .committed_provider_identities
+               .insert(provider_ref.to_canonical_string(), (uid, generation));
         })
-        .await;
+       .await;
     }
 
     /// The committed-`Provider` identity view the production Process effects
@@ -444,11 +465,11 @@ impl PlaneResourceRegistry {
     ) -> Option<(ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)> {
         self.with_inner_sync(|inner| {
             inner
-                .committed_provider_identities
-                .get(&provider_ref.to_canonical_string())
-                .cloned()
+               .committed_provider_identities
+               .get(&provider_ref.to_canonical_string())
+               .cloned()
         })
-        .flatten()
+       .flatten()
     }
 }
 
@@ -476,7 +497,7 @@ async fn register_binding_row(registry: &PlaneResourceRegistry, zone_token: &Bou
         return;
     };
     registry
-        .register_binding(
+       .register_binding(
             &socket.to_hex(),
             &worker_ref,
             &endpoint_ref,
@@ -485,7 +506,7 @@ async fn register_binding_row(registry: &PlaneResourceRegistry, zone_token: &Bou
                 execution_ref: stored.spec().execution_ref().clone(),
             },
         )
-        .await;
+       .await;
 }
 
 /// Derive the per-volume anchor from one durable Volume row.
@@ -493,9 +514,9 @@ fn volume_anchor_from_row(row: &StoredDesiredResource) -> VolumeAnchor {
     let owner_ref = decode_metadata_owner_ref(&row.metadata);
     let volume_spec = decode_volume_spec(&row.spec);
     let nix_identity = volume_spec
-        .as_ref()
-        .filter(|spec| spec.source().settings().kind() == SourceKind::NixClosure)
-        .and_then(|spec| {
+       .as_ref()
+       .filter(|spec| spec.source().settings().kind() == SourceKind::NixClosure)
+       .and_then(|spec| {
             nix_closure_volume_anchor(&row.key.name, owner_ref.as_ref(), spec).ok()
         });
     VolumeAnchor {
@@ -518,8 +539,8 @@ fn nix_closure_volume_anchor(
             return Err("nix-closure attachment must target a Guest".to_owned());
         }
         if attachment_guest
-            .replace(attachment.execution_ref().clone())
-            .is_some_and(|previous| previous != *attachment.execution_ref())
+           .replace(attachment.execution_ref().clone())
+           .is_some_and(|previous| previous != *attachment.execution_ref())
         {
             return Err("nix-closure attachments must share one Guest".to_owned());
         }
@@ -597,8 +618,340 @@ async fn corrected_committed_provider_identities(
 /// The registry key for one volume uid: the canonical uid string.
 fn resource_uid_string(bytes: &[u8; 16]) -> String {
     resource_uid(bytes)
-        .map(|uid| uid.as_str().to_owned())
-        .unwrap_or_default()
+       .map(|uid| uid.as_str().to_owned())
+       .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// Anchor projection subscription
+// ---------------------------------------------------------------------------
+
+/// The subscription's selector: Volume and VolumeBinding rows, the durable
+/// rows the anchor projection holds. The hub matches on the resource key
+/// alone, so status transitions for these rows arrive on the same
+/// subscription and are filtered to [`ChangeSource::Desired`] before the
+/// pending flag is set.
+fn anchor_projection_selector() -> WatchSelector {
+    WatchSelector::with_predicate(|key| {
+        key.type_name == "Volume" || key.type_name == "VolumeBinding"
+    })
+}
+
+/// Shared, observable state of the anchor projection subscription: the
+/// coalescing pending flag (KTD2) and the counters this module's tests
+/// assert against.
+#[derive(Debug, Default)]
+struct AnchorSubscriptionState {
+    /// Set by a drained Desired notice, cleared when the drain acts: the
+    /// reconciler's single-pending-flag coalescing shape. The flag itself is
+    /// transient, so `pending_sets` is its deterministic observable form.
+    pending: AtomicBool,
+    /// How often a drained notice set `pending` (one per drain).
+    pending_sets: AtomicU64,
+    /// Completed drain actions (one bounded re-materialization each).
+    rematerializations: AtomicU64,
+    /// Completed recovery actions (relist + reload + fresh registration).
+    relists: AtomicU64,
+    /// Consecutive drains whose bounded window passed while notices were
+    /// still arriving. A burst is normal; a drain that never quiesces is a
+    /// consumer falling behind, so only the sustained case is reported.
+    consecutive_busy: AtomicU64,
+}
+
+
+/// Spawn the plane's anchor projection subscription: one long-lived task
+/// consuming the manager's durable-change stream for Volume and
+/// VolumeBinding rows. The plane owns no other long-lived task - the manager
+/// actor supervises itself - so a caller that needs to stop or replace the
+/// subscription keeps the returned handle, and a restart is a fresh spawn
+/// anchored after the commit the reload must heal.
+fn spawn_anchor_subscription(
+    hub: Arc<WatchHub>,
+    registry: Arc<PlaneResourceRegistry>,
+    store: Arc<SpecStore>,
+    zone_token: BoundedToken,
+    anchor: RuntimeRevision,
+    window: Duration,
+    state: Arc<AnchorSubscriptionState>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(run_anchor_subscription(
+        hub,
+        anchor_projection_selector(),
+        registry,
+        store,
+        zone_token,
+        state,
+        anchor,
+        window,
+    ))
+}
+
+/// Run the anchor projection subscription: drain each registration's
+/// retained replay, then its live stream, coalescing Desired notices into
+/// one bounded re-materialization per drain, and relist on the hub's
+/// unservable signals.
+async fn run_anchor_subscription(
+    hub: Arc<WatchHub>,
+    selector: WatchSelector,
+    registry: Arc<PlaneResourceRegistry>,
+    store: Arc<SpecStore>,
+    zone_token: BoundedToken,
+    state: Arc<AnchorSubscriptionState>,
+    anchor: RuntimeRevision,
+    window: Duration,
+) {
+    // The first registration is anchored at the snapshot revision taken
+    // before the manager spawned, so the initial load and the subscription
+    // are paired through it (R1): the load covers everything at or before
+    // its own store read, the registration replays everything after the
+    // anchor, and the live stream covers the rest. Registering live-only
+    // after the load would leave the window uncovered, because a no-cursor
+    // registration serves no replay.
+    let mut cursor = anchor;
+    loop {
+        cursor = anchor_subscription_phase(
+            &hub,
+            &selector,
+            &registry,
+            &store,
+            &zone_token,
+            &state,
+            cursor,
+            window,
+        )
+       .await;
+        // Recovery (R5): the type-scoped reload rebuilds the projection
+        // from the store, covering rows committed while the subscription
+        // was between streams; the next phase's fresh registration then
+        // replays the interval after the handed-over cursor.
+        state.pending.store(false, Ordering::Relaxed);
+        // A recovery counts only once its reload read every row set: a failed
+        // reload leaves the rows it could not read to heal on their next
+        // notice, and reporting the recovery complete would hide that.
+        if reload_anchor_rows(&registry, &zone_token, &store).await {
+            state.relists.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// One registration and its live phase: drains the retained replay, then
+/// the live stream, coalescing Desired notices into one bounded
+/// re-materialization per drain. Returns the revision the next phase must
+/// relist from when the stream ends (a terminal missed-data signal or the
+/// hub reaping the subscriber) or the registration is Expired.
+async fn anchor_subscription_phase(
+    hub: &WatchHub,
+    selector: &WatchSelector,
+    registry: &PlaneResourceRegistry,
+    store: &SpecStore,
+    zone_token: &BoundedToken,
+    state: &AnchorSubscriptionState,
+    cursor: RuntimeRevision,
+    window: Duration,
+) -> RuntimeRevision {
+    let (snapshot, mut stream) = match hub.register(selector.clone(), Some(cursor)).await {
+        WatchRegistration::Live { snapshot, replay, stream } => {
+            // Drain the retained replay before treating the subscription as
+            // live: it covers the interval between the cursor and the
+            // registration, and the projection must reflect it (R1).
+            let mut keys: Vec<ResourceKey> = Vec::new();
+            for change in replay {
+                if change.source == ChangeSource::Desired && selector.matches(&change.key) {
+                    if !keys.contains(&change.key) {
+                        keys.push(change.key);
+                    }
+                }
+            }
+            if !keys.is_empty() {
+                state.pending.store(true, Ordering::Relaxed);
+                state.pending_sets.fetch_add(1, Ordering::Relaxed);
+                rematerialize_anchor_rows(registry, zone_token, store, &keys).await;
+                state.rematerializations.fetch_add(1, Ordering::Relaxed);
+                state.pending.store(false, Ordering::Relaxed);
+            }
+            (snapshot, stream)
+        }
+        WatchRegistration::Expired(RevisionExpired { snapshot,.. }) => {
+            // The cursor is unservable: relist from the handed-over
+            // snapshot revision (R5).
+            return snapshot;
+        }
+    };
+    let mut keys: Vec<ResourceKey> = Vec::new();
+    loop {
+        match stream.recv().await {
+            Some(WatchDelivery::Change(change)) => {
+                if change.source == ChangeSource::Desired && selector.matches(&change.key) {
+                    // A durable mutation of a covered row: set the pending
+                    // flag and drain the batch for the bounded window
+                    // measured from this notice (R3). A burst coalesces into
+                    // one re-materialization, and sustained traffic cannot
+                    // starve it.
+                    state.pending.store(true, Ordering::Relaxed);
+                    state.pending_sets.fetch_add(1, Ordering::Relaxed);
+                    if !keys.contains(&change.key) {
+                        keys.push(change.key);
+                    }
+                    let deadline = tokio::time::Instant::now() + window;
+                    let mut busy = false;
+                    loop {
+                        match tokio::time::timeout_at(deadline, stream.recv()).await {
+                            Ok(Some(WatchDelivery::Change(change))) => {
+                                if change.source == ChangeSource::Desired
+                                    && selector.matches(&change.key)
+                                {
+                                    busy = true;
+                                    if !keys.contains(&change.key) {
+                                        keys.push(change.key);
+                                    }
+                                }
+                            }
+                            Ok(Some(WatchDelivery::Missed { last_delivered })) => {
+                                return last_delivered;
+                            }
+                            Ok(None) => return snapshot,
+                            Err(_elapsed) => break,
+                        }
+                    }
+                    if busy {
+                        let consecutive =
+                            state.consecutive_busy.fetch_add(1, Ordering::Relaxed) + 1;
+                        if consecutive == ANCHOR_BUSY_DRAINS_BEFORE_WARN {
+                            tracing::warn!(
+                                zone = %zone_token.as_str(),
+                                drains = consecutive,
+                                "anchor projection drain window passed repeatedly while the stream stayed busy; the projection is falling behind"
+                            );
+                        }
+                    } else {
+                        state.consecutive_busy.store(0, Ordering::Relaxed);
+                    }
+                    // Clear the flag, re-check the stream for anything queued
+                    // between the last recv and the window, then perform one
+                    // re-materialization (R3).
+                    state.pending.store(false, Ordering::Relaxed);
+                    loop {
+                        match stream.try_recv() {
+                            Some(WatchDelivery::Change(change)) => {
+                                if change.source == ChangeSource::Desired
+                                    && selector.matches(&change.key)
+                                {
+                                    if !keys.contains(&change.key) {
+                                        keys.push(change.key);
+                                    }
+                                }
+                            }
+                            Some(WatchDelivery::Missed { last_delivered }) => {
+                                return last_delivered;
+                            }
+                            None => break,
+                        }
+                    }
+                    rematerialize_anchor_rows(registry, zone_token, store, &keys).await;
+                    state.rematerializations.fetch_add(1, Ordering::Relaxed);
+                    keys.clear();
+                }
+            }
+            Some(WatchDelivery::Missed { last_delivered }) => {
+                // Terminal missed-data signal: the cursor cannot be served,
+                // so relist from the handed-over revision (R5).
+                return last_delivered;
+            }
+            None => {
+                // The stream ended without a Missed (the hub reaped the
+                // subscriber): relist from the registration's snapshot.
+                return snapshot;
+            }
+        }
+    }
+}
+
+/// Register one durable row's anchor. The only row types the projection
+/// holds are Volume and VolumeBinding; every other type is not the
+/// projection's to carry.
+async fn register_anchor_row(
+    registry: &PlaneResourceRegistry,
+    zone_token: &BoundedToken,
+    row: &StoredDesiredResource,
+) {
+    match row.key.type_name.as_str() {
+        "Volume" => {
+            registry
+               .register_volume(
+                    &resource_uid_string(&row.uid),
+                    &row.key.name,
+                    volume_anchor_from_row(row),
+                )
+               .await;
+        }
+        "VolumeBinding" => register_binding_row(registry, zone_token, row).await,
+        _ => {}
+    }
+}
+
+/// Re-materialize the anchor projection for one drain: re-register the
+/// committed rows the drain collected, keyed by the committed row. This is
+/// the per-commit shape - per-row registration, never the store-wide sweep.
+async fn rematerialize_anchor_rows(
+    registry: &PlaneResourceRegistry,
+    zone_token: &BoundedToken,
+    store: &SpecStore,
+    keys: &[ResourceKey],
+) {
+    for key in keys {
+        let row = match store.get(key.clone()).await {
+            Ok(row) => row,
+            // A row the store no longer holds is gone, not failed: the drain
+            // collected a notice whose row was retired in between.
+            Err(d2b_resource_runtime::spec_store::SpecStoreError::NotFound {.. }) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    zone = %zone_token.as_str(),
+                    row_type = %key.type_name,
+                    error = %error,
+                    "anchor projection: a committed row could not be read back; its anchor stays unregistered until the next notice for that row"
+                );
+                continue;
+            }
+        };
+        register_anchor_row(registry, zone_token, &row).await;
+    }
+}
+
+/// Type-scoped reload of the rows the anchor projection holds (Volume and
+/// VolumeBinding): the recovery and relist shape, never the store-wide
+/// sweep. Reports whether every row set was read back, so a recovery is not
+/// counted as complete while the projection is still stale.
+async fn reload_anchor_rows(
+    registry: &PlaneResourceRegistry,
+    zone_token: &BoundedToken,
+    store: &SpecStore,
+) -> bool {
+    let mut complete = true;
+    for type_name in ["Volume", "VolumeBinding"] {
+        let selector = SpecSelector {
+            zone: Some(zone_token.as_str().to_owned()),
+            type_name: Some(type_name.to_owned()),
+            owner_uid: None,
+        };
+        match store.list(selector).await {
+            Ok(rows) => {
+                for row in &rows {
+                    register_anchor_row(registry, zone_token, row).await;
+                }
+            }
+            Err(error) => {
+                complete = false;
+                tracing::warn!(
+                    zone = %zone_token.as_str(),
+                    row_type = type_name,
+                    error = %error,
+                    "anchor projection reload failed; rows committed while the subscription was down stay unregistered until the next notice for them"
+                );
+            }
+        }
+    }
+    complete
 }
 
 // ---------------------------------------------------------------------------
@@ -626,9 +979,9 @@ pub(crate) fn serving_socket_path(
         || root.contains('\0')
         || root.contains('\\')
         || root
-            .split('/')
-            .skip(1)
-            .any(|component| component.is_empty() || component == "." || component == "..")
+           .split('/')
+           .skip(1)
+           .any(|component| component.is_empty() || component == "." || component == "..")
     {
         return None;
     }
@@ -658,9 +1011,9 @@ pub(crate) fn serving_socket_path(
 
 async fn socket_is_present(path: &Path) -> bool {
     tokio::fs::metadata(path)
-        .await
-        .map(|metadata| metadata.file_type().is_socket())
-        .unwrap_or(false)
+       .await
+       .map(|metadata| metadata.file_type().is_socket())
+       .unwrap_or(false)
 }
 
 async fn remove_socket_file(path: &Path) -> Result<(), String> {
@@ -685,9 +1038,9 @@ impl BindingSocketProbe {
     /// derived-child rows from the authority (the spec store) first.
     async fn path_for(&self, socket: &SocketIdentity) -> Option<PathBuf> {
         let target = self
-            .registry
-            .socket_target_by_identity(&self.zone_token, socket)
-            .await?;
+           .registry
+           .socket_target_by_identity(&self.zone_token, socket)
+           .await?;
         serving_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
@@ -713,9 +1066,9 @@ impl SocketWaitEffect {
     /// derived-child rows from the authority (the spec store) first.
     async fn path_for(&self, producer_ref: &ResourceRef) -> Option<PathBuf> {
         let target = self
-            .registry
-            .socket_target_by_ref(&self.zone_token, producer_ref)
-            .await?;
+           .registry
+           .socket_target_by_ref(&self.zone_token, producer_ref)
+           .await?;
         serving_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
@@ -974,9 +1327,9 @@ impl SocketRemoveEffect {
     /// derived-child rows from the authority (the spec store) first.
     async fn path_for(&self, producer_ref: &ResourceRef) -> Option<PathBuf> {
         let target = self
-            .registry
-            .socket_target_by_ref(&self.zone_token, producer_ref)
-            .await?;
+           .registry
+           .socket_target_by_ref(&self.zone_token, producer_ref)
+           .await?;
         serving_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
@@ -1077,7 +1430,7 @@ impl ZoneVolumeRootResolver {
                 uid: self.state.daemon_uid,
             },
         )
-        .map_err(|error| {
+       .map_err(|error| {
             tracing::warn!(
                 zone = %self.zone.as_str(),
                 volume = %volume_name,
@@ -1109,19 +1462,19 @@ impl ZoneVolumeRootResolver {
             return Err(self.source_unresolved("guest-reference", &anchor.volume_name));
         };
         let descriptor = self
-            .resolver
-            .guest_setup_descriptor_bytes(self.zone.as_str(), guest_ref.name().as_str())
-            .ok_or_else(|| self.source_unresolved("guest-setup-descriptor", &anchor.volume_name))?;
+           .resolver
+           .guest_setup_descriptor_bytes(self.zone.as_str(), guest_ref.name().as_str())
+           .ok_or_else(|| self.source_unresolved("guest-setup-descriptor", &anchor.volume_name))?;
         let descriptor: serde_json::Value = serde_json::from_slice(descriptor)
-            .map_err(|_| self.source_unresolved("guest-setup-descriptor-decode", &anchor.volume_name))?;
+           .map_err(|_| self.source_unresolved("guest-setup-descriptor-decode", &anchor.volume_name))?;
         let descriptor_artifact_id = descriptor
-            .get("systemArtifactId")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| self.source_unresolved("guest-setup-artifact-id", &anchor.volume_name))?;
+           .get("systemArtifactId")
+           .and_then(serde_json::Value::as_str)
+           .ok_or_else(|| self.source_unresolved("guest-setup-artifact-id", &anchor.volume_name))?;
         let intent = self
-            .resolver
-            .find_store_view_intent_for_zone(&self.zone, guest_ref.name().as_str())
-            .ok_or_else(|| self.source_unresolved("store-view-intent", &anchor.volume_name))?;
+           .resolver
+           .find_store_view_intent_for_zone(&self.zone, guest_ref.name().as_str())
+           .ok_or_else(|| self.source_unresolved("store-view-intent", &anchor.volume_name))?;
         if guest_ref.resource_type().as_str() != "Guest"
             || intent.vm != guest_ref.name().as_str()
             || intent.intent_id != intent_id_store_view(&self.zone, guest_ref.name().as_str())
@@ -1130,7 +1483,7 @@ impl ZoneVolumeRootResolver {
             return Err(self.source_unresolved("store-view-identity", &anchor.volume_name));
         }
         let generation_token = u32::try_from(intent.generation)
-            .map_err(|_| self.source_unresolved("store-view-generation", &anchor.volume_name))?;
+           .map_err(|_| self.source_unresolved("store-view-generation", &anchor.volume_name))?;
         let response =
             self.sync_store_view(guest_ref, intent, generation_token, &anchor.volume_name)?;
         let expected_generation_id = d2b_host::hardlink_farm::generation_id(
@@ -1154,8 +1507,8 @@ impl ZoneVolumeRootResolver {
             self.source_open_failed("marker-root", &anchor.volume_name, &self.marker_root, &error)
         })?;
         Ok(crate::resource_runtime::ResolvedVolumeRoot::new(file, volume_uid.clone())?
-            .with_marker_root(marker_root)?
-            .with_preexisting_state())
+           .with_marker_root(marker_root)?
+           .with_preexisting_state())
     }
 }
 
@@ -1180,28 +1533,28 @@ impl crate::resource_runtime::VolumeRootResolver for ZoneVolumeRootResolver {
             return self.resolve_nix_closure_root(volume_uid, &anchor, system_artifact_id);
         }
         let policy = source_policy_id
-            .map(BoundedToken::as_str)
-            .ok_or_else(|| self.source_unresolved("storage-policy", &anchor.volume_name))?;
+           .map(BoundedToken::as_str)
+           .ok_or_else(|| self.source_unresolved("storage-policy", &anchor.volume_name))?;
         let storage_id = if policy == "state-root" || policy == "default-state" {
             "path:state-root".to_owned()
         } else {
             format!("path:{policy}")
         };
         let path = self
-            .resolver
-            .find_storage_path_spec(&storage_id)
-            .map(|spec| spec.path_template.as_str().to_owned())
-            .ok_or_else(|| self.source_unresolved("storage-path", &anchor.volume_name))?;
+           .resolver
+           .find_storage_path_spec(&storage_id)
+           .map(|spec| spec.path_template.as_str().to_owned())
+           .ok_or_else(|| self.source_unresolved("storage-path", &anchor.volume_name))?;
         let path = Path::new(&path);
         if !path.is_absolute()
             || path
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
+               .components()
+               .any(|component| matches!(component, std::path::Component::ParentDir))
         {
             return Err(self.source_unresolved("storage-path-safety", &anchor.volume_name));
         }
         let file = open_anchored_directory(path)
-            .map_err(|_| self.source_unresolved("storage-path-open", &anchor.volume_name))?;
+           .map_err(|_| self.source_unresolved("storage-path-open", &anchor.volume_name))?;
         let name = anchor.volume_name.as_str();
         if name.is_empty() || name == "." || name == ".." {
             return Err(self.source_unresolved("storage-subdir-name", &anchor.volume_name));
@@ -1221,11 +1574,11 @@ impl crate::resource_runtime::VolumeRootResolver for ZoneVolumeRootResolver {
                 | ResolveFlags::NO_MAGICLINKS
                 | ResolveFlags::NO_XDEV,
         )
-        .map_err(|_| self.source_unresolved("storage-subdir-open", &anchor.volume_name))?;
+       .map_err(|_| self.source_unresolved("storage-subdir-open", &anchor.volume_name))?;
         let marker_file = open_anchored_directory(&self.marker_root)
-            .map_err(|_| self.source_unresolved("marker-root", &anchor.volume_name))?;
+           .map_err(|_| self.source_unresolved("marker-root", &anchor.volume_name))?;
         crate::resource_runtime::ResolvedVolumeRoot::new(file, volume_uid.clone())?
-            .with_marker_root(marker_file)
+           .with_marker_root(marker_file)
     }
 
     fn resolve_principal(
@@ -1236,17 +1589,17 @@ impl crate::resource_runtime::VolumeRootResolver for ZoneVolumeRootResolver {
             return Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec);
         }
         nix::unistd::User::from_name(reference.name().as_str())
-            .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?
-            .map(|user| user.uid.as_raw())
-            .ok_or(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
+           .map_err(|_| d2b_provider_volume_local::VolumeLocalError::EffectFailed)?
+           .map(|user| user.uid.as_raw())
+           .ok_or(d2b_provider_volume_local::VolumeLocalError::EffectFailed)
     }
 }
 
 fn open_anchored_directory(path: &Path) -> std::io::Result<std::os::fd::OwnedFd> {
     if !path.is_absolute()
         || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
+           .components()
+           .any(|component| matches!(component, std::path::Component::ParentDir))
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1254,12 +1607,12 @@ fn open_anchored_directory(path: &Path) -> std::io::Result<std::os::fd::OwnedFd>
         ));
     }
     let names: Vec<&std::ffi::OsStr> = path
-        .components()
-        .filter_map(|component| match component {
+       .components()
+       .filter_map(|component| match component {
             std::path::Component::Normal(name) => Some(name),
             _ => None,
         })
-        .collect();
+       .collect();
     let Some((leaf, ancestors)) = names.split_last() else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1271,7 +1624,7 @@ fn open_anchored_directory(path: &Path) -> std::io::Result<std::os::fd::OwnedFd>
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
         Mode::empty(),
     )
-    .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
+   .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
     for name in ancestors {
         // A pure anchor: `O_PATH` needs only search permission on the parent
         // and none on the component itself, which is exactly what the
@@ -1286,7 +1639,7 @@ fn open_anchored_directory(path: &Path) -> std::io::Result<std::os::fd::OwnedFd>
             Mode::empty(),
             resolve_beneath(),
         )
-        .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
+       .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
     }
     // The leaf is the handle the Volume driver keeps; it stays readable.
     let leaf = openat2(
@@ -1296,7 +1649,7 @@ fn open_anchored_directory(path: &Path) -> std::io::Result<std::os::fd::OwnedFd>
         Mode::empty(),
         resolve_beneath(),
     )
-    .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
+   .map_err(|error| std::io::Error::from_raw_os_error(error.raw_os_error()))?;
     Ok(leaf)
 }
 
@@ -1325,10 +1678,10 @@ pub(crate) fn production_volume_effects(
     crate::resource_runtime::AnchoredVolumeEffectAdapter<ZoneVolumeRootResolver>,
 > {
     let marker_root = state
-        .daemon_state_dir
-        .parent()
-        .unwrap_or(state.daemon_state_dir.as_path())
-        .join("volume-local-markers");
+       .daemon_state_dir
+       .parent()
+       .unwrap_or(state.daemon_state_dir.as_path())
+       .join("volume-local-markers");
     let closure_resolver = ZoneVolumeRootResolver {
         state: Arc::clone(state),
         resolver: resolver.clone(),
@@ -1461,9 +1814,9 @@ impl ConstructionInputs {
         let spec_store_dir = state.daemon_state_dir.join("zones").join(zone.as_str());
         let broker_socket = crate::broker_socket_path(state);
         let socket_runtime_dir = broker_socket
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("/run/d2b"));
+           .parent()
+           .map(Path::to_path_buf)
+           .unwrap_or_else(|| PathBuf::from("/run/d2b"));
         let zone_token = BoundedToken::parse(zone.as_str().to_owned()).map_err(|_| {
             PlaneError::Authority(format!("zone {} is not a bounded token", zone.as_str()))
         })?;
@@ -1489,7 +1842,7 @@ impl ConstructionInputs {
         };
         let registry = Arc::new(PlaneResourceRegistry::new());
         let controller_generation = ControllerGeneration::new(1)
-            .map_err(|error| PlaneError::Authority(error.to_string()))?;
+           .map_err(|error| PlaneError::Authority(error.to_string()))?;
         let endpoint_socket_runtime_dir = socket_runtime_dir.clone();
         let endpoint_zone_token = zone_token.clone();
         let probe = BindingSocketProbe {
@@ -1516,8 +1869,8 @@ impl ConstructionInputs {
             provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
             process_effects: Arc::new(
                 ProductionProcessDriverEffects::new(Arc::clone(&process_providers))
-                    .with_committed_provider_identities(registry_source)
-                    .with_guest_owner_identities(Arc::new(PlaneGuestOwnerIdentities {
+                   .with_committed_provider_identities(registry_source)
+                   .with_guest_owner_identities(Arc::new(PlaneGuestOwnerIdentities {
                         state: Arc::clone(state),
                     })),
             ),
@@ -1656,12 +2009,12 @@ struct PlaneGuestOwnerIdentities {
 impl GuestOwnerIdentitySource for PlaneGuestOwnerIdentities {
     async fn guest_owner_uid(&self, zone: &ZoneId, guest_ref: &ResourceRef) -> Option<ResourceUid> {
         let runtime = self
-            .state
-            .resource_plane
-            .lock()
-            .await
-            .as_ref()
-            .and_then(|plane| plane.zone(zone).ok())?;
+           .state
+           .resource_plane
+           .lock()
+           .await
+           .as_ref()
+           .and_then(|plane| plane.zone(zone).ok())?;
         match runtime.guest_owner_uid(guest_ref).await {
             Ok(uid) => Some(uid),
             Err(error) => {
@@ -1717,20 +2070,20 @@ fn check_registry_catalog(
     catalog: &[&str],
 ) -> Result<(), PlaneError> {
     let registered = registered
-        .into_iter()
-        .map(|type_name| type_name.as_str().to_owned())
-        .collect::<BTreeSet<_>>();
+       .into_iter()
+       .map(|type_name| type_name.as_str().to_owned())
+       .collect::<BTreeSet<_>>();
     let listed = catalog.iter().copied().collect::<BTreeSet<_>>();
     let missing = listed
-        .iter()
-        .filter(|entry| !registered.contains(**entry))
-        .map(|entry| (*entry).to_owned())
-        .collect::<Vec<_>>();
+       .iter()
+       .filter(|entry| !registered.contains(**entry))
+       .map(|entry| (*entry).to_owned())
+       .collect::<Vec<_>>();
     let unexpected = registered
-        .iter()
-        .filter(|entry| !listed.contains(&entry.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
+       .iter()
+       .filter(|entry| !listed.contains(&entry.as_str()))
+       .cloned()
+       .collect::<Vec<_>>();
     if missing.is_empty() && unexpected.is_empty() {
         return Ok(());
     }
@@ -1813,7 +2166,13 @@ pub struct ResourcePlaneV3 {
     targets: Arc<TargetDirectory>,
     registry: Arc<PlaneResourceRegistry>,
     client: ResourceManagerClient,
-    /// The providers this zone started, in the order they started. The plane
+    /// The anchor projection subscription: the one
+    /// long-lived task the plane owns, holding the task handle a restart
+    /// can reach. The manager actor supervises itself, so this is the
+    /// plane's first long-lived task; a restart relists from a fresh
+    /// registration rather than resuming a stale cursor.
+    #[allow(dead_code, reason = "handle home for the deferred supervisor; the restart test is the only current reader")]
+     /// The providers this zone started, in the order they started. The plane
     /// keeps them so it can report the order it ran and drain them in the
     /// mirror of it.
     providers: Arc<ProviderRuntime>,
@@ -1823,9 +2182,9 @@ pub struct ResourcePlaneV3 {
 impl core::fmt::Debug for ResourcePlaneV3 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("ResourcePlaneV3")
-            .field("zone", &self.zone)
-            .finish_non_exhaustive()
+           .debug_struct("ResourcePlaneV3")
+           .field("zone", &self.zone)
+           .finish_non_exhaustive()
     }
 }
 
@@ -2126,8 +2485,8 @@ impl ResourcePlaneV3 {
             d2b_core::loader_worker::run(move || {
                 SpecStore::open(store_path.clone()).map_err(PlaneError::from)
             })
-            .await
-            .map_err(|error| {
+           .await
+           .map_err(|error| {
                 PlaneError::Authority(format!("spec store open refused: {error:?}"))
             })??,
         );
@@ -2147,11 +2506,11 @@ impl ResourcePlaneV3 {
             &inputs.zone,
             &inputs.committed_provider_identities,
         )
-        .await;
+       .await;
         for (provider_ref, (uid, generation)) in &committed_provider_identities {
             inputs
-                .registry
-                .register_committed_provider_identity(provider_ref, uid.clone(), *generation).await;
+               .registry
+               .register_committed_provider_identity(provider_ref, uid.clone(), *generation).await;
         }
         readiness.set_spec_store_ready(true);
         // Stage 2: start the zone's providers through the toolkit base. Each
@@ -2182,9 +2541,9 @@ impl ResourcePlaneV3 {
                 foundation.allocation.clone(),
             );
             let report = seed
-                .run(&store, &providers)
-                .await
-                .map_err(|error| PlaneError::FoundationSeed(error.to_string()))?;
+               .run(&store, &providers)
+               .await
+               .map_err(|error| PlaneError::FoundationSeed(error.to_string()))?;
             tracing::info!(
                 zone = %inputs.zone.as_str(),
                 committed = report.committed.len(),
@@ -2204,9 +2563,15 @@ impl ResourcePlaneV3 {
         // guest sessions on it, and the manager resolves each row's declared
         // execution reference through it.
         let hub = Arc::new(WatchHub::new(&d2b_resource_runtime::revision::SystemClock, DEFAULT_RING_CAPACITY));
+        // The anchor projection subscription's first registration is paired
+        // with the initial load through this snapshot revision (R1): nothing
+        // publishes before the manager spawns, so the anchor is the empty
+        // cursor, and the load covers everything at or before its read while
+        // the registration replays everything after the anchor.
+        let anchor_revision = hub.snapshot_revision();
         let targets = Arc::new(TargetDirectory::new());
         let host_target = TargetRef::host(CORE_HOST_TARGET_NAME)
-            .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.to_string()))?;
         // Every registered driver's declaration carries its type's decoder,
         // so the registry is the authority: the plane wires no decoder table
         // of its own.
@@ -2227,10 +2592,25 @@ impl ResourcePlaneV3 {
             backoff: PLANE_BACKOFF,
         };
         let (actor, _join) = ractor::Actor::spawn(None, ResourceManager::new(), args)
-            .await
-            .map_err(|error| PlaneError::ManagerSpawn(error.to_string()))?;
+           .await
+           .map_err(|error| PlaneError::ManagerSpawn(error.to_string()))?;
         readiness.set_manager_started(true);
         readiness.set_spec_store_ready(true);
+        // The anchor projection subscription: one long-lived consumer of the
+        // manager's durable-change stream for Volume and VolumeBinding rows,
+        // additive on the write side. The registry's store is attached above,
+        // before the manager spawns, so the task can rebuild the projection
+        // from it. A plane restart spawns a fresh subscription with a fresh
+        // anchor, which is the restart path; this handle is dropped.
+        let _anchor_subscription = spawn_anchor_subscription(
+            Arc::clone(&hub),
+            Arc::clone(&inputs.registry),
+            Arc::clone(&store),
+            inputs.zone_token.clone(),
+            anchor_revision,
+            ANCHOR_DRAIN_WINDOW,
+            Arc::new(AnchorSubscriptionState::default()),
+        );
         Ok(Self {
             zone: inputs.zone.clone(),
             zone_token: inputs.zone_token,
@@ -2250,15 +2630,15 @@ impl ResourcePlaneV3 {
     /// for the production effects.
     pub async fn complete_initial_load(&self) -> Result<(), PlaneError> {
         self.registry
-            .load_from_store(&self.zone_token, &self.store)
-            .await?;
+           .load_from_store(&self.zone_token, &self.store)
+           .await?;
         let views = self
-            .client
-            .list(ResourceSelector {
+           .client
+           .list(ResourceSelector {
                 zone: Some(self.zone.as_str().to_owned()),
-                ..ResourceSelector::default()
+               ..ResourceSelector::default()
             })
-            .await?;
+           .await?;
         tracing::debug!(
             zone = %self.zone.as_str(),
             resources = views.len(),
@@ -2324,17 +2704,17 @@ impl ResourcePlaneV3 {
         control: Arc<dyn GuestTargetControl>,
     ) -> Result<(), PlaneError> {
         let outcome = self
-            .targets
-            .connect_guest(guest, session_generation, control)
-            .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .targets
+           .connect_guest(guest, session_generation, control)
+           .map_err(|error| PlaneError::Target(error.to_string()))?;
         self.client
-            .actor()
-            .send_message(ResourceManagerMsg::TargetReconnected {
+           .actor()
+           .send_message(ResourceManagerMsg::TargetReconnected {
                 guest: guest.clone(),
                 session_generation: outcome.session_generation(),
                 pending_adoption: outcome.pending_adoption().to_vec(),
             })
-            .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.to_string()))?;
         Ok(())
     }
 
@@ -2347,17 +2727,17 @@ impl ResourcePlaneV3 {
         session_generation: u64,
     ) -> Result<(), PlaneError> {
         let outcome = self
-            .targets
-            .disconnect_guest(guest, session_generation)
-            .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .targets
+           .disconnect_guest(guest, session_generation)
+           .map_err(|error| PlaneError::Target(error.to_string()))?;
         self.client
-            .actor()
-            .send_message(ResourceManagerMsg::TargetUnavailable {
+           .actor()
+           .send_message(ResourceManagerMsg::TargetUnavailable {
                 guest: guest.clone(),
                 session_generation: outcome.session_generation(),
                 affected: outcome.affected().to_vec(),
             })
-            .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.to_string()))?;
         Ok(())
     }
 
@@ -2380,12 +2760,13 @@ impl ResourcePlaneV3 {
         &self.store
     }
 
+
     /// Re-register the durable rows the production effects resolve
-    /// per-resource anchors from (U17: a provider controller session commits
-    /// converted Volume/VolumeBinding children through the manager after the
-    /// plane's durable loads, and a Volume root whose anchor is not registered
-    /// stays unresolved until a reload). The manager stays the only writer:
-    /// this reads its store, it never mutates it.
+    /// per-resource anchors from: a provider controller session commits
+    /// converted Volume and VolumeBinding children through the manager after
+    /// the plane's durable loads, and a Volume root whose anchor is not
+    /// registered stays unresolved until a reload. The manager stays the only
+    /// writer: this reads its store, it never mutates it.
     pub async fn reload_registry(&self) -> Result<(), PlaneError> {
         self.registry
             .load_from_store(&self.zone_token, &self.store)
@@ -2432,15 +2813,15 @@ pub async fn partition_nix_bundle(
 ) -> Result<BundleIngestPlan, PlaneError> {
     bundle.verify().map_err(|error| PlaneError::Bundle(error.to_string()))?;
     let durable_by_key: HashMap<ResourceKey, StoredDesiredResource> = store
-        .list(SpecSelector {
+       .list(SpecSelector {
             zone: Some(zone.as_str().to_owned()),
             type_name: None,
             owner_uid: None,
         })
-        .await?
-        .into_iter()
-        .map(|row| (row.key.clone(), row))
-        .collect();
+       .await?
+       .into_iter()
+       .map(|row| (row.key.clone(), row))
+       .collect();
     let mut apply = Vec::new();
     let mut api_protected = Vec::new();
     for row in &bundle.resources {
@@ -2467,10 +2848,10 @@ pub async fn partition_nix_bundle(
     }
     // Removed Nix rows: mark deleting (R26).
     let declared: HashMap<ResourceKey, ()> = bundle
-        .resources
-        .iter()
-        .map(|row| (bundle_row_key(zone, row), ()))
-        .collect();
+       .resources
+       .iter()
+       .map(|row| (bundle_row_key(zone, row), ()))
+       .collect();
     let mut remove = Vec::new();
     for (key, existing) in &durable_by_key {
         if existing.provenance != d2b_resource_runtime::spec_store::ResourceProvenance::Nix
@@ -2542,16 +2923,16 @@ impl ResourcePlaneV3 {
         // that never appears keeps the pre-v3 top-level shape, where the
         // authored reference still renders into the row's metadata.
         let mut known: std::collections::HashSet<ResourceKey> = self
-            .store
-            .list(SpecSelector {
+           .store
+           .list(SpecSelector {
                 zone: Some(self.zone.as_str().to_owned()),
                 type_name: None,
                 owner_uid: None,
             })
-            .await?
-            .into_iter()
-            .map(|row| row.key)
-            .collect();
+           .await?
+           .into_iter()
+           .map(|row| row.key)
+           .collect();
         let mut pending = plan.apply;
         let mut applied = Vec::new();
         while !pending.is_empty() {
@@ -2575,8 +2956,8 @@ impl ResourcePlaneV3 {
                 match owner {
                     Some(owner) => {
                         self.client
-                            .ensure(subject.clone(), Some(owner), desired)
-                            .await?;
+                           .ensure(subject.clone(), Some(owner), desired)
+                           .await?;
                     }
                     None => {
                         self.client.apply(subject.clone(), desired).await?;
@@ -2605,8 +2986,6 @@ impl ResourcePlaneV3 {
         report.applied = applied;
         report.removed = plan.remove;
         report.api_protected = plan.api_protected;
-        // The production effects resolve per-resource anchors durably.
-        self.reload_registry().await?;
         Ok(report)
     }
 }
@@ -2618,6 +2997,154 @@ mod tests {
     use d2b_contracts_resource::v3::ResourceName;
     use d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata;
     use d2b_process_conformance::ProcessIdentityDigest;
+    use d2b_resource_runtime::revision::ManualClock;
+    use d2b_resource_runtime::watch::{ChangeKind, ChangeNotice, WatchHubConfig};
+
+    /// One machinery-test rig for the anchor projection subscription: a
+    /// small hub (so Missed and Expired are reachable), a store, and a
+    /// registry the subscription rebuilds. The `_dir` keeps the SQLite
+    /// store alive for the rig's lifetime.
+    struct AnchorSubscriptionRig {
+        _dir: tempfile::TempDir,
+        hub: Arc<WatchHub>,
+        store: Arc<SpecStore>,
+        registry: Arc<PlaneResourceRegistry>,
+        zone_token: BoundedToken,
+    }
+
+    fn anchor_subscription_rig() -> AnchorSubscriptionRig {
+        anchor_subscription_rig_with(WatchHubConfig {
+            ring_capacity: 32,
+            delivery_buffer: 16,
+        })
+    }
+
+    fn anchor_subscription_rig_with(config: WatchHubConfig) -> AnchorSubscriptionRig {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(
+            SpecStore::open(dir.path().join("spec-store.sqlite3")).expect("store"),
+        );
+        let registry = Arc::new(PlaneResourceRegistry::new());
+        registry.attach_store(Arc::clone(&store));
+        let hub = Arc::new(WatchHub::with_config(&ManualClock::at(1_000), config));
+        let zone_token = BoundedToken::parse("test".to_owned()).expect("token");
+        AnchorSubscriptionRig {
+            _dir: dir,
+            hub,
+            store,
+            registry,
+            zone_token,
+        }
+    }
+
+    /// One committed Volume row the subscription's per-row registration reads.
+    async fn commit_volume_row(store: &SpecStore, key: &ResourceKey) {
+        store
+           .ensure(StoredDesiredResource {
+                key: key.clone(),
+                uid: d2b_resource_runtime::manager::deterministic_uid(key),
+                generation: 1,
+                owner_uid: None,
+                provenance: d2b_resource_runtime::identity::ResourceProvenance::Api,
+                deleting: false,
+                spec: serde_json::to_vec(&serde_json::json!({"providerRef": "Provider/volume-local"}))
+                   .expect("volume spec"),
+                metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
+                created_at: 0,
+            })
+           .await
+           .expect("volume row committed");
+    }
+
+    /// The binding spec the binding row's socket identity derives from.
+    fn binding_spec() -> serde_json::Value {
+        serde_json::json!({
+            "volumeRef": "Volume/state",
+            "executionRef": "Guest/acceptance-guest",
+            "view": "controller",
+            "access": "read-only",
+            "mountPath": "/state",
+        })
+    }
+
+    /// One committed VolumeBinding row, as the Volume driver mints it
+    /// (the serving Provider reference rides in the stored envelope).
+    async fn commit_binding_row(store: &SpecStore, key: &ResourceKey) {
+        let mut envelope = binding_spec().as_object().cloned().expect("object");
+        envelope.insert(
+            "providerRef".to_owned(),
+            serde_json::Value::String("Provider/volume-virtiofs".to_owned()),
+        );
+        store
+           .ensure(StoredDesiredResource {
+                key: key.clone(),
+                uid: d2b_resource_runtime::manager::deterministic_uid(key),
+                generation: 1,
+                owner_uid: Some([0x11; 16]),
+                provenance: d2b_resource_runtime::identity::ResourceProvenance::Resource,
+                deleting: false,
+                spec: serde_json::to_vec(&envelope).expect("envelope"),
+                metadata: Vec::new(),
+                created_at: 0,
+            })
+           .await
+           .expect("binding row committed");
+    }
+
+    /// Poll `condition` until it holds or the bounded wait elapses.
+    async fn wait_for(mut condition: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !condition() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "condition not met within the bounded wait"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// A test subscriber writer that appends every formatted record to a
+    /// shared buffer, so a test can assert a stall line was logged.
+    #[derive(Clone)]
+    struct CapturedWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CapturedWriter {
+        type Writer = CapturedWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Spawn the anchor projection subscription loop for a machinery test.
+    fn spawn_subscription(
+        rig: &AnchorSubscriptionRig,
+        state: &Arc<AnchorSubscriptionState>,
+        anchor: RuntimeRevision,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(run_anchor_subscription(
+            Arc::clone(&rig.hub),
+            anchor_projection_selector(),
+            Arc::clone(&rig.registry),
+            Arc::clone(&rig.store),
+            rig.zone_token.clone(),
+            Arc::clone(state),
+            anchor,
+            ANCHOR_DRAIN_WINDOW,
+        ))
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl std::io::Write for CapturedWriter {
+
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("capture lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn timestamp() -> d2b_contracts_resource::v3::Timestamp {
         d2b_contracts_resource::v3::Timestamp::parse("2026-01-01T00:00:00.000Z").expect("timestamp")
@@ -2631,7 +3158,7 @@ mod tests {
             BTreeMap::new(),
             timestamp(),
         )
-        .expect("bundle")
+       .expect("bundle")
     }
 
     fn bundle_row(
@@ -2649,9 +3176,9 @@ mod tests {
                 BTreeMap::new(),
             ),
             serde_json::from_value::<d2b_contracts_resource::v3::resource_schema::CanonicalJsonObject>(spec)
-                .expect("canonical spec"),
+               .expect("canonical spec"),
         )
-        .expect("bundle row")
+       .expect("bundle row")
     }
 
     fn test_inputs() -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
@@ -2763,7 +3290,7 @@ mod tests {
             providers.registered_types(),
             &d2b_contracts::identity::V3_CONVERTED_RESOURCE_TYPES,
         )
-        .expect("the assembled registry covers the converted-type authority list");
+       .expect("the assembled registry covers the converted-type authority list");
         runtime.drain().await.expect("the providers drain");
     }
 
@@ -2828,9 +3355,9 @@ mod tests {
         let mut reversed = plane.providers().startup_order().to_vec();
         reversed.reverse();
         plane
-            .drain_providers()
-            .await
-            .expect("the providers drain through the base");
+           .drain_providers()
+           .await
+           .expect("the providers drain through the base");
         assert_eq!(plane.providers().drain_order(), reversed);
         plane.shutdown().await;
     }
@@ -2941,8 +3468,8 @@ mod tests {
         // A row the plane never loaded: exactly the state the manager leaves
         // behind when it ensures a derived child after `open`.
         plane
-            .store()
-            .ensure(StoredDesiredResource {
+           .store()
+           .ensure(StoredDesiredResource {
                 key: ResourceKey::new("test", "VolumeBinding", "vol-binding-derived"),
                 uid,
                 generation: 1,
@@ -2953,8 +3480,8 @@ mod tests {
                 metadata: Vec::new(),
                 created_at: 0,
             })
-            .await
-            .expect("binding row");
+           .await
+           .expect("binding row");
 
         let stored = d2b_provider_volume_virtiofs::StoredBinding::new(
             serde_json::from_slice(&serde_json::to_vec(&binding).expect("binding")).expect("binding spec"),
@@ -2963,9 +3490,9 @@ mod tests {
             ZoneRevision::new(0),
         );
         let by_identity = registry
-            .socket_target_by_identity(&zone_token, &stored.socket_identity(&zone_token))
-            .await
-            .expect("identity lookup loads the derived row from the store");
+           .socket_target_by_identity(&zone_token, &stored.socket_identity(&zone_token))
+           .await
+           .expect("identity lookup loads the derived row from the store");
         assert_eq!(by_identity.volume_ref, volume_ref);
         assert_eq!(by_identity.execution_ref, execution_ref);
         for producer_ref in [
@@ -2973,9 +3500,9 @@ mod tests {
             stored.endpoint_ref().expect("endpoint ref"),
         ] {
             let target = registry
-                .socket_target_by_ref(&zone_token, &producer_ref)
-                .await
-                .expect("producer-ref lookup loads the derived row from the store");
+               .socket_target_by_ref(&zone_token, &producer_ref)
+               .await
+               .expect("producer-ref lookup loads the derived row from the store");
             assert_eq!(target.volume_ref, volume_ref);
             assert_eq!(target.execution_ref, execution_ref);
         }
@@ -3011,11 +3538,11 @@ mod tests {
             ResourceKey::new("test", "Guest", "work"),
         ] {
             let row = plane
-                .client()
-                .get_row(key)
-                .await
-                .expect("get_row")
-                .expect("committed row");
+               .client()
+               .get_row(key)
+               .await
+               .expect("get_row")
+               .expect("committed row");
             assert_eq!(row.provenance, d2b_resource_runtime::identity::ResourceProvenance::Nix);
             assert_eq!(row.generation, 1);
         }
@@ -3045,16 +3572,16 @@ mod tests {
         )]);
 
         let error = plane
-            .ingest_nix_bundle(&bundle)
-            .await
-            .expect_err("no driver serves the type");
+           .ingest_nix_bundle(&bundle)
+           .await
+           .expect_err("no driver serves the type");
         assert!(matches!(error, PlaneError::ManagerRpc(_)), "got {error}");
         let row = plane
-            .client()
-            .get_row(key)
-            .await
-            .expect("get_row")
-            .expect("the manager committed the row before the spawn failed");
+           .client()
+           .get_row(key)
+           .await
+           .expect("get_row")
+           .expect("the manager committed the row before the spawn failed");
         assert_eq!(row.provenance, d2b_resource_runtime::identity::ResourceProvenance::Nix);
         plane.shutdown().await;
     }
@@ -3072,20 +3599,20 @@ mod tests {
             origin: d2b_resource_runtime::identity::ResourceProvenance::Api,
         };
         plane
-            .client()
-            .apply(
+           .client()
+           .apply(
                 api_subject,
                 DesiredResource {
                     key: key.clone(),
                     spec: serde_json::json!({"providerRef": "Provider/volume-local", "apiField": true})
-                        .to_string()
-                        .into_bytes(),
+                       .to_string()
+                       .into_bytes(),
                     metadata: Vec::new(),
                     provenance: d2b_resource_runtime::identity::ResourceProvenance::Api,
                 },
             )
-            .await
-            .expect("api apply");
+           .await
+           .expect("api apply");
 
         let bundle = test_bundle(vec![bundle_row(
             "Volume",
@@ -3126,11 +3653,11 @@ mod tests {
 
         for _ in 0..100 {
             if plane
-                .client()
-                .get_row(ResourceKey::new("test", "Volume", "state"))
-                .await
-                .unwrap()
-                .is_none()
+               .client()
+               .get_row(ResourceKey::new("test", "Volume", "state"))
+               .await
+               .unwrap()
+               .is_none()
             {
                 gone = true;
                 break;
@@ -3165,13 +3692,13 @@ mod tests {
         // manager holds the Guest (bundle ingest) before any provider
         // controller session commits its children.
         plane
-            .ingest_nix_bundle(&test_bundle(vec![bundle_row(
+           .ingest_nix_bundle(&test_bundle(vec![bundle_row(
                 "Guest",
                 "acceptance-guest",
                 serde_json::json!({"systemArtifactId": "acceptance-system"}),
             )]))
-            .await
-            .expect("owner ingest");
+           .await
+           .expect("owner ingest");
         let owner = ResourceRef::parse("Guest/acceptance-guest").expect("owner");
         let target = ResourceRef::parse("Process/acceptance-guest-vmm").expect("target");
         let port = crate::resource_runtime::plane_controller_bridge::PlaneChildMutations::new(
@@ -3181,9 +3708,9 @@ mod tests {
         );
 
         let committed = port
-            .ensure(&target, &controller_child_envelope("running"))
-            .await
-            .expect("child commit");
+           .ensure(&target, &controller_child_envelope("running"))
+           .await
+           .expect("child commit");
         assert_eq!(committed.resource_ref, target);
         assert_ne!(committed.uid.as_str(), "");
 
@@ -3205,32 +3732,32 @@ mod tests {
         // R8: the child commit links this session's owner by uid - the
         // linkage the guest session identity fence compares against.
         let stored = plane
-            .client()
-            .get_row(ResourceKey::new("test", "Process", "acceptance-guest-vmm"))
-            .await
-            .expect("row")
-            .expect("committed child");
+           .client()
+           .get_row(ResourceKey::new("test", "Process", "acceptance-guest-vmm"))
+           .await
+           .expect("row")
+           .expect("committed child");
         let owner_row = plane
-            .client()
-            .get_row(ResourceKey::new("test", "Guest", "acceptance-guest"))
-            .await
-            .expect("owner row")
-            .expect("ingested owner");
+           .client()
+           .get_row(ResourceKey::new("test", "Guest", "acceptance-guest"))
+           .await
+           .expect("owner row")
+           .expect("ingested owner");
         assert_eq!(
             stored.owner_uid,
             Some(owner_row.uid),
             "the controller-committed child must be linked to its owner by uid"
         );
         let view = plane
-            .client()
-            .get(ResourceKey::new("test", "Process", "acceptance-guest-vmm"))
-            .await
-            .expect("view")
-            .expect("committed child");
+           .client()
+           .get(ResourceKey::new("test", "Process", "acceptance-guest-vmm"))
+           .await
+           .expect("view")
+           .expect("committed child");
         let row = d2b_resource_api::manager_backend::manager_row_stored(&view).expect("render");
         let envelope =
             d2b_contracts_resource::v3::ResourceEnvelope::from_json(&row.canonical_json)
-                .expect("envelope");
+               .expect("envelope");
         assert_eq!(envelope.metadata().owner_ref(), Some(&owner));
         let spec: serde_json::Value =
             serde_json::from_slice(&envelope.spec().base().to_canonical_bytes()).expect("spec");
@@ -3256,7 +3783,7 @@ mod tests {
         let (_dir, inputs, _readiness) = test_inputs();
         let plane = Arc::new(ResourcePlaneV3::open(inputs).await.expect("plane"));
         plane
-            .ingest_nix_bundle(&test_bundle(vec![
+           .ingest_nix_bundle(&test_bundle(vec![
                 bundle_row(
                     "Guest",
                     "acceptance-guest",
@@ -3268,8 +3795,8 @@ mod tests {
                     serde_json::json!({"systemArtifactId": "other-system"}),
                 ),
             ]))
-            .await
-            .expect("owner ingest");
+           .await
+           .expect("owner ingest");
         let zone = ZoneId::parse("test").expect("zone");
         let owned = ResourceRef::parse("Process/acceptance-guest-vmm").expect("owned child");
         let port = crate::resource_runtime::plane_controller_bridge::PlaneChildMutations::new(
@@ -3278,8 +3805,8 @@ mod tests {
             ResourceRef::parse("Guest/acceptance-guest").expect("owner"),
         );
         port.ensure(&owned, &controller_child_envelope("running"))
-            .await
-            .expect("owned child commit");
+           .await
+           .expect("owned child commit");
 
         let foreign = ResourceRef::parse("Process/other-guest-vmm").expect("foreign child");
         crate::resource_runtime::plane_controller_bridge::PlaneChildMutations::new(
@@ -3287,34 +3814,34 @@ mod tests {
             zone.clone(),
             ResourceRef::parse("Guest/other-guest").expect("foreign owner"),
         )
-        .ensure(
+       .ensure(
             &foreign,
             &controller_child_envelope_for("Guest/other-guest", "other-guest-vmm", "running"),
         )
-        .await
-        .expect("foreign child commit");
+       .await
+       .expect("foreign child commit");
 
-        // Both owners' rows really are committed in the Zone ...
+        // Both owners' rows really are committed in the Zone...
         let zone_rows = plane
-            .client()
-            .list(d2b_resource_runtime::manager::ResourceSelector {
+           .client()
+           .list(d2b_resource_runtime::manager::ResourceSelector {
                 zone: Some(zone.as_str().to_owned()),
                 type_name: Some("Process".to_owned()),
                 owner: None,
             })
-            .await
-            .expect("zone rows");
+           .await
+           .expect("zone rows");
         assert_eq!(zone_rows.len(), 2, "both owners' rows are committed");
 
-        // ... and the session-scoped relist read answers only its own child.
+        //... and the session-scoped relist read answers only its own child.
         let rows = port
-            .rows_of_types(&["Process", "Endpoint", "Volume"])
-            .await
-            .expect("owned rows");
+           .rows_of_types(&["Process", "Endpoint", "Volume"])
+           .await
+           .expect("owned rows");
         assert_eq!(
             rows.iter()
-                .map(|row| row.resource_ref.to_canonical_string())
-                .collect::<Vec<_>>(),
+               .map(|row| row.resource_ref.to_canonical_string())
+               .collect::<Vec<_>>(),
             vec![owned.to_canonical_string()],
             "the relist read must return exactly this owner's children",
         );
@@ -3372,17 +3899,17 @@ mod tests {
         // production ingest commits the Guest before its provider controller
         // session runs.
         plane
-            .ingest_nix_bundle(&test_bundle(vec![bundle_row(
+           .ingest_nix_bundle(&test_bundle(vec![bundle_row(
                 "Guest",
                 "acceptance-guest",
                 serde_json::json!({"systemArtifactId": "acceptance-system"}),
             )]))
-            .await
-            .expect("owner ingest");
+           .await
+           .expect("owner ingest");
         planes
-            .lock()
-            .await
-            .insert(zone.as_str().to_owned(), Arc::clone(&plane));
+           .lock()
+           .await
+           .insert(zone.as_str().to_owned(), Arc::clone(&plane));
         let probe = GuestControlEndpointProbe::new(Arc::clone(&planes), zone.clone());
         let guest = ResourceRef::parse("Guest/acceptance-guest").expect("guest");
         // The producer the provider's own child-role vocabulary declares per
@@ -3410,8 +3937,8 @@ mod tests {
             &ResourceRef::parse("Process/acceptance-guest-vmm").expect("target"),
             &controller_child_envelope("running"),
         )
-        .await
-        .expect("child commit");
+       .await
+       .expect("child commit");
 
         let mut realized = false;
         for _ in 0..200 {
@@ -3439,13 +3966,13 @@ mod tests {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
         let dir = tempfile::tempdir().expect("tempdir");
         let farm = dir
-            .path()
-            .join("zones/work/guests/acceptance-guest/store-view");
+           .path()
+           .join("zones/work/guests/acceptance-guest/store-view");
         std::fs::create_dir_all(&farm).expect("farm");
         // Search-only intermediate: the daemon's grant on the chain is `--x`.
         let traversal_only = dir.path().join("zones/work/guests");
         std::fs::set_permissions(&traversal_only, std::fs::Permissions::from_mode(0o111))
-            .expect("chmod traversal-only");
+           .expect("chmod traversal-only");
 
         let opened = open_anchored_directory(&farm).expect("search-only ancestors must open");
 
@@ -3498,7 +4025,7 @@ mod tests {
                 "resource": {},
             },
         }))
-        .expect("child envelope")
+       .expect("child envelope")
     }
     /// A system-homed policy row as a caller would submit it.
     fn command_desired(zone: &str, name: &str) -> DesiredResource {
@@ -3513,13 +4040,13 @@ mod tests {
             "roleRef": "Role/worker",
             "intent": { "grammar": "<zone>/<name>", "mint": "per-bundle-entry" }
         }))
-        .expect("canonical command spec");
+       .expect("canonical command spec");
         let metadata = serde_json::to_vec(&serde_json::json!({
             "annotations": {},
             "labels": {},
             "ownerRef": null
         }))
-        .expect("metadata");
+       .expect("metadata");
         DesiredResource {
             key: ResourceKey::new(zone, "Command", name),
             spec,
@@ -3544,17 +4071,17 @@ mod tests {
         let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
 
         let error = plane
-            .client()
-            .apply(api_subject("User/alice"), command_desired("test", "worker"))
-            .await
-            .expect_err("a system-homed write is refused");
+           .client()
+           .apply(api_subject("User/alice"), command_desired("test", "worker"))
+           .await
+           .expect_err("a system-homed write is refused");
         assert!(
             matches!(
                 &error,
                 d2b_resource_runtime::error::ResourceError::AdmissionDenied {
                     type_name,
                     principal,
-                    ..
+                   ..
                 } if type_name == "Command" && principal == "User/alice"
             ),
             "unexpected refusal: {error:?}"
@@ -3565,8 +4092,8 @@ mod tests {
         );
         // The refused row never reached the durable store.
         assert!(plane.store().list(SpecSelector::default()).await.expect("list")
-            .iter()
-            .all(|row| row.key.type_name != "Command"));
+           .iter()
+           .all(|row| row.key.type_name != "Command"));
     }
 
     /// The foundation plane commits the seeded policy rows before its manager
@@ -3578,19 +4105,19 @@ mod tests {
         inputs.foundation = Some(FoundationInputs {
             declarations: crate::foundation_seed::core_declarations(),
             allocation: crate::principal_allocation::PrincipalAllocation::committed()
-                .expect("committed allocation"),
+               .expect("committed allocation"),
         });
         let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
 
         let rows = plane
-            .store()
-            .list(SpecSelector::default())
-            .await
-            .expect("list rows");
+           .store()
+           .list(SpecSelector::default())
+           .await
+           .expect("list rows");
         let refs: Vec<String> = rows
-            .iter()
-            .map(|row| format!("{}/{}", row.key.type_name, row.key.name))
-            .collect();
+           .iter()
+           .map(|row| format!("{}/{}", row.key.type_name, row.key.name))
+           .collect();
         assert!(refs.contains(&"Zone/system".to_owned()), "refs: {refs:?}");
         assert!(
             refs.contains(&"Role/operation-publisher".to_owned()),
@@ -3602,10 +4129,10 @@ mod tests {
         );
         // The system-homed write is admitted on this plane.
         plane
-            .client()
-            .apply(api_subject("User/alice"), command_desired("system", "worker"))
-            .await
-            .expect("the foundation plane admits the write");
+           .client()
+           .apply(api_subject("User/alice"), command_desired("system", "worker"))
+           .await
+           .expect("the foundation plane admits the write");
     }
 
     /// The one declared spawn command, under the seed's publisher role.
@@ -3621,7 +4148,7 @@ mod tests {
             "roleRef": "Role/operation-publisher",
             "intent": { "grammar": "<zone>/<name>", "mint": "per-bundle-entry" }
         }))
-        .expect("canonical command spec");
+       .expect("canonical command spec");
         crate::foundation_seed::SeedCommand {
             name: name.to_owned(),
             spec: serde_json::from_slice(&spec).expect("command spec"),
@@ -3645,7 +4172,7 @@ mod tests {
             }],
             "commandRefs": [format!("Command/{}", command.name)],
         }))
-        .expect("publisher role scoped to the declared command");
+       .expect("publisher role scoped to the declared command");
         declarations.commands = vec![command];
         declarations
     }
@@ -3662,7 +4189,7 @@ mod tests {
         let store =
             SpecStore::open(ResourcePlaneV3::spec_store_path(&inputs.spec_store_dir)).expect("store");
         store
-            .ensure(StoredDesiredResource {
+           .ensure(StoredDesiredResource {
                 uid,
                 key,
                 generation: 1,
@@ -3673,8 +4200,8 @@ mod tests {
                 metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
                 created_at: 0,
             })
-            .await
-            .expect("provider row committed");
+           .await
+           .expect("provider row committed");
         drop(store);
         d2b_provider_process::resource_uid_from_bytes(&uid).expect("UUIDv4-shaped provider uid")
     }
@@ -3701,11 +4228,11 @@ mod tests {
             ServiceName::parse("d2b.resource.v3").expect("service"),
             SessionBinding::new(
                 SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64)))
-                    .expect("schema fingerprint"),
+                   .expect("schema fingerprint"),
                 TransportBinding::new(
                     Locality::Local,
                     BindingDigest::parse(format!("sha256:{}", "2".repeat(64)))
-                        .expect("binding digest"),
+                       .expect("binding digest"),
                 ),
                 ReconnectGeneration::new(1).expect("reconnect generation"),
                 TranscriptHash::from_bytes([3; 32]),
@@ -3741,16 +4268,16 @@ mod tests {
         );
         let declarations = seeded_declarations(command);
         let provider_ref = declarations
-            .providers
-            .first()
-            .expect("the seed declares the process provider")
-            .provider_ref
-            .clone();
+           .providers
+           .first()
+           .expect("the seed declares the process provider")
+           .provider_ref
+           .clone();
         let provider_uid = seed_provider_row(&inputs, &provider_ref).await;
         inputs.foundation = Some(FoundationInputs {
             declarations,
             allocation: crate::principal_allocation::PrincipalAllocation::committed()
-                .expect("committed allocation"),
+               .expect("committed allocation"),
         });
         let zone = inputs.zone.clone();
         let plane = ResourcePlaneV3::open(inputs).await.expect("plane");
@@ -3761,13 +4288,13 @@ mod tests {
 
         // Every row of the chain is read back, homed in the reserved Zone.
         let resources = crate::resource_runtime::committed_policy_resources(&view)
-            .await
-            .expect("committed policy read");
+           .await
+           .expect("committed policy read");
         let homed = |reference: &str| {
             resources
-                .iter()
-                .find(|row| row.resource_ref.to_canonical_string() == reference)
-                .map(|row| row.zone.as_str().to_owned())
+               .iter()
+               .find(|row| row.resource_ref.to_canonical_string() == reference)
+               .map(|row| row.zone.as_str().to_owned())
         };
         // Every policy row of the chain is read back, homed in the system Zone.
         let chain = [
@@ -3781,9 +4308,9 @@ mod tests {
                 Some(crate::foundation_seed::SYSTEM_ZONE),
                 "the policy read resolves {reference}: {:?}",
                 resources
-                    .iter()
-                    .map(|row| row.resource_ref.to_canonical_string())
-                    .collect::<Vec<_>>(),
+                   .iter()
+                   .map(|row| row.resource_ref.to_canonical_string())
+                   .collect::<Vec<_>>(),
             );
         }
         // The declared command and the operation it materialized are read back
@@ -3795,9 +4322,9 @@ mod tests {
         for reference in &declared {
             let target = ResourceRef::parse(reference).expect("resource reference");
             let row = crate::resource_runtime::bridge_manager_row(&view, &target)
-                .await
-                .expect("row read")
-                .unwrap_or_else(|| panic!("the read path resolves {reference}"));
+               .await
+               .expect("row read")
+               .unwrap_or_else(|| panic!("the read path resolves {reference}"));
             assert_eq!(row.zone.as_str(), crate::foundation_seed::SYSTEM_ZONE);
         }
         // The self-binding's subject resolves through the same read, so the
@@ -3806,11 +4333,11 @@ mod tests {
             d2bd_runtime::resource_runtime_support::committed_policy_subject_fingerprints(
                 &resources,
             )
-            .expect("subject fingerprints");
+           .expect("subject fingerprints");
         assert!(
             fingerprints.contains_key(&(
                 ResourceRef::parse("RoleBinding/system-minijail-self-operation-publisher")
-                    .expect("binding ref"),
+                   .expect("binding ref"),
                 provider_ref.clone(),
             )),
             "the seeded binding resolved its subject, fingerprints: {}",
@@ -3820,7 +4347,7 @@ mod tests {
         // The compiled policy installs the grant the chain exists for: the
         // self-bound provider creates the operation its command materialized.
         let snapshot = d2bd_runtime::resource_runtime_support::initial_policy_snapshot()
-            .expect("bootstrap snapshot");
+           .expect("bootstrap snapshot");
         let (policy, state) =
             d2bd_runtime::resource_runtime_support::compile_committed_policy_with_subjects(
                 &zone,
@@ -3830,9 +4357,9 @@ mod tests {
                 &resources,
                 std::iter::empty(),
             )
-            .expect("committed policy compiles");
+           .expect("committed policy compiles");
         let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), Some(policy))
-            .expect("authorizer over the compiled policy");
+           .expect("authorizer over the compiled policy");
         let grant = authorizer.authorize(
             &controller_subject(&provider_ref, provider_uid, &zone),
             &AuthorizationRequest {
@@ -3842,10 +4369,10 @@ mod tests {
                     resource_type: d2b_contracts_resource::v3::ResourceTypeName::parse(
                         "Operation".to_owned(),
                     )
-                    .expect("operation type"),
+                   .expect("operation type"),
                     resource_name: Some(
                         ResourceName::parse(format!("process-run-{command}"))
-                            .expect("operation name"),
+                           .expect("operation name"),
                     ),
                     verb: ResourceVerb::Create,
                     subresource: None,
@@ -3859,4 +4386,668 @@ mod tests {
             "the seeded self-binding grants the controller its operation: {grant:?}"
         );
     }
+
+    // ---------------------------------------------------------------------
+    // Anchor projection subscription
+    // ---------------------------------------------------------------------
+
+    /// A published Volume notice sets the pending flag and, after the drain,
+    /// performs exactly one re-materialization.
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_volume_notice_sets_the_pending_flag_and_drains_into_one_rematerialization() {
+        let rig = anchor_subscription_rig();
+        let key = ResourceKey::new("test", "Volume", "state");
+        commit_volume_row(&rig.store, &key).await;
+        let state = Arc::new(AnchorSubscriptionState::default());
+        let task = spawn_subscription(&rig, &state, rig.hub.snapshot_revision());
+        rig.hub
+           .publish(ChangeNotice {
+                key: key.clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        // The notice sets the pending flag. The flag is cleared as soon as
+        // the drain acts, so the deterministic observable is the set count.
+        wait_for(|| state.pending_sets.load(Ordering::Relaxed) >= 1).await;
+        // One drain performs exactly one re-materialization, not more within
+        // the following windows.
+
+        wait_for(|| state.rematerializations.load(Ordering::Relaxed) == 1).await;
+        tokio::time::sleep(ANCHOR_DRAIN_WINDOW * 3).await;
+        assert_eq!(state.rematerializations.load(Ordering::Relaxed), 1);
+        // The projection reflects the committed row.
+
+        let uid = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&key)).expect("uid");
+        assert!(rig.registry.lookup_anchor(&uid).is_some(), "the projection reflects the committed row");
+        task.abort();
+    }
+
+    /// A commit published between the initial materialization and the
+    /// subscription handoff is not lost: it appears in the registration's
+    /// retained replay and the projection reflects it once the replay is
+    /// drained (R1).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_commit_between_the_initial_load_and_the_handoff_is_not_lost() {
+        let rig = anchor_subscription_rig();
+        // The registration's snapshot revision pairs the subscription with the
+        // initial materialization: the anchor is taken before the load, so
+        // the replay covers everything after it.
+        let anchor = rig.hub.snapshot_revision();
+        rig.registry.load_from_store(&rig.zone_token, &rig.store).await.expect("initial load");
+        // A commit between the initial load and the subscription handoff.
+
+        let key = ResourceKey::new("test", "Volume", "state");
+        commit_volume_row(&rig.store, &key).await;
+        rig.hub
+           .publish(ChangeNotice {
+                key: key.clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        let state = Arc::new(AnchorSubscriptionState::default());
+        let task = spawn_subscription(&rig, &state, anchor);
+        // The commit appears in the registration's retained replay, and the
+        // projection reflects it once the replay is drained.
+
+
+
+        let uid = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&key)).expect("uid");
+        wait_for(|| rig.registry.lookup_anchor(&uid).is_some()).await;
+        task.abort();
+    }
+
+    /// A burst of Volume and VolumeBinding notices drains into one
+    /// re-materialization, not one per notice (AE3).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_burst_of_volume_and_binding_notices_drains_into_one_rematerialization() {
+        let rig = anchor_subscription_rig();
+        let volume_keys: Vec<ResourceKey> = (0..4)
+           .map(|i| ResourceKey::new("test", "Volume", format!("vol-{i}")))
+           .collect();
+        let binding_key = ResourceKey::new("test", "VolumeBinding", "binding-0");
+        for key in &volume_keys {
+            commit_volume_row(&rig.store, key).await;
+        }
+        commit_binding_row(&rig.store, &binding_key).await;
+        let state = Arc::new(AnchorSubscriptionState::default());
+        let task = spawn_subscription(&rig, &state, rig.hub.snapshot_revision());
+        // A burst of Volume and VolumeBinding notices in one pass.
+
+
+        for key in volume_keys.iter().chain(std::iter::once(&binding_key)) {
+            rig.hub
+               .publish(ChangeNotice {
+                    key: key.clone(),
+                    kind: ChangeKind::Upsert,
+                    source: ChangeSource::Desired,
+                })
+               .await;
+        }
+        // One bounded re-materialization per drain, not one per notice.
+
+
+
+        wait_for(|| state.rematerializations.load(Ordering::Relaxed) >= 1).await;
+        tokio::time::sleep(ANCHOR_DRAIN_WINDOW * 3).await;
+        assert_eq!(
+            state.rematerializations.load(Ordering::Relaxed),
+            1,
+            "a burst drains into one re-materialization"
+        );
+        // The projection reflects every row of the burst.
+
+
+
+        for key in &volume_keys {
+            let uid = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(key)).expect("uid");
+            assert!(rig.registry.lookup_anchor(&uid).is_some(), "volume {key} registered");
+        }
+        let stored = StoredBinding::new(
+            serde_json::from_slice(&serde_json::to_vec(&binding_spec()).expect("binding spec"))
+               .expect("binding spec"),
+            resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&binding_key)).expect("uid"),
+            d2b_contracts_resource::v3::ResourceGeneration::new(1).expect("generation"),
+            ZoneRevision::new(0),
+        );
+        let socket = stored.socket_identity(&rig.zone_token);
+        assert!(
+            rig.registry.lookup_socket_target_by_identity(&socket).await.is_some(),
+            "the burst's binding target registered"
+        );
+        task.abort();
+    }
+
+    /// A notice for a type the selector does not cover leaves the pending
+    /// flag clear.
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_notice_for_an_uncovered_type_leaves_the_pending_flag_clear() {
+        let rig = anchor_subscription_rig();
+        let state = Arc::new(AnchorSubscriptionState::default());
+        let task = spawn_subscription(&rig, &state, rig.hub.snapshot_revision());
+        // A Process row lies outside the Volume/VolumeBinding selector,so
+        // the hub filters it before the stream and never sets the flag.
+
+        rig.hub
+           .publish(ChangeNotice {
+                key: ResourceKey::new("test", "Process", "worker"),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        tokio::time::sleep(ANCHOR_DRAIN_WINDOW * 2).await;
+        assert!(!state.pending.load(Ordering::Relaxed));
+        assert_eq!(state.rematerializations.load(Ordering::Relaxed), 0);
+        task.abort();
+    }
+
+    /// A terminal missed-data delivery causes a relist, a fresh
+    /// registration, a replay drain, and the subscription continues
+    /// (AE4).
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_terminal_missed_delivery_relists_and_the_subscription_continues() {
+        let rig = anchor_subscription_rig_with(WatchHubConfig {
+            ring_capacity: 32,
+            delivery_buffer: 1,
+        });
+        let key_b = ResourceKey::new("test", "Volume", "b");
+        commit_volume_row(&rig.store, &key_b).await;
+        let key_c = ResourceKey::new("test", "Volume", "c");
+        commit_volume_row(&rig.store, &key_c).await;
+        let state = Arc::new(AnchorSubscriptionState::default());
+        let task = spawn_subscription(&rig, &state, rig.hub.snapshot_revision());
+        // The subscription is live before the burst.
+
+
+
+        let mut live = false;
+        for _ in 0..50 {
+            if rig.hub.subscriber_count().await == 1 {
+                live = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(live, "the subscription registered");
+        // A one-deep delivery buffer forces a Missed on the second back-to-back
+        // publish: the subscription task cannot run between them on this
+        // single-threaded runtime.
+
+
+
+        rig.hub
+           .publish(ChangeNotice {
+                key: key_b.clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        rig.hub
+           .publish(ChangeNotice {
+                key: key_c.clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        // The terminal missed-data delivery caused a relist, a fresh
+        // registration, and both rows are reflected (row b is durable, row c
+        // is durable, and the interval after the Missed is replayed).
+
+
+
+        wait_for(|| state.relists.load(Ordering::Relaxed) >= 1).await;
+        for key in [&key_b, &key_c] {
+            let uid = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(key)).expect("uid");
+            assert!(rig.registry.lookup_anchor(&uid).is_some(), "relist reflects row {key}");
+        }
+        // The subscription continues: a later notice is still drained.
+
+
+        let key_d = ResourceKey::new("test", "Volume", "d");
+        commit_volume_row(&rig.store, &key_d).await;
+        rig.hub
+           .publish(ChangeNotice {
+                key: key_d.clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        let uid_d = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&key_d)).expect("uid");
+        wait_for(|| rig.registry.lookup_anchor(&uid_d).is_some()).await;
+        task.abort();
+    }
+
+    /// An expired registration causes the same recovery path and does not end
+    /// the subscription.
+
+
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_expired_registration_relists_and_does_not_end_the_subscription() {
+        let rig = anchor_subscription_rig_with(WatchHubConfig {
+            ring_capacity: 4,
+            delivery_buffer: 16,
+        });
+        // The anchor is taken before the ring churns past it, so the
+        // registration is Expired.
+
+
+        let anchor = rig.hub.snapshot_revision();
+        let keys: Vec<ResourceKey> = (0..8)
+           .map(|i| ResourceKey::new("test", "Volume", format!("vol-{i}")))
+           .collect();
+        for key in &keys {
+            commit_volume_row(&rig.store, key).await;
+        }
+        for key in &keys {
+            rig.hub
+               .publish(ChangeNotice {
+                    key: key.clone(),
+                    kind: ChangeKind::Upsert,
+                    source: ChangeSource::Desired,
+                })
+               .await;
+        }
+        let state = Arc::new(AnchorSubscriptionState::default());
+        let task = spawn_subscription(&rig, &state, anchor);
+        // The recovery relists from the handed-over snapshot revision and the
+        // type-scoped reload rebuilds the projection from the store.
+
+
+        wait_for(|| state.relists.load(Ordering::Relaxed) >= 1).await;
+        for key in &keys {
+            let uid = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(key)).expect("uid");
+            assert!(rig.registry.lookup_anchor(&uid).is_some(), "relist rebuild reflects row {key}");
+        }
+        // The subscription continues: a later notice is acted on.
+
+
+
+        let later = ResourceKey::new("test", "Volume", "later");
+        commit_volume_row(&rig.store, &later).await;
+        rig.hub
+           .publish(ChangeNotice {
+                key: later.clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        let uid_later = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&later)).expect("uid");
+        wait_for(|| rig.registry.lookup_anchor(&uid_later).is_some()).await;
+        assert!(
+            state.rematerializations.load(Ordering::Relaxed) >= 1,
+            "the subscription continues after the expired registration"
+        );
+        task.abort();
+    }
+
+    /// The registry rebuild after a relist reflects the durable rows,
+    /// including a row committed while the subscription was between streams.
+
+
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_relist_rebuild_reflects_durable_rows_including_one_committed_between_streams() {
+        let rig = anchor_subscription_rig_with(WatchHubConfig {
+            ring_capacity: 32,
+            delivery_buffer: 1,
+        });
+        let keys: Vec<ResourceKey> = ["b", "c", "between"]
+           .iter()
+           .map(|name| ResourceKey::new("test", "Volume", *name))
+           .collect();
+        for key in &keys[..2] {
+            commit_volume_row(&rig.store, key).await;
+        }
+        let state = Arc::new(AnchorSubscriptionState::default());
+        let task = spawn_subscription(&rig, &state, rig.hub.snapshot_revision());
+        let mut live = false;
+        for _ in 0..50 {
+            if rig.hub.subscriber_count().await == 1 {
+                live = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(live, "the subscription registered");
+        // A one-deep delivery buffer forces a Missed on the second back-to-back
+        // publish, ending the live stream. Then a row is committed with no
+        // notice: only the recovery's type-scoped reload can register it,
+        // and its ensure is queued before that reload's list, so the row is
+        // visible to the store read (committed between streams).
+
+
+
+        rig.hub
+           .publish(ChangeNotice {
+                key: keys[0].clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        rig.hub
+           .publish(ChangeNotice {
+                key: keys[1].clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+           .await;
+        commit_volume_row(&rig.store, &keys[2]).await;
+        wait_for(|| state.relists.load(Ordering::Relaxed) >= 1).await;
+        for key in &keys {
+            let uid = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(key)).expect("uid");
+            assert!(rig.registry.lookup_anchor(&uid).is_some(), "the relist rebuild reflects row {key}");
+        }
+        task.abort();
+    }
+
+    /// A status-source notice for a Volume row does not set the pending
+    /// flag, so only durable changes trigger a re-materialization.
+
+
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_status_source_notice_does_not_set_the_pending_flag() {
+        let rig = anchor_subscription_rig();
+        let key = ResourceKey::new("test", "Volume", "state");
+        commit_volume_row(&rig.store, &key).await;
+        let state = Arc::new(AnchorSubscriptionState::default());
+        let task = spawn_subscription(&rig, &state, rig.hub.snapshot_revision());
+        // A status transition for a Volume row arrives on the same
+        // subscription (the selector matches the key alone) but must not
+        // trigger a drain.
+
+
+
+        rig.hub
+           .publish(ChangeNotice {
+                key: key.clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::RuntimeStatus,
+            })
+           .await;
+        tokio::time::sleep(ANCHOR_DRAIN_WINDOW * 2).await;
+        assert!(!state.pending.load(Ordering::Relaxed));
+        assert_eq!(state.rematerializations.load(Ordering::Relaxed), 0);
+        task.abort();
+    }
+
+    /// A sustained stream that never empties still performs a re-materialization
+    /// within the bounded window, and the stall line is logged.
+
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_sustained_stream_still_rematerializes_within_the_bounded_window() {
+        let rig = anchor_subscription_rig();
+        let key = ResourceKey::new("test", "Volume", "state");
+        commit_volume_row(&rig.store, &key).await;
+        let state = Arc::new(AnchorSubscriptionState::default());
+        let captured = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let writer = CapturedWriter(Arc::clone(&captured));
+        let subscriber = tracing_subscriber::fmt()
+           .with_writer(writer)
+           .with_max_level(tracing::Level::WARN)
+           .with_ansi(false)
+           .finish();
+        // The drain task must run on this thread for the thread-local
+        // subscriber to see its warning, so this test uses the current-thread
+        // runtime and holds the guard for its whole body.
+        let guard = tracing::subscriber::set_default(subscriber);
+        let task = tokio::spawn(run_anchor_subscription(
+            Arc::clone(&rig.hub),
+            anchor_projection_selector(),
+            Arc::clone(&rig.registry),
+            Arc::clone(&rig.store),
+            rig.zone_token.clone(),
+            Arc::clone(&state),
+            rig.hub.snapshot_revision(),
+            ANCHOR_DRAIN_WINDOW,
+        ));
+        // A stream that never empties: publish a matching notice every few
+        // milliseconds, faster than the bounded drain window.
+
+
+
+        let publisher_hub = Arc::clone(&rig.hub);
+        let publisher_key = key.clone();
+        let publisher = tokio::spawn(async move {
+            loop {
+                publisher_hub
+                   .publish(ChangeNotice {
+                        key: publisher_key.clone(),
+                        kind: ChangeKind::Upsert,
+                        source: ChangeSource::Desired,
+                    })
+                   .await;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        // The bounded window still re-materializes under sustained traffic.
+
+
+        wait_for(|| {
+            state.rematerializations.load(Ordering::Relaxed)
+                >= ANCHOR_BUSY_DRAINS_BEFORE_WARN
+        })
+        .await;
+        publisher.abort();
+        task.abort();
+        // The stall line was logged: a stalled consumer is observable.
+
+
+        let lines = String::from_utf8(captured.lock().expect("capture lock").clone()).expect("utf-8");
+        assert!(
+            lines.contains("anchor projection drain window passed"),
+            "stall line logged with the sustained stream: {lines}"
+        );
+        drop(guard);
+    }
+
+    /// A restart abandons the old registration and relists from a fresh one
+    /// anchored after the commit it must heal, rather than resuming a stale
+    /// cursor: a row committed in the window between the restart's reload and
+    /// its fresh registration still resolves.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_restart_relists_instead_of_resuming_a_stale_cursor() {
+        let rig = anchor_subscription_rig();
+        let state = Arc::new(AnchorSubscriptionState::default());
+        let first = ResourceKey::new("test", "Volume", "first");
+        commit_volume_row(&rig.store, &first).await;
+        let task = spawn_subscription(&rig, &state, rig.hub.snapshot_revision());
+        rig.hub
+            .publish(ChangeNotice {
+                key: first.clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+            .await;
+        let first_uid =
+            resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&first)).expect("uid");
+        wait_for(|| rig.registry.lookup_anchor(&first_uid).is_some()).await;
+        // The subscription is stopped: nothing covers the stream from here.
+        task.abort();
+        // A restart anchors the fresh registration BEFORE the reload, so a
+        // commit published after the anchor is replayed into the fresh
+        // registration and a commit read by the reload is covered by it. A
+        // row that is in neither would stay unregistered.
+        let anchor = rig.hub.snapshot_revision();
+        let reloaded = reload_anchor_rows(&rig.registry, &rig.zone_token, &rig.store).await;
+        assert!(reloaded, "the restart's reload read every row set");
+        let window_row = ResourceKey::new("test", "Volume", "window");
+        commit_volume_row(&rig.store, &window_row).await;
+        rig.hub
+            .publish(ChangeNotice {
+                key: window_row.clone(),
+                kind: ChangeKind::Upsert,
+                source: ChangeSource::Desired,
+            })
+            .await;
+        let restarted = spawn_subscription(&rig, &state, anchor);
+        let window_uid = resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&window_row))
+            .expect("uid");
+        wait_for(|| rig.registry.lookup_anchor(&window_uid).is_some()).await;
+        restarted.abort();
+    }
+
+    /// The API-apply route: a Volume row committed
+    /// through the manager client resolves with no writer-side refresh call,
+    /// because the manager's own Desired notice drives the projection. This is
+    /// the route the retired ingest trailing reload used to cover.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_api_applied_volume_resolves_without_a_writer_side_refresh() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane prepare");
+        plane.complete_initial_load().await.expect("initial load");
+        let key = ResourceKey::new("test", "Volume", "api-applied");
+        let uid =
+            resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&key)).expect("uid");
+        assert!(
+            plane.registry().lookup_anchor(&uid).is_none(),
+            "no anchor is registered before the commit"
+        );
+        plane
+           .client()
+           .apply(
+                d2b_resource_runtime::manager::MutationSubject {
+                    principal: "test".to_owned(),
+                    origin: d2b_resource_runtime::identity::ResourceProvenance::Api,
+                },
+                DesiredResource {
+                    key: key.clone(),
+                    spec: serde_json::to_vec(
+                        &serde_json::json!({ "providerRef": "Provider/volume-local" }),
+                    )
+                   .expect("volume spec"),
+                    metadata: br#"{"annotations":{},"labels":{},"ownerRef":null}"#.to_vec(),
+                    provenance: d2b_resource_runtime::identity::ResourceProvenance::Api,
+                },
+            )
+           .await
+           .expect("the api apply commits");
+        wait_for(|| plane.registry().lookup_anchor(&uid).is_some()).await;
+        plane.shutdown().await;
+    }
+
+
+    /// The controller child-mutation bridge route: a Volume row committed
+    /// through the bridge resolves with the bridge's
+    /// per-call registry reload retired, because the manager's own notice
+    /// drives the projection.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_bridge_committed_volume_resolves_without_the_bridge_refresh() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let plane = Arc::new(ResourcePlaneV3::open(inputs).await.expect("plane"));
+        plane
+           .ingest_nix_bundle(&test_bundle(vec![bundle_row(
+                "Guest",
+                "acceptance-guest",
+                serde_json::json!({"systemArtifactId": "acceptance-system"}),
+            )]))
+           .await
+           .expect("owner ingest");
+        let zone = ZoneId::parse("test").expect("zone");
+        let target = ResourceRef::parse("Volume/bridge-committed").expect("target");
+        let envelope = serde_json::to_vec(&serde_json::json!({
+            "apiVersion": "resources.d2bus.org/v3",
+            "type": "Volume",
+            "metadata": {
+                "name": "bridge-committed",
+                "zone": "test",
+                "ownerRef": "Guest/acceptance-guest",
+                "finalizers": [],
+                "deletionRequestedAt": null,
+                "createdAt": "1970-01-01T00:00:00.000Z",
+                "updatedAt": "1970-01-01T00:00:00.000Z",
+                "generation": 1,
+                "revision": 1,
+                "managedBy": "controller",
+            },
+            "spec": { "providerRef": "Provider/volume-local" },
+            "status": { "observedGeneration": 0, "phase": "Pending", "conditions": [], "resource": {} },
+        }))
+       .expect("child envelope");
+        let port = crate::resource_runtime::plane_controller_bridge::PlaneChildMutations::new(
+            Arc::clone(&plane),
+            zone,
+            ResourceRef::parse("Guest/acceptance-guest").expect("owner"),
+        );
+        port.ensure(&target, &envelope)
+           .await
+           .expect("the bridge commits the volume");
+        let key = ResourceKey::new("test", "Volume", "bridge-committed");
+        let uid =
+            resource_uid(&d2b_resource_runtime::manager::deterministic_uid(&key)).expect("uid");
+        wait_for(|| plane.registry().lookup_anchor(&uid).is_some()).await;
+        plane.shutdown().await;
+    }
+
+
+    /// A later role-ful anchor replaces an earlier one, so a Volume whose
+    /// NixClosure attachment moved heals on its next re-registration, while a
+    /// name-only registration never downgrades an anchor that already
+    /// carries a role.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_later_role_ful_anchor_replaces_an_earlier_one() {
+        let registry = PlaneResourceRegistry::new();
+        let uid = [0x42u8; 16];
+        let uid_str = resource_uid_string(&uid);
+        registry
+            .register_volume(
+                &uid_str,
+                "state",
+                VolumeAnchor {
+                    volume_name: "state".to_owned(),
+                    guest_ref: Some(ResourceRef::parse("Guest/first").expect("guest")),
+                    role: Some(ZoneNixClosureVolumeRole::StoreView),
+                },
+            )
+            .await;
+        registry
+            .register_volume(
+                &uid_str,
+                "state",
+                VolumeAnchor {
+                    volume_name: "state".to_owned(),
+                    guest_ref: Some(ResourceRef::parse("Guest/second").expect("guest")),
+                    role: Some(ZoneNixClosureVolumeRole::StoreView),
+                },
+            )
+            .await;
+        let anchor = registry
+            .lookup_anchor(&resource_uid(&uid).expect("uid"))
+            .expect("anchor");
+        assert_eq!(
+            anchor.guest_ref.as_ref().map(ResourceRef::to_canonical_string),
+            Some("Guest/second".to_owned()),
+            "the later attachment replaced the earlier one"
+        );
+        registry
+            .register_volume(
+                &uid_str,
+                "state",
+                VolumeAnchor {
+                    volume_name: "state".to_owned(),
+                    guest_ref: None,
+                    role: None,
+                },
+            )
+            .await;
+        let anchor = registry
+            .lookup_anchor(&resource_uid(&uid).expect("uid"))
+            .expect("anchor");
+        assert!(
+            anchor.role.is_some(),
+            "a name-only registration did not downgrade the anchor"
+        );
+    }
+
 }
