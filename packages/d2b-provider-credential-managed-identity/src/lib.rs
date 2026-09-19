@@ -43,6 +43,8 @@ pub use controller::{
     PROVIDER_REVOKE_FINALIZER,
 };
 
+/// Canonical wire backend identity the envelope binds this Provider under.
+pub const BACKEND_REF: &str = "credential-managed-identity";
 /// Canonical Provider reference.
 pub const PROVIDER_REF: &str = "Provider/credential-managed-identity";
 /// Maximum active leases per Provider instance.

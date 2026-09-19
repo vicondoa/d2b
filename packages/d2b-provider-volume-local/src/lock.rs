@@ -12,6 +12,9 @@ use d2b_contracts_resource::v3::execution_policy::BoundedToken;
 /// Maximum lock acquisition deadline admitted by this Provider.
 pub const MAX_LOCK_DEADLINE_MS: u64 = 60_000;
 
+/// The lock id prefix the daemon derives the per-root volume lock id under.
+pub const VOLUME_LOCK_PREFIX: &str = "volume-lock-";
+
 /// A validated opaque lock identity.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LockId(BoundedToken);

@@ -28,6 +28,10 @@ use d2b_core::{
     bundle_resolver::BundleResolver,
     processes::{ProcessNode, ProcessRole},
 };
+use d2b_provider_credential::{
+    ENTRA_BACKEND_REF, MANAGED_IDENTITY_BACKEND_REF, MANAGED_IDENTITY_PROVIDER_REF,
+    SECRET_SERVICE_BACKEND_REF,
+};
 use d2b_provider_process::{
     DeviceWorkerLaunch, ExecutionMode, LaunchRow, ProviderAdoption, ProviderLiveness,
     ServingWorkerLaunch, ServingWorkerRoot, execution_target_allowed, resolve_launch_identity,
@@ -405,7 +409,7 @@ fn identity_changed_error(mismatches: Vec<String>) -> String {
         mismatches = %mismatches.join(","),
         "Process provider identity mismatch",
     );
-    format!("provider-process-identity-changed:{}", mismatches.join(","))
+    format!("provider-process-identities-changed:{}", mismatches.join(","))
 }
 
 #[derive(Debug, Clone)]
@@ -3352,13 +3356,11 @@ fn is_credential_provider_ref(provider_ref: &ResourceRef) -> bool {
     provider_ref.resource_type().as_str() == "Provider"
         && matches!(
             provider_ref.name().as_str(),
-            "credential-secret-service"
-                | "credential-entra"
-                | "credential-managed-identity"
+            SECRET_SERVICE_BACKEND_REF | ENTRA_BACKEND_REF | MANAGED_IDENTITY_BACKEND_REF
         )
 }
 
-fn is_managed_identity_agent_context(
+fn is_credential_agent_context(
     context: &ProcessResourceContext<'_>,
     execution: &d2b_contracts_resource::v3::process::ExecutionSpec,
 ) -> bool {
@@ -3369,9 +3371,9 @@ fn is_managed_identity_agent_context(
             .is_some_and(|owner| owner.resource_type().as_str() == "Credential")
         && context.resource_ref.resource_type().as_str() == "Process"
         && context.resource_ref.name().as_str().starts_with("mi-agent-")
-        && execution.template().as_str() == "d2b-managed-identity-agent"
+        && execution.template().as_str() == d2b_provider_credential::CREDENTIAL_AGENT_BINARY
         && context.controller_provider_ref.as_ref().is_some_and(|provider| {
-            provider.to_canonical_string() == "Provider/credential-managed-identity"
+            provider.to_canonical_string() == MANAGED_IDENTITY_PROVIDER_REF
         })
 }
 
@@ -3573,7 +3575,7 @@ async fn serving_worker_launch_args(
 ) -> Result<Vec<String>, String> {
     let zone_token = BoundedToken::parse(zone.as_str().to_owned())
         .map_err(|_| "provider-ticket:serving-zone-invalid".to_owned())?;
-    let socket_path = crate::resource_plane_v3::virtiofs_socket_path(
+    let socket_path = crate::resource_plane_v3::serving_socket_path(
         socket_runtime_dir,
         &zone_token,
         &launch.volume_ref,
@@ -3895,7 +3897,7 @@ fn resource_ticket(
         && launch
             .owner_ref()
             .is_some_and(|owner| owner.resource_type().as_str() == "Provider");
-    let managed_identity_agent = is_managed_identity_agent_context(context, execution);
+    let credential_agent = is_credential_agent_context(context, execution);
     if exact_static_controller
         && launch
             .owner_ref()
@@ -3907,7 +3909,7 @@ fn resource_ticket(
     if execution.process_class() == ProcessClass::Controller && !exact_static_controller {
         return Err("provider-ticket:controller-owner-invalid".to_owned());
     }
-    if managed_identity_agent && execution.execution_ref().resource_type().as_str() != "Guest" {
+    if credential_agent && execution.execution_ref().resource_type().as_str() != "Guest" {
         return Err("provider-ticket:credential-agent-guest-required".to_owned());
     }
     let static_intent = exact_static_controller.then(|| {
@@ -3931,13 +3933,13 @@ fn resource_ticket(
         .is_some_and(|owner| owner.resource_type().as_str() == "Device");
     let generic_intent = if exact_static_controller {
         None
-    } else if managed_identity_agent {
+    } else if credential_agent {
         bundle.find_provider_component_intent_for_template(
             &execution_ref,
             execution_domain,
             user_ref.as_deref(),
             execution.template().as_str(),
-            Some("Provider/credential-managed-identity"),
+            Some(MANAGED_IDENTITY_PROVIDER_REF),
         )
     } else if binding_worker {
         // Binding-owned serving workers resolve through the owning
@@ -4002,7 +4004,7 @@ fn resource_ticket(
         .or(generic_intent)
         .ok_or_else(|| "provider-ticket:template-not-found".to_owned())?;
     let ticket_template = if exact_static_controller
-        || managed_identity_agent
+        || credential_agent
         || binding_worker
         || device_worker
     {
@@ -4064,8 +4066,8 @@ fn resource_ticket(
     .with_launch_identity(launch.clone())
     .map_err(|error| format!("provider-ticket:{}", error.code()))?;
     ticket = ticket
-        .with_inherited_fd_count(if exact_static_controller || managed_identity_agent {
-            if managed_identity_agent
+        .with_inherited_fd_count(if exact_static_controller || credential_agent {
+            if credential_agent
                 || launch
                     .owner_ref()
                     .is_some_and(is_credential_provider_ref)

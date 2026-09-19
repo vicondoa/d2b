@@ -532,7 +532,11 @@ fn nix_closure_volume_anchor(
             Ok((owner.clone(), ZoneNixClosureVolumeRole::SystemVolume))
         }
         (None, Some(guest))
-            if volume_name == format!("store-view-{}", guest.name().as_str()) =>
+            if volume_name == format!(
+                    "{}{}",
+                    d2b_provider_volume_local::STORE_VIEW_VOLUME_NAME_PREFIX,
+                    guest.name().as_str()
+                ) =>
         {
             Ok((guest, ZoneNixClosureVolumeRole::StoreView))
         }
@@ -605,7 +609,7 @@ fn resource_uid_string(bytes: &[u8; 16]) -> String {
 /// contract): the private virtiofs socket path for one (volume, guest)
 /// serving pair. The rendered accessor is crate-private in the provider
 /// today; U14 collapses this mirror behind a provider-owned probe.
-pub(crate) fn virtiofs_socket_path(
+pub(crate) fn serving_socket_path(
     socket_runtime_dir: &Path,
     zone: &BoundedToken,
     volume_ref: &ResourceRef,
@@ -684,7 +688,7 @@ impl BindingSocketProbe {
             .registry
             .socket_target_by_identity(&self.zone_token, socket)
             .await?;
-        virtiofs_socket_path(
+        serving_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
             &target.volume_ref,
@@ -712,7 +716,7 @@ impl SocketWaitEffect {
             .registry
             .socket_target_by_ref(&self.zone_token, producer_ref)
             .await?;
-        virtiofs_socket_path(
+        serving_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
             &target.volume_ref,
@@ -973,7 +977,7 @@ impl SocketRemoveEffect {
             .registry
             .socket_target_by_ref(&self.zone_token, producer_ref)
             .await?;
-        virtiofs_socket_path(
+        serving_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
             &target.volume_ref,

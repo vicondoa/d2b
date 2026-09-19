@@ -74,5 +74,5 @@ pub use source::{
     BlockImagePlan, SourcePolicy, SourcePolicyCatalog, TmpfsMountOptions, validate_source_spec,
 };
 pub use status::{AttachmentState, AttachmentStatus, LayoutPhase, VolumeStatusReport};
-pub use store_view::StoreViewMarkerEvidence;
+pub use store_view::{STORE_VIEW_VOLUME_NAME_PREFIX, StoreViewMarkerEvidence};
 pub use views::{AttachmentPlan, admit_access, admit_attachments, is_read_only, resolve_view};
