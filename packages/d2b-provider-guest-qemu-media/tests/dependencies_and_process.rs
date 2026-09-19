@@ -1,7 +1,7 @@
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_guest_qemu_media::{
     DeviceAdmission, DeviceObservation, DevicePhase, PlatformClass, ProcessSpec, RuntimeVolumeSpec,
-    build_process_spec, validate_process_spec,
+    build_process_spec, runtime_volume_name, validate_process_spec,
 };
 
 fn guest() -> ResourceRef {
@@ -26,6 +26,18 @@ fn runtime_volume_is_ephemeral_and_waits_for_process_proof() {
     assert_eq!(volume.layout[2].restart_policy, "clear-on-runner-restart");
     assert!(volume.validate().is_ok());
     assert!(serde_json::to_string(&volume).unwrap().contains("qmp.sock"));
+}
+
+#[test]
+fn runtime_volume_name_follows_the_declared_shape() {
+    assert_eq!(runtime_volume_name("media-vm"), "media-vm-runtime");
+    assert_eq!(runtime_volume_name("a"), "a-runtime");
+    // The controller's runtime Volume row and the daemon's dependency lookup
+    // both resolve the name from this declaration: the guest name plus the
+    // declared suffix.
+    let volume = RuntimeVolumeSpec::new(guest(), "corp", 10 * 1024 * 1024, 1024).unwrap();
+    assert!(volume.name.ends_with("-runtime"));
+    assert!(volume.validate().is_ok());
 }
 
 #[test]

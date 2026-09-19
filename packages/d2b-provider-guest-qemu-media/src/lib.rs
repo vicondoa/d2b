@@ -20,6 +20,7 @@ pub use controller::{
     QemuMediaPhase, QemuMediaReconcileOutcome, QemuMediaRecoveryState, RuntimeVolumeSpec,
     RuntimeVolumeView, VolumeLayoutType, VolumeQuota, build_process_spec, validate_process_spec,
 };
+pub use controller::process_builder::PROCESS_TEMPLATE;
 pub use controller::reconcile::QEMU_MEDIA_REPAIR_INTERVAL_SECS;
 pub use qmp::{
     QmpCommand, QmpError, QmpGreeting, QmpReply, QmpSession, QmpTransport, QmpVmStatus,
@@ -31,6 +32,12 @@ pub use types::{
     NetworkAttachment, RemovableVolumeRef, RtcBase, audio_capability,
     build_guest_resource_spec, runtime_volume_name,
 };
+
+/// The device-admission media contract id this Provider's controller
+/// validates observations against.
+///
+/// The daemon reads this id instead of spelling the contract itself.
+pub const MEDIA_CONTRACT_ID: &str = "qemu-media/v1";
 
 /// Stable Provider implementation identifier.
 pub const QEMU_MEDIA_IMPLEMENTATION_ID: &str = "qemu-media";
