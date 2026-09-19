@@ -24,7 +24,21 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
+
+[features]
+test-support = []
 
 [dev-dependencies]
 async-trait = "0.1"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
+
+[[test]]
+name = "engine"
+path = "tests/engine.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "registration"
+path = "tests/registration.rs"
+required-features = ["test-support"]

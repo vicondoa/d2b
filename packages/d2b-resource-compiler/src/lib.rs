@@ -1321,20 +1321,6 @@ where
     compile_inner(entry, anchor, keys, bootstrap)
 }
 
-/// Alias with the resource-plane name used by the Phase 2 work item.
-pub fn compile_provider_artifact<A, R>(
-    entry: &ArtifactCatalogEntry,
-    anchor: &A,
-    keys: &R,
-    bootstrap: &BootstrapBoundary,
-) -> Result<CompiledArtifact, Diagnostic>
-where
-    A: AnchoredDir,
-    R: PublisherKeyResolver,
-{
-    compile_artifact(entry, anchor, keys, bootstrap)
-}
-
 /// Open the selected output with the production Linux adapter and compile it.
 #[cfg(target_os = "linux")]
 pub fn compile_linux_artifact<R>(

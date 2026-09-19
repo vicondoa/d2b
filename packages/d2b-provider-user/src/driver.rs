@@ -391,14 +391,14 @@ pub fn user_descriptor(effects: Arc<dyn UserDriverEffects>) -> DriverDescriptor 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::Ordering;
 
     use d2b_contracts_resource::v3::{
-        ResourcePhase, ResourceRef, ResourceSpec,
+        ResourcePhase, ResourceSpec,
         execution_policy::to_base_object,
         user::{OsUsername, UserSpec},
     };
-    use d2b_provider_system_core::{UserDiscoveryCondition, UserStatusReport};
+    use d2b_provider_system_core::UserDiscoveryCondition;
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
         WatchRegistration,
@@ -412,60 +412,15 @@ mod tests {
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
+    use crate::test_support::RecordingEffects;
+
     use super::{
         UserDriverEffects, UserDriverFactory, UserDriverStatus, user_descriptor, user_spec_decoder,
     };
 
     // -- fakes ---------------------------------------------------------------
 
-    /// Scripted discovery port: records every call order-preservingly and can
-    /// fail discovery.
-    struct RecordingEffects {
-        calls: parking_lot::Mutex<Vec<String>>,
-        phase: parking_lot::Mutex<ResourcePhase>,
-        fail: AtomicBool,
-    }
-
-    impl RecordingEffects {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
-                phase: parking_lot::Mutex::new(ResourcePhase::Ready),
-                fail: AtomicBool::new(false),
-            })
-        }
-
-        fn call_order(&self) -> Vec<String> {
-            self.calls.lock().clone()
-        }
-
-        fn set_phase(&self, phase: ResourcePhase) {
-            *self.phase.lock() = phase;
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl UserDriverEffects for RecordingEffects {
-        async fn observe_user(
-            &self,
-            user_ref: &ResourceRef,
-            _spec: &UserSpec,
-        ) -> Result<UserStatusReport, String> {
-            self.calls.lock().push("observe-user".to_owned());
-            if self.fail.load(Ordering::SeqCst) {
-                return Err("the scripted discovery refused".to_owned());
-            }
-            Ok(UserStatusReport {
-                user_ref: user_ref.clone(),
-                provider: "system-core",
-                phase: *self.phase.lock(),
-                discovery: UserDiscoveryCondition::Discovered,
-                identity: None,
-            })
-        }
-    }
-
-    /// Recording manager: the family must never mutate children or registers;
+/// Recording manager:the family must never mutate children or registers;
     /// any unexpected manager call fails the test loudly through the recorded
     /// call list.
     struct RecordingManager {

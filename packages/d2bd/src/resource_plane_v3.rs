@@ -2650,66 +2650,6 @@ mod tests {
         .expect("bundle row")
     }
 
-    struct FakeInteractionEffects;
-
-    #[async_trait::async_trait]
-    impl InteractionDriverEffects for FakeInteractionEffects {
-        async fn reconcile(
-            &self,
-            _kind: d2b_provider_wayland_policy::InteractionKind,
-            _request: &d2b_provider_wayland_policy::InteractionEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_wayland_policy::InteractionEffectOutcome,
-            d2b_provider_wayland_policy::InteractionEffectError,
-        > {
-            Ok(d2b_provider_wayland_policy::InteractionEffectOutcome::phase(
-                d2b_provider_wayland_policy::InteractionEffectPhase::Pending,
-            ))
-        }
-
-        async fn finalize(
-            &self,
-            _kind: d2b_provider_wayland_policy::InteractionKind,
-            _request: &d2b_provider_wayland_policy::InteractionEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_wayland_policy::InteractionFinalize,
-            d2b_provider_wayland_policy::InteractionEffectError,
-        > {
-            Ok(d2b_provider_wayland_policy::InteractionFinalize::Complete)
-        }
-    }
-
-    /// Guest effects that stay Pending: the plane tests only need the Guest
-    /// driver registered, never a Guest reaching Ready.
-    struct FakeGuestEffects;
-
-    #[async_trait::async_trait]
-    impl d2b_provider_guest::GuestDriverEffects for FakeGuestEffects {
-        async fn reconcile(
-            &self,
-            _kind: d2b_provider_guest::GuestKind,
-            _request: &d2b_provider_guest::GuestEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_guest::GuestEffectOutcome,
-            d2b_provider_guest::GuestEffectError,
-        > {
-            Ok(d2b_provider_guest::GuestEffectOutcome::phase(
-                d2b_provider_guest::GuestEffectPhase::Pending,
-            ))
-        }
-
-        async fn finalize(
-            &self,
-            _kind: d2b_provider_guest::GuestKind,
-            _request: &d2b_provider_guest::GuestEffectRequest<'_>,
-        ) -> Result<
-            d2b_provider_guest::GuestFinalizeStage,
-            d2b_provider_guest::GuestEffectError,
-        > {
-            Ok(d2b_provider_guest::GuestFinalizeStage::Complete)
-        }
-    }
-
     fn test_inputs() -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let spec_store_dir = dir.path().join("daemon-state/zones/test");
@@ -2787,8 +2727,16 @@ mod tests {
                         d2b_provider_device::test_support::RecordingEffects::default(),
                     ),
                 },
-                guest_effects: Arc::new(FakeGuestEffects),
-                interaction_effects: Arc::new(FakeInteractionEffects),
+                guest_effects: {
+                    let effects = d2b_provider_guest::test_support::ScriptedEffects::new();
+                    // The old plane fake reported Pending (the plane tests
+                    // only need the Guest driver registered, never a Guest
+                    // reaching Ready); the shared double starts Ready, so
+                    // script it back.
+                    effects.set_phase(d2b_provider_guest::GuestEffectPhase::Pending);
+                    effects
+                },
+                interaction_effects: d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
                 trusted_context_publication: None,
                 foundation: None,
             },

@@ -2,34 +2,17 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use std::sync::Arc;
-
-use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid};
+use d2b_provider_provider::test_support::RecordingEffects;
 use d2b_provider_provider::{
-    PROVIDER_TYPE_NAME, ProviderDriverArgs, ProviderDriverEffects, provider_descriptor,
+    PROVIDER_TYPE_NAME, ProviderDriverArgs, provider_descriptor,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, WellKnownType};
 
-/// The port instance the declaration carries; the registration boundary never
-/// reads session evidence.
-struct UnusedEffects;
-
-impl ProviderDriverEffects for UnusedEffects {
-    fn controller_session_evidence(
-        &self,
-        _process_ref: &ResourceRef,
-        _process_uid: &ResourceUid,
-        _generation: ResourceGeneration,
-    ) -> Option<serde_json::Value> {
-        None
-    }
-}
-
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     provider_descriptor(ProviderDriverArgs {
-        effects: Arc::new(UnusedEffects),
+        effects: RecordingEffects::new(),
     })
 }
 

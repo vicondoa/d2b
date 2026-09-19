@@ -167,10 +167,6 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         include_str!("../src/unsafe_local_helper.rs"),
     ),
     (
-        "src/usbipd_perenv_autostart.rs",
-        include_str!("../src/usbipd_perenv_autostart.rs"),
-    ),
-    (
         "src/vm_start_support.rs",
         include_str!("../src/vm_start_support.rs"),
     ),

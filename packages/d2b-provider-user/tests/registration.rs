@@ -2,36 +2,19 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use std::sync::Arc;
-
 use d2b_contracts_resource::v3::{
-    ResourceRef, ResourceSpec,
+    ResourceSpec,
     execution_policy::to_base_object,
     user::{OsUsername, UserSpec},
 };
-use d2b_provider_system_core::UserStatusReport;
-use d2b_provider_user::{UserDriverEffects, user_descriptor};
+use d2b_provider_user::test_support::RecordingEffects;
+use d2b_provider_user::user_descriptor;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{DriverRegistration, ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, WellKnownType};
 
-/// The port instance the declaration carries; the registration boundary
-/// never discovers an identity.
-struct UnusedEffects;
-
-#[async_trait::async_trait]
-impl UserDriverEffects for UnusedEffects {
-    async fn observe_user(
-        &self,
-        _user_ref: &ResourceRef,
-        _spec: &UserSpec,
-    ) -> Result<UserStatusReport, String> {
-        Err("registration boundary discovers no user".to_owned())
-    }
-}
-
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
-    user_descriptor(Arc::new(UnusedEffects))
+    user_descriptor(RecordingEffects::new())
 }
 
 /// The declaration registers the one type it serves and carries the

@@ -127,6 +127,7 @@ d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap", features
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-guest = { path = "../d2b-provider-guest", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
 d2b-provider-process = { path = "../d2b-provider-process", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-volume = { path = "../d2b-provider-volume", version = "0.0.0-bootstrap", features = ["test-support"] }
@@ -138,5 +139,10 @@ d2b-provider-network-local = { path = "../d2b-provider-network-local", version =
 d2b-provider-device = { path = "../d2b-provider-device", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-device-usbip = { path = "../d2b-provider-device-usbip", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-device-security-key = { path = "../d2b-provider-device-security-key", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-host = { path = "../d2b-provider-host", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-user = { path = "../d2b-provider-user", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-provider = { path = "../d2b-provider-provider", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-notification-desktop = { path = "../d2b-provider-notification-desktop", version = "0.0.0-bootstrap", features = ["test-support"] }
+d2b-provider-wayland-policy = { path = "../d2b-provider-wayland-policy", version = "0.0.0-bootstrap", features = ["test-support"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }

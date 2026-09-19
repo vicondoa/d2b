@@ -2,48 +2,22 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use std::sync::Arc;
-
 use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
 use d2b_provider_wayland_policy::{
-    InteractionDriverArgs, InteractionDriverEffects, InteractionEffectError,
-    InteractionEffectOutcome, InteractionEffectPhase, InteractionEffectRequest,
-    InteractionFinalize, InteractionKind, InteractionSpecEnvelope, InteractionType,
+    InteractionDriverArgs, InteractionSpecEnvelope, InteractionType,
     WAYLAND_POLICY_PROVIDER_REF, WAYLAND_POLICY_RESYNC, WAYLAND_POLICY_TYPE, WaylandPolicy,
     wayland_policy_descriptor, wayland_policy_spec_decoder,
 };
+use d2b_provider_wayland_policy::test_support::ScriptedEffects;
 use d2b_resource_runtime::identity::ResourceTypeName;
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, WellKnownType};
-
-/// The port instance the declaration carries; the registration boundary never
-/// runs an effect.
-struct UnusedEffects;
-
-#[async_trait::async_trait]
-impl InteractionDriverEffects for UnusedEffects {
-    async fn reconcile(
-        &self,
-        _kind: InteractionKind,
-        _request: &InteractionEffectRequest<'_>,
-    ) -> Result<InteractionEffectOutcome, InteractionEffectError> {
-        Ok(InteractionEffectOutcome::phase(InteractionEffectPhase::Pending))
-    }
-
-    async fn finalize(
-        &self,
-        _kind: InteractionKind,
-        _request: &InteractionEffectRequest<'_>,
-    ) -> Result<InteractionFinalize, InteractionEffectError> {
-        Ok(InteractionFinalize::Complete)
-    }
-}
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     wayland_policy_descriptor(InteractionDriverArgs {
         zone: "work".to_owned(),
         controller_generation: ControllerGeneration::new(3).expect("generation"),
-        effects: Arc::new(UnusedEffects),
+        effects: ScriptedEffects::new(),
         behavior: WaylandPolicy,
     })
 }

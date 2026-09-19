@@ -236,6 +236,48 @@ Bazel-backed host-integration lane.
 Hardware and live-host tests remain explicit manual tiers and require the
 matching devices or deployed d2b state.
 
+## Dead-code lane
+
+`make check-dead-code` runs the workspace dead-code gate through the
+`packages/xtask` `deadcode-check` entrypoint. It is not part of `make check`
+or the fixed Layer-1 job set; run it as a local gate when restructuring
+visibility, deleting code, or editing dependency lists.
+
+The scan is three independent passes over the repository-root workspace:
+
+- `cargo hawk check` - dead and overbroad public API (`pub` that can become
+  `pub(crate)`) across the production targets.
+- `cargo shear` - unused `Cargo.toml` dependencies (edition-2024 aware).
+- `cargo check --workspace --all-targets` with
+  `RUSTFLAGS="-A unused -D dead_code"` - the rustc `dead_code` lint isolated
+  as a hard error.
+
+Both external scanners are required, not optional: a missing binary fails the
+gate with an install hint, and that fail-closed behavior is deliberate.
+
+The lane is classified as a local Make goal, so `make check-dead-code` runs
+inside the d2b development shell that the dispatcher re-enters for classified
+goals (`nix develop .#bazel`), where `cargo-shear` is provisioned as a pinned
+shell package rather than fetched per invocation.
+`cargo-hawk` remains unprovisioned by the shell: it is built against rustc
+internals (`rustc_private`) and only runs with the exact toolchain it was
+built against, which the pinned stable toolchain cannot satisfy - install it
+against a matching nightly to run that pass.
+
+**Baseline.** The lane is red on an untouched tree and is meant to be read as a
+delta, not a boolean: `cargo-shear` reports 81 pre-existing findings repo-wide
+(identical on the untouched `v3` baseline) and the `cargo-hawk` pass does not
+run at all. Re-run the lane before and after a change and compare the finding
+set; a new finding is a regression, the standing corpus is not. The rustc
+`dead_code` pass is the one that is expected to be clean.
+
+**Cargo lanes and the test-support feature.** Three integration test binaries -
+`d2b-provider-wayland-policy`'s `tests/engine.rs` and `tests/registration.rs`,
+and `d2b-provider-guest`'s `tests/registration.rs` - declare
+`required-features = ["test-support"]`, so a plain `cargo test -p <crate>` skips
+them silently; run those crates with `--features test-support` (or
+`--all-features`) when working through cargo instead of the Bazel layer.
+
 ## Heavy lanes
 
 Every Layer-2, host-integration, hardware, live, and perf-heavy command

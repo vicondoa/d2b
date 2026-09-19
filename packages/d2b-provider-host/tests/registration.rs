@@ -2,37 +2,19 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use std::sync::Arc;
-
 use d2b_contracts_resource::v3::{
     ResourceRef, ResourceSpec,
     execution_policy::to_base_object,
     host::{HOST_PROVIDER_REF, HostSpec},
 };
-use d2b_provider_host::{HostDriverEffects, host_descriptor};
-use d2b_provider_system_core::HostObservationReport;
+use d2b_provider_host::test_support::RecordingEffects;
+use d2b_provider_host::host_descriptor;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{DriverRegistration, ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, WellKnownType};
 
-/// The port instance the declaration carries; the registration boundary never
-/// observes a host.
-struct UnusedEffects;
-
-#[async_trait::async_trait]
-impl HostDriverEffects for UnusedEffects {
-    async fn observe_host(
-        &self,
-        _host_ref: &ResourceRef,
-        _provider_ref: &ResourceRef,
-        _spec: &HostSpec,
-    ) -> Result<HostObservationReport, String> {
-        Err("registration boundary observes no host".to_owned())
-    }
-}
-
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
-    host_descriptor(Arc::new(UnusedEffects))
+    host_descriptor(RecordingEffects::new())
 }
 
 /// The declaration registers the one type it serves and carries the

@@ -2,45 +2,22 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use std::sync::Arc;
-
 use d2b_contracts_resource::v3::ControllerGeneration;
 use d2b_provider_guest::{
-    GUEST_TYPE_NAME, GuestDriverArgs, GuestDriverEffects, GuestEffectError, GuestEffectOutcome,
-    GuestEffectRequest, GuestFinalizeStage, GuestKind, guest_descriptor,
+    GUEST_TYPE_NAME, GuestDriverArgs, guest_descriptor,
 };
+use d2b_provider_guest::test_support::ScriptedEffects;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, ChildCustody, WellKnownType};
-
-/// The port instance the declaration carries; the registration boundary
-/// never runs an effect.
-struct UnusedEffects;
-
-#[async_trait::async_trait]
-impl GuestDriverEffects for UnusedEffects {
-    async fn reconcile(
-        &self,
-        _kind: GuestKind,
-        _request: &GuestEffectRequest<'_>,
-    ) -> Result<GuestEffectOutcome, GuestEffectError> {
-        Err(GuestEffectError::Unavailable)
-    }
-
-    async fn finalize(
-        &self,
-        _kind: GuestKind,
-        _request: &GuestEffectRequest<'_>,
-    ) -> Result<GuestFinalizeStage, GuestEffectError> {
-        Err(GuestEffectError::Unavailable)
-    }
-}
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     guest_descriptor(GuestDriverArgs {
         zone: "work".to_owned(),
         controller_generation: ControllerGeneration::new(1).expect("generation"),
-        effects: Arc::new(UnusedEffects),
+        // The port instance the declaration carries; the registration
+        // boundary never runs an effect.
+        effects: ScriptedEffects::new(),
     })
 }
 

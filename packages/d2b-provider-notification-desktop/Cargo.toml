@@ -15,6 +15,7 @@ await_holding_refcell_ref = "deny"
 
 [features]
 daemon-support = []
+test-support = []
 
 [dependencies]
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }

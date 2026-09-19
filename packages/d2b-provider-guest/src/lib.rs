@@ -25,6 +25,16 @@ pub mod driver;
 pub mod target_control;
 pub mod target_service;
 
+// The scripted GuestDriverEffects recording double. Needed both by
+// external crates (d2bd's plane tests, which opt in via the `test-support`
+// feature) and by this crate's own tests. Gating on
+// `any(test, feature = "test-support")` makes it available automatically to
+// this crate's unit tests. Integration tests that need it declare
+// `required-features`, so run those with `--features test-support` (or let
+// the Bazel `*_test_support` target compile them).
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+
 pub use driver::{
     GUEST_REGISTRATIONS, GUEST_TYPE_NAME, GuestChildObservation, GuestChildSurface, GuestDriverArgs,
     GuestDriverEffects, GuestDriverFactory, GuestDriverStatus, GuestEffectError, GuestEffectOutcome,

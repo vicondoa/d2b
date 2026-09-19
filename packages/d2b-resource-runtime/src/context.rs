@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::error::{FailureComparison, ResourceError};
 use crate::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
@@ -131,57 +131,10 @@ pub struct ChildEnsure {
     pub metadata: Vec<u8>,
 }
 
-/// Messages a driver's context sends to the owning manager actor (R2:
-/// drivers never touch the spec store; the manager is the only writer).
-/// Every durable mutation is request/reply, and the reply fires only after
-/// the manager's commit - drivers observe persist-before-spawn by
-/// construction (F1, AE1).
-///
-/// There is deliberately NO spawn-shaped call on this surface: child actor
-/// creation is the manager's commit-then-spawn handler (U3).
-#[derive(Debug)]
-pub enum ManagerCall {
-    EnsureChild {
-        parent: ResourceKey,
-        child: ChildEnsure,
-        reply: oneshot::Sender<Result<EnsureOutcome, ResourceError>>,
-    },
-    Get {
-        key: ResourceKey,
-        reply: oneshot::Sender<Result<Option<StoredDesiredResource>, ResourceError>>,
-    },
-    /// Live runtime view (row plus published status) for one resource
-    /// (`ResourceContext::get_view`).
-    GetView {
-        key: ResourceKey,
-        reply: oneshot::Sender<Result<Option<ResourceView>, ResourceError>>,
-    },
-    Delete {
-        key: ResourceKey,
-        reply: oneshot::Sender<Result<(), ResourceError>>,
-    },
-    ListOwned {
-        owner_uid: [u8; 16],
-        reply: oneshot::Sender<Result<Vec<StoredDesiredResource>, ResourceError>>,
-    },
-    RegisterWatch {
-        /// The subscription: target, condition, and the subscriber's notify
-        /// sender. The manager routes it to the target actor and records the
-        /// dependency edge from `subscriber` (spec section 16).
-        registration: WatchRegistration,
-        subscriber: ResourceKey,
-        reply: oneshot::Sender<Result<WatchId, ResourceError>>,
-    },
-    CancelWatch {
-        watch: WatchId,
-        reply: oneshot::Sender<Result<(), ResourceError>>,
-    },
-}
-
 /// The injected manager endpoint behind a [`ResourceContext`] (KTD3): every
 /// durable child mutation and every internal-watch registration rides this
 /// surface, never the spec store. U3's manager implements it directly or
-/// over its mailbox (see [`ChannelManagerEndpoint`]).
+/// over its mailbox.
 #[async_trait]
 pub trait ManagerEndpoint: Send + Sync + 'static {
     async fn ensure_child(
@@ -202,92 +155,6 @@ pub trait ManagerEndpoint: Send + Sync + 'static {
         registration: WatchRegistration,
     ) -> Result<WatchId, ResourceError>;
     async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError>;
-}
-
-/// Endpoint over a manager request channel. The manager actor consumes the
-/// [`ManagerCall`] stream (or wraps it into its own mailbox messages).
-pub struct ChannelManagerEndpoint {
-    tx: mpsc::Sender<ManagerCall>,
-}
-
-impl ChannelManagerEndpoint {
-    pub fn new(tx: mpsc::Sender<ManagerCall>) -> Self {
-        Self { tx }
-    }
-}
-
-#[async_trait]
-impl ManagerEndpoint for ChannelManagerEndpoint {
-    async fn ensure_child(&self, parent: &ResourceKey, child: ChildEnsure) -> Result<EnsureOutcome, ResourceError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(ManagerCall::EnsureChild { parent: parent.clone(), child, reply })
-            .await
-            .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-        rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
-    }
-
-    async fn get(&self, key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(ManagerCall::Get { key: key.clone(), reply })
-            .await
-            .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-        rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
-    }
-
-    async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(ManagerCall::GetView { key: key.clone(), reply })
-            .await
-            .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-        rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
-    }
-
-    async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(ManagerCall::Delete { key: key.clone(), reply })
-            .await
-            .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-        rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
-    }
-
-    async fn list_owned(&self, owner_uid: [u8; 16]) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(ManagerCall::ListOwned { owner_uid, reply })
-            .await
-            .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-        rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
-    }
-
-    async fn register_watch(
-        &self,
-        subscriber: &ResourceKey,
-        registration: WatchRegistration,
-    ) -> Result<WatchId, ResourceError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(ManagerCall::RegisterWatch {
-                registration,
-                subscriber: subscriber.clone(),
-                reply,
-            })
-            .await
-            .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-        rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
-    }
-
-    async fn cancel_watch(&self, watch: WatchId) -> Result<(), ResourceError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .send(ManagerCall::CancelWatch { watch, reply })
-            .await
-            .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
-        rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,19 +980,120 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use async_trait::async_trait;
     use parking_lot::Mutex;
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
 
     use super::test_support::{fixture, test_row, DeadManager, FailingDecoder, NullRequeue, TokioRequeue};
     use super::{
-        LookupDisposition, LookupPlane, ManagerEndpoint, RequeueScheduler, RowLookup,
+        ChildEnsure, LookupDisposition, LookupPlane, ManagerEndpoint, RequeueScheduler, RowLookup,
         WatchCondition, WatchId, WatchRegistration, WatchSatisfied, typed_spec_decoder,
     };
     use crate::error::ResourceError;
-    use crate::identity::{ResourceKey, ResourceProvenance, ResourceTypeName};
+    use crate::identity::{ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource};
     use crate::manager::ResourceView;
     use crate::spec_store::EnsureOutcome;
+
+    /// Test-local manager request enum carried by [`ChannelEndpointStub`].
+    /// The production request surface this mirrors was deleted as zero-caller
+    /// API (audit B6); the routing and failure-mapping assertions the
+    /// in-module tests pinned against it survive against this stub, which
+    /// keeps the request/reply shapes of the variants the tests exercise.
+    #[derive(Debug)]
+    enum StubCall {
+        EnsureChild {
+            parent: ResourceKey,
+            child: ChildEnsure,
+            reply: oneshot::Sender<Result<EnsureOutcome, ResourceError>>,
+        },
+        Get {
+            key: ResourceKey,
+            reply: oneshot::Sender<Result<Option<StoredDesiredResource>, ResourceError>>,
+        },
+        GetView {
+            key: ResourceKey,
+            reply: oneshot::Sender<Result<Option<ResourceView>, ResourceError>>,
+        },
+        RegisterWatch {
+            registration: WatchRegistration,
+            subscriber: ResourceKey,
+            reply: oneshot::Sender<Result<WatchId, ResourceError>>,
+        },
+    }
+
+    /// Channel endpoint stub implementing [`ManagerEndpoint`] over
+    /// [`StubCall`]: the deleted production channel endpoint's request/reply
+    /// shape, kept in-module so the routing, ordering, and failure-mapping
+    /// assertions of the tests below survive the deletion.
+    struct ChannelEndpointStub {
+        tx: mpsc::Sender<StubCall>,
+    }
+
+    impl ChannelEndpointStub {
+        fn new(tx: mpsc::Sender<StubCall>) -> Self {
+            Self { tx }
+        }
+    }
+
+    #[async_trait]
+    impl ManagerEndpoint for ChannelEndpointStub {
+        async fn ensure_child(&self, parent: &ResourceKey, child: ChildEnsure) -> Result<EnsureOutcome, ResourceError> {
+            let (reply, rx) = oneshot::channel();
+            self.tx
+                .send(StubCall::EnsureChild { parent: parent.clone(), child, reply })
+                .await
+                .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
+            rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+        }
+
+        async fn get(&self, key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
+            let (reply, rx) = oneshot::channel();
+            self.tx
+                .send(StubCall::Get { key: key.clone(), reply })
+                .await
+                .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
+            rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+        }
+
+        async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+            let (reply, rx) = oneshot::channel();
+            self.tx
+                .send(StubCall::GetView { key: key.clone(), reply })
+                .await
+                .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
+            rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+        }
+
+        async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
+            Err(ResourceError::ManagerRpc("delete not exercised in-module".into()))
+        }
+
+        async fn list_owned(&self, _owner_uid: [u8; 16]) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Err(ResourceError::ManagerRpc("list_owned not exercised in-module".into()))
+        }
+
+        async fn register_watch(
+            &self,
+            subscriber: &ResourceKey,
+            registration: WatchRegistration,
+        ) -> Result<WatchId, ResourceError> {
+            let (reply, rx) = oneshot::channel();
+            self.tx
+                .send(StubCall::RegisterWatch {
+                    registration,
+                    subscriber: subscriber.clone(),
+                    reply,
+                })
+                .await
+                .map_err(|_| ResourceError::ManagerRpc("manager channel closed".into()))?;
+            rx.await.map_err(|_| ResourceError::ManagerRpc("manager dropped the request".into()))?
+        }
+
+        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
+            Err(ResourceError::ManagerRpc("cancel_watch not exercised in-module".into()))
+        }
+    }
 
     // -- Manager routing (R2; spec section 12) --------------------------------
 
@@ -1138,7 +1106,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn ensure_child_sends_one_persist_request_and_awaits_commit_ack() {
-        let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(4);
+        let (tx, mut rx) = mpsc::channel::<StubCall>(4);
         let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
         let calls = Arc::new(AtomicUsize::new(0));
         let order_stub = order.clone();
@@ -1146,7 +1114,7 @@ mod tests {
         let stub = tokio::spawn(async move {
             while let Some(call) = rx.recv().await {
                 match call {
-                    super::ManagerCall::EnsureChild { parent, child, reply } => {
+                    StubCall::EnsureChild { parent, child, reply } => {
                         assert_eq!(parent.type_name, "Volume");
                         assert_eq!(child.type_name, ResourceTypeName::new("Process"));
                         assert_eq!(child.name, "worker-0");
@@ -1161,7 +1129,7 @@ mod tests {
         });
         let mut fixture = fixture(
             test_row("z", "Volume", "data"),
-            super::ChannelManagerEndpoint::new(tx),
+            ChannelEndpointStub::new(tx),
             NullRequeue,
             Arc::new(FailingDecoder),
         );
@@ -1200,9 +1168,9 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn manager_failures_surface_as_manager_rpc_errors() {
         // Channel closed before the call.
-        let (tx, rx) = mpsc::channel::<super::ManagerCall>(1);
+        let (tx, rx) = mpsc::channel::<StubCall>(1);
         drop(rx);
-        let endpoint = super::ChannelManagerEndpoint::new(tx);
+        let endpoint = ChannelEndpointStub::new(tx);
         let key = ResourceKey::new("z", "Volume", "data");
         let error = endpoint.get(&key).await.unwrap_err();
         assert!(matches!(error, ResourceError::ManagerRpc(_)));
@@ -1210,8 +1178,8 @@ mod tests {
         assert!(matches!(error, ResourceError::ManagerRpc(_)), "the live read fails loudly too");
 
         // Manager receives the request and drops it without replying.
-        let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(1);
-        let endpoint = super::ChannelManagerEndpoint::new(tx);
+        let (tx, mut rx) = mpsc::channel::<StubCall>(1);
+        let endpoint = ChannelEndpointStub::new(tx);
         tokio::spawn(async move {
             let _ = rx.recv().await; // take the request, never reply
         });
@@ -1225,8 +1193,8 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn dropped_view_request_surfaces_as_manager_rpc_error() {
-        let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(1);
-        let endpoint = super::ChannelManagerEndpoint::new(tx);
+        let (tx, mut rx) = mpsc::channel::<StubCall>(1);
+        let endpoint = ChannelEndpointStub::new(tx);
         tokio::spawn(async move {
             let _ = rx.recv().await; // take the request, never reply
         });
@@ -1280,9 +1248,9 @@ mod tests {
     /// One classified read against a scripted manager: `respond` answers the
     /// single call the read makes, and the returned context runs the read.
     fn scripted_read(
-        respond: impl FnOnce(super::ManagerCall) + Send + 'static,
+        respond: impl FnOnce(StubCall) + Send + 'static,
     ) -> (super::ResourceContext, tokio::task::JoinHandle<()>) {
-        let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(1);
+        let (tx, mut rx) = mpsc::channel::<StubCall>(1);
         let stub = tokio::spawn(async move {
             match rx.recv().await {
                 Some(call) => respond(call),
@@ -1291,7 +1259,7 @@ mod tests {
         });
         let harness = fixture(
             test_row("z", "Volume", "data"),
-            super::ChannelManagerEndpoint::new(tx),
+            ChannelEndpointStub::new(tx),
             NullRequeue,
             Arc::new(FailingDecoder),
         );
@@ -1310,7 +1278,7 @@ mod tests {
         // The manager answers with the row.
         let answer = row.clone();
         let (mut ctx, stub) = scripted_read(move |call| match call {
-            super::ManagerCall::Get { reply, .. } => {
+            StubCall::Get { reply, .. } => {
                 let _ = reply.send(Ok(Some(answer)));
             }
             other => panic!("classified lookup sent a non-Get call: {other:?}"),
@@ -1326,7 +1294,7 @@ mod tests {
 
         // The manager answers that it holds no row: absence, not failure.
         let (mut ctx, stub) = scripted_read(|call| match call {
-            super::ManagerCall::Get { reply, .. } => {
+            StubCall::Get { reply, .. } => {
                 let _ = reply.send(Ok(None));
             }
             other => panic!("classified lookup sent a non-Get call: {other:?}"),
@@ -1341,7 +1309,7 @@ mod tests {
 
         // The manager cannot answer: unavailable, never absence.
         let (mut ctx, stub) = scripted_read(|call| match call {
-            super::ManagerCall::Get { reply, .. } => {
+            StubCall::Get { reply, .. } => {
                 let _ = reply.send(Err(ResourceError::ManagerRpc("no answer".into())));
             }
             other => panic!("classified lookup sent a non-Get call: {other:?}"),
@@ -1369,8 +1337,10 @@ mod tests {
             status_projection: None,
         };
         let answer = view.clone();
+        let view_key = key.clone();
         let (mut ctx, stub) = scripted_read(move |call| match call {
-            super::ManagerCall::GetView { reply, .. } => {
+            StubCall::GetView { key, reply } => {
+                assert_eq!(key, view_key, "the view read targets the requested key");
                 let _ = reply.send(Ok(Some(answer)));
             }
             other => panic!("classified view lookup sent a non-GetView call: {other:?}"),
@@ -1618,14 +1588,14 @@ mod tests {
         assert_eq!(registration.target, target);
         assert_eq!(registration.condition, WatchCondition::Custom("gpu-free".into()));
 
-        // ManagerCall request/reply round-trip.
-        let (mtx, mut mrx) = mpsc::channel::<super::ManagerCall>(1);
+        // Endpoint request/reply round-trip.
+        let (mtx, mut mrx) = mpsc::channel::<StubCall>(1);
         let (reply_tx, reply_rx) = oneshot::channel();
-        mtx.send(super::ManagerCall::Get { key: target.clone(), reply: reply_tx })
+        mtx.send(StubCall::Get { key: target.clone(), reply: reply_tx })
             .await
             .unwrap();
         match mrx.recv().await.unwrap() {
-            super::ManagerCall::Get { key, reply } => {
+            StubCall::Get { key, reply } => {
                 assert_eq!(key, target);
                 let _ = reply.send(Ok(None));
             }
@@ -1649,10 +1619,10 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn watch_registration_routes_through_the_manager_with_subscriber_identity() {
-        let (tx, mut rx) = mpsc::channel::<super::ManagerCall>(1);
+        let (tx, mut rx) = mpsc::channel::<StubCall>(1);
         let mut fixture = fixture(
             test_row("z", "Volume", "data"),
-            super::ChannelManagerEndpoint::new(tx),
+            ChannelEndpointStub::new(tx),
             NullRequeue,
             Arc::new(FailingDecoder),
         );
@@ -1660,7 +1630,7 @@ mod tests {
         let watched = ResourceKey::new("z", "Process", "worker-0");
         let stub_target = watched.clone();
         let stub = tokio::spawn(async move {
-            if let Some(super::ManagerCall::RegisterWatch { registration, subscriber: from, reply }) =
+            if let Some(StubCall::RegisterWatch { registration, subscriber: from, reply }) =
                 rx.recv().await
             {
                 assert_eq!(from, subscriber, "the context reports its own key as subscriber");
