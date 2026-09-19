@@ -8767,19 +8767,18 @@ fn collect_provider_module_signals(
 /// sorted deterministically. The crate's own family tokens are not signals;
 /// test-only code and generated views are skipped like the shared probes.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn collect_provider_family_signals(repo_root: &Path) -> Result<Vec<ProviderFamilySignal>, String> {
-    let members = cargo_workspace_members(repo_root)?;
+fn collect_provider_family_signals(
+    repo_root:&Path,
+    provider_crates: &[&str],
+) -> Result<Vec<ProviderFamilySignal>, String> {
     let mut signals = Vec::new();
-    for member in members {
-        if !member.package_name.starts_with("d2b-provider-") {
-            continue;
-        }
-        let family = provider_crate_family(&member.package_name);
-        let directory = member.crate_dir.join("src");
+    for crate_name in provider_crates {
+        let family = provider_crate_family(crate_name);
+        let directory = repo_root.join("packages").join(crate_name).join("src");
         if !directory.is_dir() {
             continue;
         }
-        collect_provider_module_signals(repo_root, &directory, &member.package_name, &family, &mut signals)?;
+        collect_provider_module_signals(repo_root, &directory, crate_name, &family, &mut signals)?;
     }
     signals.sort_by(|left, right| {
         left.crate_name
@@ -8904,10 +8903,11 @@ fn provision_family_exemptions() -> Vec<ProviderFamilyKnowledgeExemption> {
 /// tree no longer carries. Passed the ratchet as a parameter so the tests can
 /// exercise both directions on fixtures.
 fn check_provider_crate_family_knowledge_with(
-    repo_root: &Path,
+    repo_root:&Path,
+    provider_crates: &[&str],
     ratchet: &[ProviderFamilyKnowledgeExemption],
 ) -> Result<(), String> {
-    let signals = collect_provider_family_signals(repo_root)?;
+    let signals = collect_provider_family_signals(repo_root, provider_crates)?;
     let exempt: BTreeSet<(String, String, &str)> = ratchet
         .iter()
         .map(|row| (row.crate_name.to_owned(), row.module.to_owned(), row.token))
@@ -8974,8 +8974,13 @@ fn check_provider_crate_family_knowledge_with(
 /// every other current site is recorded with its reason instead of weakening
 /// the rule.
 fn check_provider_crate_family_knowledge(repo_root:&Path) -> Result<(), String> {
+    let provider_crates: Vec<&str> = COMMITTED_SCOPE
+        .iter()
+        .filter(|row| matches!(row.class, CommittedScopeClass::Provider))
+        .map(|row| row.crate_name)
+        .collect();
     let ratchet = provision_family_exemptions();
-    check_provider_crate_family_knowledge_with(repo_root, &ratchet)
+    check_provider_crate_family_knowledge_with(repo_root, &provider_crates, &ratchet)
 }
 
 /// The classes the committed program scope names. A provider crate, a
@@ -10703,13 +10708,23 @@ mod tests {
             "pub const TYPE: &str = \"device-usbip.d2bus.org.Widget\";\n",
         )
         .unwrap();
-        let error = check_provider_crate_family_knowledge_with(&fixture.root, &[]).unwrap_err();
+        let error = check_provider_crate_family_knowledge_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+            &[],
+        )
+        .unwrap_err();
         assert!(error.contains("provider-crate-family-literal"), "{error}");
         assert!(error.contains("\"family\":\"device-usbip\""), "{error}");
         assert!(error.contains("packages/d2b-provider-fixture-example/src/leak.rs"), "{error}");
 
         fs::remove_file(&leak).unwrap();
-        check_provider_crate_family_knowledge_with(&fixture.root, &[]).unwrap();
+        check_provider_crate_family_knowledge_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+            &[],
+        )
+        .unwrap();
     }
 
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -10729,10 +10744,20 @@ mod tests {
             family: "system-core",
             reason: "fixture",
         }];
-        check_provider_crate_family_knowledge_with(&fixture.root, &rows).unwrap();
+        check_provider_crate_family_knowledge_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+            &rows,
+        )
+        .unwrap();
 
         fs::remove_file(&leak).unwrap();
-        let error = check_provider_crate_family_knowledge_with(&fixture.root, &rows).unwrap_err();
+        let error = check_provider_crate_family_knowledge_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+            &rows,
+        )
+        .unwrap_err();
         assert!(error.contains("stale-provider-family-knowledge-exemption"), "{error}");
         assert!(error.contains("\"crate\":\"d2b-provider-fixture-example\""), "{error}");
     }
