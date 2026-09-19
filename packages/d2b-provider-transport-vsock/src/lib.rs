@@ -53,3 +53,5 @@ pub use topology::{ParentStoreResourceCensus, TopologyError, TransportLimits, Zo
 pub const VSOCK_IMPLEMENTATION_ID: &str = "vsock";
 /// Stable Provider resource reference.
 pub const PROVIDER_REF: &str = "Provider/transport-vsock";
+/// The role id the vsock relay process carries in launcher rows.
+pub const VSOCK_RELAY_ROLE: &str = "vsock-relay";

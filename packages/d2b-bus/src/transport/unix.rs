@@ -191,7 +191,7 @@ impl fmt::Display for TransportAdmissionError {
                 formatter.write_str("transport-attachment-policy-rejected")
             }
             Self::RouteClassMismatch => formatter.write_str("transport-route-class-mismatch"),
-            Self::Credit(inner) => write!(formatter, "transport-credit({inner})"),
+            Self::Credit(inner) => write!(formatter, "credit({inner})"),
             Self::Closed => formatter.write_str("transport-closed"),
             Self::Protocol => formatter.write_str("transport-protocol-violation"),
             Self::Io => formatter.write_str("transport-io"),
