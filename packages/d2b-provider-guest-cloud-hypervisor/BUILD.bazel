@@ -35,6 +35,7 @@ d2b_rust_library(
         "root-config.schema.json",
     ],
     deps = [
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -59,6 +60,7 @@ d2b_rust_library(
     ],
     crate_name = "d2b_provider_guest_cloud_hypervisor",
     deps = [
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -76,6 +78,7 @@ d2b_rust_binary(
     srcs = ["controller/main.rs"],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-core:d2b_core",
         ":d2b_provider_guest_cloud_hypervisor",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -85,6 +88,7 @@ d2b_rust_test(
     crate = ":d2b_provider_guest_cloud_hypervisor",
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -101,6 +105,7 @@ d2b_rust_test(
     ],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_provider_guest_cloud_hypervisor",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -114,6 +119,7 @@ d2b_rust_test(
     ],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -129,6 +135,7 @@ d2b_rust_test(
     ],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -143,6 +150,7 @@ d2b_rust_test(
     ],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
@@ -158,6 +166,7 @@ d2b_rust_test(
     ],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_provider_guest_cloud_hypervisor",
@@ -171,6 +180,7 @@ d2b_rust_test(
     ],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_provider_guest_cloud_hypervisor",

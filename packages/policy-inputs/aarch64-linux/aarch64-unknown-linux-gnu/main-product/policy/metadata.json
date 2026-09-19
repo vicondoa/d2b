@@ -2,8 +2,8 @@
   "authority": "cargo-locked-metadata",
   "defaultFeatures": true,
   "features": [],
-  "lockSha256": "06d0a8754ae5204189afbdbf80d62692507b14d173aac45c7e7a601aa000a73e",
-  "policyPackageCount": 392,
+  "lockSha256": "36a1d817b31ae8822bbe841dd7c9ee8bd4860c1cc4b65f679c503d2ea0d1fcbe",
+  "policyPackageCount": 395,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
     "aead@0.5.2#registry+https://github.com/rust-lang/crates.io-index",
@@ -15,6 +15,7 @@
     "anstyle-query@1.1.5#registry+https://github.com/rust-lang/crates.io-index",
     "anstyle@1.0.14#registry+https://github.com/rust-lang/crates.io-index",
     "anyhow@1.0.104#registry+https://github.com/rust-lang/crates.io-index",
+    "arc-swap@1.9.2#registry+https://github.com/rust-lang/crates.io-index",
     "async-broadcast@0.7.2#registry+https://github.com/rust-lang/crates.io-index",
     "async-channel@2.5.0#registry+https://github.com/rust-lang/crates.io-index",
     "async-executor@1.14.0#registry+https://github.com/rust-lang/crates.io-index",
@@ -156,6 +157,7 @@
     "d2b-unsafe-local-helper@0.0.0-bootstrap#path",
     "d2b-zone-routing@0.0.0-bootstrap#path",
     "d2b@0.0.0-bootstrap#path",
+    "d2bd-runtime@0.0.0-bootstrap#path",
     "darling@0.24.1#registry+https://github.com/rust-lang/crates.io-index",
     "darling_core@0.24.1#registry+https://github.com/rust-lang/crates.io-index",
     "darling_macro@0.24.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -304,6 +306,7 @@
     "rustls-pki-types@1.15.1#registry+https://github.com/rust-lang/crates.io-index",
     "rustls-webpki@0.103.14#registry+https://github.com/rust-lang/crates.io-index",
     "rustls@0.23.43#registry+https://github.com/rust-lang/crates.io-index",
+    "rustversion@1.0.23#registry+https://github.com/rust-lang/crates.io-index",
     "schemars@0.8.22#registry+https://github.com/rust-lang/crates.io-index",
     "schemars_derive@0.8.22#registry+https://github.com/rust-lang/crates.io-index",
     "scopeguard@1.2.0#registry+https://github.com/rust-lang/crates.io-index",
@@ -398,7 +401,7 @@
     "zvariant_derive@5.15.0#registry+https://github.com/rust-lang/crates.io-index",
     "zvariant_utils@4.2.0#registry+https://github.com/rust-lang/crates.io-index"
   ],
-  "productionPackageCount": 392,
+  "productionPackageCount": 395,
   "resolveNodeCount": 413,
   "roots": [
     "d2b",
