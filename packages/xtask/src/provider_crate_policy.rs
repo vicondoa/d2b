@@ -4962,30 +4962,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 systemd step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/transport/credit.rs",
-        token: "transport_azure_relay",
-        family: "transport-azure-relay",
-        retires_with: "U10-U12 family rollout (transport-azure-relay)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/transport/unix.rs",
-        token: "transport_azure_relay",
-        family: "transport-azure-relay",
-        retires_with: "U10-U12 family rollout (transport-azure-relay)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/transport/credit.rs",
-        token: "transport_unix",
-        family: "transport-unix",
-        retires_with: "U10-U12 family rollout (transport-unix)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/transport/unix.rs",
-        token: "transport_unix",
-        family: "transport-unix",
-        retires_with: "U10-U12 family rollout (transport-unix)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-bus/src/metrics.rs",
         token: "vsock",
         family: "transport-vsock",
@@ -4995,25 +4971,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-bus/src/session/noise_vectors.rs",
         token: "vsock",
         family: "transport-vsock",
-        retires_with: "U10-U12 family rollout (transport-vsock)",
+        retires_with: "R4 zone-plane surface - permanent: TransportClass::NativeVsock is the frozen wire transport class the noise profile table pins",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-bus/src/session/prologue.rs",
         token: "vsock",
         family: "transport-vsock",
-        retires_with: "U10-U12 family rollout (transport-vsock)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/transport/credit.rs",
-        token: "transport_vsock",
-        family: "transport-vsock",
-        retires_with: "U10-U12 family rollout (transport-vsock)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/transport/unix.rs",
-        token: "transport_vsock",
-        family: "transport-vsock",
-        retires_with: "U10-U12 family rollout (transport-vsock)",
+        retires_with: "R4 zone-plane surface - permanent: EvidenceClass::NativeVsock maps the frozen wire transport class label (native-vsock)",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-resource-api/src/authz.rs",

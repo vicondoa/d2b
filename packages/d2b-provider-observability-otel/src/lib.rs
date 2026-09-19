@@ -13,6 +13,8 @@ pub mod metrics;
 pub const PROVIDER_NAME: &str = "observability-otel";
 pub const PROVIDER_REF: &str = "Provider/observability-otel";
 pub const PROVIDER_API_MAJOR: u16 = 1;
+/// The role id the otel host bridge process carries in launcher rows.
+pub const OTEL_HOST_BRIDGE_ROLE: &str = "otel-host-bridge";
 
 pub use agent::{
     ProviderAgentAuditEvent, ProviderAgentAuditOutcome, ProviderAgentError, ProviderAgentProcess,
