@@ -40,7 +40,7 @@ use crate::{
 /// callers:
 ///
 /// ```compile_fail
-/// use d2b_resource_api::TrustedRequest;
+/// use d2b_resource_api::service::TrustedRequest;
 ///
 /// fn forge<T>(request: &TrustedRequest<T>) {
 ///     let _ = &request.subject;

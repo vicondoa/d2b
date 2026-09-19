@@ -1,6 +1,6 @@
 //! Host-prep DAG: per-VM host preparation steps that the daemon executes
 //! via the broker before invoking the per-VM process DAG
-//! (`d2bd::supervisor::dag`).
+//! (`d2bd-runtime::supervisor::dag`).
 //!
 //! Background
 //! ----------
@@ -209,8 +209,8 @@ impl HostPrepStepKind {
             Self::ApplySysctl => "ApplySysctl",
             Self::SetBridgePortFlags => "SetBridgePortFlags",
             // No broker op: executed inline in the daemon (see
-            // `d2bd::net_route_preflight`). Reported here for
-            // audit symmetry with other host-scope steps.
+            // `d2bd::composition::dispatch_broker_host_reconcile_as`). Reported
+            // here for audit symmetry with other host-scope steps.
             Self::HostNetRoutePreflight => "HostNetRoutePreflight",
         }
     }

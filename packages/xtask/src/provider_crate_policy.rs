@@ -687,13 +687,14 @@ fn check_closed_matrix(repo_root: &Path, members: &[WorkspaceMember]) -> Result<
 /// driver.
 ///
 /// A driver belongs to the per-type crate that declares its resource type.
-/// These roots are the shared platform - the daemon, the broker, the core
-/// contracts, the controller session library, and the resource runtime and
-/// resource types the framework itself lives in - so a driver declaration here
-/// is resource knowledge living outside the crate that owns it. The framework
-/// roots are monitored so the shared declaration-only metadata driver is
-/// policed in place: [`FRAMEWORK_DRIVER_DECLARATIONS`] names the one allowed
-/// case, and a per-resource driver parked in either crate still fails.
+/// These roots are the shared platform - the daemon, the broker, the service
+/// bus, the core contracts, the controller session library, the resource API
+/// and compiler, and the resource runtime, resource types, and host vocabulary
+/// the framework itself lives in - so a driver declaration here is resource
+/// knowledge living outside the crate that owns it. The framework roots are
+/// monitored so the shared declaration-only metadata driver is policed in
+/// place: [`FRAMEWORK_DRIVER_DECLARATIONS`] names the one allowed case, and a
+/// per-resource driver parked in either crate still fails.
 const SHARED_CRATE_SOURCE_ROOTS: &[&str] = &[
     "packages/d2b-broker/src",
     "packages/d2b-contracts-broker/src",
@@ -707,6 +708,10 @@ const SHARED_CRATE_SOURCE_ROOTS: &[&str] = &[
     "packages/d2b-resource-runtime/src",
     "packages/d2b-resource-types/src",
     "packages/d2bd/src",
+    "packages/d2b-bus/src",
+    "packages/d2b-resource-api/src",
+    "packages/d2b-resource-compiler/src",
+    "packages/d2b-host/src",
 ];
 
 /// One shared-crate module that still declares a resource driver.
@@ -4713,6 +4718,366 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "volume-virtiofs",
         retires_with: "U12 volume/store step",
     },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        token: "nixos",
+        family: "activation-nixos",
+        retires_with: "U12 activation/host-maintenance step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+        token: "activation_nixos",
+        family: "activation-nixos",
+        retires_with: "U12 activation/host-maintenance step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+        token: "nixos",
+        family: "activation-nixos",
+        retires_with: "U12 activation/host-maintenance step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/hardlink_farm.rs",
+        token: "nixos",
+        family: "activation-nixos",
+        retires_with: "U12 activation/host-maintenance step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/host_prep_dag.rs",
+        token: "nixos",
+        family: "activation-nixos",
+        retires_with: "U12 activation/host-maintenance step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/host_prep_dag.rs",
+        token: "sysctl",
+        family: "activation-nixos",
+        retires_with: "U12 activation/host-maintenance step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/ioctl_policy.rs",
+        token: "sysctl",
+        family: "activation-nixos",
+        retires_with: "U12 activation/host-maintenance step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/netlink.rs",
+        token: "sysctl",
+        family: "activation-nixos",
+        retires_with: "U12 activation/host-maintenance step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/devices.rs",
+        token: "pipewire",
+        family: "audio-pipewire",
+        retires_with: "U12 audio step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/ioctl_policy.rs",
+        token: "pipewire",
+        family: "audio-pipewire",
+        retires_with: "U12 audio step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        token: "clipboard",
+        family: "clipboard-wayland",
+        retires_with: "U10-U12 family rollout (clipboard-wayland)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        token: "clipboard_wayland",
+        family: "clipboard-wayland",
+        retires_with: "U10-U12 family rollout (clipboard-wayland)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        token: "credential_managed_identity",
+        family: "credential-managed-identity",
+        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        token: "managed_identity",
+        family: "credential-managed-identity",
+        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        token: "device_security_key",
+        family: "device-security-key",
+        retires_with: "U12 security-key step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        token: "security_key",
+        family: "device-security-key",
+        retires_with: "U12 security-key step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/devices.rs",
+        token: "tpm",
+        family: "device-tpm",
+        retires_with: "U12 tpm/device step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/ioctl_policy.rs",
+        token: "tpm",
+        family: "device-tpm",
+        retires_with: "U12 tpm/device step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/devices.rs",
+        token: "usbip",
+        family: "device-usbip",
+        retires_with: "U12 usbip step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/ioctl_policy.rs",
+        token: "usbip",
+        family: "device-usbip",
+        retires_with: "U12 usbip step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/nftables.rs",
+        token: "usbip",
+        family: "device-usbip",
+        retires_with: "U12 usbip step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        token: "display_wayland",
+        family: "display-wayland",
+        retires_with: "U10-U12 family rollout (display-wayland)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        token: "wayland",
+        family: "display-wayland",
+        retires_with: "U10-U12 family rollout (display-wayland)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/dnsmasq.rs",
+        token: "dnsmasq",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/host_prep_dag.rs",
+        token: "dnsmasq",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/host_prep_dag.rs",
+        token: "nftables",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/lib.rs",
+        token: "dnsmasq",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/lib.rs",
+        token: "nftables",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/routes.rs",
+        token: "dnsmasq",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/routes.rs",
+        token: "nftables",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        token: "notification",
+        family: "notification-desktop",
+        retires_with: "U10-U12 family rollout (notification-desktop)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        token: "notification_desktop",
+        family: "notification-desktop",
+        retires_with: "U10-U12 family rollout (notification-desktop)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/host_prep_dag.rs",
+        token: "qemu_media",
+        family: "runtime-qemu-media",
+        retires_with: "U12 qemu-media step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/host_prep_dag.rs",
+        token: "runtime_qemu_media",
+        family: "runtime-qemu-media",
+        retires_with: "U12 qemu-media step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/media.rs",
+        token: "qemu_media",
+        family: "runtime-qemu-media",
+        retires_with: "U12 qemu-media step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/media.rs",
+        token: "runtime_qemu_media",
+        family: "runtime-qemu-media",
+        retires_with: "U12 qemu-media step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U10-U12 family rollout (system-core)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U10-U12 family rollout (system-core)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U10-U12 family rollout (system-core)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/manager_backend/tests.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U10-U12 family rollout (system-core)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/service.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U10-U12 family rollout (system-core)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        token: "minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        token: "system_minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        token: "minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        token: "system_minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/manager_backend/tests.rs",
+        token: "minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/manager_backend/tests.rs",
+        token: "system_minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        token: "minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        token: "system_minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/manager_backend/tests.rs",
+        token: "system_systemd",
+        family: "system-systemd",
+        retires_with: "U12 systemd step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/transport/credit.rs",
+        token: "transport_azure_relay",
+        family: "transport-azure-relay",
+        retires_with: "U10-U12 family rollout (transport-azure-relay)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/transport/unix.rs",
+        token: "transport_azure_relay",
+        family: "transport-azure-relay",
+        retires_with: "U10-U12 family rollout (transport-azure-relay)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/transport/credit.rs",
+        token: "transport_unix",
+        family: "transport-unix",
+        retires_with: "U10-U12 family rollout (transport-unix)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/transport/unix.rs",
+        token: "transport_unix",
+        family: "transport-unix",
+        retires_with: "U10-U12 family rollout (transport-unix)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/metrics.rs",
+        token: "vsock",
+        family: "transport-vsock",
+        retires_with: "U10-U12 family rollout (transport-vsock)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session/noise_vectors.rs",
+        token: "vsock",
+        family: "transport-vsock",
+        retires_with: "U10-U12 family rollout (transport-vsock)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session/prologue.rs",
+        token: "vsock",
+        family: "transport-vsock",
+        retires_with: "U10-U12 family rollout (transport-vsock)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/transport/credit.rs",
+        token: "transport_vsock",
+        family: "transport-vsock",
+        retires_with: "U10-U12 family rollout (transport-vsock)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/transport/unix.rs",
+        token: "transport_vsock",
+        family: "transport-vsock",
+        retires_with: "U10-U12 family rollout (transport-vsock)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        token: "vsock",
+        family: "transport-vsock",
+        retires_with: "U10-U12 family rollout (transport-vsock)",
+    },
 ];
 
 /// The framework's own driver declarations, the one allowed implementation
@@ -4806,6 +5171,55 @@ fn opens_test_module(lines: &[&str], index: usize) -> Option<usize> {
     None
 }
 
+/// Whether a module file's parent declares it under `#[cfg(test)] mod <name>;`.
+///
+/// A test module can be a separate file declared by its parent
+/// (`#[cfg(test)] mod tests;` in `manager_backend.rs`) rather than an in-file
+/// `#[cfg(test)] mod tests`, so the driver probe consults the declaring file
+/// to see the guard the file itself cannot show.
+fn parent_declares_test_module(path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    let Some(directory) = path.parent() else {
+        return false;
+    };
+    let mut candidates = vec![
+        directory.join("mod.rs"),
+        directory.join("lib.rs"),
+        directory.join("main.rs"),
+    ];
+    if let Some(name) = directory.file_name().and_then(|name| name.to_str()) {
+        candidates.push(directory.with_file_name(format!("{name}.rs")));
+    }
+    candidates.into_iter().any(|parent| {
+        fs::read_to_string(&parent)
+            .ok()
+            .is_some_and(|text| declares_test_module(&text, stem))
+    })
+}
+
+/// Whether `text` opens a `mod <stem>;` declaration under `#[cfg(test)]`.
+fn declares_test_module(text: &str, stem: &str) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim() != "#[cfg(test)]" {
+            continue;
+        }
+        let declaration = lines[index + 1..].iter().map(|line| line.trim()).find(|line| {
+            !line.is_empty() && !line.starts_with("#[") && !line.starts_with("//")
+        });
+        if let Some(declaration) = declaration
+            && (declaration == format!("mod {stem};")
+                || declaration == format!("pub mod {stem};")
+                || declaration == format!("pub(crate) mod {stem};"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Whether one line closes a block opened at `indent`.
 ///
 /// rustfmt keeps a block's own closing brace at the opener's indent and every
@@ -4865,6 +5279,9 @@ fn collect_shared_drivers(
             continue;
         }
         if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        if parent_declares_test_module(&path) {
             continue;
         }
         let text = fs::read_to_string(&path)
@@ -5630,6 +6047,8 @@ fn generated_view_has_producer(header: &str) -> bool {
 /// generated marker: the classification only follows a provenance annotation
 /// naming a real generator, so a view can never be hand-edited into looking
 /// generated and a generator template cannot masquerade as production code.
+/// A `mod.rs` under a `generated/` directory is the registry that names the
+/// views, not a view, so it needs no producer.
 fn check_generated_provenance(repo_root: &Path) -> Result<(), String> {
     let mut violations = Vec::new();
     for root in SHARED_CRATE_SOURCE_ROOTS {
@@ -5675,7 +6094,8 @@ fn collect_generated_provenance(
         let text = fs::read_to_string(&path)
             .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
         let header = text.lines().take(3).collect::<Vec<_>>().join("\n");
-        if inside_generated && !generated_view_has_producer(&header) {
+        let registry = path.file_name().and_then(|name| name.to_str()) == Some("mod.rs");
+        if inside_generated && !registry && !generated_view_has_producer(&header) {
             violations.push(
                 serde_json::json!({
                     "error": "generated-view-without-producer",
@@ -6405,6 +6825,9 @@ fn use_binding(statement: &str, name: &str) -> bool {
 /// The mechanical repair for one dangling citation, when removing it cannot
 /// change what the sentence says.
 ///
+/// `start` and `end` are byte spans into the comment (`line[comment_start..]`),
+/// and the returned rewrite uses line byte offsets.
+///
 /// Three shapes qualify: a parenthetical that holds only the citation, a
 /// trailing clause after a comma or dash that is only the citation, and a
 /// comment line that holds only the citation. Everything else - a citation
@@ -6418,8 +6841,8 @@ fn mechanical_rewrite(
     end: usize,
 ) -> Option<CitationRewrite> {
     let comment = &line[comment_start..];
-    let token_start = start - comment_start;
-    let token_end = end - comment_start;
+    let token_start = start;
+    let token_end = end;
     let token = &comment[token_start..token_end];
     whole_line_rewrite(comment, previous, token)
         .or_else(|| parenthetical_rewrite(comment, comment_start, token_start, token_end))
@@ -7735,6 +8158,28 @@ mod tests {
             "/// [`PrepareStateDir`]: crate::broker_wire::BrokerRequest::PrepareStateDir";
         let start = definition.find("crate::").unwrap();
         assert!(mechanical_rewrite(definition, 0, None, start, definition.len()).is_none());
+    }
+
+    /// A citation on an indented comment line rewrites with comment-relative
+    /// spans: the offsets are measured from the comment, not the line, so a
+    /// deeper indent cannot underflow the arithmetic.
+    #[test]
+    fn an_indented_comment_citation_rewrites_without_underflow() {
+        let line = "            // (see d2bd::gone)";
+        let comment_start = line.find("//").unwrap();
+        let comment = &line[comment_start..];
+        let start = comment.find("d2bd::gone").unwrap();
+        let end = start + "d2bd::gone".len();
+        let Some(CitationRewrite::DropSpan {
+            start: drop_start,
+            end: drop_end,
+            keep,
+        }) = mechanical_rewrite(line, comment_start, None, start, end)
+        else {
+            panic!("a parenthetical citation on an indented comment is mechanical");
+        };
+        assert_eq!(&line[drop_start..drop_end], "(see d2bd::gone)");
+        assert_eq!(keep, None);
     }
 
     /// A family string literal introduced into a shared crate fails the check
