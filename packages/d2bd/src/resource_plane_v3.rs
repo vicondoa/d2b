@@ -1935,7 +1935,7 @@ impl ResourcePlaneV3 {
         // Providers) through the Device family's. Each declaration carries its
         // decoder, so the registry serves it for the type.
         set = set.with(
-            family_declaration("network-local"),
+            family_declaration(d2b_provider_network_local::NETWORK_FAMILY_NAME),
             vec![network_descriptor(NetworkDriverArgs {
                 zone: inputs.zone.as_str().to_owned(),
                 controller_generation: inputs.authority.controller_generation,
@@ -2781,7 +2781,7 @@ mod tests {
                 "activation-nixos",
                 "telemetry-service",
                 "telemetry-binding",
-                "network-local",
+                d2b_provider_network_local::NETWORK_FAMILY_NAME,
                 "device-usbip",
                 "device-security-key",
                 "device",
@@ -2863,7 +2863,7 @@ mod tests {
         let provider_generation =
             d2b_contracts_resource::v3::ResourceGeneration::new(4).expect("generation");
         inputs.committed_provider_identities = BTreeMap::from([(
-            ResourceRef::parse("Provider/network-local").expect("provider ref"),
+            ResourceRef::parse(d2b_provider_network_local::NETWORK_PROVIDER_REF).expect("provider ref"),
             (provider_uid.clone(), provider_generation),
         )]);
         let registry = Arc::clone(&inputs.registry);
@@ -2871,7 +2871,7 @@ mod tests {
         let source = &*registry;
         assert_eq!(
             source.committed_provider_identity(
-                &ResourceRef::parse("Provider/network-local").expect("provider ref")
+                &ResourceRef::parse(d2b_provider_network_local::NETWORK_PROVIDER_REF).expect("provider ref")
             ),
             Some((provider_uid, provider_generation))
         );

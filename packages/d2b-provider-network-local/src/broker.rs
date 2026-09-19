@@ -8,7 +8,7 @@ use std::fmt;
 use tracing::warn;
 
 use d2b_contracts::types::{BundleOpId, ScopeId, VmId};
-use d2b_contracts_broker::broker_wire::{NetworkTapContext, NftablesProjectionAction};
+use d2b_contracts_broker::broker_wire::NetworkTapContext;
 use d2b_contracts_resource::v3::{
     IfName, NetworkIfRole, NetworkProvenance, ResourceBundleGenerationId, ResourceUid,
     network::{AttachmentGenerationFence, AttachmentHandle, NetworkSpec},
@@ -218,7 +218,7 @@ impl NetworkEffectContext {
     }
 
     /// Borrow the opaque net-VM identity used for DHCP lease seeding.
-    pub const fn dnsmasq_vm_id(&self) -> &VmId {
+    pub const fn dhcp_vm_id(&self) -> &VmId {
         &self.dnsmasq_vm_id
     }
 
@@ -565,6 +565,18 @@ impl fmt::Debug for NetworkEffectContext {
     }
 }
 
+/// The firewall projection action one broker invocation carries.
+///
+/// The family declares the action vocabulary; the daemon's broker adapter
+/// maps it onto the kernel payload's `apply`/`remove` spellings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirewallProjectionAction {
+    /// Install the ownership-scoped projection.
+    Apply,
+    /// Remove the ownership-scoped projection.
+    Remove,
+}
+
 /// Broker operations needed by the Network effect port.
 pub trait NetworkBroker: Send + Sync {
     /// Ensure the Network bridge exists.
@@ -575,7 +587,7 @@ pub trait NetworkBroker: Send + Sync {
     fn apply_projection(
         &self,
         context: &NetworkEffectContext,
-        action: NftablesProjectionAction,
+        action: FirewallProjectionAction,
     ) -> Result<FirewallDigest, NetworkBrokerError>;
     /// Apply the trusted NetworkManager unmanaged projection.
     fn apply_nm_unmanaged(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError>;
@@ -682,7 +694,7 @@ impl<B: NetworkBroker> NetworkEffectPort for BrokerNetworkEffectPort<B> {
             return Err(NetworkEffectError::StaleConfigurationGeneration);
         }
         self.broker
-            .apply_projection(&self.context, NftablesProjectionAction::Apply)
+            .apply_projection(&self.context, FirewallProjectionAction::Apply)
             .map_err(map_broker_error)
     }
 
@@ -706,7 +718,7 @@ impl<B: NetworkBroker> NetworkEffectPort for BrokerNetworkEffectPort<B> {
             return Err(NetworkEffectError::StaleConfigurationGeneration);
         }
         self.broker
-            .apply_projection(&self.context, NftablesProjectionAction::Remove)
+            .apply_projection(&self.context, FirewallProjectionAction::Remove)
             .map(|_| ())
             .map_err(map_broker_error)
     }
@@ -832,7 +844,6 @@ mod tests {
     use super::*;
     use crate::controller::{NetworkAdmissionIntent, NetworkAdmissionKey};
     use d2b_contracts::types::{BundleOpId, VmId};
-    use d2b_contracts_broker::broker_wire::NftablesProjectionAction;
     use d2b_contracts_resource::v3::{
         ResourceBundleGenerationId, ResourceUid,
         execution_policy::BoundedToken,
@@ -874,11 +885,11 @@ mod tests {
         fn apply_projection(
             &self,
             _: &NetworkEffectContext,
-            action: NftablesProjectionAction,
+            action: FirewallProjectionAction,
         ) -> Result<FirewallDigest, NetworkBrokerError> {
             self.record(match action {
-                NftablesProjectionAction::Apply => "projection-apply",
-                NftablesProjectionAction::Remove => "projection-remove",
+                FirewallProjectionAction::Apply => "projection-apply",
+                FirewallProjectionAction::Remove => "projection-remove",
             });
             Ok(FirewallDigest::new([7; 32]))
         }
