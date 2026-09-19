@@ -897,27 +897,30 @@ impl<'de> Deserialize<'de> for ExecutionPolicy {
 
 /// The wire mirror of `ExecutionPolicy`, flattened into the Host and Guest
 /// base specs so both render exactly one copy of the shared fields.
+///
+/// Public because the per-type base shapes that flatten the policy (Host and
+/// Guest) live in their owning crates and decode through this wire mirror.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct ExecutionPolicyWire {
+pub struct ExecutionPolicyWire {
     #[serde(default = "default_system_domain")]
-    pub(crate) default_domain: ExecutionDomain,
+    pub default_domain: ExecutionDomain,
     #[serde(default = "default_allowed_domains")]
-    pub(crate) allowed_domains: Vec<ExecutionDomain>,
+    pub allowed_domains: Vec<ExecutionDomain>,
     #[serde(default)]
-    pub(crate) default_user_ref: Option<ResourceRef>,
+    pub default_user_ref: Option<ResourceRef>,
     #[serde(default)]
-    pub(crate) budget: BudgetSpec,
+    pub budget: BudgetSpec,
     #[serde(default)]
-    pub(crate) network_attachments: Vec<NetworkAttachment>,
+    pub network_attachments: Vec<NetworkAttachment>,
     #[serde(default)]
-    pub(crate) device_attachments: Vec<DeviceAttachment>,
+    pub device_attachments: Vec<DeviceAttachment>,
     #[serde(default)]
-    pub(crate) volume_attachment_defaults: Vec<CanonicalJsonObject>,
+    pub volume_attachment_defaults: Vec<CanonicalJsonObject>,
 }
 
 impl ExecutionPolicyWire {
-    pub(crate) fn into_policy(self) -> Result<ExecutionPolicy, PrimitiveSpecError> {
+    pub fn into_policy(self) -> Result<ExecutionPolicy, PrimitiveSpecError> {
         ExecutionPolicy::new(
             self.default_domain,
             self.allowed_domains,
@@ -1200,7 +1203,6 @@ mod tests {
         use crate::v3::{
             ResourceTypeName,
             device::DEVICE_RESOURCE_TYPE,
-            guest::GUEST_RESOURCE_TYPE,
             host::HOST_RESOURCE_TYPE,
             network::NETWORK_RESOURCE_TYPE,
             process::{EPHEMERAL_PROCESS_RESOURCE_TYPE, PROCESS_RESOURCE_TYPE},
@@ -1208,9 +1210,11 @@ mod tests {
             volume::VOLUME_RESOURCE_TYPE,
         };
 
+        // `Guest` is not here: the Guest shape moved to the crate that owns
+        // the type (d2b-provider-guest), and the generated type authority
+        // pins its name there.
         let declared = [
             HOST_RESOURCE_TYPE,
-            GUEST_RESOURCE_TYPE,
             PROCESS_RESOURCE_TYPE,
             EPHEMERAL_PROCESS_RESOURCE_TYPE,
             VOLUME_RESOURCE_TYPE,
@@ -1240,7 +1244,6 @@ mod tests {
         use crate::v3::{
             ResourceRef,
             device::DeviceSpec,
-            guest::GuestSpec,
             host::HostSpec,
             process::{ExecutionSpec, ProcessClass, ProcessSpec},
             user::{OsUsername, UserSpec},
@@ -1254,7 +1257,6 @@ mod tests {
         .unwrap();
         let objects = [
             to_base_object(&HostSpec::system_default()).unwrap(),
-            to_base_object(&GuestSpec::system_default()).unwrap(),
             to_base_object(&ProcessSpec::minimal(execution)).unwrap(),
             to_base_object(&UserSpec::minimal(OsUsername::parse("alice").unwrap())).unwrap(),
             to_base_object(&DeviceSpec::emulated_exclusive()).unwrap(),

@@ -17400,7 +17400,7 @@ fn stop_vmm_runner_with_provider(
     let force_generation_baseline = force_shutdown_generation(state, input.vm);
     let provider: Box<dyn provider_shutdown::GracefulVmShutdown> = match target.kind {
         provider_shutdown::ProviderKind::CloudHypervisor => {
-            Box::new(provider_shutdown::CloudHypervisorShutdown::default())
+            Box::new(d2b_provider_guest::CloudHypervisorShutdown::default())
         }
         provider_shutdown::ProviderKind::QemuMedia => Box::new(QemuBrokerShutdownProvider {
             socket_path: broker_socket_path(state),

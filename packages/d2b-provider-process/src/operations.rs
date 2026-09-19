@@ -2709,6 +2709,13 @@ impl OperationHandler for SpawnRunnerHandler {
                     "stateRoot": identity.state_root.display().to_string(),
                     "stateVolume": identity.state_volume,
                 })),
+                // The stale-socket preflight paths the guest runtime
+                // Provider declares from its own argv; the broker's spawn
+                // kernel unlinks provably-stale sockets before spawning.
+                "preflightSocketPaths": d2b_provider_guest_cloud_hypervisor::preflight_socket_paths(&argv)
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>(),
                 "deviceWorker": {
                     "scope": device_worker.scope.as_ref().map(|scope| serde_json::json!({
                         "zoneUid": scope.zone_uid.as_str(),

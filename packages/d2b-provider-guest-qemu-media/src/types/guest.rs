@@ -8,8 +8,29 @@ use d2b_contracts_resource::v3::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub use d2b_contracts_resource::v3::GuestSpec;
 pub use d2b_contracts_resource::v3::execution_policy::{DeviceAttachment, NetworkAttachment};
+
+/// The canonical minimal Guest base object: the `Guest` primitive base spec
+/// with no execution target and no system artifact, rendered from the typed
+/// shape the crate that owns the `Guest` type declares (U7). This Provider
+/// only writes the stored spec, so it reads the base through the canonical
+/// JSON data path instead of a typed dependency on the owning crate.
+pub const MINIMAL_GUEST_BASE_JSON: &str = r#"{"allowedDomains":["system"],"budget":{},"defaultDomain":"system","defaultUserRef":null,"deviceAttachments":[],"networkAttachments":[],"volumeAttachmentDefaults":[]}"#;
+
+/// The deterministic name of one Guest's qemu-media runtime Volume.
+pub fn runtime_volume_name(guest_name: &str) -> String {
+    format!("{guest_name}-runtime")
+}
+
+/// This Provider's audio capability row: declared qemu audio backend on
+/// the host only; guest enforcement unsupported.
+pub fn audio_capability() -> d2b_core::provider_capabilities::AudioProviderCapability {
+    d2b_core::provider_capabilities::AudioProviderCapability {
+        host_enforcement: d2b_core::provider_capabilities::AudioHostEnforcementKind::QemuAudioBackend,
+        guest_enforcement: d2b_core::provider_capabilities::AudioGuestEnforcementKind::Unsupported,
+        needs_local_state_file: true,
+    }
+}
 
 /// Maximum removable media attachments on one Guest.
 pub const MAX_REMOVABLE_VOLUMES: usize = 4;
@@ -308,10 +329,8 @@ pub fn build_guest_resource_spec(
     settings.memory_mib = memory_mib;
     settings.validate()?;
 
-    let base = GuestSpec::system_default();
-    let base = serde_json::to_vec(&base).map_err(|_| GuestResourceSpecError::CanonicalJson)?;
-    let base =
-        CanonicalJsonObject::parse(&base).map_err(|_| GuestResourceSpecError::CanonicalJson)?;
+    let base = CanonicalJsonObject::parse(MINIMAL_GUEST_BASE_JSON.as_bytes())
+        .map_err(|_| GuestResourceSpecError::CanonicalJson)?;
     let settings =
         serde_json::to_vec(&settings).map_err(|_| GuestResourceSpecError::CanonicalJson)?;
     let settings =

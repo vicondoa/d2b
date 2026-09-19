@@ -824,7 +824,7 @@ impl NetworkResourcePort for NetworkChildPort<'_> {
 
     async fn upsert_guest(
         &self,
-        spec: &d2b_contracts_resource::v3::guest::GuestSpec,
+        spec: &d2b_provider_guest::GuestSpec,
     ) -> Result<(), NetworkEffectError> {
         let mut value = serde_json::to_value(spec).map_err(|_| NetworkEffectError::ConfigVolume)?;
         value

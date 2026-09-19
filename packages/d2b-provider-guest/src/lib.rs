@@ -22,6 +22,8 @@
 #![deny(missing_docs)]
 
 pub mod driver;
+pub mod guest_spec;
+pub mod shutdown;
 pub mod target_control;
 pub mod target_service;
 
@@ -41,6 +43,11 @@ pub use driver::{
     GuestEffectPhase, GuestEffectRequest, GuestFinalizeStage, GuestKind, GuestRegistration,
     GuestStatusSink, declared_dependency_refs, decode_metadata, guest_descriptor,
     guest_spec_decoder, guest_status_sink, key_ref, resource_uid, view_phase,
+};
+pub use guest_spec::{GUEST_RESOURCE_TYPE, GuestSpec};
+pub use shutdown::{
+    CloudHypervisorShutdown, GracefulVmShutdown, ProviderGuestState, ProviderKind,
+    ProviderRequestOutcome, ProviderShutdownTarget, ProviderVmmExitOutcome,
 };
 pub use target_control::{
     GuestTargetSession, SessionTargetControlChannel, guest_target_ref, session_target_control,

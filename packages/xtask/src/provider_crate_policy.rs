@@ -1146,12 +1146,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 observability census step (kernel stale-socket cleanup moves into d2b-provider-observability-otel)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/kernel_ops.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U12 cloud-hypervisor census step (kernel stale-socket cleanup moves into d2b-provider-runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/audio.rs",
         token: "audio_pipewire",
         family: "audio-pipewire",
@@ -1500,36 +1494,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (observability-otel)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "runtime_azure_container_apps",
-        family: "runtime-azure-container-apps",
-        retires_with: "U10-U12 family rollout (runtime-azure-container-apps)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/media.rs",
-        token: "runtime_azure_container_apps",
-        family: "runtime-azure-container-apps",
-        retires_with: "U10-U12 family rollout (runtime-azure-container-apps)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "runtime_azure_virtual_machine",
-        family: "runtime-azure-virtual-machine",
-        retires_with: "U10-U12 family rollout (runtime-azure-virtual-machine)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/media.rs",
-        token: "runtime_azure_virtual_machine",
-        family: "runtime-azure-virtual-machine",
-        retires_with: "U10-U12 family rollout (runtime-azure-virtual-machine)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "runtime_cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
@@ -1542,12 +1506,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/media.rs",
-        token: "runtime_cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
@@ -1555,12 +1513,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
-        token: "runtime_qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
         token: "runtime_qemu_media",
         family: "runtime-qemu-media",
         retires_with: "U12 qemu-media step",
@@ -1753,12 +1705,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
-        token: "nixos",
-        family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/provider_capabilities.rs",
         token: "nixos",
         family: "activation-nixos",
         retires_with: "U12 activation/host-maintenance step",
@@ -2423,6 +2369,14 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "device-security-key",
         retires_with: "U12 security-key step",
     },
+    // U7 permanent carve-out: the host document's guest runtime shapes
+    // (`HostQemuMedia`, `QemuMediaSourceIntent`, `CloudHypervisorCapability`,
+    // `HostChConfig`, `ChNetHandoffMode`) stay in the shared core crate.
+    // The host document is shared state the broker's media kernel, the
+    // daemon, and the resolver all read; placing the shapes in the owning
+    // provider crates would give the shared core crate a provider
+    // dependency, which the dependency-direction detector refuses. The
+    // family rows below stay because the shapes carry the family spellings.
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/host.rs",
         token: "security_key",
@@ -3372,19 +3326,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/provider_shutdown.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/guest_effects.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/provider_capabilities.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
@@ -3493,18 +3435,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
-        token: "qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/provider_capabilities.rs",
-        token: "qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/provider_shutdown.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
         retires_with: "U12 qemu-media step",

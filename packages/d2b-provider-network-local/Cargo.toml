@@ -24,6 +24,7 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-provider-process-minijail = { path = "../d2b-provider-process-minijail", version = "0.0.0-bootstrap" }
+d2b-provider-guest = { path = "../d2b-provider-guest", version = "0.0.0-bootstrap" }
 d2b-provider-guest-cloud-hypervisor = { path = "../d2b-provider-guest-cloud-hypervisor", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }

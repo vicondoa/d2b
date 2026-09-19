@@ -3,6 +3,8 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+use std::path::PathBuf;
+
 use d2b_contracts_resource::v3::ResourceRef;
 
 pub mod adoption;
@@ -79,4 +81,60 @@ pub fn provider_manifest() -> Result<d2b_contracts_provider::v3::ProviderManifes
 /// Enter the controller role.
 pub fn controller_binary_entrypoint() -> i32 {
     controller_session::run_from_fd10()
+}
+
+/// The `--api-socket` value of a cloud-hypervisor argv, when present.
+pub fn api_socket_path(argv: &[String]) -> Option<PathBuf> {
+    let mut iter = argv.iter();
+    while let Some(argument) = iter.next() {
+        if argument == "--api-socket"
+            && let Some(path) = iter.next()
+        {
+            return Some(PathBuf::from(path));
+        }
+        if let Some(path) = argument.strip_prefix("--api-socket=") {
+            return Some(PathBuf::from(path));
+        }
+    }
+    None
+}
+
+/// The `socket=` field of the `--vsock` device, when present.
+pub fn vsock_socket_path(argv: &[String]) -> Option<PathBuf> {
+    let mut iter = argv.iter();
+    while let Some(argument) = iter.next() {
+        if argument == "--vsock"
+            && let Some(spec) = iter.next()
+        {
+            for field in spec.split(',') {
+                if let Some(path) = field.strip_prefix("socket=") {
+                    return Some(PathBuf::from(path));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Every socket-carrying argv path the broker's stale-socket preflight
+/// unlinks before spawning this Provider's runner.
+pub fn preflight_socket_paths(argv: &[String]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(path) = api_socket_path(argv) {
+        paths.push(path);
+    }
+    if let Some(path) = vsock_socket_path(argv) {
+        paths.push(path);
+    }
+    paths
+}
+
+/// This Provider's audio capability row: PipeWire vhost-user-sound host
+/// enforcement plus a signed target-local audio Process.
+pub fn audio_capability() -> d2b_core::provider_capabilities::AudioProviderCapability {
+    d2b_core::provider_capabilities::AudioProviderCapability {
+        host_enforcement: d2b_core::provider_capabilities::AudioHostEnforcementKind::PipeWireVhostUserSound,
+        guest_enforcement: d2b_core::provider_capabilities::AudioGuestEnforcementKind::ProcessCapable,
+        needs_local_state_file: true,
+    }
 }

@@ -31,8 +31,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceRef, ResourceUid, execution_policy::ExecutionPolicy,
-    guest::GuestSpec, network::NetworkSpec,
+    network::NetworkSpec,
 };
+use d2b_provider_guest::GuestSpec;
 use d2b_provider_toolkit::{
     ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
     SharedProviderDriverFactory, SharedProviderEffectError, SharedProviderEffectOutcome,

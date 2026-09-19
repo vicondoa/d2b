@@ -2523,7 +2523,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
             audit_mode: "Yes",
         },
         payload_provenance: PayloadProvenance::Request,
-        payload_fields: &["activationInput", "argv", "binaryPath", "capabilities", "cgroupPlacement", "deviceWorker", "env", "gid", "mountPolicy", "namespaces", "role", "rootCarveOut", "runnerIdentity", "seccompPolicyRef", "servingWorker", "skipBinaryExistsCheck", "supplementaryGroups", "swtpmIdentity", "uid", "umask", "userNamespace"],
+        payload_fields: &["activationInput", "argv", "binaryPath", "capabilities", "cgroupPlacement", "deviceWorker", "env", "gid", "mountPolicy", "namespaces", "preflightSocketPaths", "role", "rootCarveOut", "runnerIdentity", "seccompPolicyRef", "servingWorker", "skipBinaryExistsCheck", "supplementaryGroups", "swtpmIdentity", "uid", "umask", "userNamespace"],
         payload_required: &["binaryPath", "argv", "uid", "gid", "supplementaryGroups", "env", "capabilities", "namespaces", "mountPolicy", "cgroupPlacement", "role", "servingWorker", "runnerIdentity"],
         audit_join: None,
         max_fds: 8,

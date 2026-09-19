@@ -1061,7 +1061,7 @@ impl ProductionGuestDriverEffects {
         };
         let runtime_volume_ready = children.iter().any(|child| {
             child.key.type_name == "Volume"
-                && child.key.name == format!("{}-runtime", request.target.name().as_str())
+                && child.key.name == qemu_media_runtime::runtime_volume_name(request.target.name().as_str())
                 && child.ready()
         });
         Ok(qemu_media_runtime::QemuMediaDependencies {
@@ -1124,8 +1124,11 @@ impl ProductionGuestDriverEffects {
                     .map_err(|_| GuestEffectError::InvalidResource)?;
                 let process = qemu_media_runtime::build_process_spec(
                     config.controller_execution_ref.clone(),
-                    ResourceRef::parse(&format!("Volume/{}-runtime", request.target.name().as_str()))
-                        .map_err(|_| GuestEffectError::InvalidResource)?,
+                    ResourceRef::parse(&format!(
+                        "Volume/{}",
+                        qemu_media_runtime::runtime_volume_name(request.target.name().as_str())
+                    ))
+                    .map_err(|_| GuestEffectError::InvalidResource)?,
                     device_ref,
                     network_refs,
                 )
