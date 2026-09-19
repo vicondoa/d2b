@@ -528,14 +528,22 @@ mod tests {
 
     #[test]
     fn system_core_handler_names_use_exact_hyphenated_wire_values() {
-        assert_eq!(
-            serde_json::to_string(&ZoneHandlerName::SystemCoreHost).unwrap(),
-            r#""system-core-host""#
-        );
-        assert_eq!(
-            serde_json::to_string(&ZoneHandlerName::SystemCoreUser).unwrap(),
-            r#""system-core-user""#
-        );
+        const HANDLER_VECTORS: &[(ZoneHandlerName, &str)] = &[
+            (ZoneHandlerName::ConfigurationPublication,"configuration-publication"),
+            (ZoneHandlerName::Authorization,"authorization"),
+            (ZoneHandlerName::ApiCatalog,"api-catalog"),
+            (ZoneHandlerName::ProviderLifecycle,"provider-lifecycle"),
+            (ZoneHandlerName::SystemCoreHost,"system-core-host"),
+            (ZoneHandlerName::SystemCoreUser,"system-core-user"),
+            (ZoneHandlerName::ZoneLink,"zone-link"),
+            (ZoneHandlerName::BackupCleanup,"backup-cleanup"),
+        ];
+        for (handler, wire) in HANDLER_VECTORS {
+            assert_eq!(
+                serde_json::to_string(handler).unwrap(),
+                format!(r#""{wire}""#)
+            );
+        }
         assert!(serde_json::from_str::<ZoneHandlerName>(r#""system_core_host""#).is_err());
         assert!(serde_json::from_str::<ZoneHandlerName>(r#""system_core_user""#).is_err());
     }

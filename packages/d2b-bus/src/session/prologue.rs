@@ -276,6 +276,19 @@ mod tests {
     }
 
     #[test]
+    fn evidence_class_labels_are_frozen() {
+        const LABELS: &[(EvidenceClass, &str)] = &[
+            (EvidenceClass::UnixPeer,"unix-peer"),
+            (EvidenceClass::EnrolledKk,"enrolled-kk"),
+            (EvidenceClass::BootstrapIkpsk2,"bootstrap-ikpsk2"),
+            (EvidenceClass::NativeVsock,"native-vsock"),
+        ];
+        for (evidence, label) in LABELS {
+            assert_eq!(evidence_class_label(*evidence), *label);
+        }
+    }
+
+    #[test]
     fn debug_output_never_echoes_the_digest_or_the_policy() {
         let subject = SubjectContextDigest::of_subject(&fixtures::subject("relay-a", "zone-link"));
         assert_eq!(format!("{subject:?}"), "SubjectContextDigest(<redacted>)");
