@@ -1160,7 +1160,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Guest",
-            dto_resource_schema::<d2b_contracts_resource::v3::guest::GuestSpec>(
+            dto_resource_schema::<d2b_provider_guest::GuestSpec>(
                 "Guest",
                 "VM, sandbox, cloud, or remote execution parent.",
                 true,

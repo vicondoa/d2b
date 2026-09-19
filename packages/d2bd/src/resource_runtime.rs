@@ -46,7 +46,6 @@ use d2b_contracts_resource::v3::{
     process::ProcessSpec,
     volume::VolumeSpec,
 };
-use d2b_contracts_resource::v3::guest::GuestSpec;
 use d2b_contracts_zone_session::v3::{ZoneStatusResource, resource_bundle::ResourceBundle};
 use d2b_core_controller::authority::{
     AuthorityOperationState, AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest,
@@ -90,6 +89,7 @@ use d2b_provider_toolkit::{
     PROVIDER_DELIVERY_KEY_STREAM_CREDIT, PROVIDER_DELIVERY_KEY_STREAM_ID, PROVIDER_READY_MARKER,
     PROVIDER_READY_STREAM_CREDIT, PROVIDER_READY_STREAM_ID, ProviderSessionMetadata,
 };
+use d2b_provider_guest::GuestSpec;
 use d2b_provider_guest_cloud_hypervisor::{
     AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph, ChildRole,
     CloudHypervisorConfig, CloudHypervisorController, CloudHypervisorResourceApiError,

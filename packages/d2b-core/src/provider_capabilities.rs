@@ -58,26 +58,6 @@ pub struct AudioProviderCapability {
 }
 
 impl AudioProviderCapability {
-    /// Capability row for Cloud Hypervisor NixOS VMs: PipeWire vhost-user-sound
-    /// host enforcement plus a signed target-local audio Process.
-    pub fn cloud_hypervisor_nixos() -> Self {
-        Self {
-            host_enforcement: AudioHostEnforcementKind::PipeWireVhostUserSound,
-            guest_enforcement: AudioGuestEnforcementKind::ProcessCapable,
-            needs_local_state_file: true,
-        }
-    }
-
-    /// Capability row for qemu-media VMs: declared qemu audio backend on the
-    /// host only; guest enforcement unsupported.
-    pub fn qemu_media() -> Self {
-        Self {
-            host_enforcement: AudioHostEnforcementKind::QemuAudioBackend,
-            guest_enforcement: AudioGuestEnforcementKind::Unsupported,
-            needs_local_state_file: true,
-        }
-    }
-
     /// Capability row for ACA sandbox targets: no local host enforcement;
     /// guest enforcement via the signed target-local audio Process.
     pub fn aca_sandbox() -> Self {
@@ -117,22 +97,6 @@ pub struct ConsoleProviderCapability {
 }
 
 impl ConsoleProviderCapability {
-    /// Capability row for Cloud Hypervisor NixOS VMs.
-    pub fn cloud_hypervisor_nixos() -> Self {
-        Self {
-            backend: ConsoleBackendKind::LocalHypervisor,
-            persistent_drain: true,
-        }
-    }
-
-    /// Capability row for qemu-media VMs.
-    pub fn qemu_media() -> Self {
-        Self {
-            backend: ConsoleBackendKind::LocalHypervisor,
-            persistent_drain: true,
-        }
-    }
-
     /// Capability row for ACA sandbox targets.
     pub fn aca_sandbox() -> Self {
         Self {

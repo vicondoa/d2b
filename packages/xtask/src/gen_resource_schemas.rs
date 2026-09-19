@@ -12,9 +12,10 @@ use std::{
 
 use crate::zone_schema::core_schema_artifact_name;
 use d2b_contracts_resource::v3::{
-    EphemeralProcessSpec, GuestSpec, HostSpec, UserSpec, process::ProcessSpec,
+    EphemeralProcessSpec, HostSpec, UserSpec, process::ProcessSpec,
 };
 use d2b_provider_endpoint::endpoint::EndpointSpec;
+use d2b_provider_guest::GuestSpec;
 use schemars::schema_for;
 use serde_json::Value;
 

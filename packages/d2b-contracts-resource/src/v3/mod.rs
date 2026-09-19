@@ -6,7 +6,6 @@ pub mod bridge;
 pub mod device;
 pub mod error;
 pub mod execution_policy;
-pub mod guest;
 pub mod host;
 pub mod identity;
 pub mod limits;
@@ -32,7 +31,6 @@ pub use error::{
     ResourceErrorKind, ResourceErrorReason, ResourceErrorValidation, RetryClass,
 };
 pub use execution_policy::*;
-pub use guest::*;
 pub use host::*;
 pub use identity::{
     ConfigurationGeneration, ControllerGeneration, IdentityClass, IdentityError,

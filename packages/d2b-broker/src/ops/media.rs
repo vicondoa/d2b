@@ -77,7 +77,7 @@ impl std::fmt::Display for MediaOpError {
             Self::DeviceBusy(reason) => write!(f, "media-device-busy:{reason}"),
             Self::IdentityMismatch(reason) => write!(f, "media-identity-mismatch:{reason}"),
             Self::AmbiguousRuntimeSelector(media_refs) => {
-                write!(f, "media-runtime-selector-ambiguous:{}", media_refs.len())
+                write!(f, "media-selector-ambiguous:{}", media_refs.len())
             }
             Self::Io(reason) => write!(f, "io:{reason}"),
             Self::Registry(reason) => write!(f, "registry:{reason}"),

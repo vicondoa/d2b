@@ -10127,59 +10127,11 @@ fn audio_state_value<'a>(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) async fn cleanup_cloud_hypervisor_stale_sockets(
-    role: &d2b_contracts_broker::broker_wire::RunnerRole,
-    argv: &[String],
-) -> Result<(), BrokerError> {
-    if !matches!(
-        role,
-        d2b_contracts_broker::broker_wire::RunnerRole::CloudHypervisor
-    ) {
-        return Ok(());
-    }
-    for path in cloud_hypervisor_socket_paths(argv) {
-        cleanup_stale_unix_socket(&path).await?;
+pub(crate) async fn cleanup_stale_sockets(paths: &[PathBuf]) -> Result<(), BrokerError> {
+    for path in paths {
+        cleanup_stale_unix_socket(path).await?;
     }
     Ok(())
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn bind_cloud_hypervisor_guest_uid(
-    role: RunnerRole,
-    owner_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
-    argv: &[String],
-) -> Result<Vec<String>, BrokerError> {
-    if role != RunnerRole::CloudHypervisor {
-        return Ok(argv.to_vec());
-    }
-    let owner_uid = owner_uid.ok_or_else(|| BrokerError::SpawnRunnerIntentMismatch {
-        field: "owner_uid",
-        requested: "missing".to_owned(),
-        resolved: "required-for-cloud-hypervisor".to_owned(),
-    })?;
-    let mut bound = argv.to_vec();
-    let cmdline_index = bound
-        .iter()
-        .position(|argument| argument == "--cmdline")
-        .and_then(|index| bound.get(index + 1).map(|_| index + 1))
-        .ok_or_else(|| BrokerError::SpawnRunnerIntentMismatch {
-            field: "argv",
-            requested: "cloud-hypervisor-without-cmdline".to_owned(),
-            resolved: "cmdline-required".to_owned(),
-        })?;
-    if bound[cmdline_index]
-        .split_ascii_whitespace()
-        .any(|argument| argument.starts_with("d2b.guest_uid="))
-    {
-        return Err(BrokerError::SpawnRunnerIntentMismatch {
-            field: "argv",
-            requested: "prebound-guest-uid".to_owned(),
-            resolved: "broker-owned".to_owned(),
-        });
-    }
-    bound[cmdline_index].push_str(" d2b.guest_uid=");
-    bound[cmdline_index].push_str(owner_uid.as_str());
-    Ok(bound)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -10266,52 +10218,26 @@ fn otel_host_bridge_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError>
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn cloud_hypervisor_socket_paths(argv: &[String]) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let mut iter = argv.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--api-socket" => {
-                if let Some(path) = iter.next() {
-                    paths.push(PathBuf::from(path));
-                }
-            }
-            "--vsock" => {
-                if let Some(spec) = iter.next() {
-                    for field in spec.split(',') {
-                        if let Some(path) = field.strip_prefix("socket=") {
-                            paths.push(PathBuf::from(path));
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    paths
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
     let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => {
             return Err(BrokerError::LiveHandler(format!(
-                "cloud-hypervisor socket preflight could not stat {}: {err}",
+                "runner socket preflight could not stat {}: {err}",
                 path.display()
             )));
         }
     };
     if !metadata.file_type().is_socket() {
         return Err(BrokerError::LiveHandler(format!(
-            "cloud-hypervisor socket preflight refusing to remove non-socket path {}",
+            "runner socket preflight refusing to remove non-socket path {}",
             path.display()
         )));
     }
     match tokio::net::UnixStream::connect(path).await {
         Ok(_) => Err(BrokerError::LiveHandler(format!(
-            "cloud-hypervisor socket preflight found active listener at {}",
+            "runner socket preflight found active listener at {}",
             path.display()
         ))),
         Err(err)
@@ -10322,13 +10248,13 @@ async fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
         {
             tokio::fs::remove_file(path).await.map_err(|remove_err| {
                 BrokerError::LiveHandler(format!(
-                    "cloud-hypervisor socket preflight could not remove stale {}: {remove_err}",
+                    "runner socket preflight could not remove stale {}: {remove_err}",
                     path.display()
                 ))
             })
         }
         Err(err) => Err(BrokerError::LiveHandler(format!(
-            "cloud-hypervisor socket preflight could not prove {} stale: {err}",
+            "runner socket preflight could not prove {} stale: {err}",
             path.display()
         ))),
     }
@@ -16088,9 +16014,22 @@ mod tests {
         role_id: &str,
         bundle_runner_intent_ref: &str,
     ) -> serde_json::Value {
+        spawn_payload_with_preflight(argv, role, serving_worker, vm_id, role_id, bundle_runner_intent_ref, Vec::new())
+    }
+
+    fn spawn_payload_with_preflight(
+        argv: Vec<String>,
+        role: &str,
+        serving_worker: bool,
+        vm_id: &str,
+        role_id: &str,
+        bundle_runner_intent_ref: &str,
+        preflight_socket_paths: Vec<String>,
+    ) -> serde_json::Value {
         serde_json::json!({
             "binaryPath": argv[0],
             "argv": argv,
+            "preflightSocketPaths": preflight_socket_paths,
             "uid": nix::unistd::Uid::current().as_raw(),
             "gid": Gid::current().as_raw(),
             "supplementaryGroups": [],
@@ -16384,7 +16323,7 @@ mod tests {
             harness
                 .invoke(
                     "spawn-process",
-                    spawn_payload(
+                    spawn_payload_with_preflight(
                         vec![
                             spawn_test_binary("true"),
                             "--api-socket".to_owned(),
@@ -16395,6 +16334,7 @@ mod tests {
                         "vm-stale",
                         "ch-runner",
                         "runner:vm-stale:ch-runner",
+                        vec![stale.display().to_string()],
                     ),
                     Vec::new(),
                 )

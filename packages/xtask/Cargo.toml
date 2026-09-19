@@ -59,6 +59,7 @@ sha2.workspace = true
 
 
 d2b-provider-endpoint = { path = "../d2b-provider-endpoint", version = "0.0.0-bootstrap" }
+d2b-provider-guest = { path = "../d2b-provider-guest", version = "0.0.0-bootstrap" }
 d2b-provider-command = { path = "../d2b-provider-command", version = "0.0.0-bootstrap" }
 d2b-provider-operation = { path = "../d2b-provider-operation", version = "0.0.0-bootstrap" }
 d2b-provider-seccomp-profile = { path = "../d2b-provider-seccomp-profile", version = "0.0.0-bootstrap" }

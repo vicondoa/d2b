@@ -7,7 +7,6 @@ use d2b_contracts_resource::v3::{
     IfName, NetworkProvenance, ResourceBundleGenerationId, ResourceGeneration, ResourceRef,
     ResourceUid,
     execution_policy::{BoundedToken, BudgetSpec, ExecutionPolicy},
-    guest::GuestSpec,
     network::{
         AttachmentGenerationFence, AttachmentHandle, Ipv4Cidr, MacvtapMode, NetworkSpec,
         SharingPolicy, cidr_overlaps,
@@ -24,6 +23,7 @@ use d2b_contracts_resource::v3::{
         VolumeSource, VolumeSpec,
     },
 };
+use d2b_provider_guest::GuestSpec;
 
 use crate::artifact::{
     ArtifactCatalogEntry, ArtifactResolutionError, resolve_net_vm_system_artifact,

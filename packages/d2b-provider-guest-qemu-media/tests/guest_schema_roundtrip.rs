@@ -1,5 +1,6 @@
+use d2b_contracts_resource::v3::CanonicalJsonObject;
 use d2b_provider_guest_qemu_media::{
-    GuestProviderSpecSettings, GuestSpec, build_guest_resource_spec,
+    GuestProviderSpecSettings, MINIMAL_GUEST_BASE_JSON, build_guest_resource_spec,
 };
 
 #[test]
@@ -60,23 +61,21 @@ fn guest_spec_requires_the_runtime_provider() {
 }
 
 #[test]
-fn canonical_guest_deserializes_minimal_base_and_rejects_shadow_fields() {
-    let minimal = br#"{
-        "allowedDomains":["system"],
-        "budget":{},
-        "defaultDomain":"system",
-        "defaultUserRef":null,
-        "deviceAttachments":[],
-        "networkAttachments":[],
-        "systemArtifactId":null,
-        "volumeAttachmentDefaults":[]
-    }"#;
-    let guest: GuestSpec = serde_json::from_slice(minimal).unwrap();
-    assert_eq!(guest, GuestSpec::system_default());
-    assert!(
-        serde_json::from_slice::<GuestSpec>(
-            br#"{"providerRef":"Provider/runtime-qemu-media","vcpu":2,"memoryMib":4096}"#
-        )
-        .is_err()
+fn canonical_guest_base_round_trips_and_rejects_shadow_fields() {
+    let base = CanonicalJsonObject::parse(MINIMAL_GUEST_BASE_JSON.as_bytes()).unwrap();
+    let rendered = serde_json::to_string(&base).unwrap();
+    assert_eq!(
+        CanonicalJsonObject::parse(rendered.as_bytes()).unwrap(),
+        base,
+        "the pinned minimal Guest base must round-trip through its canonical form"
     );
+    for reserved in ["providerRef", "updatePolicy", "provider"] {
+        assert!(
+            !MINIMAL_GUEST_BASE_JSON.contains(reserved),
+            "the minimal Guest base must not restate a universal or Provider-layer field"
+        );
+    }
+    // Shadow-field refusal is the typed shape's behavior; the owning crate's
+    // tests pin it (d2b-provider-guest guest_spec tests), and the daemon
+    // decodes stored specs through that typed shape.
 }
