@@ -81,6 +81,7 @@ jobs:
     env:
       D2B_BAZEL_PROFILE: local
       D2B_BAZEL_UNTRUSTED: "1"
+      D2B_BAZEL_TEST_OUTPUT: errors
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
