@@ -1,0 +1,16 @@
+{
+  "crate": "d2b-provider-volume",
+  "types": [
+    {
+      "resourceType": "Volume",
+      "allowedSources": ["builtin", "startup"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": false,
+      "reads": []
+    }
+  ],
+  "provides": [],
+  "roles": [],
+  "principals": []
+}

@@ -62,53 +62,12 @@ pub const STANDARD_RESOURCE_TYPES: [&str; 23] = [
     "SeccompProfile",
 ];
 
-/// The resource types the v3 resource runtime owns end to end (R35/F1
-/// exclusive per-type partition): served only by the per-zone manager plane.
-pub const V3_CONVERTED_RESOURCE_TYPES: [&str; 36] = [
-    "Process",
-    // U12: the one-shot Process family member, served by the same Process
-    // driver factory.
-    "EphemeralProcess",
-    // U12: the four runtime-Provider Guests (cloud-hypervisor, qemu-media,
-    // azure container apps, azure virtual machine).
-    "Guest",
-    "Volume",
-    "VolumeBinding",
-    "Endpoint",
-    "Host",
-    "User",
-    "activation-nixos.d2bus.org.NixosGeneration",
-    "telemetry.d2bus.org.TelemetryService",
-    "telemetry.d2bus.org.TelemetryBinding",
-    "Credential",
-    "Network",
-    "Device",
-    "usb.d2bus.org.UsbService",
-    "usb.d2bus.org.UsbBinding",
-    "security-key.d2bus.org.SecurityKeyService",
-    "security-key.d2bus.org.SecurityKeyBinding",
-    "display-wayland.d2bus.org.WaylandPolicy",
-    "display-wayland.d2bus.org.WaylandSession",
-    "audio.d2bus.org.AudioService",
-    "audio.d2bus.org.AudioBinding",
-    "shell-terminal.d2bus.org.ShellPool",
-    "shell-terminal.d2bus.org.ShellSession",
-    // U12: the nine fixed Core controller-family types.
-    "Zone",
-    "ZoneLink",
-    "Provider",
-    "Role",
-    "RoleBinding",
-    "Quota",
-    "EmergencyPolicy",
-    "ResourceExport",
-    "ResourceImport",
-    // The controller family's policy types: declared with their drivers, and
-    // materialized by the committed policy rows the seed writes.
-    "Command",
-    "Operation",
-    "SeccompProfile",
-];
+// The resource-type authority is generated from the per-crate
+// `resource-types.json` declarations;the layout check's parity and drift
+// gates own it (`cargo xtask check-provider-crate-layout`),and `--fix`
+// regenerates it.
+
+include!("generated/v3_converted_resource_types.rs");
 
 /// The storage plane that owns one resource type (R35/F1: an exclusive
 /// per-type partition, no dual authority).

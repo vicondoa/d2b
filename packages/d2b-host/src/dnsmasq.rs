@@ -15,7 +15,7 @@
 //!
 //! The broker integration is wired through a new
 //! `BrokerRequest::RenderDnsmasqEnvConf` op in
-//! `d2b-contracts::broker_wire`; the broker writes
+//! `d2b-contracts-broker::broker_wire`; the broker writes
 //! `/var/lib/d2b/dnsmasq/<env>.conf` atomically
 //! (write-to-tempfile + rename) with mode `0640 root:d2bd`
 //! per the ADR 0018 spec. The daemon-side host-prep DAG calls
