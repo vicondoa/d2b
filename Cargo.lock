@@ -1737,7 +1737,6 @@ name = "d2b-provider-system-core"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
- "schemars",
  "serde",
  "serde_json",
  "tokio",
@@ -2303,7 +2302,6 @@ dependencies = [
  "d2b-core",
  "d2b-core-controller",
  "d2b-host",
- "d2b-provider-system-core",
  "d2b-resource-api",
  "d2b-session",
  "d2b-session-unix",
@@ -5476,7 +5474,6 @@ dependencies = [
  "d2b-provider-endpoint",
  "d2b-provider-operation",
  "d2b-provider-seccomp-profile",
- "d2b-provider-system-core",
  "nix 0.29.0",
  "protobuf-codegen",
  "rustix 0.38.44",

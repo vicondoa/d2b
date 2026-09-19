@@ -2,8 +2,11 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use d2b_contracts_resource::v3::{ ResourceRef, ResourceSpec, execution_policy::to_base_object };
-use d2b_provider_system_core::host_spec::{ HOST_PROVIDER_REF, HostSpec };
+use d2b_contracts_resource::v3::{
+    ResourceRef, ResourceSpec,
+    execution_policy::to_base_object,
+    host::{HOST_PROVIDER_REF, HostSpec},
+};
 use d2b_provider_host::test_support::RecordingEffects;
 use d2b_provider_host::host_descriptor;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};

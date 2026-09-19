@@ -8,7 +8,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use d2b_contracts_resource::v3::{
+use super::{
     ResourceRef,
     execution_policy::{
         BudgetSpec, DeviceAttachment, ExecutionDomain, ExecutionPolicy, ExecutionPolicyWire,
@@ -30,13 +30,11 @@ pub const HOST_PROVIDER_REF: &str = "Provider/system-core";
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
-#[allow(missing_docs)] // the enum doc would enter the derived Host schema; the schema is byte-pinned.
 pub enum IsolationPosture {
     /// The Host provides no isolation boundary.
     #[serde(rename = "none")]
     NoIsolation,
 }
-
 
 /// The Host ResourceType base spec.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -157,7 +155,7 @@ fn system_domains() -> Vec<ExecutionDomain> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::{execution_policy::to_base_object, resource_schema::canonical_json_bytes};
+    use crate::v3::{execution_policy::to_base_object, resource_schema::canonical_json_bytes};
 
     const MINIMAL_HOST_SPEC: &[u8] = br#"{"allowedDomains":["system"],"budget":{},"defaultDomain":"system","defaultUserRef":null,"deviceAttachments":[],"isolationPosture":null,"networkAttachments":[],"volumeAttachmentDefaults":[]}"#;
 

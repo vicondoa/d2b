@@ -1238,7 +1238,11 @@ dependencies = [
 name = "d2b-provider-command"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts-resource",
  "d2b-resource-types",
+ "schemars",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -1370,6 +1374,7 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core-controller",
+ "d2b-provider-endpoint",
  "d2b-provider-process-minijail",
  "d2b-provider-process-systemd",
  "d2b-provider-toolkit",
@@ -1463,6 +1468,8 @@ dependencies = [
  "d2b-resource-runtime",
  "d2b-resource-types",
  "parking_lot",
+ "schemars",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -1631,7 +1638,11 @@ dependencies = [
 name = "d2b-provider-operation"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts-resource",
  "d2b-resource-types",
+ "schemars",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -1711,7 +1722,11 @@ dependencies = [
 name = "d2b-provider-quota"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts-resource",
  "d2b-resource-types",
+ "schemars",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -1757,7 +1772,11 @@ dependencies = [
 name = "d2b-provider-seccomp-profile"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts-resource",
  "d2b-resource-types",
+ "schemars",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -2000,6 +2019,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts-resource",
+ "d2b-provider-endpoint",
  "d2b-provider-process-minijail",
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
@@ -2106,6 +2126,7 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core-controller",
+ "d2b-provider-quota",
  "d2b-provider-role",
  "d2b-resource-runtime",
  "protobuf",

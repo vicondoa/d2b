@@ -28,7 +28,7 @@ d2b_rust_binary(
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-operation:d2b_provider_operation",
         "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
-        "//packages/d2b-provider-system-core:d2b_provider_system_core",] + all_crate_deps(normal = True, cargo_only = True),
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 d2b_rust_binary(
@@ -55,7 +55,7 @@ d2b_rust_binary(
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-operation:d2b_provider_operation",
         "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
-        "//packages/d2b-provider-system-core:d2b_provider_system_core",] + all_crate_deps(normal = True, cargo_only = True),
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 generated_artifact_check(
@@ -331,7 +331,7 @@ d2b_rust_test(
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-operation:d2b_provider_operation",
         "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
-        "//packages/d2b-provider-system-core:d2b_provider_system_core",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 d2b_rust_test(
@@ -356,7 +356,7 @@ d2b_rust_test(
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-operation:d2b_provider_operation",
         "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
-        "//packages/d2b-provider-system-core:d2b_provider_system_core",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 d2b_rust_test(
@@ -449,7 +449,7 @@ d2b_rust_test(
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-operation:d2b_provider_operation",
         "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
-        "//packages/d2b-provider-system-core:d2b_provider_system_core",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 d2b_rust_test(
@@ -477,7 +477,7 @@ d2b_rust_test(
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
         "//packages/d2b-provider-operation:d2b_provider_operation",
         "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
-        "//packages/d2b-provider-system-core:d2b_provider_system_core",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 test_suite(

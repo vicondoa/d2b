@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use d2b_contracts_resource::v3::{ResourcePhase, ResourceRef};
-use d2b_provider_system_core::user_spec::UserSpec;
+use d2b_contracts_resource::v3::user::UserSpec;
 use d2b_provider_system_core::{UserDiscoveryCondition, UserStatusReport};
 
 use crate::UserDriverEffects;
