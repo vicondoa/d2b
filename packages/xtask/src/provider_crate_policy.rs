@@ -1129,11 +1129,11 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "activation-nixos",
         retires_with: "U12 activation/host-maintenance step",
     },
+    SharedFamilyKnowledgeExemption {
     // U10 ported the retired process-family arm's privileged behaviors
     // into the spawn-process kernel (kernel_ops.rs); the kernel keeps the
     // family knowledge these tokens name until each family's own U12
     // census step moves it into its provider crate.
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/kernel_ops.rs",
         token: "usbip",
         family: "device-usbip",
@@ -3611,6 +3611,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "system-core",
         retires_with: "U10-U12 family rollout (system-core)",
     },
+    SharedFamilyKnowledgeExemption {
     // U4 permanent carve-out: the Host and User primitive shapes stay in the
     // shared contracts crate. A shared runtime consumer (d2bd-runtime) needs
     // the shapes, so placing them in the owning provider crate makes a shared
@@ -3618,7 +3619,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     // refuses; the guard wins over the re-homing. Host carries the
     // system-core token here; User carries no family token, so it needs no
     // ratchet row, only this record.
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/host.rs",
         token: "system_core",
         family: "system-core",
@@ -3629,12 +3629,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "system_core",
         family: "system-core",
         retires_with: "U10-U12 family rollout (system-core)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/error.rs",
@@ -3661,19 +3655,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (system-minijail)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/sys.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/system_core_effects.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/lib.rs",
         token: "minijail",
         family: "system-minijail",
         retires_with: "U10-U12 family rollout (system-minijail)",
@@ -3692,36 +3674,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/catalog.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/spawn_runner.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/live_handlers.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/bundle_resolver.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/minijail_profile.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/test_support.rs",
         token: "minijail",
         family: "system-minijail",
         retires_with: "U10-U12 family rollout (system-minijail)",
@@ -4014,6 +3966,16 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "activation-nixos",
         retires_with: "U12 activation/host-maintenance step",
     },
+    // U6 permanent carve-out: the Process and EphemeralProcess shapes stay
+    // in the shared contracts crate. The broker's spawn validation reads the
+    // namespace, capability, environment, and mapping classes from
+    // `v3::process` in its own runtime module, and d2b-core's resolver and
+    // the resource compiler consume the spec shapes; placing the shapes in
+    // d2b-provider-process would give the broker and the shared core crates
+    // a dependency on a provider crate, which the broker manifest pin and
+    // the shared-crate dependency detector both refuse. The shapes carry no
+    // process-family token of their own, so they need no ratchet row, only
+    // this record; the activation-nixos rows below are the U12 lane's.
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/process.rs",
         token: "activation_nixos",
@@ -4973,8 +4935,9 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "vsock",
         family: "transport-vsock",
         retires_with: "U10-U12 family rollout (transport-vsock)",
-    },
+    }
 ];
+
 
 /// The framework's own driver declarations, the one allowed implementation
 /// shape under the framework roots.

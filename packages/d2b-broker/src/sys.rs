@@ -1533,7 +1533,7 @@ pub mod pidfd_sys {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
     use std::path::Path;
 
-    use d2b_core::minijail_profile::{MountPolicy, NamespaceSet};
+    use d2b_core::sandbox_profile::{MountPolicy, NamespaceSet};
     use nix::libc;
 
     /// `clone_args` per `<linux/sched.h>`. Layout is stable since
@@ -3557,7 +3557,7 @@ mod tests {
     use std::os::fd::{AsRawFd, OwnedFd};
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    use d2b_core::minijail_profile::{MountPolicy, NamespaceSet};
+    use d2b_core::sandbox_profile::{MountPolicy, NamespaceSet};
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
     use nix::libc;
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};

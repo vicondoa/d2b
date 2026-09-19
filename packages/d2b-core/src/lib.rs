@@ -16,7 +16,7 @@ pub mod host_w3;
 pub mod kernel_seat;
 pub mod loader_worker;
 pub mod manifest_v04;
-pub mod minijail_profile;
+pub mod sandbox_profile;
 pub mod privileges;
 pub mod privileges_w3;
 pub mod processes;

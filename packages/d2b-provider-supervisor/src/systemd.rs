@@ -7,8 +7,8 @@ use std::sync::Mutex;
 
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerResponse, GuestExecutionBinding,
-    OpenSystemdUnitPidfdRequest, StopSystemdUnitRequest, SystemdStopClass, SystemdUnitDomain,
-    SystemdUnitIdentity, SystemdUnitRequest,
+    OpenUnitPidfdRequest, StopUnitRequest, UnitStopClass, UnitDomain,
+    UnitIdentity, UnitRequest,
 };
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 use d2b_provider_process::{
@@ -50,7 +50,7 @@ impl SystemdInvocationIdentity {
     ///
     /// A zero main pid, zero generation, or an empty bundle content identity
     /// is a drifted runtime tuple, not a launchable identity.
-    pub fn new(identity: &SystemdUnitIdentity) -> Result<Self, ProcessEffectError> {
+    pub fn new(identity: &UnitIdentity) -> Result<Self, ProcessEffectError> {
         let main_pid =
             NonZeroU32::new(identity.main_pid).ok_or(ProcessEffectError::IdentityChanged)?;
         if identity.invocation_id == [0; 16]
@@ -113,8 +113,8 @@ impl SystemdInvocationIdentity {
         )
     }
 
-    pub(crate) fn wire_identity(&self) -> SystemdUnitIdentity {
-        SystemdUnitIdentity {
+    pub(crate) fn wire_identity(&self) -> UnitIdentity {
+        UnitIdentity {
             invocation_id: self.invocation_id,
             cgroup_identity: self.cgroup_identity,
             main_pid: self.main_pid.get(),
@@ -321,7 +321,7 @@ mod tests {
     fn identity(seed: u32) -> SystemdInvocationIdentity {
         let mut invocation_id = [0; 16];
         invocation_id[..4].copy_from_slice(&(seed + 1).to_le_bytes());
-        SystemdInvocationIdentity::new(&SystemdUnitIdentity {
+        SystemdInvocationIdentity::new(&UnitIdentity {
             invocation_id,
             cgroup_identity: [1; 32],
             main_pid: seed + 1,
@@ -459,7 +459,7 @@ pub struct BrokerSystemdEffectOwner {
     io_timeout: std::time::Duration,
     profile: BrokerProfile,
     caller_role: BrokerCallerRole,
-    requests: Mutex<BTreeMap<ProcessIdentityDigest, SystemdUnitRequest>>,
+    requests: Mutex<BTreeMap<ProcessIdentityDigest, UnitRequest>>,
 }
 
 impl BrokerSystemdEffectOwner {
@@ -498,13 +498,13 @@ impl BrokerSystemdEffectOwner {
     fn intent(
         &self,
         request: &ProcessRequest,
-    ) -> Result<(BrokerLaunchIntent, SystemdUnitRequest), ProcessEffectError> {
+    ) -> Result<(BrokerLaunchIntent, UnitRequest), ProcessEffectError> {
         let intent = self.resolver.resolve(request)?;
         let domain = match request.ticket().domain() {
-            ExecutionDomain::System => SystemdUnitDomain::System,
-            ExecutionDomain::User => SystemdUnitDomain::User,
+            ExecutionDomain::System => UnitDomain::System,
+            ExecutionDomain::User => UnitDomain::User,
         };
-        let unit = SystemdUnitRequest {
+        let unit = UnitRequest {
             execution_ref: Some(intent.execution_ref.clone()),
             user_ref: intent.user_ref.clone(),
             vm_id: intent.vm_id.clone(),
@@ -531,7 +531,7 @@ impl BrokerSystemdEffectOwner {
 fn remember(
         &self,
         identity: &SystemdInvocationIdentity,
-        request: SystemdUnitRequest,
+        request: UnitRequest,
     ) -> Result<(), ProcessEffectError> {
         self.requests
             .lock()
@@ -552,7 +552,7 @@ fn remember(
 fn request_for(
         &self,
         identity: &SystemdInvocationIdentity,
-    ) -> Result<SystemdUnitRequest, ProcessEffectError> {
+    ) -> Result<UnitRequest, ProcessEffectError> {
         self.requests
             .lock()
             .map_err(|_| {
@@ -573,7 +573,7 @@ fn request_for(
 fn take_request(
         &self,
         identity: &SystemdInvocationIdentity,
-    ) -> Result<SystemdUnitRequest, ProcessEffectError> {
+    ) -> Result<UnitRequest, ProcessEffectError> {
         self.requests
             .lock()
             .map_err(|_| {
@@ -589,7 +589,7 @@ fn take_request(
 
     fn identity(
         &self,
-        wire: &SystemdUnitIdentity,
+        wire: &UnitIdentity,
         intent: &BrokerLaunchIntent,
     ) -> Result<SystemdInvocationIdentity, ProcessEffectError> {
         if wire.provider_identity != intent.provider_identity
@@ -648,7 +648,7 @@ impl std::fmt::Debug for BrokerSystemdEffectOwner {
 /// Core-local systemd pidfd handle.
 pub struct BrokerSystemdPidfdHandle {
     pidfd: OwnedFd,
-    request: SystemdUnitRequest,
+    request: UnitRequest,
     identity: SystemdInvocationIdentity,
 }
 
@@ -710,7 +710,7 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
     ) -> Result<SystemdEffectLaunch<Self::Handle>, ProcessEffectError> {
         let unit = self.request_for(expected)?;
         let frame = self.request(BrokerRequest::OpenSystemdUnitPidfd(
-            OpenSystemdUnitPidfdRequest {
+            OpenUnitPidfdRequest {
                 unit: unit.clone(),
                 expected: expected.wire_identity(),
             },
@@ -750,12 +750,12 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
         handle: &Self::Handle,
         class: ProcessStopClass,
     ) -> Result<(), ProcessEffectError> {
-        let frame = self.request(BrokerRequest::StopSystemdUnit(StopSystemdUnitRequest {
+        let frame = self.request(BrokerRequest::StopSystemdUnit(StopUnitRequest {
             unit: handle.request.clone(),
             expected: handle.identity.wire_identity(),
             class: match class {
-                ProcessStopClass::Drain => SystemdStopClass::Drain,
-                ProcessStopClass::Terminate => SystemdStopClass::Terminate,
+                ProcessStopClass::Drain => UnitStopClass::Drain,
+                ProcessStopClass::Terminate => UnitStopClass::Terminate,
             },
         }))?;
         let BrokerResponse::StopSystemdUnit(response) = frame.response else {

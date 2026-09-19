@@ -4,7 +4,7 @@ use d2b_core::bundle::{Bundle, BundleGeneration};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent};
 use d2b_core::host::HostJson;
 use d2b_core::manifest_v04::ManifestV04;
-use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
 use std::collections::BTreeMap;
 
 use d2b_core::processes::{

@@ -212,7 +212,7 @@ pub fn path_bearing_key_violations(manifest: &Value) -> Vec<String> {
 /// ([`BROAD_CAPABILITIES`]) must carry a non-empty `adr_carve_out` reference.
 /// Returns `true` when `caps` requests a broad capability without an ADR
 /// carve-out. Field-based (not tied to a specific profile DTO) so it applies
-/// equally to `processes.json` `RoleProfile`s and `MinijailProfile`s.
+/// equally to `processes.json` `RoleProfile`s and `SandboxProfile`s.
 pub fn is_broad_cap_violation(caps: &[String], adr_carve_out: Option<&str>) -> bool {
     let requests_broad = caps
         .iter()

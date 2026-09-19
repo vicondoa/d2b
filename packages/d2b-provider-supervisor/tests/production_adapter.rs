@@ -7,7 +7,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use d2b_contracts_broker::broker_wire::SystemdUnitIdentity;
+use d2b_contracts_broker::broker_wire::UnitIdentity;
 use d2b_process_conformance::suite;
 use d2b_process_conformance::testing::{ScriptedEffectPort, block_on, fixtures};
 use d2b_process_conformance::{
@@ -407,7 +407,7 @@ impl SystemdEffectOwner for SystemdOwner {
 }
 
 fn invocation(start_time: u64) -> SystemdInvocationIdentity {
-    SystemdInvocationIdentity::new(&SystemdUnitIdentity {
+    SystemdInvocationIdentity::new(&UnitIdentity {
         invocation_id: [1; 16],
         cgroup_identity: [2; 32],
         main_pid: 100,

@@ -4,7 +4,7 @@
 //! consumers never pull this in.
 
 use crate::bundle_resolver::{ResolvedRunnerIntent, UserNamespaceSpec};
-use crate::minijail_profile::{
+use crate::sandbox_profile::{
     BindMount, CgroupPlacement, MountPolicy, NamespaceSet, WritablePath,
 };
 use crate::processes::{ProcessRole, RoleProfile, RoleUserNamespace};
