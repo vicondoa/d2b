@@ -164,17 +164,6 @@ pub trait SharedProviderFamily: Send + Sync + 'static {
         request: &SharedProviderEffectRequest<'_>,
         state: &Self::State,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError>;
-
-    /// The family's Volume-anchor refresh hook, when its effects may commit a
-    /// Volume or VolumeBinding child.
-    ///
-    /// The plane's anchor cache is a projection of the durable rows the
-    /// volume root resolver reads synchronously, so a row committed through
-    /// the child endpoint after the plane's last durable load is otherwise
-    /// invisible. Families that declare neither row type answer `None`.
-    fn volume_anchor_refresh(&self) -> Option<Arc<dyn VolumeAnchorRefresh>> {
-        None
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -422,14 +411,6 @@ pub fn key_ref(key: &ResourceKey) -> ResourceRef {
 // Manager-routed child surface
 // ---------------------------------------------------------------------------
 
-/// The plane-anchor refresh hook a family supplies when its effects may
-/// commit a Volume or VolumeBinding child row.
-#[async_trait]
-pub trait VolumeAnchorRefresh: Send + Sync {
-    /// Re-register the plane's per-resource Volume anchors.
-    async fn refresh_volume_anchors(&self);
-}
-
 /// Manager-routed child mutations handed to one Provider effect call.
 ///
 /// The driver owns this surface (it is the only holder of the resource's
@@ -463,18 +444,13 @@ pub trait SharedProviderChildSurface: Send + Sync {
 /// preserved.
 pub struct ContextChildSurface<'a> {
     ctx: tokio::sync::Mutex<&'a mut ResourceContext>,
-    /// The family's anchor-refresh hook: a Volume or VolumeBinding child
-    /// committed here changes the rows the plane's volume root resolver can
-    /// see.
-    refresh: Option<Arc<dyn VolumeAnchorRefresh>>,
 }
 
 impl<'a> ContextChildSurface<'a> {
-    /// Build the surface over one resource context and one family hook.
-    pub fn new(ctx: &'a mut ResourceContext, refresh: Option<Arc<dyn VolumeAnchorRefresh>>) -> Self {
+    /// Build the surface over one resource context.
+    pub fn new(ctx: &'a mut ResourceContext) -> Self {
         Self {
             ctx: tokio::sync::Mutex::new(ctx),
-            refresh,
         }
     }
 }
@@ -482,29 +458,10 @@ impl<'a> ContextChildSurface<'a> {
 #[async_trait]
 impl SharedProviderChildSurface for ContextChildSurface<'_> {
     async fn ensure(&self, child: ChildEnsure) -> Result<EnsureOutcome, SharedProviderEffectError> {
-        let (outcome, committed_row) = {
-            let mut ctx = self.ctx.lock().await;
-            let outcome = ctx
-                .ensure_child(child.clone())
-                .await
-                .map_err(|_| SharedProviderEffectError::Unavailable)?;
-            let committed = matches!(
-                outcome,
-                EnsureOutcome::Created(_) | EnsureOutcome::Updated(_)
-            ) && matches!(child.type_name.as_str(), "Volume" | "VolumeBinding");
-            (outcome, committed)
-        };
-        // The plane's per-resource anchors are a cache of the durable rows:
-        // one committed through this endpoint after the plane's last durable
-        // load is only observable through a reload, and an unregistered
-        // Volume root resolves as `volume-anchor` forever. An `Updated`
-        // Volume or VolumeBinding is a new root exactly as a `Created` one is
-        // (the controller-bridge path refreshes its registry on every such
-        // commit), so the refresh is bounded to both commit shapes.
-        if committed_row && let Some(refresh) = &self.refresh {
-            refresh.refresh_volume_anchors().await;
-        }
-        Ok(outcome)
+        let mut ctx = self.ctx.lock().await;
+        ctx.ensure_child(child)
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)
     }
 
     async fn delete(&self, key: &ResourceKey) -> Result<(), SharedProviderEffectError> {
@@ -977,7 +934,7 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
         // The surface borrows the context mutably for the effect call; the
         // driver reads nothing else from the context until it is dropped.
         let outcome = {
-            let surface = ContextChildSurface::new(ctx, self.family.volume_anchor_refresh());
+            let surface = ContextChildSurface::new(ctx);
             let request = SharedProviderEffectRequest {
                 zone: self.zone.clone(),
                 target,
@@ -1040,7 +997,7 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
             .status::<SharedProviderDriverStatus>()
             .and_then(|status| status.resource.clone());
         let finalized = {
-            let surface = ContextChildSurface::new(ctx, self.family.volume_anchor_refresh());
+            let surface = ContextChildSurface::new(ctx);
             let request = SharedProviderEffectRequest {
                 zone: self.zone.clone(),
                 target,
@@ -1101,11 +1058,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ContextChildSurface, ProviderRow, SharedProviderChildSurface, SharedProviderDeclarationError,
+        ProviderRow, SharedProviderDeclarationError,
         SharedProviderDriverArgs, SharedProviderDriverFactory, SharedProviderDriverStatus,
         SharedProviderEffectError, SharedProviderEffectOutcome, SharedProviderEffectPhase,
         SharedProviderEffectRequest, SharedProviderFamily, SharedProviderFinalize,
-        VolumeAnchorRefresh, shared_provider_spec_decoder,
+        shared_provider_spec_decoder,
     };
 
     /// Ordered log every fake writes to, so ordering is one assertion.
@@ -1151,7 +1108,6 @@ mod tests {
     struct RecordingManager {
         log: Log,
         owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
-        ensure_outcomes: tokio::sync::Mutex<std::collections::VecDeque<EnsureOutcome>>,
     }
 
     impl RecordingManager {
@@ -1159,7 +1115,6 @@ mod tests {
             Arc::new(Self {
                 log,
                 owned: tokio::sync::Mutex::new(Vec::new()),
-                ensure_outcomes: tokio::sync::Mutex::new(std::collections::VecDeque::new()),
             })
         }
 
@@ -1167,14 +1122,7 @@ mod tests {
             Arc::new(Self {
                 log,
                 owned: tokio::sync::Mutex::new(owned),
-                ensure_outcomes: tokio::sync::Mutex::new(std::collections::VecDeque::new()),
             })
-        }
-
-        fn script_ensure_outcomes(&self, outcomes: Vec<EnsureOutcome>) {
-            if let Ok(mut scripted) = self.ensure_outcomes.try_lock() {
-                scripted.extend(outcomes);
-            }
         }
     }
 
@@ -1189,9 +1137,6 @@ mod tests {
                 .lock()
                 .await
                 .push(format!("ensure:{}/{}", child.type_name.as_str(), child.name));
-            if let Some(outcome) = self.ensure_outcomes.lock().await.pop_front() {
-                return Ok(outcome);
-            }
             Ok(EnsureOutcome::Created(test_row(
                 "dev",
                 child.type_name.as_str(),
@@ -1273,7 +1218,6 @@ mod tests {
         log: Log,
         phase: tokio::sync::Mutex<SharedProviderEffectPhase>,
         finalize: tokio::sync::Mutex<SharedProviderFinalize>,
-        refreshes: Arc<tokio::sync::Mutex<usize>>,
         declares_children: bool,
     }
 
@@ -1288,22 +1232,8 @@ mod tests {
                 log,
                 phase: tokio::sync::Mutex::new(phase),
                 finalize: tokio::sync::Mutex::new(finalize),
-                refreshes: Arc::new(tokio::sync::Mutex::new(0)),
                 declares_children,
             })
-        }
-
-        fn refreshes(&self) -> usize {
-            *self.refreshes.try_lock().expect("refresh counter lock")
-        }
-    }
-
-    struct RefreshAdapter(Arc<tokio::sync::Mutex<usize>>);
-
-    #[async_trait]
-    impl VolumeAnchorRefresh for RefreshAdapter {
-        async fn refresh_volume_anchors(&self) {
-            *self.0.lock().await += 1;
         }
     }
 
@@ -1366,10 +1296,6 @@ mod tests {
                 .await
                 .push(format!("finalize:{}", component.effect_id()));
             Ok(*self.finalize.lock().await)
-        }
-
-        fn volume_anchor_refresh(&self) -> Option<Arc<dyn VolumeAnchorRefresh>> {
-            Some(Arc::new(RefreshAdapter(Arc::clone(&self.refreshes))))
         }
     }
 
@@ -1707,81 +1633,6 @@ mod tests {
         assert!(
             !log.lock().await.iter().any(|entry| entry.starts_with("effect:")),
             "recovery adoption runs no provider effect"
-        );
-    }
-
-    /// The child surface's anchor reload: a `Volume`/`VolumeBinding` child
-    /// committed after the plane's last durable load is only observable
-    /// through a reload, and an `Updated` child is a new root exactly as a
-    /// `Created` one is. Other child types and an `Unchanged` ensure change
-    /// nothing, so they never reload.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-
-    #[tokio::test]
-    async fn volume_anchor_refresh_covers_created_and_updated_volume_children() {
-        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let manager = RecordingManager::new(Arc::clone(&log));
-        let mut fixture = fixture(
-            "FixtureOne",
-            "row-a",
-            json!({"providerRef": "Provider/fixture-one"}),
-            Arc::clone(&manager),
-            Arc::new(RecordingRequeue::default()),
-            log,
-            SharedProviderEffectPhase::Ready,
-            SharedProviderFinalize::Complete,
-            true,
-        );
-        manager.script_ensure_outcomes(vec![
-            EnsureOutcome::Created(test_row("dev", "Volume", "vol-data")),
-            EnsureOutcome::Updated(test_row("dev", "Volume", "vol-data")),
-            EnsureOutcome::Unchanged(test_row("dev", "Volume", "vol-data")),
-            EnsureOutcome::Updated(test_row("dev", "FixtureOne", "row-a")),
-        ]);
-        let child = |type_name: &str, name: &str| ChildEnsure {
-            type_name: ResourceTypeName::new(type_name),
-            name: name.to_owned(),
-            spec: b"{}".to_vec(),
-            metadata: Vec::new(),
-        };
-        let refresh: Arc<dyn VolumeAnchorRefresh> =
-            Arc::new(RefreshAdapter(Arc::clone(&fixture.family.refreshes)));
-        let surface = ContextChildSurface::new(&mut fixture.ctx, Some(refresh));
-        surface
-            .ensure(child("Volume", "vol-data"))
-            .await
-            .expect("created");
-        assert_eq!(
-            fixture.family.refreshes(),
-            1,
-            "a created Volume reloads the anchors"
-        );
-        surface
-            .ensure(child("Volume", "vol-data"))
-            .await
-            .expect("updated");
-        assert_eq!(
-            fixture.family.refreshes(),
-            2,
-            "an updated Volume reloads the anchors"
-        );
-        surface
-            .ensure(child("Volume", "vol-data"))
-            .await
-            .expect("unchanged");
-        assert_eq!(
-            fixture.family.refreshes(),
-            2,
-            "an unchanged ensure reloads nothing"
-        );
-        surface
-            .ensure(child("FixtureOne", "row-a"))
-            .await
-            .expect("other type");
-        assert_eq!(
-            fixture.family.refreshes(),
-            2,
-            "only Volume/VolumeBinding commits reload"
         );
     }
 }

@@ -139,8 +139,7 @@ pub use shared_provider::{
     SharedProviderDriverStatus, SharedProviderEffectError, SharedProviderEffectOutcome,
     SharedProviderEffectPhase, SharedProviderEffectRequest, SharedProviderFamily,
     SharedProviderFinalize, SharedProviderSpecDecodeError, SharedProviderSpecEnvelope,
-    VolumeAnchorRefresh, decode_metadata, key_ref, owner_ref, resource_uid,
-    shared_provider_spec_decoder,
+    decode_metadata, key_ref, owner_ref, resource_uid, shared_provider_spec_decoder,
 };
 pub use testing::{
     AdmissionRefusal, AdmittedRow, DeterministicClock, FIXTURE_NOW_UNIX_MS, FakeBus,

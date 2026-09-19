@@ -37,8 +37,8 @@ use d2b_provider_guest::GuestSpec;
 use d2b_provider_toolkit::{
     ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
     SharedProviderDriverFactory, SharedProviderEffectError, SharedProviderEffectOutcome,
-    SharedProviderEffectRequest, SharedProviderFamily, SharedProviderFinalize, VolumeAnchorRefresh,
-    key_ref, resource_uid, shared_provider_spec_decoder,
+    SharedProviderEffectRequest, SharedProviderFamily, SharedProviderFinalize, key_ref,
+    resource_uid, shared_provider_spec_decoder,
 };
 use d2b_resource_runtime::context::{ChildEnsure, ResourceContext};
 use d2b_resource_runtime::identity::ResourceTypeName;
@@ -141,10 +141,6 @@ pub trait NetworkDriverEffects: Send + Sync + 'static {
         &self,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError>;
-
-    /// Re-register the plane's per-resource Volume anchors after the driver
-    /// committed a Volume child row.
-    async fn refresh_volume_anchors(&self) {}
 }
 
 /// Everything the composition must construct to instantiate the Network
@@ -156,20 +152,6 @@ pub struct NetworkDriverArgs {
     pub controller_generation: ControllerGeneration,
     /// The daemon-realized effect port the driver drives.
     pub effects: Arc<dyn NetworkDriverEffects>,
-}
-
-/// The anchor-refresh adapter handed to the child surface.
-///
-/// The child surface is toolkit-owned and cannot name this family's port, so
-/// the family bridges its `refresh_volume_anchors` hook into the neutral
-/// handle.
-struct NetworkAnchorRefresh(Arc<dyn NetworkDriverEffects>);
-
-#[async_trait]
-impl VolumeAnchorRefresh for NetworkAnchorRefresh {
-    async fn refresh_volume_anchors(&self) {
-        self.0.refresh_volume_anchors().await;
-    }
 }
 
 /// The family's declarations and typed Provider effect.
@@ -229,10 +211,6 @@ impl SharedProviderFamily for NetworkFamily {
         _state: &(),
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         self.effects.finalize(request).await
-    }
-
-    fn volume_anchor_refresh(&self) -> Option<Arc<dyn VolumeAnchorRefresh>> {
-        Some(Arc::new(NetworkAnchorRefresh(Arc::clone(&self.effects))))
     }
 }
 

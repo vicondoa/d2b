@@ -40,7 +40,7 @@ use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid}
 use d2b_provider_toolkit::{
     ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
     SharedProviderDriverFactory, SharedProviderEffectError, SharedProviderEffectOutcome,
-    SharedProviderEffectRequest, SharedProviderFamily, SharedProviderFinalize, VolumeAnchorRefresh, owner_ref,
+    SharedProviderEffectRequest, SharedProviderFamily, SharedProviderFinalize, owner_ref,
     shared_provider_spec_decoder,
 };
 use d2b_resource_runtime::context::ResourceContext;
@@ -161,28 +161,6 @@ pub trait DeviceDriverEffects: Send + Sync + 'static {
         request: &SharedProviderEffectRequest<'_>,
         state: &DeviceResourceState,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError>;
-
-    /// Re-register the plane's per-resource Volume anchors after this effect
-    /// committed a Volume child row.
-    ///
-    /// The device controller creates the TPM state Volume through the child
-    /// surface, and the plane's anchor cache is a projection of the durable
-    /// rows the volume root resolver reads. Without this reload the row is
-    /// invisible until the next durable load, so the Volume resolves as a
-    /// `volume-anchor` failure and the Device never leaves reconcile.
-    async fn refresh_volume_anchors(&self) {}
-}
-
-/// The child surface is toolkit-owned and cannot name this family's port, so
-/// the family bridges its `refresh_volume_anchors` hook into the neutral
-/// handle.
-struct DeviceAnchorRefresh(Arc<dyn DeviceDriverEffects>);
-
-#[async_trait]
-impl VolumeAnchorRefresh for DeviceAnchorRefresh {
-    async fn refresh_volume_anchors(&self) {
-        self.0.refresh_volume_anchors().await;
-    }
 }
 
 /// Everything the composition must construct to instantiate the Device driver
@@ -247,10 +225,6 @@ impl SharedProviderFamily for DeviceFamily {
         state: &DeviceResourceState,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         self.effects.finalize_device(component, request, state).await
-    }
-
-    fn volume_anchor_refresh(&self) -> Option<Arc<dyn VolumeAnchorRefresh>> {
-        Some(Arc::new(DeviceAnchorRefresh(Arc::clone(&self.effects))))
     }
 }
 

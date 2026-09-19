@@ -2761,18 +2761,6 @@ impl ResourcePlaneV3 {
     }
 
 
-    /// Re-register the durable rows the production effects resolve
-    /// per-resource anchors from: a provider controller session commits
-    /// converted Volume and VolumeBinding children through the manager after
-    /// the plane's durable loads, and a Volume root whose anchor is not
-    /// registered stays unresolved until a reload. The manager stays the only
-    /// writer: this reads its store, it never mutates it.
-    pub async fn reload_registry(&self) -> Result<(), PlaneError> {
-        self.registry
-            .load_from_store(&self.zone_token, &self.store)
-            .await
-    }
-
     pub fn registry(&self) -> &Arc<PlaneResourceRegistry> {
         &self.registry
     }
