@@ -56,7 +56,9 @@ use d2b_contracts_resource::v3::{ NetworkProvenance, ResourceEnvelope, ResourceG
 use d2b_provider_endpoint::endpoint::{ EndpointClass, EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport,
         EndpointVisibility, };
 use d2b_contracts_resource::v3::ResourceBundleGenerationId;
-use d2b_contracts_resource::v3::{ResourceName, activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE};
+use d2b_contracts_resource::v3::{
+    ActivationMode, ResourceName, activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE,
+};
 use d2b_contracts_zone_session::v3::ZoneLinkSpec;
 use d2b_contracts_zone_session::v3::component_session::{OperationClass, OperationId};
 use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
@@ -20555,9 +20557,13 @@ fn dispatch_live_guest_activation_resource(
 
 fn activation_generation_name(vm: &str, ordinal: u64, mode: DaemonActivationMode) -> String {
     let suffix = match mode {
-        DaemonActivationMode::Switch => "gen",
-        DaemonActivationMode::Boot => "boot",
-        DaemonActivationMode::Test => "test",
+        DaemonActivationMode::Switch => {
+            activation_runner_step(ActivationMode::Switch).generation_suffix
+        }
+        DaemonActivationMode::Boot => {
+            activation_runner_step(ActivationMode::Boot).generation_suffix
+        }
+        DaemonActivationMode::Test => activation_runner_step(ActivationMode::Test).generation_suffix,
         DaemonActivationMode::Rollback => "rollback",
     };
     let readable = format!("{vm}--{suffix}-{ordinal}");
@@ -20580,13 +20586,22 @@ fn activation_generation_name(vm: &str, ordinal: u64, mode: DaemonActivationMode
     format!("activation-gen-{suffix}")
 }
 
-const fn resource_activation_mode_label(mode: DaemonActivationMode) -> &'static str {
+fn resource_activation_mode_label(mode: DaemonActivationMode) -> &'static str {
     match mode {
-        DaemonActivationMode::Switch => "switch",
-        DaemonActivationMode::Boot => "boot",
-        DaemonActivationMode::Test => "test",
+        DaemonActivationMode::Switch => activation_runner_step(ActivationMode::Switch).label,
+        DaemonActivationMode::Boot => activation_runner_step(ActivationMode::Boot).label,
+        DaemonActivationMode::Test => activation_runner_step(ActivationMode::Test).label,
         DaemonActivationMode::Rollback => "switch",
     }
+}
+
+/// The declared runner step for one activation mode.
+///
+/// The daemon passes only the modes the family declares; a mode without a
+/// declared step would be a programming error, not a runtime refusal.
+fn activation_runner_step(mode: ActivationMode) -> &'static d2b_provider_activation_nixos::ActivationRunnerStep {
+    d2b_provider_activation_nixos::declared_runner_step(mode)
+        .expect("the daemon passes only declared activation modes")
 }
 
 fn dispatch_broker_switch_as(

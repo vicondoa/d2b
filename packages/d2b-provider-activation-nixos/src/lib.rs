@@ -11,6 +11,7 @@
 
 pub mod controller;
 pub mod driver;
+pub mod vocabulary;
 
 // `test_support` is needed both by external crates (which opt in via the
 // `test-support` feature) and by this crate's OWN tests. Gating on
@@ -32,4 +33,7 @@ pub use driver::{
     ActivationDriver, ActivationDriverArgs, ActivationDriverEffects, ActivationDriverError,
     ActivationDriverFactory, ActivationDriverStatus, HostHandoffResult, RUNNER_PROVIDER_REF,
     RUNNER_TYPE_NAME, activation_descriptor, activation_spec_decoder,
+};
+pub use vocabulary::{
+    ACTIVATION_RUNNER_STEPS, ActivationRunnerStep, declared_runner_step, is_declared_runner_step,
 };

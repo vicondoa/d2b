@@ -718,6 +718,19 @@ impl ActivationController {
         trust.verify(expected, artifact_bytes, activation_catalog_digest)
     }
 
+    /// Refuse a runner step outside the family's declared set.
+    ///
+    /// The runner performs only the steps the family declares
+    /// ([`crate::vocabulary::ACTIVATION_RUNNER_STEPS`]); an activation that
+    /// requests another step is refused before any runner is planned.
+    pub fn refuse_undeclared_runner_step(&self, step: &str) -> Result<(), ActivationError> {
+        if crate::vocabulary::is_declared_runner_step(step) {
+            Ok(())
+        } else {
+            Err(ActivationError::InvalidSpec)
+        }
+    }
+
     /// Reconcile one desired generation.
     pub fn reconcile(
         &self,
@@ -758,6 +771,13 @@ impl ActivationController {
             GenerationPhase::Pending | GenerationPhase::Degraded
         ) && spec.activation_mode() != ActivationMode::Adopt
         {
+            // Refuse a runner step outside the declared set: the runner
+            // performs only the steps the family declares (switch, boot,
+            // test), so an activation that requests another step is
+            // refused before any runner is planned.
+            let declared = crate::vocabulary::declared_runner_step(spec.activation_mode())
+                .ok_or(ActivationError::InvalidSpec)?;
+            self.refuse_undeclared_runner_step(declared.label)?;
             let generation_ref = format!(
                 "activation-nixos.d2bus.org.NixosGeneration/{}",
                 observed.name()
