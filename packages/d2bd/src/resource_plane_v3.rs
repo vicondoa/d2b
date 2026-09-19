@@ -2166,13 +2166,7 @@ pub struct ResourcePlaneV3 {
     targets: Arc<TargetDirectory>,
     registry: Arc<PlaneResourceRegistry>,
     client: ResourceManagerClient,
-    /// The anchor projection subscription: the one
-    /// long-lived task the plane owns, holding the task handle a restart
-    /// can reach. The manager actor supervises itself, so this is the
-    /// plane's first long-lived task; a restart relists from a fresh
-    /// registration rather than resuming a stale cursor.
-    #[allow(dead_code, reason = "handle home for the deferred supervisor; the restart test is the only current reader")]
-     /// The providers this zone started, in the order they started. The plane
+    /// The providers this zone started, in the order they started. The plane
     /// keeps them so it can report the order it ran and drain them in the
     /// mirror of it.
     providers: Arc<ProviderRuntime>,
