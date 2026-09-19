@@ -909,7 +909,7 @@ mod tests {
         fn device_worker_endpoint_class(
             &self,
             purpose: &str,
-        ) -> Option<d2b_contracts_resource::v3::endpoint::EndpointClass> {
+        ) -> Option<d2b_provider_endpoint::endpoint::EndpointClass> {
             crate::endpoint_effects::device_worker_endpoint_class(purpose)
         }
     }
@@ -975,7 +975,7 @@ mod tests {
 
         let envelope: d2b_contracts_resource::v3::ResourceSpec =
             serde_json::from_slice(&desired.spec).expect("spec");
-        let spec: d2b_contracts_resource::v3::endpoint::EndpointSpec =
+        let spec: d2b_provider_endpoint::endpoint::EndpointSpec =
             serde_json::from_slice(&envelope.base_with_provider_ref().to_canonical_bytes())
                 .expect("endpoint contract");
         assert_eq!(spec.purpose().as_str(), "guest-control");
@@ -1058,7 +1058,7 @@ mod tests {
 
         let envelope: d2b_contracts_resource::v3::ResourceSpec =
             serde_json::from_slice(&desired.spec).expect("spec");
-        let spec: d2b_contracts_resource::v3::endpoint::EndpointSpec =
+        let spec: d2b_provider_endpoint::endpoint::EndpointSpec =
             serde_json::from_slice(&envelope.base_with_provider_ref().to_canonical_bytes())
                 .expect("endpoint contract");
         assert_eq!(spec.purpose().as_str(), "ch-api");
@@ -1068,7 +1068,7 @@ mod tests {
         );
         assert_eq!(
             spec.locality(),
-            d2b_contracts_resource::v3::endpoint::EndpointLocality::HostLocal
+            d2b_provider_endpoint::endpoint::EndpointLocality::HostLocal
         );
         assert_eq!(
             d2b_provider_endpoint::endpoint_realization(&spec, &CommittedEndpointPurposes),

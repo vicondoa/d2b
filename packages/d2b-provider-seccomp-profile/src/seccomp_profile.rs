@@ -10,7 +10,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::execution_policy::{BoundedToken, redacted_debug};
+use d2b_contracts_resource::v3::execution_policy::{BoundedToken, redacted_debug};
 
 /// Canonical `SeccompProfile` ResourceType name.
 pub const SECCOMP_PROFILE_RESOURCE_TYPE: &str = "SeccompProfile";
@@ -438,7 +438,7 @@ mod tests {
     fn the_wire_shape_round_trips_and_is_closed() {
         let profile = profile();
         let bytes =
-            super::super::resource_schema::canonical_json_bytes(&profile).expect("canonical");
+            d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(&profile).expect("canonical");
         let restored: SeccompProfileSpec = serde_json::from_slice(&bytes).expect("parses");
         assert_eq!(restored, profile);
         let unknown = json!({

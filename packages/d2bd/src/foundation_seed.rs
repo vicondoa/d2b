@@ -19,10 +19,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use d2b_contracts_resource::v3::{
-    CommandSpec, OperationSpec, PayloadSchema, ResourceRef, SeccompProfileSpec,
-    SECCOMP_PROFILE_RESOURCE_TYPE, canonical_json_bytes,
-};
+use d2b_contracts_resource::v3::{ PayloadSchema, ResourceRef, canonical_json_bytes };
+use d2b_provider_command::command::{ CommandSpec };
+use d2b_provider_operation::operation::{ OperationSpec };
+use d2b_provider_seccomp_profile::seccomp_profile::{ SECCOMP_PROFILE_RESOURCE_TYPE, SeccompProfileSpec };
 use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, RoleSpec};
 use d2b_resource_runtime::identity::ResourceTypeName;
 use d2b_resource_runtime::manager::{
@@ -416,7 +416,7 @@ impl FoundationSeed {
             spawn_authority(),
             Default::default(),
             Default::default(),
-            d2b_contracts_resource::v3::PayloadProvenance::Derived,
+            d2b_provider_operation::PayloadProvenance::Derived,
             None,
         )
         .map_err(|_| SeedError::InvalidRow {
@@ -864,21 +864,20 @@ fn clone_payload(schema: &PayloadSchema) -> PayloadSchema {
 /// fields needs at least redacted access, a plain payload none.
 fn secret_access_ceiling(
     schema: &PayloadSchema,
-) -> d2b_contracts_resource::v3::SecretAccess {
+) -> d2b_provider_operation::SecretAccess {
     if schema
         .property_names()
         .any(|name| schema.is_write_only(name))
     {
-        d2b_contracts_resource::v3::SecretAccess::RedactedOnly
+        d2b_provider_operation::SecretAccess::RedactedOnly
     } else {
-        d2b_contracts_resource::v3::SecretAccess::None
+        d2b_provider_operation::SecretAccess::None
     }
 }
 
-fn audit_facet(schema: &PayloadSchema) -> d2b_contracts_resource::v3::OperationAudit {
-    use d2b_contracts_resource::v3::{
-        AuditMode, BoundedText, BoundedToken, OperationAudit,
-    };
+fn audit_facet(schema: &PayloadSchema) -> d2b_provider_operation::OperationAudit {
+    use d2b_contracts_resource::v3::{ BoundedText, BoundedToken };
+use d2b_provider_operation::operation::{ AuditMode, OperationAudit };
     let retained = schema
         .property_names()
         .filter(|name| !schema.is_write_only(name))
@@ -899,10 +898,9 @@ fn audit_facet(schema: &PayloadSchema) -> d2b_contracts_resource::v3::OperationA
     .expect("bounded audit facet")
 }
 
-fn spawn_authority() -> d2b_contracts_resource::v3::OperationAuthority {
-    use d2b_contracts_resource::v3::{
-        BoundedText, BrokerRequirement, OperationAuthority, OperationDomain, OperationSurface,
-    };
+fn spawn_authority() -> d2b_provider_operation::OperationAuthority {
+    use d2b_contracts_resource::v3::{ BoundedText };
+use d2b_provider_operation::operation::{ BrokerRequirement, OperationAuthority, OperationDomain, OperationSurface };
     OperationAuthority::new(
         OperationSurface::Broker,
         OperationDomain::Host,
@@ -1089,10 +1087,8 @@ impl std::error::Error for SeedError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::{
-        CommandArgvSlot, CommandExec, CommandIntent, DeviceBind, DeviceNodeKind, SeccompCgroups,
-        SeccompDeviceAccess, SeccompNamespaces,
-    };
+    use d2b_provider_command::command::{ CommandArgvSlot, CommandExec, CommandIntent };
+use d2b_provider_seccomp_profile::seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, SeccompDeviceAccess, SeccompNamespaces };
     use d2b_contracts_resource::v3::{BoundedText, BoundedToken};
     use serde_json::json;
 
@@ -1269,7 +1265,7 @@ mod tests {
                 SeccompNamespaces::default(),
                 SeccompCgroups::default(),
                 vec![DeviceBind::new(
-                    d2b_contracts_resource::v3::DeviceNodePath::parse("/dev/null").expect("path"),
+                    d2b_provider_seccomp_profile::DeviceNodePath::parse("/dev/null").expect("path"),
                     DeviceNodeKind::Char,
                     1,
                     3,
@@ -1361,7 +1357,7 @@ mod tests {
         );
         assert_ne!(
             spec.secret_access(),
-            d2b_contracts_resource::v3::SecretAccess::None
+            d2b_provider_operation::SecretAccess::None
         );
         // The role's posture row resolves the committed profile and principal.
         let role = row_spec(&fixture.store, "Role/worker").await.expect("role row");

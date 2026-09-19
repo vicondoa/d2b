@@ -9,7 +9,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{
+use d2b_contracts_resource::v3::{
     ResourceRef,
     execution_policy::{BoundedText, BoundedToken, PrimitiveSpecError, redacted_debug},
 };
@@ -474,7 +474,7 @@ impl EndpointAttachmentPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::resource_schema::canonical_json_bytes;
+    use d2b_contracts_resource::v3::resource_schema::canonical_json_bytes;
 
     fn minimal() -> EndpointSpec {
         EndpointSpec::new(

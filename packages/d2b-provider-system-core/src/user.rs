@@ -28,7 +28,7 @@ use std::fmt;
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::resource_status::ResourcePhase;
-use d2b_contracts_resource::v3::user::{USER_RESOURCE_TYPE, UserSpec};
+use crate::user_spec::{USER_RESOURCE_TYPE, UserSpec};
 use serde::{Serialize, Serializer};
 
 use crate::error::SystemCoreError;

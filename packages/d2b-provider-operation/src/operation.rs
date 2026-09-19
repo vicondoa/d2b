@@ -18,9 +18,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::execution_policy::{BoundedText, BoundedToken, redacted_debug};
-use super::ResourceRef;
-use super::payload_schema::PayloadSchema;
+use d2b_contracts_resource::v3::execution_policy::{BoundedText, BoundedToken, redacted_debug};
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::payload_schema::PayloadSchema;
 
 /// Canonical `Operation` ResourceType name.
 pub const OPERATION_RESOURCE_TYPE: &str = "Operation";
@@ -486,7 +486,7 @@ impl OperationSpec {
         wire_tag: Option<u32>,
     ) -> Result<Self, OperationContractError> {
         if let Some(owner_ref) = &owner_ref {
-            super::execution_policy::require_resource_type(owner_ref, "Command")
+            d2b_contracts_resource::v3::execution_policy::require_resource_type(owner_ref, "Command")
                 .map_err(|_| OperationContractError::InvalidOwnerRef)?;
             if wire_tag.is_some() {
                 return Err(OperationContractError::InheritedWireTagOnMaterialized);
@@ -799,7 +799,7 @@ mod tests {
     fn the_wire_shape_round_trips_and_is_closed() {
         let spec = spec(SecretAccess::RedactedOnly).expect("operation validates");
         let bytes =
-            super::super::resource_schema::canonical_json_bytes(&spec).expect("canonical");
+            d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(&spec).expect("canonical");
         let restored: OperationSpec = serde_json::from_slice(&bytes).expect("parses");
         assert_eq!(restored, spec);
         let text = String::from_utf8(bytes).expect("utf8");

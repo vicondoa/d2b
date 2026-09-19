@@ -30,16 +30,9 @@ use d2b_bus::{
 };
 use d2b_contracts_resource::resource_proto as wire;
 use d2b_contracts_resource::v3::identity::{EvidenceClass, ServiceName};
-use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourcePhase, ResourceRef,
-    ResourceUid, ZoneId, ZoneRevision, canonical_digest,
-    endpoint::{
-        EndpointClass, EndpointConsumerPolicy, EndpointLifecyclePolicy, EndpointLocality,
-        EndpointOperation, EndpointSpec, EndpointTransport, EndpointVisibility,
-    },
-    execution_policy::{BoundedText, BoundedToken},
-    process::{ExecutionSpec, ProcessClass, ProcessSpec},
-};
+use d2b_contracts_resource::v3::{ CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourcePhase, ResourceRef, ResourceUid, ZoneId, ZoneRevision, canonical_digest, execution_policy::{BoundedText, BoundedToken}, process::{ExecutionSpec, ProcessClass, ProcessSpec} };
+use d2b_provider_endpoint::endpoint::{ EndpointClass, EndpointConsumerPolicy, EndpointLifecyclePolicy, EndpointLocality,
+        EndpointOperation, EndpointSpec, EndpointTransport, EndpointVisibility, };
 use d2b_contracts_zone_session::v3::component_session::{
     AttachmentKind, AttachmentPolicy, AttachmentPolicyKind, AttachmentPurpose, EndpointPolicy,
     EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
@@ -2926,7 +2919,7 @@ where
             Some(BoundedText::parse(fingerprint).map_err(|_| WorkerEffectError::LaunchRejected)?),
             EndpointLocality::CrossDomain,
             EndpointVisibility::Zone,
-            d2b_contracts_resource::v3::endpoint::EndpointAttachmentPolicy::new(
+            d2b_provider_endpoint::endpoint::EndpointAttachmentPolicy::new(
                 matches!(role, DisplayProcessRole::HostProxy),
                 u16::from(matches!(role, DisplayProcessRole::HostProxy)),
             )

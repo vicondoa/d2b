@@ -13,7 +13,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::execution_policy::{
+use d2b_contracts_resource::v3::execution_policy::{
     BoundedText, PrimitiveSpecError, parsed_deserialize, redacted_debug, string_schema,
 };
 
@@ -170,7 +170,7 @@ impl<'de> Deserialize<'de> for UserSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::{execution_policy::to_base_object, resource_schema::canonical_json_bytes};
+    use d2b_contracts_resource::v3::{execution_policy::to_base_object, resource_schema::canonical_json_bytes};
 
     const MINIMAL_USER_SPEC: &[u8] = br#"{"displayName":"","groups":[],"osUsername":"alice"}"#;
 

@@ -28,3 +28,7 @@ pub use driver::{
     EndpointDriverFactory, EndpointDriverStatus, EndpointPurposeVocabulary, EndpointRealization,
     GuestControlProducer, endpoint_descriptor, endpoint_realization, endpoint_spec_decoder,
 };
+
+/// The Endpoint ResourceType spec and status shapes owned by this crate.
+pub mod endpoint;
+pub use endpoint::*;

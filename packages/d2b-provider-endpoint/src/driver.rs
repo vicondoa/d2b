@@ -41,13 +41,9 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::{
-    endpoint::{
-        EndpointClass, EndpointLifecyclePolicy, EndpointLocality, EndpointSpec, EndpointTransport,
-        EndpointVisibility,
-    },
-    CanonicalJsonObject, ResourceRef, ResourceSpec,
-};
+use d2b_contracts_resource::v3::{ CanonicalJsonObject, ResourceRef, ResourceSpec };
+use crate::endpoint::{ EndpointClass, EndpointLifecyclePolicy, EndpointLocality, EndpointSpec, EndpointTransport,
+        EndpointVisibility, };
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
@@ -609,15 +605,10 @@ pub fn endpoint_descriptor(args: EndpointDriverArgs) -> DriverDescriptor {
 mod tests {
     use std::sync::Arc;
 
-    use d2b_contracts_resource::v3::{
-        endpoint::{
-            EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy,
+    use d2b_contracts_resource::v3::{ execution_policy::BoundedToken, ResourceRef };
+use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy,
             EndpointLifecyclePolicy, EndpointLocality, EndpointOperation, EndpointSpec,
-            EndpointTransport, EndpointVisibility,
-        },
-        execution_policy::BoundedToken,
-        ResourceRef,
-    };
+            EndpointTransport, EndpointVisibility, };
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext,
         WatchId, WatchRegistration,

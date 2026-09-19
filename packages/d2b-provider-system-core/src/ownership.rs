@@ -16,8 +16,8 @@
 //! not by membership in the list.
 
 use d2b_contracts_resource::v3::ResourceRef;
-use d2b_contracts_resource::v3::host::HOST_RESOURCE_TYPE;
-use d2b_contracts_resource::v3::user::USER_RESOURCE_TYPE;
+use crate::host_spec::HOST_RESOURCE_TYPE;
+use crate::user_spec::USER_RESOURCE_TYPE;
 
 use crate::error::SystemCoreError;
 

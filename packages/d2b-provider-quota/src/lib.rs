@@ -17,4 +17,8 @@
 
 mod driver;
 
+/// The Quota ResourceType spec and status shapes owned by this crate.
+pub mod quota;
+
 pub use driver::quota_descriptor;
+pub use quota::*;

@@ -4,7 +4,8 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::{endpoint::EndpointClass, ResourceRef};
+use d2b_contracts_resource::v3::{ ResourceRef };
+use d2b_provider_endpoint::endpoint::{ EndpointClass };
 use d2b_provider_endpoint::{
     EndpointDriverArgs, EndpointDriverEffects, EndpointPurposeVocabulary, GuestControlProducer,
     endpoint_descriptor,

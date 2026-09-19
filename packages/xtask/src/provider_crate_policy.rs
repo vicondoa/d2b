@@ -3888,12 +3888,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (transport-vsock)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts-resource/src/v3/endpoint.rs",
-        token: "vsock",
-        family: "transport-vsock",
-        retires_with: "U10-U12 family rollout (transport-vsock)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "vsock",
         family: "transport-vsock",
@@ -4296,12 +4290,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (display-wayland)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts-resource/src/v3/network.rs",
-        token: "network_local",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/authority.rs",
         token: "observability_otel",
         family: "observability-otel",
@@ -4416,12 +4404,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (shell-terminal)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts-resource/src/v3/network.rs",
-        token: "system_core",
-        family: "system-core",
-        retires_with: "U10-U12 family rollout (system-core)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/telemetry_policy.rs",
         token: "system_core",
         family: "system-core",
@@ -4429,12 +4411,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/provider.rs",
-        token: "system_core",
-        family: "system-core",
-        retires_with: "U10-U12 family rollout (system-core)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts-resource/src/v3/host.rs",
         token: "system_core",
         family: "system-core",
         retires_with: "U10-U12 family rollout (system-core)",
@@ -7243,7 +7219,27 @@ fn check_shared_structural_knowledge(repo_root: &Path) -> Result<(), String> {
 /// dependency-direction detector lists. A shared crate may depend on
 /// a provider crate only through an edge named here;the list is empty
 /// today and only the owning crates' moves add edges to it./
-const ALLOWED_SHARED_PROVIDER_DEPENDENCY_EDGES: &[(&str, &str)] = &[];
+///
+/// U4 re-homed the laneless primitive types into their owning provider
+/// crates, and the consumers that use the moved shapes follow them
+/// (KTD3): the resource contracts crate keeps only generic machinery,
+/// and each typed consumer below takes a named edge to the owning type's
+/// crate. The generic modules stay put; no shared crate gains a provider
+/// dependency for anything else.
+const ALLOWED_SHARED_PROVIDER_DEPENDENCY_EDGES: &[(&str, &str)] = &[
+    // U4: the quota status projection the manager backend reads lives in
+    // d2b-provider-quota.
+    ("packages/d2b-resource-api", "d2b-provider-quota"),
+    // U4: the daemon composes and seeds the re-homed command, operation,
+    // seccomp-profile, endpoint, host, and user shapes from their owning
+    // crates.
+    ("packages/d2bd", "d2b-provider-command"),
+    ("packages/d2bd", "d2b-provider-endpoint"),
+    ("packages/d2bd", "d2b-provider-operation"),
+    ("packages/d2bd", "d2b-provider-seccomp-profile"),
+    ("packages/d2bd", "d2b-provider-system-core"),
+    ("packages/d2bd-runtime", "d2b-provider-system-core"),
+];
 
 /// The provider crate name one manifest dependency line declares, when
 /// the line names one (either as the key or via `package =`)./

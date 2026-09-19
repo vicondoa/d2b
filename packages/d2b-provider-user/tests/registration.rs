@@ -2,11 +2,8 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use d2b_contracts_resource::v3::{
-    ResourceSpec,
-    execution_policy::to_base_object,
-    user::{OsUsername, UserSpec},
-};
+use d2b_contracts_resource::v3::{ ResourceSpec, execution_policy::to_base_object };
+use d2b_provider_system_core::user_spec::{ OsUsername, UserSpec };
 use d2b_provider_user::test_support::RecordingEffects;
 use d2b_provider_user::user_descriptor;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};

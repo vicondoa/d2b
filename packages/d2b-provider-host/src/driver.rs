@@ -39,10 +39,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{
-    ResourceRef, ResourceSpec,
-    host::{HOST_PROVIDER_REF, HOST_RESOURCE_TYPE, HostSpec},
-};
+use d2b_contracts_resource::v3::{ ResourceRef, ResourceSpec };
+use d2b_provider_system_core::host_spec::{ HOST_PROVIDER_REF, HOST_RESOURCE_TYPE, HostSpec };
 use d2b_provider_system_core::HostObservationReport;
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
 use d2b_resource_runtime::driver::{
@@ -419,11 +417,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
 
-    use d2b_contracts_resource::v3::{
-        ResourcePhase, ResourceRef, ResourceSpec,
-        execution_policy::to_base_object,
-        host::{HOST_PROVIDER_REF, HostSpec},
-    };
+    use d2b_contracts_resource::v3::{ ResourcePhase, ResourceRef, ResourceSpec, execution_policy::to_base_object };
+use d2b_provider_system_core::host_spec::{ HOST_PROVIDER_REF, HostSpec };
     use d2b_provider_system_core::HostCapabilityClass;
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,

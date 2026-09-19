@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use d2b_contracts_resource::v3::{ResourcePhase, ResourceRef};
-use d2b_contracts_resource::v3::host::HostSpec;
+use d2b_provider_system_core::host_spec::HostSpec;
 use d2b_provider_system_core::{HostCapabilityClass, HostObservationReport, HostReconciler};
 
 use crate::HostDriverEffects;
