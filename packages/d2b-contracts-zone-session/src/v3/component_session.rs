@@ -3180,7 +3180,6 @@ mod wire_enum_vectors {
     /// Golden canonical wire vectors for the closed wire enums behind the service,
     /// transport, and attachment surfaces. A change to any row is a wire
     /// break on the zone-plane session contract.
-
     const SERVICE_VECTORS: &[(ServicePackage, u8, &str)] = &[
         (ServicePackage::ResourceV3, 1, "d2b.resource.v3"),
         (ServicePackage::ControllerV3, 2, "d2b.controller.v3"),
