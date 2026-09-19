@@ -1,14 +1,13 @@
-//! Core-owned USBIP identity and bundle adapter.
+//! Provider-owned USBIP identity and bundle adapter.
 //!
-//! This module is deliberately independent from the public contracts crate:
-//! `d2b-contracts` depends on `d2b-core` for canonical identity/error types.
-//! The daemon bridges these Core projections to the typed USBIP effect ports.
-//! It is the only place that derives physical and relay authority keys from
-//! trusted bundle data.
+//! The adapter derives the physical and relay authority keys the family's
+//! effects consume from trusted bundle data. The daemon bridges these
+//! projections to the typed USBIP effect ports; the adapter's only shared
+//! dependency is the trusted bundle resolver in `d2b-core`.
 
 use sha2::{Digest, Sha256};
 
-use crate::bundle_resolver::BundleResolver;
+use d2b_core::bundle_resolver::BundleResolver;
 
 /// Domain used for the Host-global physical USB backing digest.
 pub const PHYSICAL_USB_BACKING_DOMAIN: &str = "d2b:physical-usb-backing/v1";
@@ -185,8 +184,8 @@ impl UsbipCoreAdapter {
             .as_deref()
             .ok_or(UsbipCoreAdapterError::EnvironmentMissing)?;
 
-        let firewall_intent_ref = crate::bundle_resolver::intent_id_usbip_firewall(env, bus_id);
-        let bind_intent_ref = crate::bundle_resolver::intent_id_usbip_bind(env, vm, bus_id);
+        let firewall_intent_ref = d2b_core::bundle_resolver::intent_id_usbip_firewall(env, bus_id);
+        let bind_intent_ref = d2b_core::bundle_resolver::intent_id_usbip_bind(env, vm, bus_id);
         if self
             .resolver
             .find_usbip_firewall_intent(&firewall_intent_ref)

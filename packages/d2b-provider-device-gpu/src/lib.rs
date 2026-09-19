@@ -13,6 +13,7 @@ pub mod gpu_argv;
 mod process;
 mod settings;
 pub mod video_argv;
+pub mod vocabulary;
 mod workers;
 
 pub use authority::{

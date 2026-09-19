@@ -181,7 +181,10 @@ impl ProductionProcessDriverEffects {
             .pointer("/metadata/name")
             .and_then(serde_json::Value::as_str)
             .ok_or("device-worker-state-volume-unresolved")?;
-        let storage_path_id = format!("path:swtpm-state:{vm_name}");
+        let storage_path_id = format!(
+            "{}{vm_name}",
+            d2b_provider_device_tpm::vocabulary::TPM_STATE_STORAGE_ROW_PREFIX
+        );
         self.providers
             .bundle()
             .resolve_volume_view_root(&storage_path_id, volume_name, "")
