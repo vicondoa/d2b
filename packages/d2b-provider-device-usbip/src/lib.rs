@@ -8,6 +8,7 @@
 
 #![deny(missing_docs)]
 
+pub mod core_adapter;
 mod arbitration;
 mod busid;
 mod controller;
@@ -18,6 +19,7 @@ mod process;
 mod production;
 pub mod reconcile_state;
 pub mod state_machine;
+pub mod vocabulary;
 mod workers;
 
 #[cfg(any(test, feature = "test-support"))]

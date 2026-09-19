@@ -16,6 +16,7 @@
 #![deny(missing_docs)]
 
 mod driver;
+pub mod vocabulary;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

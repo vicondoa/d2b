@@ -30,6 +30,7 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 libc = "0.2"
 parking_lot = "0.12"
 serde.workspace = true
+sha2 = { workspace = true }
 serde_json.workspace = true
 tracing = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

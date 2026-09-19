@@ -8,7 +8,6 @@ pub mod closures;
 pub mod configured_argv;
 pub mod console_ring;
 pub mod contract_id;
-pub mod device_usbip_adapter;
 pub mod error;
 pub mod host;
 pub mod host_generation;

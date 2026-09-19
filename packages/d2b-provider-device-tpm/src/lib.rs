@@ -14,6 +14,7 @@ mod resources;
 mod runner;
 mod state;
 pub mod swtpm_argv;
+pub mod vocabulary;
 
 pub use migration::LegacyMigrationOutcome;
 pub use resource_controller::{

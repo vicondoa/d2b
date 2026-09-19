@@ -268,20 +268,6 @@ d2b_rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-d2b_rust_test(
-    name = "device_usbip_adapter",
-    srcs = [
-        "tests/device_usbip_adapter.rs",
-    ],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_core",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
 # keep
 filegroup(
     name = "cargo_workspace_sources",

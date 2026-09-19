@@ -13,6 +13,7 @@ mod lease;
 mod process;
 pub mod relay;
 mod relay_service;
+pub mod vocabulary;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

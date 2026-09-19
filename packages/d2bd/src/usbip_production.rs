@@ -25,7 +25,7 @@ use d2b_provider_device_usbip::{
 };
 
 #[cfg(test)]
-use d2b_core::device_usbip_adapter::UsbipCoreAdapter;
+use d2b_provider_device_usbip::core_adapter::UsbipCoreAdapter;
 
 use crate::{ServerState, dispatch_broker_request_as};
 

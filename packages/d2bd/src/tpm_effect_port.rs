@@ -129,15 +129,20 @@ impl DeclaredTpmRows<'_> {
 
     /// The declared long-lived swtpm row (`Process/swtpm-<device>`).
     fn process_ref(&self) -> Result<ResourceRef, TpmResourceEffectError> {
-        ResourceRef::parse(&format!("Process/swtpm-{}", self.device_ref.name().as_str()))
-            .map_err(|_| TpmResourceEffectError::InvalidDevice)
+        ResourceRef::parse(&format!(
+            "{}{}",
+            d2b_provider_device_tpm::vocabulary::TPM_PROCESS_ROW_PREFIX,
+            self.device_ref.name().as_str()
+        ))
+        .map_err(|_| TpmResourceEffectError::InvalidDevice)
     }
 
     /// The declared pre-start flush row
     /// (`EphemeralProcess/swtpm-flush-<device>`).
     fn flush_ref(&self) -> Result<ResourceRef, TpmResourceEffectError> {
         ResourceRef::parse(&format!(
-            "EphemeralProcess/swtpm-flush-{}",
+            "{}{}",
+            d2b_provider_device_tpm::vocabulary::TPM_FLUSH_ROW_PREFIX,
             self.device_ref.name().as_str()
         ))
         .map_err(|_| TpmResourceEffectError::InvalidDevice)
@@ -145,8 +150,12 @@ impl DeclaredTpmRows<'_> {
 
     /// The declared TPM Endpoint (`Endpoint/tpm-<device>`).
     fn endpoint_ref(&self) -> Result<ResourceRef, TpmResourceEffectError> {
-        ResourceRef::parse(&format!("Endpoint/tpm-{}", self.device_ref.name().as_str()))
-            .map_err(|_| TpmResourceEffectError::InvalidDevice)
+        ResourceRef::parse(&format!(
+            "{}{}",
+            d2b_provider_device_tpm::vocabulary::TPM_ENDPOINT_ROW_PREFIX,
+            self.device_ref.name().as_str()
+        ))
+        .map_err(|_| TpmResourceEffectError::InvalidDevice)
     }
 
     /// The controller-owned state Volume document and reference
@@ -459,7 +468,10 @@ fn zone_native_swtpm_state_row<'a>(
     resolver: &'a d2b_core::bundle_resolver::BundleResolver,
     guest: &str,
 ) -> Option<(&'a d2b_core::storage::StoragePathSpec, PathBuf)> {
-    let spec = resolver.find_storage_path_spec(&format!("path:swtpm-state:{guest}"))?;
+    let spec = resolver.find_storage_path_spec(&format!(
+        "{}{guest}",
+        d2b_provider_device_tpm::vocabulary::TPM_STATE_STORAGE_ROW_PREFIX
+    ))?;
     let path = PathBuf::from(spec.path_template.as_str());
     if !path.is_absolute()
         || path

@@ -94,6 +94,17 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "core_adapter",
+    srcs = ["tests/core_adapter.rs"],
+    compile_data = ["Cargo.toml"],
+    deps = [
+        ":d2b_provider_device_usbip",
+        "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "conformance",
     srcs = ["tests/conformance.rs"],
     compile_data = ["Cargo.toml"],
