@@ -576,6 +576,9 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
     check_closed_matrix(&repo_root, &members)?;
     check_shared_driver_placements(&repo_root)?;
     check_shared_family_knowledge(&repo_root)?;
+    check_shared_structural_knowledge(&repo_root)?;
+    check_shared_provider_dependencies(&repo_root)?;
+    check_self_binding_scope(&repo_root)?;
     check_generated_provenance(&repo_root)?;
     check_broker_manifest(&repo_root)?;
     check_banned_api_allows(&repo_root)?;
@@ -5206,9 +5209,10 @@ fn declares_test_module(text: &str, stem: &str) -> bool {
         if line.trim() != "#[cfg(test)]" {
             continue;
         }
-        let declaration = lines[index + 1..].iter().map(|line| line.trim()).find(|line| {
-            !line.is_empty() && !line.starts_with("#[") && !line.starts_with("//")
-        });
+        let declaration = lines[index + 1..]
+            .iter()
+            .map(|line| line.trim())
+            .find(|line| !line.is_empty() && !line.starts_with("#[") && !line.starts_with("//"));
         if let Some(declaration) = declaration
             && (declaration == format!("mod {stem};")
                 || declaration == format!("pub mod {stem};")
@@ -5988,6 +5992,1524 @@ fn check_shared_family_knowledge(repo_root: &Path) -> Result<(), String> {
     check_shared_family_knowledge_with(repo_root, SHARED_FAMILY_KNOWLEDGE_RATCHET)
 }
 
+/// The per-provider role vocabularies the structural probes recognize by
+/// shape. These enums' variants name provider family roles (sidecars,
+/// runners, workers), so a branch over any of them is per-family
+/// knowledge no matter how a family's own spelling reads. Generic
+/// authz/call/bus/network role enums are not on this list:their variants
+/// are platform roles, not provider roles, and the token probe polices the
+/// family literals they may carry.
+const STRUCTURAL_ROLE_VOCABULARIES: &[&str] = &[
+    "ProcessRole",
+    "RunnerRole",
+    "GpuProcessRole",
+    "SecurityKeyProcessRole",
+    "DisplayProcessRole",
+];
+
+/// The runner-role id strings the shared wire vocabulary spells. A string
+/// literal equal to one of these in a shared Nix module is a role literal:
+/// the role vocabulary is knowledge the owning providers must declare,and
+/// a hand-spelled id cannot hide behind a family's renamed spelling.
+const ROLE_ID_LITERALS: &[&str] = &[
+    "provider-controller",
+    "cloud-hypervisor",
+    "qemu-media",
+    "activation-nixos-runner",
+    "virtiofsd",
+    "swtpm",
+    "swtpm-flush",
+    "gpu",
+    "audio",
+    "video",
+    "vsock-relay",
+    "usbip",
+    "otel-host-bridge",
+    "wayland-proxy",
+];
+
+/// One structural knowledge signal a shared-crate or shared-Nix probe
+/// found: the shape the token list cannot express, reported with the file
+/// and the symbol the shape carries.
+struct StructuralKnowledgeSignal {
+    /// Repository-relative path that holds the signal.
+    module: String,
+    /// The violation class./
+    class: StructuralSignalClass,
+    /// The symbol the shape carries: a role variant (`ProcessRole::Audio`),
+    /// a table name, a type-name arm literal, a provider id, or a role id.
+    symbol: String,
+    /// One-based line number inside the module.
+    line: usize,
+}
+
+/// The structural knowledge classes the issue's classes name./
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum StructuralSignalClass {
+    /// A branch or comparison over a per-provider role vocabulary.
+    PerFamilyBranch,
+    /// A data table whose rows are keyed by per-provider role variants.
+    PerRoleOrSeccompTable,
+    /// A data table whose rows are keyed by provider id literals.
+    PerFamilyTable,
+    /// A record row binding an operation to a subject.
+    AuthorizationRow,
+    /// A data table mapping runner roles to launch identities.
+    LaunchIntentTable,
+    /// A match arm over a resource-type name string.
+    TypeNameMatchArm,
+    /// A provider id literal (`"Provider/<name>"`) in a shared Nix module.
+    ProviderId,
+    /// A role id literal in a shared Nix module.
+    RoleLiteral,
+}
+
+impl StructuralSignalClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PerFamilyBranch => "per-family-branch",
+            Self::PerRoleOrSeccompTable => "per-role-or-seccomp-table",
+            Self::PerFamilyTable => "per-family-table",
+            Self::AuthorizationRow => "authorization-row",
+            Self::LaunchIntentTable => "launch-intent-table",
+            Self::TypeNameMatchArm => "type-name-match-arm",
+            Self::ProviderId => "provider-id",
+            Self::RoleLiteral => "role-literal",
+        }
+    }
+}
+
+/// One structural knowledge exemption row. A signal without a row beside it
+/// fails,arow whose signal the tree no longer carries fails the same way,and
+/// no row may be added because that is what a reintroduction looks like./
+///
+/// Where a Rust structural signal's symbol contains a family token the module's
+/// family-knowledge ratchet already records, the signal is covered by that
+/// row instead:the structural ratchet records only the sites the token probe
+/// cannot see./
+#[derive(Debug, Clone, Copy)]
+struct SharedStructuralKnowledgeExemption {
+    /// Repository-relative module (Rust source or Nix module) that holds the site.
+    module: &'static str,
+    /// The violation class name (`StructuralSignalClass::as_str`).
+    class: &'static str,
+    /// The symbol the site carries (role variant, table name, arm literal,
+    /// provider id, or role id)./
+    symbol: &'static str,
+    /// What deletes the row (census step, or the R4 surface carve-out)./
+    retires_with: &'static str,
+}
+
+/// The structural knowledge the tree still carries in shared crates and Nix
+/// modules, seeded from the current tree and only shrinking from here./
+/// The composition root crates that exist to link provider crates. d2bd is
+/// the daemon's composition root: its provider dependencies are the link
+/// contract the composition rule reserves for it, not family knowledge
+/// shipping through Cargo. Every other shared crate stays provider-free./
+const COMPOSITION_LINK_CRATES: &[&str] = &["packages/d2bd"];
+const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption] = &[
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/kernel_ops.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/ops/systemd.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/ops/systemd.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/ops/systemd.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ComponentSessionHealth",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::HostReconcile",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ComponentSessionHealth",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::HostReconcile",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ComponentSessionHealth",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::HostReconcile",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/audio_host_controller.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ComponentSessionHealth",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/interaction_composition.rs",
+        class: "per-family-branch",
+        symbol: "DisplayProcessRole::GuestFrontend",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/interaction_composition.rs",
+        class: "per-family-branch",
+        symbol: "DisplayProcessRole::HostProxy",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/process_provider_runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/process_provider_runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/process_provider_runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-qemu-media",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-unix",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-vsock",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/guest-closures.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "provider-id",
+        symbol: "Provider/device-tpm",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/options-zones-resources.nix",
+        class: "provider-id",
+        symbol: "Provider/credential-entra",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/options-zones.nix",
+        class: "provider-id",
+        symbol: "Provider/system-core",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/credential-entra",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/credential-managed-identity",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-azure-container-apps",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-azure-virtual-machine",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-azure-relay",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-unix",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-vsock",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/providers/system-minijail.nix",
+        class: "provider-id",
+        symbol: "Provider/system-minijail",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/providers/system-systemd.nix",
+        class: "provider-id",
+        symbol: "Provider/system-systemd",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/activation-nixos",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/audio-pipewire",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/device-gpu",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/device-security-key",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/device-tpm",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/device-usbip",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/display-wayland",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/observability-otel",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-qemu-media",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/system-minijail",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/system-systemd",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-vsock",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/volume-virtiofs",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "role-literal",
+        symbol: "audio",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "role-literal",
+        symbol: "provider-controller",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "role-literal",
+        symbol: "qemu-media",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "role-literal",
+        symbol: "video",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/components/observability/guest.nix",
+        class: "role-literal",
+        symbol: "cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+
+        symbol: "audio",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "gpu",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "qemu-media",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "swtpm",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "usbip",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "video",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "virtiofsd",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/privileges-json.nix",
+        class: "role-literal",
+        symbol: "audio",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-catalog.nix",
+        class: "role-literal",
+        symbol: "audio",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/vm-options.nix",
+        class: "role-literal",
+        symbol: "cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-resource/src/v3/execution_policy.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-resource/src/v3/execution_policy.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-zone-session/src/v3/resource_bundle.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-zone-session/src/v3/resource_bundle.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-zone-session/src/v3/role.rs",
+        class: "type-name-match-arm",
+        symbol: "Provider",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-zone-session/src/v3/role.rs",
+        class: "type-name-match-arm",
+        symbol: "ZoneLink",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        class: "type-name-match-arm",
+        symbol: "EphemeralProcess",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        class: "type-name-match-arm",
+        symbol: "Process",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/process_provider_runtime.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/process_provider_runtime.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/resource_runtime/plane_controller_bridge.rs",
+        class: "type-name-match-arm",
+        symbol: "Volume",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/resource_runtime/plane_controller_bridge.rs",
+        class: "type-name-match-arm",
+        symbol: "VolumeBinding",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/shared_provider_effects.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/shared_provider_effects.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-bus/src/metrics.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        class: "type-name-match-arm",
+        symbol: "Provider",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-provider/src/v3/provider.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-provider/src/v3/semantic_services/child_resources.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-resource/src/v3/resource_schema.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-resource/src/v3/volume_binding.rs",
+        class: "type-name-match-arm",
+        symbol: "Volume",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core-controller/src/controller_assignment.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core-controller/src/controller_assignment.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core-controller/src/owner_reconcile.rs",
+        class: "type-name-match-arm",
+        symbol: "Volume",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        class: "type-name-match-arm",
+        symbol: "Role",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        class: "type-name-match-arm",
+        symbol: "Zone",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "type-name-match-arm",
+        symbol: "{}.host.d2b",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/foundation_seed.rs",
+        class: "type-name-match-arm",
+        symbol: "Zone",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/provider_registry.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/resource_runtime.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+];
+
+/// The shared Nix surface the structural probes monitor. The generated views
+/// under `generated/` are produced by `gen-nix-inventories` and covered by
+/// the generated-artifact provenance gate, so they are not hand tables./
+const NIX_SURFACE_ROOTS: &[&str] = &["nixos-modules"];
+
+/// One line opens a structural table block: a const, static, or let whose
+/// initializer is an array(`&[`, `[`, or `vec![`). The block tracks table
+/// knowledge until its bracket depth closes./
+fn table_block_name(line: &str) -> Option<&str> {
+    let code = code_text(line);
+    let code = code.split_once("/*").map_or(code, |(before, _)| before);
+    let keyword_str = ["const ", "static ", "let "]
+        .iter()
+        .find(|keyword| code.starts_with(**keyword))?;
+    let rest = &code[keyword_str.len()..];
+    let after_name = rest.find(char::is_whitespace).or_else(|| rest.find(':'))?;
+    if after_name == 0 {
+        return None;
+    }
+    let name = &rest[..after_name];
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    let init = &rest[after_name..];
+    if init.contains('=') && (init.contains("[") || init.contains("vec![")) {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+/// Whether one code line references a per-provider role variant./
+fn structural_role_variant(code: &str) -> Option<(&str, &str)> {
+    for vocabulary in STRUCTURAL_ROLE_VOCABULARIES {
+        let needle = [vocabulary, "::"].concat();
+        if let Some(start) = code.find(&needle).filter(|offset| {
+            (*offset == 0) || !code.as_bytes()[*offset - 1].is_ascii_alphanumeric()
+        }) {
+            let rest = &code[start + needle.len()..];
+            let end = rest
+                .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .unwrap_or(rest.len());
+            if end > 0 {
+                return Some((vocabulary, &rest[..end]));
+            }
+        }
+    }
+    None
+}
+
+/// Every structural signal carried by one line of Rust code, given the
+/// current table-block state./
+fn line_structural_signals(
+    module: &str,
+    line_number: usize,
+    line: &str,
+    table_name: Option<&str>,
+    prev_type_match: bool,
+    signals: &mut Vec<StructuralKnowledgeSignal>,
+) {
+    let code = code_text(line);
+    let code = code.split_once("/*").map_or(code, |(before, _)| before);
+    let in_table = table_name.is_some();
+    if let Some((vocabulary, variant)) = structural_role_variant(code) {
+        let class = if in_table {
+            StructuralSignalClass::PerRoleOrSeccompTable
+        } else {
+            StructuralSignalClass::PerFamilyBranch
+        };
+        signals.push(StructuralKnowledgeSignal {
+            module: module.to_owned(),
+            class,
+            symbol: format!("{vocabulary}::{variant}"),
+            line: line_number,
+        });
+        if in_table {
+            let role_count = code.matches("Role::").count();
+            if role_count >= 2 {
+                signals.push(StructuralKnowledgeSignal {
+                    module: module.to_owned(),
+                    class: StructuralSignalClass::LaunchIntentTable,
+                    symbol: table_name.unwrap_or("launch-intent-table").to_owned(),
+                    line: line_number,
+                });
+            }
+        }
+    }
+    let literals = string_literal_spans(code);
+    if in_table {
+        let has_provider = literals
+            .iter()
+            .any(|(_, _, content)| content.starts_with("Provider/"));
+        if has_provider {
+            signals.push(StructuralKnowledgeSignal {
+                module: module.to_owned(),
+                class: StructuralSignalClass::PerFamilyTable,
+                symbol: table_name.unwrap_or("provider-table").to_owned(),
+                line: line_number,
+            });
+        }
+        if code.contains("operation:") && code.contains("subject:") {
+            signals.push(StructuralKnowledgeSignal {
+                module: module.to_owned(),
+                class: StructuralSignalClass::AuthorizationRow,
+                symbol: table_name.unwrap_or("authorization-row").to_owned(),
+                line: line_number,
+            });
+        }
+    } else {
+        if code.contains("operation:") && code.contains("subject:") {
+            signals.push(StructuralKnowledgeSignal {
+                module: module.to_owned(),
+                class: StructuralSignalClass::AuthorizationRow,
+                symbol: "authorization-row".to_owned(),
+                line: line_number,
+            });
+        }
+    }
+    if !in_table
+        && (code.contains("resource_type") || prev_type_match)
+        && (code.contains("match") || code.contains("=>"))
+    {
+        for (_, _, content) in &literals {
+            signals.push(StructuralKnowledgeSignal {
+                module: module.to_owned(),
+                class: StructuralSignalClass::TypeNameMatchArm,
+                symbol: content.clone(),
+                line: line_number,
+            });
+        }
+    }
+}
+
+/// The structural signals one Rust module carries, ignoring test-only code
+/// and the generated views.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn module_structural_signals(
+    repo_root: &Path,
+    module: &str,
+    signals: &mut Vec<StructuralKnowledgeSignal>,
+) -> Result<(), String> {
+    let path = repo_root.join(module);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    let lines: Vec<&str> = text.lines().collect();
+    let mut index = 0;
+    let mut table_depth = 0;
+    let mut table_name: Option<&str> = None;
+    while index < lines.len() {
+        if let Some(indent) = opens_test_module(&lines, index) {
+            index += 1;
+            while index < lines.len() && !closes_indented_block(lines[index], indent) {
+                index += 1;
+            }
+            index += 1;
+            continue;
+        }
+        let line = lines[index];
+        let code = code_text(line);
+        let code = code.split_once("/*").map_or(code, |(before, _)| before);
+        if table_depth == 0 {
+            if let Some(name) = table_block_name(line) {
+                table_name = Some(name);
+                table_depth = 1;
+            }
+        } else {
+            table_depth += code.matches('[').count();
+            table_depth -= code.matches(']').count();
+            if table_depth == 0 {
+                table_name = None;
+            }
+        }
+        let prev_type_match = index > 0
+            && code_text(lines[index - 1]).contains("resource_type")
+            && code_text(lines[index - 1]).contains("match");
+        line_structural_signals(
+            module,
+            index + 1,
+            line,
+            table_name,
+            prev_type_match,
+            signals,
+        );
+        index += 1;
+    }
+    Ok(())
+}
+
+/// The structural signals one shared Nix module carries./
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn nix_module_structural_signals(
+    repo_root: &Path,
+    module: &str,
+    signals: &mut Vec<StructuralKnowledgeSignal>,
+) -> Result<(), String> {
+    let path = repo_root.join(module);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    for (line_number, line) in text.lines().enumerate() {
+        let code = code_text(line);
+        let code = code.split_once("/*").map_or(code, |(before, _)| before);
+        let literals = string_literal_spans(code);
+        for (_, _, content) in &literals {
+            if content.starts_with("Provider/") && !content.contains("${") {
+                signals.push(StructuralKnowledgeSignal {
+                    module: module.to_owned(),
+                    class: StructuralSignalClass::ProviderId,
+                    symbol: content.clone(),
+                    line: line_number + 1,
+                });
+            }
+            if ROLE_ID_LITERALS.contains(&content.as_str()) {
+                signals.push(StructuralKnowledgeSignal {
+                    module: module.to_owned(),
+                    class: StructuralSignalClass::RoleLiteral,
+                    symbol: content.clone(),
+                    line: line_number + 1,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every structural signal under the shared-crate source roots and the shared
+/// Nix surface, sorted deterministically./
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_structural_signals(repo_root: &Path) -> Result<Vec<StructuralKnowledgeSignal>, String> {
+    let mut signals = Vec::new();
+    for root in SHARED_CRATE_SOURCE_ROOTS {
+        let directory = repo_root.join(root);
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_module_structural_signals(repo_root, &directory, &mut signals)?;
+    }
+    for root in NIX_SURFACE_ROOTS {
+        let directory = repo_root.join(root);
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_nix_structural_signals(repo_root, &directory, &mut signals)?;
+    }
+    signals.sort_by(|left, right| {
+        left.module
+            .cmp(&right.module)
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.class.cmp(&right.class))
+            .then_with(|| left.symbol.cmp(&right.symbol))
+    });
+    Ok(signals)
+}
+
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_module_structural_signals(
+    repo_root: &Path,
+    directory: &Path,
+    signals: &mut Vec<StructuralKnowledgeSignal>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        if file_type.is_dir() {
+            if entry.file_name().to_string_lossy() != "generated" {
+                collect_module_structural_signals(repo_root, &path, signals)?;
+            }
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        module_structural_signals(repo_root, &relative, signals)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_nix_structural_signals(
+    repo_root: &Path,
+    directory: &Path,
+    signals: &mut Vec<StructuralKnowledgeSignal>,
+) -> Result<(), String> {
+    if directory.file_name().map(|name| name.to_string_lossy()) == Some("generated".into()) {
+        return Ok(());
+    }
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        if file_type.is_dir() {
+            collect_nix_structural_signals(repo_root, &path, signals)?;
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("nix") {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        nix_module_structural_signals(repo_root, &relative, signals)?;
+    }
+    Ok(())
+}
+
+/// Render one structural knowledge violation as canonical JSON./
+fn render_structural_violation(signal: &StructuralKnowledgeSignal, class_prefix: &str) -> String {
+    serde_json::json!({
+        "error": format!("{class_prefix}-{}", signal.class.as_str()),
+        "module": signal.module,
+        "class": signal.class.as_str(),
+        "symbol": signal.symbol,
+        "line": signal.line,
+    })
+    .to_string()
+}
+
+/// The family token one structural symbol's words contain, when one exists./
+fn structural_symbol_token(symbol: &str) -> Option<&'static str> {
+    let words = identifier_words(symbol);
+    for entry in FAMILY_KNOWLEDGE_TOKENS {
+        let token_words: Vec<&str> = entry
+            .token
+            .split('_')
+            .filter(|word| !word.is_empty())
+            .collect();
+        if token_words.is_empty() || words.len() < token_words.len() {
+            continue;
+        }
+        if (0..=words.len() - token_words.len()).any(|start| {
+            words[start..start + token_words.len()]
+                .iter()
+                .zip(&token_words)
+                .all(|(word, token_word)| word == token_word)
+        }) {
+            return Some(entry.token);
+        }
+    }
+    None
+}
+
+/// Fail every structural signal a shared crate or Nix module still carries
+/// without an exemption row beside it, and fail every row whose signal the
+/// tree no longer carries. A Rust structural signal whose symbol names a
+/// family token the module's family-knowledge ratchet already records is
+/// covered by that row instead, so the structural ratchet records only the
+/// sites the token probe cannot see. Passed both ratchets as parameters so
+/// the tests can exercise both directions on fixtures./
+
+fn check_shared_structural_knowledge_with(
+    repo_root: &Path,
+    structural_ratchet: &[SharedStructuralKnowledgeExemption],
+    family_ratchet: &[SharedFamilyKnowledgeExemption],
+) -> Result<(), String> {
+    let signals = collect_structural_signals(repo_root)?;
+    let structural_exempt: BTreeSet<(&str, &str, &str)> = structural_ratchet
+        .iter()
+        .map(|row| (row.module, row.class, row.symbol))
+        .collect();
+    let family_exempt: BTreeSet<(String, &str)> = family_ratchet
+        .iter()
+        .map(|row| (row.module.to_owned(), row.token))
+        .collect();
+    let mut violations = Vec::new();
+
+    let rust_prefix = "shared-crate-structural";
+    let nix_prefix = "shared-nix-structural";
+    for signal in &signals {
+        let class = signal.class.as_str();
+        if structural_exempt.contains(&(signal.module.as_str(), class, signal.symbol.as_str())) {
+            continue;
+        }
+        let covered_by_family = signal.class != StructuralSignalClass::ProviderId
+            && signal.class != StructuralSignalClass::RoleLiteral
+            && structural_symbol_token(&signal.symbol)
+                .is_some_and(|token| family_exempt.contains(&(signal.module.clone(), token)));
+        if covered_by_family {
+            continue;
+        }
+        let prefix = if signal.module.starts_with("nixos-modules/") {
+            nix_prefix
+        } else {
+            rust_prefix
+        };
+        violations.push(render_structural_violation(signal, prefix));
+    }
+    for row in structural_ratchet {
+        if !repo_root.join(shared_source_root(row.module)).is_dir() {
+            continue;
+        }
+        if !signals.iter().any(|signal| {
+            signal.module == row.module
+                && signal.class.as_str() == row.class
+                && signal.symbol == row.symbol
+        }) {
+            violations.push(
+                serde_json::json!({
+                    "error": "stale-shared-structural-knowledge-exemption",
+                    "module": row.module,
+                    "class": row.class,
+                    "symbol": row.symbol,
+                    "retiresWith": row.retires_with,
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations.join("\n"))
+    }
+}
+
+/// Fail when structural knowledge reappears in a shared crate or Nix
+/// module, against the shrinking structural ratchet./
+fn check_shared_structural_knowledge(repo_root: &Path) -> Result<(), String> {
+    check_shared_structural_knowledge_with(
+        repo_root,
+        SHARED_STRUCTURAL_KNOWLEDGE_RATCHET,
+        SHARED_FAMILY_KNOWLEDGE_RATCHET,
+    )
+}
+/// The named shared-crate-to-provider dependency edges the
+/// dependency-direction detector lists. A shared crate may depend on
+/// a provider crate only through an edge named here;the list is empty
+/// today and only the owning crates' moves add edges to it./
+const ALLOWED_SHARED_PROVIDER_DEPENDENCY_EDGES: &[(&str, &str)] = &[];
+
+/// The provider crate name one manifest dependency line declares, when
+/// the line names one (either as the key or via `package =`)./
+fn manifest_provider_dependency(line: &str) -> Option<&str> {
+    let starts = line.find("d2b-provider")?;
+    let rest = &line[starts..];
+    let end = rest
+        .find(|ch: char| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'))
+        .unwrap_or(rest.len());
+    let name = &rest[..end];
+    if name == "d2b-provider" {
+        return None;
+    }
+    Some(name)
+}
+
+/// provider crate, unless the edge is one the check lists./
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn check_shared_provider_dependencies_with(
+    repo_root: &Path,
+    allowed: &[(&str, &str)],
+) -> Result<(), String> {
+    let mut shared_dirs: BTreeSet<&str> = BTreeSet::new();
+    for root in SHARED_CRATE_SOURCE_ROOTS {
+        shared_dirs.insert(root.strip_suffix("/src").unwrap_or(root));
+    }
+    let mut violations = Vec::new();
+    for crate_dir in shared_dirs {
+        if COMPOSITION_LINK_CRATES.contains(&crate_dir) {
+            continue;
+        }
+        let manifest_path = repo_root.join(crate_dir).join("Cargo.toml");
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let text = fs::read_to_string(&manifest_path)
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let mut section = String::new();
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or(line);
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                section = trimmed.to_owned();
+                continue;
+            }
+            if section != "[dependencies]" && section != "[build-dependencies]" {
+                continue;
+            }
+            let Some(provider) = manifest_provider_dependency(trimmed) else {
+                continue;
+            };
+            if name_kind(provider, false) != ProviderNameKind::Provider {
+                continue;
+            }
+            let listed = allowed.iter().any(|(crate_name, provider_name)| {
+                *crate_name == crate_dir && *provider_name == provider
+            });
+            if !listed {
+                violations.push(
+                    serde_json::json!({
+                        "error": "shared-crate-provider-dependency",
+                        "crate": crate_dir,
+                        "provider": provider,
+                    })
+                    .to_string(),
+                );
+            }
+        }
+    }
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations.join("\n"))
+    }
+}
+
+/// provider crate, unless the edge is one the check lists./
+fn check_shared_provider_dependencies(repo_root: &Path) -> Result<(), String> {
+    check_shared_provider_dependencies_with(repo_root, ALLOWED_SHARED_PROVIDER_DEPENDENCY_EDGES)
+}
+
+/// The provider name one `provider_ref:` line names./
+fn provider_ref_name(line: &str) -> Option<&str> {
+    let prefix = "Provider/";
+    let starts = line.find(prefix)?;
+    let rest = &line[starts + prefix.len()..];
+    let end = rest
+        .find(|ch: char| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'))
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// The role name one `role_ref:` or `roles:` line names, one per call./
+fn role_ref_name(line: &str) -> Option<&str> {
+    let prefix = "Role/";
+    let starts = line.find(prefix)?;
+    let rest = &line[starts + prefix.len()..];
+    let end = rest
+        .find(|ch: char| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'))
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// Fail when a self-binding names a subject other than its declaring
+/// provider, or a role the declaring provider does not itself declare./
+fn check_self_binding_scope(repo_root: &Path) -> Result<(), String> {
+    let mut violations = Vec::new();
+    for root in SHARED_CRATE_SOURCE_ROOTS {
+        let directory = repo_root.join(root);
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_self_binding_scope(repo_root, &directory, &mut violations)?;
+    }
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations.join("\n"))
+    }
+}
+
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_self_binding_scope(
+    repo_root: &Path,
+    directory: &Path,
+    violations: &mut Vec<String>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        if file_type.is_dir() {
+            if entry.file_name().to_string_lossy() != "generated" {
+                collect_self_binding_scope(repo_root, &path, violations)?;
+            }
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        let text = fs::read_to_string(&path)
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let lines: Vec<&str> = text.lines().collect();
+        let mut index = 0;
+        while index < lines.len() {
+            let line = lines[index];
+            if code_text(line).contains("SeedProvider {") {
+                let mut provider_name = None;
+                let mut roles = Vec::new();
+                let mut pending_subject = None;
+                let mut pending_role = None;
+                let mut stop = index + 1;
+                while stop < lines.len() {
+                    let inner = code_text(lines[stop]);
+                    if inner.contains("provider_ref:") && provider_name.is_none() {
+                        provider_name = provider_ref_name(inner);
+                    }
+                    if inner.contains("Role/")
+                        && !inner.contains("role_ref:")
+                        && !inner.contains("subject_ref:")
+                    {
+                        if let Some(role) = role_ref_name(inner) {
+                            roles.push(role.to_owned());
+                        }
+                    }
+                    if inner.contains("subject_ref:") {
+                        pending_subject = provider_ref_name(inner).map(str::to_owned);
+                    }
+                    if inner.contains("role_ref:") && !inner.contains("roles:") {
+                        pending_role = role_ref_name(inner).map(str::to_owned);
+                    }
+                    if pending_subject.is_some() && pending_role.is_some() {
+                        if let (Some(subject), Some(role)) =
+                            (pending_subject.take(), pending_role.take())
+                        {
+                            if provider_name.as_deref() != Some(subject.as_str()) {
+                                violations.push(
+                                    serde_json::json!({
+                                        "error": "self-binding-subject-escape",
+                                        "module": relative,
+                                        "subject": subject,
+                                        "provider": provider_name,
+                                    })
+                                    .to_string(),
+                                );
+                            }
+                            if !roles.contains(&role) {
+                                violations.push(
+                                    serde_json::json!({
+                                        "error": "self-binding-role-escape",
+                                        "module": relative,
+                                        "role": role,
+                                        "provider": provider_name,
+                                    })
+                                    .to_string(),
+                                );
+                            }
+                        }
+                    }
+                    if inner.contains("}") && inner.contains("SeedSelfBinding") {
+                        pending_subject = None;
+                        pending_role = None;
+                    }
+                    if code_text(lines[stop]).trim() == "}" {
+                        // A SeedSelfBinding row closes at a line whose trim is "}";
+                        // a multi-line row ends there too; clearing pendings keep
+                        // the next row from inheriting a stale half.
+                        if inner.contains("SeedSelfBinding") {
+                            pending_subject = None;
+                            pending_role = None;
+                        }
+                    }
+                    stop += 1;
+                }
+            }
+            index += 1;
+        }
+    }
+    Ok(())
+}
 /// The xtask generators that may produce a `generated/` view file, in the
 /// exact command spelling the provenance annotation uses.
 const GENERATOR_COMMANDS: &[&str] = &[
@@ -8538,8 +10060,8 @@ mod tests {
             "#![allow(clippy::disallowed_methods)]\n",
         )
         .unwrap();
-        let error = check_banned_api_allows_with(&fixture.root, &[])
-            .expect_err("blanket allow must fail");
+        let error =
+            check_banned_api_allows_with(&fixture.root, &[]).expect_err("blanket allow must fail");
         assert!(error.contains("blanket allow"), "error: {error}");
         assert!(error.contains("clippy::disallowed_methods"));
     }
@@ -8555,10 +10077,16 @@ mod tests {
             "#[allow(clippy::disallowed_methods, reason = \"trust me\")]\npub fn f() {}\n",
         )
         .unwrap();
-        let error = check_banned_api_allows_with(&fixture.root, &[])
-            .expect_err("unknown reason must fail");
-        assert!(error.contains("without a sanctioned reason"), "error: {error}");
-        assert!(error.contains("dedicated bounded worker per plan R4"), "error: {error}");
+        let error =
+            check_banned_api_allows_with(&fixture.root, &[]).expect_err("unknown reason must fail");
+        assert!(
+            error.contains("without a sanctioned reason"),
+            "error: {error}"
+        );
+        assert!(
+            error.contains("dedicated bounded worker per plan R4"),
+            "error: {error}"
+        );
 
         fs::write(
             fixture.root.join("packages/d2b-core/src/lib.rs"),
@@ -8567,7 +10095,10 @@ mod tests {
         .unwrap();
         let error = check_banned_api_allows_with(&fixture.root, &[])
             .expect_err("reasonless allow must fail");
-        assert!(error.contains("without a sanctioned reason"), "error: {error}");
+        assert!(
+            error.contains("without a sanctioned reason"),
+            "error: {error}"
+        );
     }
 
     /// A per-site allow carrying a sanctioned reason passes the policy
@@ -8617,6 +10148,174 @@ mod tests {
             check_banned_api_allows(root),
             Ok(()),
             "the committed tree must carry only sanctioned banned-API suppressions"
+        );
+    }
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_per_role_posture_table_in_a_shared_crate_is_refused() {
+        let fixture = Fixture::new("role-posture-table");
+        let broker = fixture.root.join("packages/d2b-broker/src");
+        fs::create_dir_all(&broker).unwrap();
+        let table = broker.join("posture.rs");
+        fs::write(
+            &table,
+            "const ROLE_POSTURE: &[(ProcessRole, &str)] = &[\n    (ProcessRole::Audio, \"posture-a\"),\n    (ProcessRole::Video, \"posture-v\"),\n];\n",
+        )
+        .unwrap();
+        let error = check_shared_structural_knowledge_with(&fixture.root, &[], &[])
+            .expect_err("a per-role posture table in a shared crate is refused");
+        assert!(
+            error.contains("per-family-branch") || error.contains("per-role-or-seccomp-table"),
+            "{error}"
+        );
+        assert!(
+            error.contains("packages/d2b-broker/src/posture.rs"),
+            "{error}"
+        );
+        assert!(error.contains("ProcessRole::Audio"), "{error}");
+        fs::remove_file(&table).unwrap();
+        assert_eq!(
+            check_shared_structural_knowledge_with(&fixture.root, &[], &[]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_per_family_branch_and_type_name_match_arm_are_refused() {
+        let fixture = Fixture::new("family-branch");
+        let broker = fixture.root.join("packages/d2b-broker/src");
+        fs::create_dir_all(&broker).unwrap();
+        let leak = broker.join("branch.rs");
+        fs::write(
+            &leak,
+            "fn dispatch(role: ProcessRole) {\n    match role {\n        ProcessRole::Audio => (),\n        _ => (),\n    }\n}\nfn kind(resource_type: &str) {\n    match resource_type {\n        \"audio\" => (),\n        _ => (),\n    }\n}\n",
+        )
+        .unwrap();
+        let error = check_shared_structural_knowledge_with(&fixture.root, &[], &[])
+            .expect_err("a per-family branch and a type-name match arm are refused");
+        assert!(error.contains("per-family-branch"), "{error}");
+        assert!(error.contains("ProcessRole::Audio"), "{error}");
+        assert!(error.contains("type-name-match-arm"), "{error}");
+        assert!(error.contains("\"audio\""), "{error}");
+        fs::remove_file(&leak).unwrap();
+        assert_eq!(
+            check_shared_structural_knowledge_with(&fixture.root, &[], &[]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_provider_id_and_role_literal_in_a_shared_nix_module_are_refused() {
+        let fixture = Fixture::new("nix-knowledge");
+        let nix = fixture.root.join("nixos-modules");
+        fs::create_dir_all(&nix).unwrap();
+        let leak = nix.join("roles.nix");
+        fs::write(
+            &leak,
+            "{\n  providerRef = \"Provider/aud\";\n  role = \"qemu-media\";\n}\n",
+        )
+        .unwrap();
+        let error = check_shared_structural_knowledge_with(&fixture.root, &[], &[])
+            .expect_err("a provider id and a role literal in a shared Nix module are refused");
+        assert!(error.contains("provider-id"), "{error}");
+        assert!(error.contains("Provider/aud"), "{error}");
+        assert!(error.contains("role-literal"), "{error}");
+        assert!(error.contains("qemu-media"), "{error}");
+        fs::remove_file(&leak).unwrap();
+        assert_eq!(
+            check_shared_structural_knowledge_with(&fixture.root, &[], &[]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_shared_crate_dependency_on_a_provider_crate_is_refused_unless_listed() {
+        let fixture = Fixture::new("provider-dependency");
+        let core = fixture.root.join("packages/d2b-core");
+        fs::create_dir_all(core.join("src")).unwrap();
+        fs::write(
+            core.join("Cargo.toml"),
+            "[package]\nname = \"d2b-core\"\nversion = \"0.0.0\"\n\n[dependencies]\nd2b-provider-process-systemd = { path = \"../d2b-provider-process-systemd\" }\n",
+        )
+        .unwrap();
+        let error = check_shared_provider_dependencies_with(&fixture.root, &[])
+            .expect_err("a shared crate depending on a provider crate is refused");
+        assert!(
+            error.contains("shared-crate-provider-dependency"),
+            "{error}"
+        );
+        assert!(error.contains("d2b-provider-process-systemd"), "{error}");
+        assert_eq!(
+            check_shared_provider_dependencies_with(
+                &fixture.root,
+                &[("packages/d2b-core", "d2b-provider-process-systemd")]
+            ),
+            Ok(()),
+            "a listed edge passes"
+        );
+        fs::write(
+            core.join("Cargo.toml"),
+            "[package]\nname = \"d2b-core\"\nversion = \"0.0.0\"\n\n[dependencies]\nserde = \"1\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            check_shared_provider_dependencies_with(&fixture.root, &[]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_self_binding_outside_its_declaring_scope_is_refused() {
+        let fixture = Fixture::new("self-binding-escape");
+        let d2bd = fixture.root.join("packages/d2bd/src");
+        fs::create_dir_all(&d2bd).unwrap();
+        let leak = d2bd.join("seed.rs");
+        fs::write(
+            &leak,
+            "SeedProvider {\n    provider_ref: ResourceRef::parse(\"Provider/system-minijail\"),\n    roles: vec![ResourceRef::parse(\"Role/worker\")],\n    self_bindings: vec![SeedSelfBinding {\n        subject_ref: ResourceRef::parse(\"Provider/other\"),\n        role_ref: ResourceRef::parse(\"Role/other\"),\n    }],\n}\n",
+        )
+        .unwrap();
+        let error = check_self_binding_scope(&fixture.root)
+            .expect_err("a self-binding naming another subject or role is refused");
+        assert!(error.contains("self-binding-subject-escape"), "{error}");
+        assert!(error.contains("other"), "{error}");
+        assert!(error.contains("self-binding-role-escape"), "{error}");
+        assert!(error.contains("other"), "{error}");
+        fs::remove_file(&leak).unwrap();
+        assert_eq!(check_self_binding_scope(&fixture.root), Ok(()));
+    }
+
+    #[test]
+    fn the_structural_ratchet_matches_the_committed_tree() {
+        let root = repo_root().expect("resolve repository root");
+        assert_eq!(
+            check_shared_structural_knowledge(root),
+            Ok(()),
+            "the committed tree must be exactly the seeded structural-knowledge ratchet"
+        );
+    }
+
+    #[test]
+    fn the_dependency_direction_matches_the_committed_tree() {
+        let root = repo_root().expect("resolve repository root");
+        assert_eq!(
+            check_shared_provider_dependencies(root),
+            Ok(()),
+            "no shared crate may depend on a provider crate outside the listed edges"
+        );
+    }
+
+    #[test]
+    fn the_self_binding_scope_matches_the_committed_tree() {
+        let root = repo_root().expect("resolve repository root");
+        assert_eq!(
+            check_self_binding_scope(root),
+            Ok(()),
+            "every committed self-binding stays inside its declaring provider's scope"
         );
     }
 }
