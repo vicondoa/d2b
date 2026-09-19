@@ -434,6 +434,7 @@ fn generated_artifact_path(repo_root: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 mod tests {
     use super::*;
     use std::fs;

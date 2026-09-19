@@ -52,16 +52,9 @@ use d2b_contracts_control::public_wire::{
 };
 use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
-use d2b_contracts_resource::v3::{
-    NetworkProvenance, ResourceEnvelope,
-    ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
-    ZoneResourceIdentity, ZoneRevision,
-    endpoint::{
-        EndpointClass, EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport,
-        EndpointVisibility,
-    },
-    process::ProcessSpec,
-};
+use d2b_contracts_resource::v3::{ NetworkProvenance, ResourceEnvelope, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId, ZoneResourceIdentity, ZoneRevision, process::ProcessSpec };
+use d2b_provider_endpoint::endpoint::{ EndpointClass, EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport,
+        EndpointVisibility, };
 use d2b_contracts_resource::v3::ResourceBundleGenerationId;
 use d2b_contracts_resource::v3::{ResourceName, activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE};
 use d2b_contracts_zone_session::v3::ZoneLinkSpec;

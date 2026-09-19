@@ -16,7 +16,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use d2b_contracts_resource::v3::ResourceRef;
-use d2b_contracts_resource::v3::endpoint::EndpointClass;
+use d2b_provider_endpoint::endpoint::EndpointClass;
 use d2b_provider_endpoint::{
     EndpointDriverEffects, EndpointPurposeVocabulary, GuestControlProducer,
 };
@@ -132,7 +132,7 @@ impl EndpointDriverEffects for ProductionEndpointDriverEffects {
 
 #[cfg(test)]
 mod tests {
-    use d2b_contracts_resource::v3::endpoint::EndpointClass;
+    use d2b_provider_endpoint::endpoint::EndpointClass;
     use d2b_provider_endpoint::GuestControlProducer;
 
     use super::{device_worker_endpoint_class, device_worker_purpose, guest_control_purpose};

@@ -44,6 +44,9 @@ tracing = "0.1"
 ttrpc = { version = "0.9.0", default-features = false, features = ["async"] }
 uzers = "0.12"
 
+
+
+d2b-provider-system-core = { path = "../d2b-provider-system-core", version = "0.0.0-bootstrap" }
 [dev-dependencies]
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }

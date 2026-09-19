@@ -13,7 +13,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ResourcePhase, ResourceRef, host::HostSpec, user::UserSpec};
+use d2b_contracts_resource::v3::{ ResourcePhase, ResourceRef };
+use d2b_provider_system_core::host_spec::{ HostSpec };
+use d2b_provider_system_core::user_spec::{ UserSpec };
 use d2b_provider_host::HostDriverEffects;
 use d2b_provider_system_core::{
     DiscoveredUser, HostCapabilityClass, HostObservationReport, HostProbeEffectPort,

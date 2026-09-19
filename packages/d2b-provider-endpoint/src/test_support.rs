@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use d2b_contracts_resource::v3::endpoint::EndpointClass;
+use crate::endpoint::EndpointClass;
 use d2b_contracts_resource::v3::ResourceRef;
 
 use crate::driver::{

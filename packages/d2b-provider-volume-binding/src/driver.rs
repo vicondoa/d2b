@@ -1680,7 +1680,7 @@ mod tests {
         assert_eq!(typed.execution().template().as_str(), WORKER_TEMPLATE);
         let endpoint_spec: serde_json::Value =
             serde_json::from_slice(&endpoint.spec).expect("endpoint spec json");
-        let _typed: d2b_contracts_resource::v3::endpoint::EndpointSpec =
+        let _typed: d2b_provider_endpoint::endpoint::EndpointSpec =
             serde_json::from_value(endpoint_spec).expect("EndpointSpec parses");
     }
 

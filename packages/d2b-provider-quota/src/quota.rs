@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{ResourceTypeName, execution_policy::redacted_debug};
+use d2b_contracts_resource::v3::{ResourceTypeName, execution_policy::redacted_debug};
 
 /// Canonical Quota ResourceType name.
 pub const QUOTA_RESOURCE_TYPE: &str = "Quota";
@@ -24,7 +24,9 @@ pub const QUOTA_DRAIN_FINALIZER: &str = "core.quota-drain";
 )]
 #[serde(rename_all = "lowercase")]
 pub enum QuotaEnforcementPolicy {
+    /// Refuse admissions that would exceed the ceiling.
     Hard,
+    /// Warn on excess without refusing admission.
     Soft,
 }
 
@@ -34,16 +36,22 @@ pub enum QuotaEnforcementPolicy {
 )]
 #[serde(rename_all = "lowercase")]
 pub enum QuotaScope {
+    /// The quota applies zone-wide.
     Zone,
 }
 
 /// Quota contract failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaContractError {
+    /// A ceiling is zero or exceeds the zone-wide maximum.
     ZeroOrOverLimit,
+    /// A per-type ceiling exceeds the zone-wide ceiling.
     PerTypeBoundExceeded,
+    /// The same ResourceType is named by more than one per-type ceiling.
     DuplicateResourceType,
+    /// A named ResourceType is not a standard resource type.
     InvalidResourceType,
+    /// The scope is not a supported quota scope.
     InvalidScope,
 }
 
@@ -364,8 +372,11 @@ const fn default_enforcement() -> QuotaEnforcementPolicy {
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum QuotaConditionType {
+    /// The row's ceilings are internally consistent.
     CeilingsValid,
+    /// The zone exceeds one or more ceilings.
     OverQuota,
+    /// Quota dependents are draining before deletion.
     QuotaDrainPending,
 }
 
@@ -379,7 +390,7 @@ pub struct QuotaStatusResource {
     used_storage_gib: Option<u32>,
     over_quota: bool,
     over_quota_types: Vec<ResourceTypeName>,
-    last_checked_at: Option<super::Timestamp>,
+    last_checked_at: Option<d2b_contracts_resource::v3::Timestamp>,
     dependent_count: u32,
 }
 
@@ -393,7 +404,7 @@ impl QuotaStatusResource {
         used_storage_gib: Option<u32>,
         over_quota: bool,
         mut over_quota_types: Vec<ResourceTypeName>,
-        last_checked_at: Option<super::Timestamp>,
+        last_checked_at: Option<d2b_contracts_resource::v3::Timestamp>,
         dependent_count: u32,
     ) -> Result<Self, QuotaContractError> {
         if over_quota_types.len() > 16 {
