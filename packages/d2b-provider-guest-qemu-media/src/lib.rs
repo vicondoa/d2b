@@ -6,6 +6,7 @@
 pub mod adoption;
 pub mod config;
 pub mod controller;
+pub mod hotplug;
 pub mod qmp;
 pub mod types;
 
@@ -22,6 +23,10 @@ pub use controller::{
 };
 pub use controller::process_builder::PROCESS_TEMPLATE;
 pub use controller::reconcile::QEMU_MEDIA_REPAIR_INTERVAL_SECS;
+pub use hotplug::{
+    QemuMediaHotplugAction, QemuMediaHotplugScaffold, QemuMediaHotplugScaffoldError,
+    qemu_media_hotplug_scaffold,
+};
 pub use qmp::{
     QmpCommand, QmpError, QmpGreeting, QmpReply, QmpSession, QmpTransport, QmpVmStatus,
     ScriptedQmpTransport,

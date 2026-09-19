@@ -321,15 +321,16 @@ impl std::error::Error for CycleError {}
 /// step list.
 ///
 /// The set of steps is derived from the VM's properties in the
-/// trusted bundle:
+/// trusted bundle, plus the two neutral parameters the daemon resolves
+/// from the Guest provider ref it already holds:
 ///
-/// - NixOS VMs emit `SshHostKeyPreflight`, `OwnershipMatrixCheck`,
-///   `ApplyNftablesRules`, `BringUpTapInterface`, and
-///   `PreOpenVhostNetFd`.
-/// - QEMU media VMs skip the NixOS-only SSH, ownership-matrix,
-///   and vhost-net steps.
-/// - Net VMs (Guest resource `spec.netVm` flag) additionally emit
-///   `SeedDnsmasqLease`.
+/// - `include_nixos_steps` selects the NixOS-only preflight steps
+///   (`SshHostKeyPreflight`, `OwnershipMatrixCheck`,
+///   `PreOpenVhostNetFd`).
+/// - `runner_role_id` names the runner intent role for the tap step.
+///
+/// Net VMs (Guest resource `spec.netVm` flag) additionally emit
+/// `SeedDnsmasqLease`.
 ///
 /// Steps unrelated to the VM's optional sidecars (obs / usbip /
 /// gpu) are intentionally not part of the host-prep DAG - those are
@@ -341,7 +342,12 @@ impl std::error::Error for CycleError {}
 /// Does not panic. Returns an empty vector if the VM is unknown to
 /// the resolver (the daemon-side caller is responsible for
 /// surfacing that as a typed error).
-pub fn build_host_prep_dag(vm: &str, resolver: &BundleResolver) -> Vec<HostPrepStep> {
+pub fn build_host_prep_dag(
+    vm: &str,
+    resolver: &BundleResolver,
+    include_nixos_steps: bool,
+    runner_role_id: &str,
+) -> Vec<HostPrepStep> {
     let Some(resource) = resolver
         .guest_vm_resources()
         .find(|(_, resource)| resource.metadata().name().as_str() == vm)
@@ -350,15 +356,6 @@ pub fn build_host_prep_dag(vm: &str, resolver: &BundleResolver) -> Vec<HostPrepS
         return Vec::new();
     };
     let spec = resource.spec();
-    let runtime_kind = if matches!(
-        spec.get("providerRef"),
-        Some(CanonicalJsonValue::String(provider_ref))
-            if provider_ref.as_str() == "Provider/runtime-qemu-media"
-    ) {
-        RuntimeKind::QemuMedia
-    } else {
-        RuntimeKind::Nixos
-    };
     // Best-effort env: top-level `spec.env`, else `spec.executionPolicy.env`.
     let env = match spec.get("env") {
         Some(CanonicalJsonValue::String(env)) => Some(env.as_str()),
@@ -371,34 +368,29 @@ pub fn build_host_prep_dag(vm: &str, resolver: &BundleResolver) -> Vec<HostPrepS
             }),
     };
     let is_net_vm = matches!(spec.get("netVm"), Some(CanonicalJsonValue::Bool(true)));
-    build_host_prep_dag_for_runtime(vm, is_net_vm, env, &runtime_kind)
+    build_host_prep_dag_for(vm, is_net_vm, env, include_nixos_steps, runner_role_id)
 }
 
 /// Bundle-free constructor used by unit tests and integrators that
 /// already know the VM's net-VM flag + env. Keeps the production
 /// `build_host_prep_dag` thin and tests hermetic.
-pub fn build_host_prep_dag_for(vm: &str, is_net_vm: bool, env: Option<&str>) -> Vec<HostPrepStep> {
-    build_host_prep_dag_for_runtime(vm, is_net_vm, env, &RuntimeKind::Nixos)
-}
-
-pub fn build_host_prep_dag_for_runtime(
+pub fn build_host_prep_dag_for(
     vm: &str,
     is_net_vm: bool,
     env: Option<&str>,
-    runtime_kind: &RuntimeKind,
+    include_nixos_steps: bool,
+    runner_role_id: &str,
 ) -> Vec<HostPrepStep> {
     let vm_id = VmId::new(vm.to_string());
     let env_scope = env.map(|e| ScopeId::new(format!("env:{e}")));
     let nft_intent = env.map(|e| BundleOpId::new(format!("nft:env:{e}")));
-    let is_qemu_media = matches!(runtime_kind, RuntimeKind::QemuMedia);
-    let runner_role_id = if is_qemu_media { "qemu-media" } else { "ch" };
 
     let id = |k: HostPrepStepKind| HostPrepStepId::new(vm, k);
 
     let mut steps = Vec::with_capacity(9);
 
     // Preflights - no upstream deps; siblings of one another.
-    if !is_qemu_media {
+    if include_nixos_steps {
         steps.push(HostPrepStep {
             id: id(HostPrepStepKind::SshHostKeyPreflight),
             depends_on: vec![],
@@ -410,7 +402,7 @@ pub fn build_host_prep_dag_for_runtime(
             },
         });
     }
-    if !is_qemu_media {
+    if include_nixos_steps {
         steps.push(HostPrepStep {
             id: id(HostPrepStepKind::OwnershipMatrixCheck),
             depends_on: vec![],
@@ -442,7 +434,7 @@ pub fn build_host_prep_dag_for_runtime(
     // (so the chain exists AND the tap-parent bridge is daemon-owned
     // before the tap is added to it).
     let mut nft_deps = vec![id(HostPrepStepKind::ApplyNmUnmanaged)];
-    if !is_qemu_media {
+    if include_nixos_steps {
         nft_deps.push(id(HostPrepStepKind::OwnershipMatrixCheck));
         nft_deps.push(id(HostPrepStepKind::SshHostKeyPreflight));
     }
@@ -506,7 +498,7 @@ pub fn build_host_prep_dag_for_runtime(
     // vhost-net fd: depends on the tap (and post-tap bridge flags
     // are now in their stable state) so the runner gets both fds
     // together with the bridge-port flags already pinned.
-    if !is_qemu_media {
+    if include_nixos_steps {
         steps.push(HostPrepStep {
             id: id(HostPrepStepKind::PreOpenVhostNetFd),
             depends_on: vec![id(HostPrepStepKind::SetBridgePortFlags)],
@@ -533,6 +525,23 @@ pub fn build_host_prep_dag_for_runtime(
     }
 
     topo_sort(steps).expect("static host-prep DAG is acyclic")
+}
+
+/// Bundle-free constructor for integrators that resolve the runtime
+/// kind themselves. The daemon path resolves the runtime kind from the
+/// Guest provider ref it already holds and passes the neutral
+/// parameters to [`build_host_prep_dag`]; this wrapper maps the runtime
+/// kind to the NixOS-only step selection and keeps the tap runner role
+/// id a caller-supplied parameter.
+pub fn build_host_prep_dag_for_runtime(
+    vm: &str,
+    is_net_vm: bool,
+    env: Option<&str>,
+    runtime_kind: &RuntimeKind,
+    runner_role_id: &str,
+) -> Vec<HostPrepStep> {
+    let include_nixos_steps = matches!(runtime_kind, RuntimeKind::Nixos);
+    build_host_prep_dag_for(vm, is_net_vm, env, include_nixos_steps, runner_role_id)
 }
 
 /// Pure topological sort with cycle + dangling-edge detection.
@@ -605,7 +614,7 @@ mod tests {
 
     #[test]
     fn workload_vm_minimal_fixture_step_set_and_order() {
-        let steps = build_host_prep_dag_for("work", false, Some("work"));
+        let steps = build_host_prep_dag_for("work", false, Some("work"), true, "ch");
         let ids: Vec<&str> = steps.iter().map(|s| s.id.as_str()).collect();
         // Net-VM-only step must be absent.
         assert!(!ids.contains(&"work:seed-dnsmasq-lease"));
@@ -649,7 +658,7 @@ mod tests {
 
     #[test]
     fn net_vm_fixture_adds_seed_dnsmasq_lease() {
-        let steps = build_host_prep_dag_for("sys-work-net", true, Some("work"));
+        let steps = build_host_prep_dag_for("sys-work-net", true, Some("work"), true, "ch");
         let ids: Vec<&str> = steps.iter().map(|s| s.id.as_str()).collect();
         assert!(ids.contains(&"sys-work-net:seed-dnsmasq-lease"));
         assert_topo_valid(&steps);
@@ -662,8 +671,13 @@ mod tests {
 
     #[test]
     fn qemu_media_vm_uses_qemu_role_and_skips_nixos_only_steps() {
-        let steps =
-            build_host_prep_dag_for_runtime("media", false, Some("work"), &RuntimeKind::QemuMedia);
+        let steps = build_host_prep_dag_for_runtime(
+            "media",
+            false,
+            Some("work"),
+            &RuntimeKind::QemuMedia,
+            "qemu-media",
+        );
         let ids: Vec<&str> = steps.iter().map(|s| s.id.as_str()).collect();
 
         assert!(!ids.contains(&"media:ssh-host-key-preflight"));
@@ -769,7 +783,7 @@ mod tests {
 
     #[test]
     fn step_serde_round_trip_through_wire() {
-        let steps = build_host_prep_dag_for("work", false, Some("work"));
+        let steps = build_host_prep_dag_for("work", false, Some("work"), true, "ch");
         let json = serde_json::to_string(&steps).expect("serialize");
         let back: Vec<HostPrepStep> = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(steps, back);

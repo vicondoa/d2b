@@ -22,10 +22,7 @@ use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core::host::{
     QemuMediaFormat, QemuMediaSourceIntent, QemuMediaSourceKind, QemuMediaUsbSelector,
 };
-use d2b_host::media::{
-    MediaAccessMode, QemuMediaHotplugAction, QemuMediaHotplugScaffold, SafeUsbCandidate,
-    UsbPhysicalIdentity,
-};
+use d2b_host::media::{MediaAccessMode, SafeUsbCandidate, UsbPhysicalIdentity};
 use nix::libc;
 use nix::unistd::{Group, Uid};
 use serde::{Deserialize, Serialize};
@@ -595,13 +592,64 @@ fn resolve_boot_source<'a>(
         .ok_or(MediaOpError::MissingBundlePolicy)
 }
 
+/// The hotplug action one scaffold plans. Committed broker-side view of
+/// the provider-declared hotplug vocabulary
+/// (`d2b-provider-guest-qemu-media::hotplug`); the broker is pinned
+/// provider-free, so the privileged media kernel re-derives the same
+/// scaffold the provider declares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QemuMediaHotplugAction {
+    Attach,
+    Detach,
+}
+
+impl QemuMediaHotplugAction {
+    fn qmp_commands(self) -> &'static [&'static str] {
+        match self {
+            Self::Attach => &["blockdev-add", "device_add"],
+            Self::Detach => &["device_del", "blockdev-del"],
+        }
+    }
+}
+
+/// One planned hotplug transaction: the opaque ids and QMP command names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QemuMediaHotplugScaffold {
+    media_ref: String,
+    slot: String,
+    blockdev_id: String,
+    device_id: String,
+    qmp_commands: Vec<String>,
+}
+
 fn qmp_scaffold(
     media_ref: &str,
     slot: &str,
     action: QemuMediaHotplugAction,
 ) -> Result<QemuMediaHotplugScaffold, MediaOpError> {
-    d2b_host::media::qemu_media_hotplug_scaffold(media_ref, slot, action)
-        .map_err(|err| MediaOpError::QmpScaffold(format!("{err:?}")))
+    d2b_host::media::validate_media_ref(media_ref)
+        .map_err(|_| MediaOpError::QmpScaffold("InvalidMediaRef".to_owned()))?;
+    if slot.is_empty() {
+        return Err(MediaOpError::QmpScaffold("EmptySlot".to_owned()));
+    }
+    if slot.len() > 63
+        || !slot
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        return Err(MediaOpError::QmpScaffold("InvalidSlot".to_owned()));
+    }
+    Ok(QemuMediaHotplugScaffold {
+        media_ref: media_ref.to_owned(),
+        slot: slot.to_owned(),
+        blockdev_id: format!("d2b-media-{media_ref}"),
+        device_id: format!("d2b-usb-{media_ref}"),
+        qmp_commands: action
+            .qmp_commands()
+            .iter()
+            .map(|command| (*command).to_owned())
+            .collect(),
+    })
 }
 
 fn qmp_socket_path(vm: &str) -> PathBuf {
