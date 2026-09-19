@@ -4074,18 +4074,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 activation/host-maintenance step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
-        token: "activation_nixos",
-        family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
-        token: "nixos",
-        family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
         token: "nixos",
         family: "activation-nixos",
@@ -4212,12 +4200,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 security-key step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
-        token: "security_key",
-        family: "device-security-key",
-        retires_with: "U12 security-key step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "swtpm",
         family: "device-tpm",
@@ -4309,18 +4291,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/resource_schema.rs",
-        token: "wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
-        token: "display_wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
         token: "wayland",
         family: "display-wayland",
         retires_with: "U10-U12 family rollout (display-wayland)",
@@ -4441,12 +4411,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/resource_schema.rs",
-        token: "shell_terminal",
-        family: "shell-terminal",
-        retires_with: "U10-U12 family rollout (shell-terminal)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
         token: "shell_terminal",
         family: "shell-terminal",
         retires_with: "U10-U12 family rollout (shell-terminal)",

@@ -1,0 +1,24 @@
+{
+  "crate": "d2b-provider-device-usbip",
+  "types": [
+    {
+      "resourceType": "usb.d2bus.org.UsbService",
+      "allowedSources": ["builtin", "startup", "runtime"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": true,
+      "reads": ["Device", "Network"]
+    },
+    {
+      "resourceType": "usb.d2bus.org.UsbBinding",
+      "allowedSources": ["builtin", "startup", "runtime"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": false,
+      "reads": ["usb.d2bus.org.UsbService", "Guest"]
+    }
+  ],
+  "provides": ["Provider/device-usbip", "Process/device-usbip-service-controller", "Process/device-usbip-binding-controller"],
+  "roles": [],
+  "principals": []
+}

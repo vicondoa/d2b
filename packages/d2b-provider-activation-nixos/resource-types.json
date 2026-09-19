@@ -1,0 +1,53 @@
+{
+  "crate": "d2b-provider-activation-nixos",
+  "types": [
+    {
+      "resourceType": "activation-nixos.d2bus.org.NixosGeneration",
+      "allowedSources": ["builtin", "startup"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host", "guest"],
+      "exportable": false,
+      "reads": ["activation-nixos.d2bus.org.NixosGeneration"]
+    }
+  ],
+  "provides": ["Provider/system-minijail"],
+  "roles": [
+    {
+      "name": "Lifecycle",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    },
+    {
+      "name": "Admin",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    },
+    {
+      "name": "User",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    },
+    {
+      "name": "Provider",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    }
+  ],
+  "principals": []
+}

@@ -1,0 +1,43 @@
+{
+  "crate": "d2b-provider-device-security-key",
+  "types": [
+    {
+      "resourceType": "security-key.d2bus.org.SecurityKeyService",
+      "allowedSources": ["builtin", "startup", "runtime"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": true,
+      "reads": ["Device"]
+    },
+    {
+      "resourceType": "security-key.d2bus.org.SecurityKeyBinding",
+      "allowedSources": ["builtin", "startup", "runtime"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": false,
+      "reads": ["security-key.d2bus.org.SecurityKeyService", "Guest"]
+    }
+  ],
+  "provides": ["Provider/device-security-key", "Process/device-security-key-service-controller", "Process/device-security-key-binding-controller"],
+  "roles": [
+    {
+      "name": "HostRelay",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": ["sk-relay"],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    },
+    {
+      "name": "GuestFrontend",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    }
+  ],
+  "principals": []
+}

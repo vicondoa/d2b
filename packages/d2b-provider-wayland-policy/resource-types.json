@@ -1,0 +1,16 @@
+{
+  "crate": "d2b-provider-wayland-policy",
+  "types": [
+    {
+      "resourceType": "display-wayland.d2bus.org.WaylandPolicy",
+      "allowedSources": ["builtin", "startup", "runtime"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host", "guest"],
+      "exportable": false,
+      "reads": []
+    }
+  ],
+  "provides": ["Provider/display-wayland"],
+  "roles": [],
+  "principals": []
+}

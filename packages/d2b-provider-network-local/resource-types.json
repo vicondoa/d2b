@@ -1,0 +1,53 @@
+{
+  "crate": "d2b-provider-network-local",
+  "types": [
+    {
+      "resourceType": "Network",
+      "allowedSources": ["builtin", "startup"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": false,
+      "reads": ["Host", "Guest", "Volume", "Process", "User"]
+    }
+  ],
+  "provides": ["Provider/network-local", "Process/network-local-controller"],
+  "roles": [
+    {
+      "name": "NetVmLan",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    },
+    {
+      "name": "WorkloadLanIsolated",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    },
+    {
+      "name": "WorkloadLanEastWest",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    },
+    {
+      "name": "UplinkPointToPoint",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    }
+  ],
+  "principals": []
+}

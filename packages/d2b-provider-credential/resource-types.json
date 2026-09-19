@@ -1,0 +1,16 @@
+{
+  "crate": "d2b-provider-credential",
+  "types": [
+    {
+      "resourceType": "Credential",
+      "allowedSources": ["builtin", "startup"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete", "use-credential", "admin-credential"],
+      "execution": ["host", "guest"],
+      "exportable": false,
+      "reads": ["Process", "Host", "Guest", "Provider"]
+    }
+  ],
+  "provides": [],
+  "roles": [],
+  "principals": []
+}

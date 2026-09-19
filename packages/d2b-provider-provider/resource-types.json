@@ -1,0 +1,16 @@
+{
+  "crate": "d2b-provider-provider",
+  "types": [
+    {
+      "resourceType": "Provider",
+      "allowedSources": ["builtin"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": false,
+      "reads": ["Host", "Process", "Volume", "Zone"]
+    }
+  ],
+  "provides": ["Provider/system-core", "Provider/system-minijail", "Host/host-system"],
+  "roles": [],
+  "principals": []
+}
