@@ -4662,12 +4662,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 volume/store step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/router.rs",
-        token: "nixos",
-        family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-host/src/bin/d2b-activation-helper.rs",
         token: "activation_nixos",
         family: "activation-nixos",
@@ -4728,12 +4722,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (clipboard-wayland)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/router.rs",
-        token: "clipboard_wayland",
-        family: "clipboard-wayland",
-        retires_with: "U10-U12 family rollout (clipboard-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-resource-compiler/src/lib.rs",
         token: "credential_managed_identity",
         family: "credential-managed-identity",
@@ -4788,18 +4776,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 usbip step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/router.rs",
-        token: "display_wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/router.rs",
-        token: "wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-host/src/dnsmasq.rs",
         token: "dnsmasq",
         family: "network-local",
@@ -4848,12 +4824,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (notification-desktop)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/router.rs",
-        token: "notification_desktop",
-        family: "notification-desktop",
-        retires_with: "U10-U12 family rollout (notification-desktop)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-host/src/host_prep_dag.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
@@ -4876,12 +4846,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "runtime_qemu_media",
         family: "runtime-qemu-media",
         retires_with: "U12 qemu-media step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-bus/src/router.rs",
-        token: "system_core",
-        family: "system-core",
-        retires_with: "U10-U12 family rollout (system-core)",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-bus/src/session_seam_tests.rs",

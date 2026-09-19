@@ -1042,7 +1042,7 @@ pub async fn register_system_core_session(
         },
     )?;
     registrar
-        .install_system_core_subject(&verified_peer)
+        .install_bootstrap_provider_subject(&verified_peer)
         .map_err(|error| {
             tracing::warn!(
                 reason = "system-core session setup failed: system-core subject installation refused",
@@ -3542,7 +3542,7 @@ mod tests {
         let verified_peer =
             VerifiedUnixPeer::verify_inherited_seqpacket(&initiator_socket).unwrap();
         registrar
-            .install_system_core_subject(&verified_peer)
+            .install_bootstrap_provider_subject(&verified_peer)
             .unwrap();
         registrar
             .component_session_acceptor(system_core_endpoint_policy(), verified_peer)

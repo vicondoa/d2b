@@ -1,0 +1,5 @@
+{
+  "provider": "display-wayland",
+  "providerRef": "Provider/display-wayland",
+  "services": ["d2b.display.v3"]
+}
