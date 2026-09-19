@@ -2061,34 +2061,16 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "R4 zone-plane surface - permanent",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "entra",
-        family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "entra",
         family: "credential-entra",
         retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "managed_identity",
-        family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "managed_identity",
         family: "credential-managed-identity",
         retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "secret_service",
-        family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
@@ -3954,22 +3936,10 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
 
 
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "credential_entra",
-        family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "credential_managed_identity",
         family: "credential-managed-identity",
         retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "credential_managed_identity",
-        family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
@@ -3979,12 +3949,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
 
 
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "credential_secret_service",
-        family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
-    },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "gpu",
@@ -4632,30 +4596,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "notification",
         family: "notification-desktop",
         retires_with: "U10-U12 family rollout (notification-desktop)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-host/src/host_prep_dag.rs",
-        token: "qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "permanent:the host is pinned provider-free;the privileged media open/probe stays in the host as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-host/src/host_prep_dag.rs",
-        token: "runtime_qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "permanent:the host is pinned provider-free;the privileged media open/probe stays in the host as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-host/src/media.rs",
-        token: "qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "permanent:the host is pinned provider-free;the privileged media open/probe stays in the host as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-host/src/media.rs",
-        token: "runtime_qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "permanent:the host is pinned provider-free;the privileged media open/probe stays in the host as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-bus/src/session_seam_tests.rs",

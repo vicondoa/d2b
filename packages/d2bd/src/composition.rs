@@ -19006,8 +19006,21 @@ fn dispatch_broker_vm_start_inner(
     // `SshHostKeyPreflight` still cover the two stubs that intentionally
     // remain typed-Unimplemented at the broker layer pending sibling
     // handlers.
-    let host_prep_steps =
-        d2b_host::host_prep_dag::build_host_prep_dag(request.vm.as_str(), &resolver);
+    // The daemon resolves the runtime kind from the Guest provider ref
+    // it already holds and passes neutral parameters to the host DAG
+    // builder: whether the NixOS-only preflight steps apply, and the
+    // runner intent role for the tap step.
+    let is_qemu_media = vm_is_qemu_media(state, &resolver, &request.vm)?;
+    let host_prep_steps = d2b_host::host_prep_dag::build_host_prep_dag(
+        request.vm.as_str(),
+        &resolver,
+        !is_qemu_media,
+        if is_qemu_media {
+            RunnerRole::QemuMedia.as_str()
+        } else {
+            "ch"
+        },
+    );
     log_host_prep_dag(&request.vm, &host_prep_steps);
     if std::env::var("D2B_HOST_PREP_DAG_EXECUTE")
         .map(|v| v == "1")

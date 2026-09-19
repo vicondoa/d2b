@@ -1,7 +1,10 @@
-//! Pure helpers for qemu-media physical USB handling.
+//! Pure helpers for physical USB media handling.
 //!
 //! This module has no syscall side effects. The privileged broker owns live
 //! sysfs/procfs reads, registry writes, udev rule reloads, and fd opening.
+//! The hotplug scaffold vocabulary lives in the media provider crate
+//! (`d2b-provider-guest-qemu-media`); this module keeps only the generic
+//! USB helpers.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -256,7 +259,7 @@ pub fn qemu_read_only_required(access: MediaAccessMode) -> bool {
 
 pub fn redacted_enrollment_summary(vm: &str, media_ref: &str, read_only: bool) -> String {
     format!(
-        "qemu-media registry: recorded media ref '{}' for vm '{}' (access={})",
+        "media registry: recorded media ref '{}' for vm '{}' (access={})",
         media_ref,
         vm,
         if read_only { "read-only" } else { "read-write" }
@@ -391,102 +394,6 @@ fn by_id_names_for_block(by_id_root: &Path, block_device: &str) -> Vec<String> {
     names.sort();
     names.dedup();
     names
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QemuMediaHotplugAction {
-    Attach,
-    Detach,
-}
-
-impl QemuMediaHotplugAction {
-    pub fn qmp_commands(self) -> &'static [&'static str] {
-        match self {
-            Self::Attach => &["blockdev-add", "device_add"],
-            Self::Detach => &["device_del", "blockdev-del"],
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct QemuMediaHotplugScaffold {
-    pub media_ref: String,
-    pub slot: String,
-    pub blockdev_id: String,
-    pub device_id: String,
-    pub qmp_commands: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QemuMediaHotplugScaffoldError {
-    InvalidMediaRef,
-    EmptySlot,
-    InvalidSlot,
-}
-
-pub fn qemu_media_hotplug_scaffold(
-    media_ref: &str,
-    slot: &str,
-    action: QemuMediaHotplugAction,
-) -> Result<QemuMediaHotplugScaffold, QemuMediaHotplugScaffoldError> {
-    validate_media_ref(media_ref).map_err(|_| QemuMediaHotplugScaffoldError::InvalidMediaRef)?;
-    if slot.is_empty() {
-        return Err(QemuMediaHotplugScaffoldError::EmptySlot);
-    }
-    if slot.len() > 63
-        || !slot
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-    {
-        return Err(QemuMediaHotplugScaffoldError::InvalidSlot);
-    }
-    Ok(QemuMediaHotplugScaffold {
-        media_ref: media_ref.to_owned(),
-        slot: slot.to_owned(),
-        blockdev_id: format!("d2b-media-{media_ref}"),
-        device_id: format!("d2b-usb-{media_ref}"),
-        qmp_commands: action
-            .qmp_commands()
-            .iter()
-            .map(|command| (*command).to_owned())
-            .collect(),
-    })
-}
-
-#[cfg(test)]
-mod hotplug_tests {
-    use super::*;
-
-    #[test]
-    fn qmp_scaffold_uses_only_opaque_ref_derived_ids() {
-        let plan =
-            qemu_media_hotplug_scaffold("installer-usb", "cdrom", QemuMediaHotplugAction::Attach)
-                .expect("scaffold");
-
-        assert_eq!(plan.blockdev_id, "d2b-media-installer-usb");
-        assert_eq!(plan.device_id, "d2b-usb-installer-usb");
-        assert_eq!(plan.qmp_commands, ["blockdev-add", "device_add"]);
-    }
-
-    #[test]
-    fn qmp_scaffold_rejects_path_like_refs_and_slots() {
-        assert!(matches!(
-            qemu_media_hotplug_scaffold(
-                "/dev/disk/by-id/secret",
-                "cdrom",
-                QemuMediaHotplugAction::Attach
-            ),
-            Err(QemuMediaHotplugScaffoldError::InvalidMediaRef)
-        ));
-        assert!(matches!(
-            qemu_media_hotplug_scaffold(
-                "installer-usb",
-                "../cdrom",
-                QemuMediaHotplugAction::Attach
-            ),
-            Err(QemuMediaHotplugScaffoldError::InvalidSlot)
-        ));
-    }
 }
 
 #[cfg(test)]
