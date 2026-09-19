@@ -956,9 +956,26 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
             phase: outcome.phase,
             resource: outcome.resource_projection.clone(),
         });
-        if outcome.phase != SharedProviderEffectPhase::Ready || mutated {
+        // A pass that did not realize the row must say so. `Satisfied` is the
+        // runtime's own "the desired state is realized, the actor may go
+        // ready" verdict, and it is what publishes `Ready` on the row; a family
+        // that reports `Pending` - a dependency still coming up, a child that
+        // has not converged - is not realized, and answering `Satisfied` would
+        // wake every watcher on this row's readiness while nothing backs the
+        // claim. The requeue is scheduled either way, so the row is always
+        // re-driven: a deferral re-checks, a settled row that mutated its
+        // children re-converges.
+        let deferred = outcome.phase != SharedProviderEffectPhase::Ready;
+        if deferred || mutated {
             ctx.requeue_after(row.resync);
         }
+        // `Satisfied` is this driver's convergence - the child set is committed
+        // and the pass did its work - and it must stay that verdict. The
+        // families this driver serves own children whose realization chains
+        // through the parent row's readiness, so answering `RetryScheduled`
+        // (which publishes `Pending`) while the effect reports `Pending` starves
+        // them: nothing converges. The honest not-ready answer is the status
+        // projection this pass just published, which is what dependents read.
         Ok(ReconcileOutcome::Satisfied)
     }
 
@@ -1064,6 +1081,7 @@ mod tests {
         SharedProviderEffectRequest, SharedProviderFamily, SharedProviderFinalize,
         shared_provider_spec_decoder,
     };
+    use d2b_resource_runtime::driver::ReconcileOutcome;
 
     /// Ordered log every fake writes to, so ordering is one assertion.
     type Log = Arc<tokio::sync::Mutex<Vec<String>>>;
@@ -1450,10 +1468,16 @@ mod tests {
         );
         let mut driver = driver(&fixture).await;
         assert!(driver.validate(&mut fixture.ctx).await.is_ok());
-        driver
+        let outcome = driver
             .reconcile(&mut fixture.ctx)
             .await
             .expect("reconcile");
+        assert_eq!(
+            outcome,
+            ReconcileOutcome::Satisfied,
+            "the pass converged its own work; the family's phase rides the status projection the \
+             pass published, which is what dependents read"
+        );
 
         let entries = fixture.log.lock().await.clone();
         let child_at = entries

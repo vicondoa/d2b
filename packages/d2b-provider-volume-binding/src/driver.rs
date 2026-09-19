@@ -932,6 +932,16 @@ impl ResourceDriver for BindingDriver {
             // depending on a watch delivery.
             ctx.requeue_after(BINDING_RESYNC);
         }
+        // `Satisfied` here is the *driver's* convergence - the derived child
+        // set is committed and this pass did its work - not the serving
+        // readiness, which is the fenced projection set above (`ready` is
+        // false with `BindingNotReady` until the worker's socket listens).
+        // The two must not be conflated: the binding's worker Process is a
+        // child of this row, and deferring this row to `RetryScheduled` while
+        // its socket is absent publishes `Pending` for the parent the worker's
+        // own launch chains through - a cycle in which neither the socket nor
+        // the parent ever converges. The projection is what tells a Guest the
+        // share is not being served yet.
         Ok(ReconcileOutcome::Satisfied)
     }
 
@@ -1433,7 +1443,12 @@ mod tests {
 
         d.validate(&mut f.ctx).await.expect("validate");
         let outcome = d.reconcile(&mut f.ctx).await.expect("reconcile");
-        assert_eq!(outcome, ReconcileOutcome::Satisfied);
+        assert_eq!(
+            outcome,
+            ReconcileOutcome::Satisfied,
+            "the pass converged its own work; the serving half rides the fenced projection, which \
+             reports `ready: false` with `BindingNotReady` until the worker's socket listens"
+        );
 
         let order = manager.order();
         // F1: each child row is ensured (committed) BEFORE its spawn

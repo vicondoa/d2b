@@ -30,17 +30,23 @@
 //! `observedGeneration` writes (status is runtime-only now, R11), and the
 //! `assess_update` / `plan_upgrade` runner path (no driver equivalent; the
 //! family never planned an upgrade). The old runner's 5s resync relisted and
-//! did nothing whenever the status was current, so no periodic re-probe is
-//! reproduced.
+//! did nothing whenever the status was **current**, so it is not reproduced as
+//! a blanket poll - but "current" is not "ready": an observation that is
+//! `Degraded` (the user manager not up yet, a mandatory gate not passed) is the
+//! state that resolves on its own, and pinning it for the whole generation
+//! would leave the row claiming a realization the host never reached. A
+//! non-Ready observation therefore re-probes on [`HOST_REOBSERVE`] and answers
+//! [`ReconcileOutcome::RetryScheduled`], never `Satisfied`.
 //!
 //! KTD13: the driver has no spawn surface at all. It observes the local host
 //! through the effect port the daemon implements and owns no Process.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
-    ResourceRef, ResourceSpec,
+    ResourcePhase, ResourceRef, ResourceSpec,
     host::{HOST_PROVIDER_REF, HOST_RESOURCE_TYPE, HostSpec},
 };
 use d2b_provider_system_core::HostObservationReport;
@@ -58,6 +64,14 @@ use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor,
 // ---------------------------------------------------------------------------
 // Driver error and status
 // ---------------------------------------------------------------------------
+
+/// How soon a Host observation that is not `Ready` is re-probed.
+///
+/// Echoes the old runner's 5s resync, which is what made a degraded Host
+/// recover: an observation is a local probe, and the states it reports as not
+/// ready resolve on their own. The re-probe is one probe per interval, not a
+/// poll on the ready path, which the generation short-circuit still pins.
+pub const HOST_REOBSERVE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HostDriverErrorKind {
@@ -268,6 +282,17 @@ impl HostDriver {
         ctx.status::<HostDriverStatus>()
             .map(HostDriverStatus::observed_generation)
     }
+
+    /// Whether the stored observation is the one a converged Host publishes.
+    ///
+    /// The generation short-circuit answers "one observation per desired
+    /// generation", and a degraded observation is stored at the same
+    /// generation - so without this the short-circuit would pin a Host that is
+    /// not realized for as long as its spec stands still.
+    fn observed_ready(&self, ctx: &ResourceContext) -> bool {
+        ctx.status::<HostDriverStatus>()
+            .is_some_and(|status| status.report().status.phase == ResourcePhase::Ready)
+    }
 }
 
 #[async_trait]
@@ -317,7 +342,10 @@ impl ResourceDriver for HostDriver {
         ctx: &mut ResourceContext,
     ) -> Result<ReconcileOutcome, Self::Error> {
         let generation = ctx.generation();
-        if self.observed_generation(ctx) == Some(generation) {
+        // One observation per desired generation - while that observation is
+        // the Ready one. A generation pinned on a degraded observation must be
+        // re-probed, or the Host claims a realization the probe never reached.
+        if self.observed_generation(ctx) == Some(generation) && self.observed_ready(ctx) {
             return Ok(ReconcileOutcome::Satisfied);
         }
         let (provider_ref, spec) = self.host_spec(ctx, DriverOp::Reconcile)?;
@@ -338,11 +366,19 @@ impl ResourceDriver for HostDriver {
                             .with_note(error),
                     )
             })?;
+        let ready = report.status.phase == ResourcePhase::Ready;
         ctx.set_status(HostDriverStatus {
             observed_generation: generation,
             report,
         });
-        Ok(ReconcileOutcome::Satisfied)
+        if ready {
+            return Ok(ReconcileOutcome::Satisfied);
+        }
+        // A degraded observation is not a converged Host. It is also the state
+        // that resolves on its own, so the row re-probes rather than pinning
+        // the degraded projection for the rest of its generation.
+        ctx.requeue_after(HOST_REOBSERVE);
+        Ok(ReconcileOutcome::RetryScheduled)
     }
 
     /// Drain step (R10, F3): every owned child finalizes before this
@@ -782,12 +818,18 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_publishes_a_degraded_host_observation() {
-        let (mut ctx, effects, _manager, _requeue, mut driver) = host_fixture().await;
+        let (mut ctx, effects, _manager, requeue, mut driver) = host_fixture().await;
         effects.set_phase(ResourcePhase::Degraded);
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("reconcile"),
-            ReconcileOutcome::Satisfied,
-            "a degraded observation still converges, exactly as the old handler did"
+            ReconcileOutcome::RetryScheduled,
+            "a degraded observation is not a converged Host: `Satisfied` would publish Ready \
+             and wake every watcher on this Host's readiness"
+        );
+        assert_eq!(
+            requeue.call_count(),
+            1,
+            "the degraded observation re-probes instead of pinning itself for the generation"
         );
         let report = ctx
             .status::<HostDriverStatus>()

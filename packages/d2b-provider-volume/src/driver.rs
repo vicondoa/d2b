@@ -26,6 +26,7 @@
 //! probe recover reads. The production implementation lives in the daemon
 //! behind that port, so the family carries no effect implementation.
 use std::sync::Arc;
+use std::time::Duration;
 
 use d2b_contracts_resource::v3::{
     ResourceName, ResourceRef, ResourceSpec, ResourceTypeName as ContractResourceTypeName,
@@ -61,6 +62,16 @@ const BINDING_PROVIDER_REF: &str = d2b_provider_volume_virtiofs::PROVIDER_REF;
 /// Deterministic `VolumeBinding` child type (old
 /// `VOLUME_BINDING_RESOURCE_TYPE`).
 const VOLUME_BINDING_TYPE: &str = "VolumeBinding";
+
+/// How soon a Volume re-checks the state it serves.
+///
+/// A Volume's realization is its layout root plus the binding children
+/// derived from it, and both can change under a pass that is not watching the
+/// host: a root that goes missing is the volume-local provider's own evidence
+/// of loss, and a binding child can be retired by another owner. The re-check
+/// is one pass over the child set, so a settled Volume renews it on this
+/// cadence rather than waiting for an unrelated trigger.
+pub const VOLUME_RESYNC: Duration = Duration::from_secs(30);
 
 /// The children this driver mints: one deterministic `VolumeBinding` per
 /// admitted virtiofs attachment, served by the Provider the derived rows
@@ -557,7 +568,13 @@ impl ResourceDriver for VolumeDriver {
         let uid = resource_uid(ctx.uid())
             .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, DriverOp::Recover))?;
         if self.effects.has_layout(&uid) {
-            self.layout_ready.store(true, std::sync::atomic::Ordering::SeqCst);
+            // The marker proves a layout was materialized once, not that the
+            // entry it names is still the volume's root: a marker that outlives
+            // its root is the provider's own evidence of loss. So recovery
+            // adopts the row without pinning `layout_ready` - the pass that
+            // follows re-runs the layout effect, which re-derives and
+            // re-materializes the root, and is idempotent on a root that is
+            // still there.
             ctx.set_status(VolumeDriverStatus::ServingChildren { desired: 0, converged: false });
             Ok(RecoveryOutcome::Adopted)
         } else {
@@ -598,6 +615,13 @@ impl ResourceDriver for VolumeDriver {
             desired: desired.len(),
             converged,
         });
+        // The child set is what this plane serves, and a set that did not
+        // converge re-checks on the preserved cadence so a binding that drifts
+        // is re-derived instead of sitting unreported. The verdict stays the
+        // driver's convergence: this row's binding children chain their own
+        // realization through it, and deferring the parent to `Pending` would
+        // starve them.
+        ctx.requeue_after(VOLUME_RESYNC);
         Ok(ReconcileOutcome::Satisfied)
     }
 
@@ -872,7 +896,8 @@ mod tests {
         }
     }
 
-    /// Dead requeue: these Volume flows never schedule a requeue.
+    /// Records nothing: the Volume flows schedule their re-checks on
+    /// [`VOLUME_RESYNC`], and the tests assert the outcome that carries them.
     struct NullRequeue;
 
     impl RequeueScheduler for NullRequeue {
@@ -1061,16 +1086,20 @@ mod tests {
             .expect("spawn notification after ensure")
     }
 
-    // -- adoption: an existing layout is never re-created ----------------------
+    // -- adoption: an existing layout is adopted, then re-validated ------------
 
     /// §36 recovery (`existing volume/mount is adopted` + `missing desired
     /// resource is recreated`): a fresh driver - the post-restart in-memory
-    /// state - adopts a layout that already exists on the host without
-    /// re-running the layout effect, and its reconcile re-attaches the
-    /// deterministic binding child instead of re-creating anything.
+    /// state - adopts the layout the host already holds, and the pass that
+    /// follows re-validates it through the same idempotent `ensure-layout`
+    /// effect instead of trusting the marker alone: a marker that outlives its
+    /// root is the provider's own evidence of loss, and a pass that never
+    /// re-reads the layout could not tell the two apart. Adoption still never
+    /// mints a duplicate: the effect ensures the one farm, and the
+    /// deterministic binding child is re-attached rather than re-created.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
-    async fn recover_adopts_the_existing_layout_and_never_recreates_it() {
+    async fn recover_adopts_the_existing_layout_and_revalidates_it() {
         let fake = FakeLayoutEffects::new();
         let manager = RecordingManager::new();
         let mut first = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
@@ -1088,17 +1117,18 @@ mod tests {
             RecoveryOutcome::Adopted,
             "the existing layout is adopted, not recreated"
         );
-        assert_eq!(
-            adopted.reconcile(&mut restarted.ctx).await.expect("reconcile"),
-            ReconcileOutcome::Satisfied
-        );
+        let outcome = reconcile_to_children(&mut adopted, &mut restarted).await;
+        assert_eq!(outcome, ReconcileOutcome::Satisfied);
 
         let layout_effects = fake
             .call_order()
             .iter()
             .filter(|call| **call == "ensure-layout")
             .count();
-        assert_eq!(layout_effects, 1, "the adopted layout is never re-created");
+        assert_eq!(
+            layout_effects, 2,
+            "the adoption pass re-validates the layout through the idempotent ensure"
+        );
         let binding_ensures = manager
             .order()
             .iter()

@@ -28,16 +28,21 @@
 //! `assess_update` / `plan_upgrade` runner path (no driver equivalent; the
 //! family never planned an upgrade). The old runner's 5s resync relisted and
 //! did nothing whenever the status was current, so no periodic re-discovery
-//! is reproduced.
+//! is reproduced for a realized identity; a pass whose own discovery is not
+//! yet realized re-checks itself ([`USER_REDISCOVER`]).
 //!
 //! KTD13: the driver has no spawn surface at all. It discovers the local
 //! identity only through the effect port the daemon implements and owns no
 //! Process.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ResourceRef, ResourceSpec, user::{USER_RESOURCE_TYPE, UserSpec}};
+use d2b_contracts_resource::v3::{
+    ResourcePhase, ResourceRef, ResourceSpec,
+    user::{USER_RESOURCE_TYPE, UserSpec},
+};
 use d2b_provider_system_core::UserStatusReport;
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
 use d2b_resource_runtime::driver::{
@@ -49,6 +54,16 @@ use d2b_resource_runtime::error::{
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
+
+/// How soon a User discovery that is not `Ready` is re-discovered.
+///
+/// Echoes the old runner's 5s resync, which is what made an absent or drifted
+/// identity catch up: discovery reads the local machine, and the identity can
+/// appear or drift with no spec write, so the phases it reports as not ready
+/// resolve without a generation bump. The re-check is one discovery per
+/// interval, never a poll on the ready path, which the generation
+/// short-circuit still pins.
+pub const USER_REDISCOVER: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------------------
 // Driver error and status
@@ -248,6 +263,18 @@ impl UserDriver {
         ctx.status::<UserDriverStatus>()
             .map(UserDriverStatus::observed_generation)
     }
+
+    /// Whether the stored discovery is the one a converged User publishes.
+    ///
+    /// The generation short-circuit answers "one discovery per desired
+    /// generation", and an unrealized discovery is stored at the same
+    /// generation - so without this the short-circuit would pin a `Pending`
+    /// (no such identity), `Degraded` (a drifted one), or `Unknown` (an
+    /// unverified one) row for as long as its spec stands still.
+    fn observed_ready(&self, ctx: &ResourceContext) -> bool {
+        ctx.status::<UserDriverStatus>()
+            .is_some_and(|status| status.report().phase == ResourcePhase::Ready)
+    }
 }
 
 #[async_trait]
@@ -288,14 +315,19 @@ impl ResourceDriver for UserDriver {
     }
 
     /// Discover the declared identity through the effects port and publish
-    /// the typed status (R11). The preserved `observedGeneration`
-    /// short-circuit keeps one discovery per desired generation.
+    /// the typed status (R11). A discovery that is not realized schedules its
+    /// own bounded re-check and answers `RetryScheduled`, so the runtime
+    /// publishes the honest `Pending` phase rather than a claimed `Ready`.
     async fn reconcile(
         &mut self,
         ctx: &mut ResourceContext,
     ) -> Result<ReconcileOutcome, Self::Error> {
         let generation = ctx.generation();
-        if self.observed_generation(ctx) == Some(generation) {
+        // One discovery per desired generation - while that discovery is the
+        // realized one. A generation pinned on an unrealized discovery must be
+        // re-discovered, or the User claims an identity the discovery never
+        // found.
+        if self.observed_generation(ctx) == Some(generation) && self.observed_ready(ctx) {
             return Ok(ReconcileOutcome::Satisfied);
         }
         let spec = self.user_spec(ctx, DriverOp::Reconcile)?;
@@ -312,11 +344,20 @@ impl ResourceDriver for UserDriver {
                         .with_note(error),
                 )
         })?;
+        let ready = report.phase == ResourcePhase::Ready;
         ctx.set_status(UserDriverStatus {
             observed_generation: generation,
             report,
         });
-        Ok(ReconcileOutcome::Satisfied)
+        if ready {
+            return Ok(ReconcileOutcome::Satisfied);
+        }
+        // An unrealized discovery is not a converged User. The identity is
+        // local state that appears or drifts with no spec write, so the row
+        // re-discovers rather than pinning the absence for the rest of its
+        // generation.
+        ctx.requeue_after(USER_REDISCOVER);
+        Ok(ReconcileOutcome::RetryScheduled)
     }
 
     /// Drain step (R10, F3): every owned child finalizes before this
@@ -415,7 +456,8 @@ mod tests {
     use crate::test_support::RecordingEffects;
 
     use super::{
-        UserDriverEffects, UserDriverFactory, UserDriverStatus, user_descriptor, user_spec_decoder,
+        USER_REDISCOVER, UserDriverEffects, UserDriverFactory, UserDriverStatus, user_descriptor,
+        user_spec_decoder,
     };
 
     // -- fakes ---------------------------------------------------------------
@@ -530,6 +572,11 @@ mod tests {
 
         fn call_count(&self) -> usize {
             self.calls.lock().len()
+        }
+
+        /// The scheduled delays in milliseconds, in arrival order.
+        fn calls(&self) -> Vec<u64> {
+            self.calls.lock().clone()
         }
     }
 
@@ -690,7 +737,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_discovers_once_per_desired_generation() {
-        let (mut ctx, effects, manager, _requeue, mut driver) = user_fixture().await;
+        let (mut ctx, effects, manager, requeue, mut driver) = user_fixture().await;
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
@@ -700,9 +747,9 @@ mod tests {
         assert_eq!(status.observed_generation(), 1);
         assert_eq!(status.report().discovery, UserDiscoveryCondition::Discovered);
 
-        // The preserved plan short-circuit: a status observed at the current
-        // generation does not re-discover (the old runner's 5s relist was a
-        // no-op in exactly this state).
+        // The preserved plan short-circuit: a realized status observed at the
+        // current generation does not re-discover (the old runner's 5s relist
+        // was a no-op in exactly this state).
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("second reconcile"),
             ReconcileOutcome::Satisfied
@@ -712,22 +759,74 @@ mod tests {
             vec!["observe-user".to_owned()],
             "one discovery per desired generation"
         );
+        assert_eq!(
+            requeue.call_count(),
+            0,
+            "a realized discovery re-checks nothing"
+        );
         assert!(manager.call_order().is_empty());
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_publishes_the_user_discovery_projection() {
+        for phase in [
+            ResourcePhase::Pending,
+            ResourcePhase::Degraded,
+            ResourcePhase::Unknown,
+        ] {
+            let (mut ctx, effects, _manager, requeue, mut driver) = user_fixture().await;
+            effects.set_phase(phase);
+            assert_eq!(
+                driver.reconcile(&mut ctx).await.expect("reconcile"),
+                ReconcileOutcome::RetryScheduled,
+                "{phase:?} is not the realized identity: the pass must not claim it"
+            );
+            let status = ctx.status::<UserDriverStatus>().expect("status");
+            assert_eq!(status.observed_generation(), 1);
+            assert_eq!(status.report().phase, phase);
+            assert_eq!(status.report().discovery, UserDiscoveryCondition::Discovered);
+            assert_eq!(
+                requeue.calls(),
+                vec![USER_REDISCOVER.as_millis() as u64],
+                "exactly one re-check, on the discovery cadence"
+            );
+        }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn reconcile_rediscovers_a_cached_unrealized_phase() {
         let (mut ctx, effects, _manager, _requeue, mut driver) = user_fixture().await;
         effects.set_phase(ResourcePhase::Pending);
         assert_eq!(
-            driver.reconcile(&mut ctx).await.expect("reconcile"),
+            driver.reconcile(&mut ctx).await.expect("first reconcile"),
+            ReconcileOutcome::RetryScheduled
+        );
+
+        // The cached status is current-generation but not realized, so the
+        // next pass re-discovers instead of short-circuiting into a claim.
+        effects.set_phase(ResourcePhase::Ready);
+        assert_eq!(
+            driver.reconcile(&mut ctx).await.expect("second reconcile"),
             ReconcileOutcome::Satisfied
         );
-        let status = ctx.status::<UserDriverStatus>().expect("status");
-        assert_eq!(status.observed_generation(), 1);
-        assert_eq!(status.report().phase, ResourcePhase::Pending);
-        assert_eq!(status.report().discovery, UserDiscoveryCondition::Discovered);
+        assert_eq!(
+            effects.call_order(),
+            vec!["observe-user".to_owned(), "observe-user".to_owned()],
+            "a cached unrealized discovery is re-observed"
+        );
+
+        // The realized status now short-circuits the third pass.
+        assert_eq!(
+            driver.reconcile(&mut ctx).await.expect("third reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(
+            effects.call_order().len(),
+            2,
+            "one discovery per realized generation"
+        );
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -793,7 +892,7 @@ mod tests {
         assert_eq!(
             requeue.call_count(),
             0,
-            "no self-requeue: the old runner's 5s relist never re-discovered a current status"
+            "no self-requeue: the observed identity was realized"
         );
     }
 }
