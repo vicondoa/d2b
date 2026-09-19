@@ -574,8 +574,10 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
     let members = cargo_workspace_members(&repo_root)?;
     check_members(&repo_root, members.clone())?;
     check_closed_matrix(&repo_root, &members)?;
+    check_committed_scope(&repo_root, &members)?;
     check_shared_driver_placements(&repo_root)?;
     check_shared_family_knowledge(&repo_root)?;
+    check_provider_crate_family_knowledge(&repo_root)?;
     check_shared_structural_knowledge(&repo_root)?;
     check_shared_provider_dependencies(&repo_root)?;
     check_self_binding_scope(&repo_root)?;
@@ -8528,7 +8530,7 @@ fn contains_rust_file(root: &Path) -> Result<bool, String> {
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn integration_has_rust_scenario(integration: &Path) -> Result<bool, String> {
+fn integration_has_rust_scenario(integration:&Path) -> Result<bool, String> {
     let entries = fs::read_dir(integration)
         .map_err(|_| "provider-crate-layout-integration-unreadable".to_owned())?;
     for entry in entries {
@@ -8546,6 +8548,741 @@ fn integration_has_rust_scenario(integration: &Path) -> Result<bool, String> {
         }
     }
     Ok(false)
+}
+
+// ---------------------------------------------------------------------------
+// U14: provider-crate content and committed scope (zero-outside-edit)
+// ---------------------------------------------------------------------------
+
+/// One family-knowledge signal a provider crate's own sources carries:the
+/// family identity token names a different family than the crate's own.
+struct ProviderFamilySignal {
+    /// The provider crate that carries the signal (its Cargo package name).
+    crate_name: String,
+    /// Repository-relative module that holds the signal.
+    module: String,
+    /// The family identity token the signal writes.
+    token: &'static str,
+    /// The family that owns the token.
+    family: &'static str,
+    /// One-based line number inside the module.
+    line: usize,
+    /// How the signal appeared.
+    class: FamilySignalClass,
+    /// The literal or identifier that carried the signal.
+    text: String,
+}
+
+/// Whether one family-token entry names a family identity: its snake_case
+/// spelling dashes into exactly the family's identity (`device_usbip` names
+/// `device-usbip`). The FAMILY_KNOWLEDGE_TOKENS list additionally carries
+/// shorter hand-written identifiers the shared crates still write
+/// (`usbip`, `systemd`, `wayland`); those are polysemous platform words a
+/// provider crate legitimately carries everywhere, so a token-level gate
+/// over them cannot stay silent on the tree without restating it. The
+/// identity spellings are unambiguous: a provider crate carrying another
+/// family's identity is the mistake this gate refuses.
+fn is_family_identity_token(entry: &FamilyToken) -> bool {
+    entry.token.replace('_', "-") == entry.family
+}
+
+/// The family one provider crate belongs to: the closed matrix is the
+/// family authority, and a crate the matrix does not name owns the family its
+/// name suffix spells.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn provider_crate_family(crate_name: &str) -> String {
+    PROVIDER_MATRIX
+        .iter()
+        .find(|row| row.crate_name == crate_name)
+        .map_or_else(|| crate_name.strip_prefix("d2b-provider-").unwrap_or(crate_name).replace('_', "-"), |row| row.identity.to_owned())
+}
+
+/// Whether one literal's content is a resource reference: `Provider/<name>`,
+/// `Process/<name>`, `Host/<name>`, `User/<name>`, or `Guest/<name>`. The
+/// resource model addresses providers and processes by name; naming the
+/// provider one delegates a child to is the one legitimate cross-family
+/// shape ((`d2b-provider-device-usbip/src/lifecycle.rs:25` names the
+/// system-minijail provider that owns its guest-proxy child). A reference
+/// names a provider; it is not knowledge about that provider.
+fn is_resource_reference_literal(content: &str) -> bool {
+    const KINDS: &[&str] = &["Provider/", "Process/", "Host/", "User/", "Guest/"];
+    KINDS.iter().any(|kind| content.starts_with(kind))
+}
+
+/// Whether one identifier names a reference to another family rather than
+/// knowledge: a `*_ref`/`*_REF` field or constant holds a reference (a
+/// provider ref, a display ref, a controller ref. The rule cannot tell
+/// a reference identifier from a knowledge identifier by any other shape,
+/// so the suffix is the recorded reference marker.
+fn is_reference_identifier(identifier: &str) -> bool {
+    identifier.ends_with("_ref") || identifier.ends_with("_REF")
+}
+
+/// The family-knowledge signals one provider-crate module carries, ignoring
+/// test-only code, generated views, reference literals and identifiers. The
+/// token probe matches family identities only: a token whose snake case
+/// spells another family's identity is a signal wherever it appears, unless
+/// the line is a sibling-crate path (a dependency reference), the literal
+/// is a resource reference, or the identifier ends in `_ref`/`_REF`.)
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn provider_module_family_signals(
+    repo_root: &Path,
+    module: &str,
+    crate_name: &str,
+    family: &str,
+    signals: &mut Vec<ProviderFamilySignal>,
+) -> Result<(), String> {
+    let path = repo_root.join(module);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|_| "provider-crate-layout-provider-unreadable".to_owned())?;
+    let lines: Vec<&str> = text.lines().collect();
+
+    let mut index = 0;
+    while index < lines.len() {
+        if let Some(indent) = opens_test_module(&lines, index) {
+            index += 1;
+            while index < lines.len() && !closes_indented_block(lines[index], indent) {
+                index += 1;
+            }
+            index += 1;
+            continue;
+        }
+        let line = lines[index];
+        let code = code_text(line);
+        let code = code.split_once("/*").map_or(code, |(before, _)| before);
+        let literals = string_literal_spans(code);
+        let assembles = is_name_assembling_macro_line(code);
+        let identifier_runs = identifier_spans(code, &literals);
+
+        if !code.contains("d2b_provider_") {
+            for (_, _, content)in &literals {
+                if is_resource_reference_literal(content) {
+                    continue;
+                }
+                if assembles {
+                    for entry in FAMILY_KNOWLEDGE_TOKENS {
+                        if !is_family_identity_token(entry) || entry.family == family {
+                            continue;
+                        }
+                        if literal_contains_token(content, entry.token)
+                            || token_segments(entry.token)
+                                .iter()
+                                .any(|segment| literal_has_glued_segment(content, segment))
+                        {
+                            signals.push(ProviderFamilySignal {
+                                crate_name: crate_name.to_owned(),
+                                module: module.to_owned(),
+                                token: entry.token,
+                                family: entry.family,
+                                line: index + 1,
+                                class: FamilySignalClass::Assembled,
+                                text: content.clone(),
+                            });
+                        }
+                    }
+                } else {
+                    for entry in FAMILY_KNOWLEDGE_TOKENS {
+                        if !is_family_identity_token(entry) || entry.family == family {
+                            continue;
+                        }
+                        if literal_contains_token(content, entry.token) {
+                            signals.push(ProviderFamilySignal {
+                                crate_name: crate_name.to_owned(),
+                                module: module.to_owned(),
+                                token: entry.token,
+                                family: entry.family,
+                                line: index + 1,
+                                class: FamilySignalClass::Literal,
+                                text: content.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            for (start, end)in identifier_runs {
+                let identifier = &code[start..end];
+                if is_reference_identifier(identifier) {
+                    continue;
+                }
+                for entry in FAMILY_KNOWLEDGE_TOKENS {
+                    if !is_family_identity_token(entry) || entry.family == family {
+                        continue;
+                    }
+                    if identifier_contains_token(identifier, entry.token) {
+                        signals.push(ProviderFamilySignal {
+                            crate_name: crate_name.to_owned(),
+                            module: module.to_owned(),
+                            token: entry.token,
+                            family: entry.family,
+                            line: index + 1,
+                            class: FamilySignalClass::Identifier,
+                            text: identifier.to_owned(),
+                        });
+                    }
+                }
+            }
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_provider_module_signals(
+    repo_root: &Path,
+    directory:&Path,
+    crate_name: &str,
+    family: &str,
+    signals: &mut Vec<ProviderFamilySignal>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "provider-crate-layout-provider-unreadable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-provider-unreadable".to_owned())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider-crate-layout-provider-unreadable".to_owned())?;
+        if file_type.is_dir() {
+            if entry.file_name().to_string_lossy() != "generated" {
+                collect_provider_module_signals(repo_root, &path, crate_name, family, signals)?;
+            }
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        provider_module_family_signals(repo_root, &relative, crate_name, family, signals)?;
+    }
+    Ok(())
+}
+
+/// Every family-identity signal a provider crate's own sources carries,
+/// sorted deterministically. The crate's own family tokens are not signals;
+/// test-only code and generated views are skipped like the shared probes.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_provider_family_signals(repo_root: &Path) -> Result<Vec<ProviderFamilySignal>, String> {
+    let members = cargo_workspace_members(repo_root)?;
+    let mut signals = Vec::new();
+    for member in members {
+        if !member.package_name.starts_with("d2b-provider-") {
+            continue;
+        }
+        let family = provider_crate_family(&member.package_name);
+        let directory = member.crate_dir.join("src");
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_provider_module_signals(repo_root, &directory, &member.package_name, &family, &mut signals)?;
+    }
+    signals.sort_by(|left, right| {
+        left.crate_name
+            .cmp(&right.crate_name)
+            .then_with(|| left.module.cmp(&right.module))
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.token.cmp(right.token))
+            .then_with(|| left.text.cmp(&right.text))
+    });
+    Ok(signals)
+}
+
+/// Render one provider-crate family-knowledge violation as canonical JSON.
+fn render_provider_family_violation(signal: &ProviderFamilySignal) -> String {
+    let error = match signal.class {
+        FamilySignalClass::Literal => "provider-crate-family-literal",
+        FamilySignalClass::Assembled => "provider-crate-family-assembled-name",
+        FamilySignalClass::Identifier => "provider-crate-family-identifier",
+        FamilySignalClass::ServerState => "provider-crate-family-server-state",
+    };
+    serde_json::json!({
+        "error": error,
+        "crate": signal.crate_name,
+        "module": signal.module,
+        "line": signal.line,
+        "family": signal.family,
+        "token": signal.token,
+        "text": signal.text,
+    })
+    .to_string()
+}
+
+/// One committed exemption row: a provider crate module that legitimately
+/// carries another family's identity token. The list only shrinks: a signal
+/// without a row is a policy failure ((a reintroduction),and a row whose
+/// signal the tree no longer carries is stale. No row may be added unless the
+/// change that introduces a legitimate cross-family reference also records
+/// its reason here.
+
+
+#[derive(Clone)]
+struct ProviderFamilyKnowledgeExemption {
+    /// The provider crate that carries the token ((its Cargo package name).
+    crate_name: &'static str,
+    /// Repository-relative module path that carries the token.
+
+    module: &'static str,
+    /// The family identity token the module writes.
+
+    token: &'static str,
+    /// The family that owns the token.
+
+    family: &'static str,
+    /// What the reference is and why it stays.
+
+    reason: &'static str,
+}
+
+/// The committed family-knowledge exemptions, seeded from the tree the plan
+/// refactors: every current site where a provider crate legitimately carries
+/// another family's identity token. The list only shrinks: a new cross-family
+/// signal anywhere else fails the layout check until its reason is recorded
+/// here.
+const PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS: &[ProviderFamilyKnowledgeExemption] = &[
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device", module: "packages/d2b-provider-device/src/driver.rs", token: "device_gpu", family: "device-gpu", reason: "family effect-id strings route provider effects through the shared device driver" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device", module: "packages/d2b-provider-device/src/driver.rs", token: "device_security_key", family: "device-security-key", reason: "family effect-id strings route provider effects through the shared device driver" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device", module: "packages/d2b-provider-device/src/driver.rs", token: "device_tpm", family: "device-tpm", reason: "family effect-id strings route provider effects through the shared device driver" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device", module: "packages/d2b-provider-device/src/driver.rs", token: "device_usbip", family: "device-usbip", reason: "family effect-id strings route provider effects through the shared device driver" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-gpu", module: "packages/d2b-provider-device-gpu/src/process.rs", token: "device_security_key", family: "device-security-key", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-gpu", module: "packages/d2b-provider-device-gpu/src/process.rs", token: "device_tpm", family: "device-tpm", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-gpu", module: "packages/d2b-provider-device-gpu/src/process.rs", token: "device_usbip", family: "device-usbip", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-security-key", module: "packages/d2b-provider-device-security-key/src/process.rs", token: "device_gpu", family: "device-gpu", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-security-key", module: "packages/d2b-provider-device-security-key/src/process.rs", token: "device_tpm", family: "device-tpm", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-security-key", module: "packages/d2b-provider-device-security-key/src/process.rs", token: "device_usbip", family: "device-usbip", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-tpm", module: "packages/d2b-provider-device-tpm/src/resources.rs", token: "device_gpu", family: "device-gpu", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-tpm", module: "packages/d2b-provider-device-tpm/src/resources.rs", token: "device_security_key", family: "device-security-key", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-tpm", module: "packages/d2b-provider-device-tpm/src/resources.rs", token: "device_usbip", family: "device-usbip", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-usbip", module: "packages/d2b-provider-device-usbip/src/core_adapter.rs", token: "device_security_key", family: "device-security-key", reason: "runner-role id union the provider-name dispatch shares" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-display-wayland", module: "packages/d2b-provider-display-wayland/src/bin/d2b-wayland-proxy.rs", token: "clipboard_wayland", family: "clipboard-wayland", reason: "the wayland proxy binary's messages name the wayland surface it serves" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-display-wayland", module: "packages/d2b-provider-display-wayland/src/wayland_proxy/identity.rs", token: "network_local", family: "network-local", reason: "shared local-resource role suffix used by the local namespace providers" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-display-wayland", module: "packages/d2b-provider-display-wayland/src/wayland_proxy/identity.rs", token: "volume_local", family: "volume-local", reason: "shared local-resource role suffix used by the local namespace providers" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest", module: "packages/d2b-provider-guest/src/driver.rs", token: "runtime_azure_container_apps", family: "runtime-azure-container-apps", reason: "the guest-kind runtime resource names assemble from the runtime family ids" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest", module: "packages/d2b-provider-guest/src/driver.rs", token: "runtime_azure_virtual_machine", family: "runtime-azure-virtual-machine", reason: "the guest-kind runtime resource names assemble from the runtime family ids" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest", module: "packages/d2b-provider-guest/src/driver.rs", token: "runtime_cloud_hypervisor", family: "runtime-cloud-hypervisor", reason: "the guest-kind runtime resource names assemble from the runtime family ids" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest", module: "packages/d2b-provider-guest/src/driver.rs", token: "runtime_qemu_media", family: "runtime-qemu-media", reason: "the guest-kind runtime resource names assemble from the runtime family ids" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest-cloud-hypervisor", module: "packages/d2b-provider-guest-cloud-hypervisor/src/guest_local.rs", token: "activation_nixos", family: "activation-nixos", reason: "module-path reference to the activation family's declared type" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest-qemu-media", module: "packages/d2b-provider-guest-qemu-media/src/types/guest.rs", token: "runtime_azure_container_apps", family: "runtime-azure-container-apps", reason: "guest-kind runtime resource name template" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest-qemu-media", module: "packages/d2b-provider-guest-qemu-media/src/types/guest.rs", token: "runtime_azure_virtual_machine", family: "runtime-azure-virtual-machine", reason: "guest-kind runtime resource name template" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest-qemu-media", module: "packages/d2b-provider-guest-qemu-media/src/types/guest.rs", token: "runtime_cloud_hypervisor", family: "runtime-cloud-hypervisor", reason: "guest-kind runtime resource name template" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-host", module: "packages/d2b-provider-host/src/driver.rs", token: "system_core", family: "system-core", reason: "the host error-code strings keep the system-core prefix stable" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-observability-otel", module: "packages/d2b-provider-observability-otel/src/agent.rs", token: "system_core", family: "system-core", reason: "the otel agent names the system-core user workload" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "device_gpu", family: "device-gpu", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "device_security_key", family: "device-security-key", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "device_tpm", family: "device-tpm", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "device_usbip", family: "device-usbip", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "activation_nixos", family: "activation-nixos", reason: "the process provider runs the activation-nixos activation runner" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "system_minijail", family: "system-minijail", reason: "runner-role id union the process supervisor dispatch shares" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "system_systemd", family: "system-systemd", reason: "runner-role id union the process supervisor dispatch shares" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-provider", module: "packages/d2b-provider-provider/src/providers.rs", token: "system_core", family: "system-core", reason: "the provider-composition plan names its system-core handlers" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-provider", module: "packages/d2b-provider-provider/src/driver.rs", token: "system_core", family: "system-core", reason: "the provider-composition plan names its system-core handlers" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-shell-pool", module: "packages/d2b-provider-shell-pool/src/shell_pool.rs", token: "shell_terminal", family: "shell-terminal", reason: "family-qualified resource type names the shell-terminal family's type" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-shell-session", module: "packages/d2b-provider-shell-session/src/shell_session.rs", token: "shell_terminal", family: "shell-terminal", reason: "family-qualified resource type names the shell-terminal family's type" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "activation_nixos", family: "activation-nixos", reason: "the supervisor dispatches the activation-nixos activation runner role" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "system_minijail", family: "system-minijail", reason: "the supervisor dispatches runner roles" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "system_systemd", family: "system-systemd", reason: "the supervisor dispatches runner roles" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-system-core", module: "packages/d2b-provider-system-core/src/host.rs", token: "audio_pipewire", family: "audio-pipewire", reason: "the system-core host names the audio-pipewire workload kind" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/driver.rs", token: "system_core", family: "system-core", reason: "the user error-code strings keep the system-core prefix stable" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/test_support.rs", token: "system_core", family: "system-core", reason: "test-support fixture provider names the system-core provider" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-volume", module: "packages/d2b-provider-volume/src/driver.rs", token: "volume_local", family: "volume-local", reason: "the volume provider's own name const uses its sibling family's id" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/wayland_policy.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-policy provider's interface types name the display-wayland surface" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/interaction.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-policy provider's interface types name the display-wayland surface" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-session", module: "packages/d2b-provider-wayland-session/src/wayland_session.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-session provider's interface types name the display-wayland surface" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-zone", module: "packages/d2b-provider-zone/src/zone_status.rs", token: "system_core", family: "system-core", reason: "the zone status emitter names the system-core session phases" },
+];
+
+fn provision_family_exemptions() -> Vec<ProviderFamilyKnowledgeExemption> {
+    PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS.to_vec()
+}
+
+/// Fail every family-identity signal a provider crate still carries
+/// without an exemption row beside it, and fail every row whose signal the
+/// tree no longer carries. Passed the ratchet as a parameter so the tests can
+/// exercise both directions on fixtures.
+fn check_provider_crate_family_knowledge_with(
+    repo_root: &Path,
+    ratchet: &[ProviderFamilyKnowledgeExemption],
+) -> Result<(), String> {
+    let signals = collect_provider_family_signals(repo_root)?;
+    let exempt: BTreeSet<(String, String, &str)> = ratchet
+        .iter()
+        .map(|row| (row.crate_name.to_owned(), row.module.to_owned(), row.token))
+        .collect();
+    let mut violations = Vec::new();
+
+    for signal in &signals {
+        if !exempt.contains(&(signal.crate_name.clone(), signal.module.clone(), signal.token)) {
+
+            violations.push(render_provider_family_violation(signal));
+        }
+    }
+    for row in ratchet {
+        if family_of_token(row.token) != Some(row.family) {
+            violations.push(
+                serde_json::json!({
+                    "error": "provider-family-knowledge-exemption-mismatch",
+                    "crate": row.crate_name,
+                    "module": row.module,
+                    "token": row.token,
+                    "family": row.family,
+                })
+                .to_string(),
+            );
+        }
+        if !signals
+            .iter()
+            .any(|signal| {
+                signal.crate_name == row.crate_name
+                    && signal.module == row.module
+                    && signal.token == row.token
+            })
+        {
+            violations.push(
+                serde_json::json!({
+                    "error": "stale-provider-family-knowledge-exemption",
+                    "crate": row.crate_name,
+                    "module": row.module,
+                    "token": row.token,
+                    "family": row.family,
+                    "reason": row.reason,
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "provider-crate family-knowledge violations:\n{}",
+            violations.join("\n")
+        ))
+    }
+}
+
+/// Fail when family knowledge reappears in a provider crate: a family
+/// identity token inside a provider crate's own sources that names a different
+/// family, other than the committed reference exemptions. The child-placement
+/// provider reference is the one legitimate cross-family shape the rule names;
+/// every other current site is recorded with its reason instead of weakening
+/// the rule.
+fn check_provider_crate_family_knowledge(repo_root:&Path) -> Result<(), String> {
+    let ratchet = provision_family_exemptions();
+    check_provider_crate_family_knowledge_with(repo_root, &ratchet)
+}
+
+/// The classes the committed program scope names. A provider crate, a
+/// shared crate, the daemon, the broker, or the check's own tooling crate;
+/// the plan's lanes edit exactly those crates. The declared generated-artifact
+/// and digest roots are additionally part of the scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommittedScopeClass {
+    Provider,
+    Shared,
+    Daemon,
+    Broker,
+    Tooling,
+}
+
+/// One row in the committed program scope: a workspace crate the plan's
+/// program may edit,classified into the class the plan names. The list is
+/// closed: a workspace crate without a row is an edit outside the declared
+/// scope (a crate no unit names),and a row whose crate no longer exists is
+/// stale. A committed-scope check cannot police every file outside these
+/// classes without encoding the whole plan's touch surface,so it polices
+/// the crate set and the declared artifact roots,the two surfaces the plan
+/// names; every other surface (docs/plans, changelog.d, tests/, Nix
+/// modules, Bazel files, ...) is out of its scope by construction.
+struct CommittedScopeEntry {
+    crate_name: &'static str,
+    class: CommittedScopeClass,
+    reason: &'static str,
+}
+
+/// The committed workspace-crate scope, seeded from the tree the plan
+/// refactors. Every workspace member must appear exactly once;every entry
+/// must stay a live member. The classes are the plan's own naming: the plan
+/// names provider crates as a class, the shared crates its lanes read
+/// through, the daemon, the broker, and the tooling its own check lives in.
+const COMMITTED_SCOPE: &[CommittedScopeEntry] = &[
+    CommittedScopeEntry { crate_name: "d2b-host-activation-helper", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-core", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-host", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-unsafe-local-helper", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-sk-frontend", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-audit", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-telemetry", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts-broker", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts-control", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts-resource", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts-provider", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts-zone-session", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-bus", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-zone-routing", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-resource-client", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-resource-compiler", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-provider", class: CommittedScopeClass::Shared,
+        reason: "the provider base library; a shared platform crate not edited by family lanes" },
+    CommittedScopeEntry { crate_name: "d2b-provider-toolkit", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-activation-nixos", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-config-nixos", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-audio-pipewire", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-clipboard-wayland", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-display-wayland", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-notification-desktop", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-guest", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-guest-azure-container-apps", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-guest-azure-virtual-machine", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-guest-cloud-hypervisor", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-guest-qemu-media", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-shell-terminal", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-transport-azure-relay", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-transport-unix", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-transport-vsock", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-process-conformance", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-provider-system-core", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-process-systemd", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-process-minijail", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-volume-local", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-volume-virtiofs", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-supervisor", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-credential-secret-service", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-credential-entra", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-credential-managed-identity", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-credential", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-network-local", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-device", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-device-gpu", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-device-security-key", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-device-tpm", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-device-usbip", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-observability-otel", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-process", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-host", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-user", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-session", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-session-unix", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-controller-toolkit", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-core-controller", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-provider-test-controller", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-resource-api", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-resource-runtime", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-resource-types", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2bd-runtime", class: CommittedScopeClass::Daemon,
+        reason: "the daemon composition root (and its runtime)" },
+    CommittedScopeEntry { crate_name: "d2bd", class: CommittedScopeClass::Daemon,
+        reason: "the daemon composition root (and its runtime)" },
+    CommittedScopeEntry { crate_name: "xtask", class: CommittedScopeClass::Tooling,
+        reason: "the check's own home; every U-unit touches the tooling" },
+    CommittedScopeEntry { crate_name: "d2b-broker", class: CommittedScopeClass::Broker,
+        reason: "the broker binary and its composition/fixture support crates" },
+    CommittedScopeEntry { crate_name: "d2b-broker-composition", class: CommittedScopeClass::Broker,
+        reason: "the broker binary and its composition/fixture support crates" },
+    CommittedScopeEntry { crate_name: "d2b-broker-fixture-handlers", class: CommittedScopeClass::Broker,
+        reason: "the broker binary and its composition/fixture support crates" },
+    CommittedScopeEntry { crate_name: "d2b-broker-fixture-syscall-surface", class: CommittedScopeClass::Broker,
+        reason: "the broker binary and its composition/fixture support crates" },
+    CommittedScopeEntry { crate_name: "d2b-provider-endpoint", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-telemetry-service", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-telemetry-binding", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-volume", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-volume-binding", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-wayland-policy", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-wayland-session", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-audio-service", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-audio-binding", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-shell-pool", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-shell-session", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-zone", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-zone-link", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-provider", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-role", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-role-binding", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-quota", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-emergency-policy", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-resource-export", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-resource-import", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-command", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-operation", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-seccomp-profile", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+];
+const COMMITTED_SCOPE_ARTIFACT_ROOTS: &[&str] = &["docs/reference", "packages/policy-inputs"];
+
+/// Fail when a workspace crate has no committed scope row ((an edit to a
+/// crate no unit names),when a row names a crate the workspace no longer has,
+/// or when a declared artifact root has vanished. The committed scope is
+/// compared against the workspace rather than a diff: any crate present without
+/// a row is an edit outside the scope that happened, whiche is what a
+/// committed scope gate can prove without a diff..
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn check_committed_scope(repo_root:&Path, members: &[WorkspaceMember]) -> Result<(), String> {
+    check_committed_scope_with(
+        repo_root,
+        members,
+        COMMITTED_SCOPE,
+        COMMITTED_SCOPE_ARTIFACT_ROOTS,
+    )
+}
+
+/// The committed-scope gate against a caller-supplied scope: fixtures and
+/// ratchet tests exercise both directions on tiny scopes instead of the real
+/// 94-row table.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn check_committed_scope_with(
+    repo_root:&Path,
+    members: &[WorkspaceMember],
+    scope: &[CommittedScopeEntry],
+    artifact_roots: &[&str],
+) -> Result<(), String> {
+    let expected: BTreeSet<&str> = scope
+        .iter()
+        .map(|row| row.crate_name)
+        .collect();
+    let actual: BTreeSet<&str> = members
+        .iter()
+        .map(|member| member.package_name.as_str())
+        .collect();
+    let mut violations = Vec::new();
+
+    for crate_name in actual.difference(&expected) {
+        violations.push(
+            serde_json::json!({
+                "error": "committed-scope-crate-unclassified",
+                "crate": crate_name,
+            })
+            .to_string(),
+        );
+    }
+    for row in scope {
+        if !actual.contains(row.crate_name) {
+            violations.push(
+                serde_json::json!({
+                    "error": "committed-scope-crate-stale",
+                    "crate": row.crate_name,
+                    "class": format!("{:?}", row.class),
+                    "reason": row.reason,
+                })
+                .to_string(),
+            );
+        }
+    }
+    for root in artifact_roots {
+        if !repo_root.join(root).is_dir() {
+            violations.push(
+                serde_json::json!({
+                    "error": "committed-scope-artifact-root-missing",
+                    "root": root,
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "committed scope violations:\n{}",
+            violations.join("\n")
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -9954,5 +10691,87 @@ mod tests {
             Ok(()),
             "every committed self-binding stays inside its declaring provider's scope"
         );
+    }
+
+    #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_family_identity_in_a_provider_crate_is_refused() {
+        let fixture = Fixture::new("family-leak");
+        let leak = fixture.provider_dir().join("src/leak.rs");
+        fs::write(
+            &leak,
+            "pub const TYPE: &str = \"device-usbip.d2bus.org.Widget\";\n",
+        )
+        .unwrap();
+        let error = check_provider_crate_family_knowledge_with(&fixture.root, &[]).unwrap_err();
+        assert!(error.contains("provider-crate-family-literal"), "{error}");
+        assert!(error.contains("\"family\":\"device-usbip\""), "{error}");
+        assert!(error.contains("packages/d2b-provider-fixture-example/src/leak.rs"), "{error}");
+
+        fs::remove_file(&leak).unwrap();
+        check_provider_crate_family_knowledge_with(&fixture.root, &[]).unwrap();
+    }
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn the_provider_family_ratchet_only_shrinks_with_its_signals() {
+        let fixture = Fixture::new("family-ratchet");
+        let leak = fixture.provider_dir().join("src/leak.rs");
+        fs::write(
+            &leak,
+            "pub const TYPE: &str = \"system-core-user\";\n",
+        )
+        .unwrap();
+        let rows = vec![ProviderFamilyKnowledgeExemption {
+            crate_name: "d2b-provider-fixture-example",
+            module: "packages/d2b-provider-fixture-example/src/leak.rs",
+            token: "system_core",
+            family: "system-core",
+            reason: "fixture",
+        }];
+        check_provider_crate_family_knowledge_with(&fixture.root, &rows).unwrap();
+
+        fs::remove_file(&leak).unwrap();
+        let error = check_provider_crate_family_knowledge_with(&fixture.root, &rows).unwrap_err();
+        assert!(error.contains("stale-provider-family-knowledge-exemption"), "{error}");
+        assert!(error.contains("\"crate\":\"d2b-provider-fixture-example\""), "{error}");
+    }
+
+    #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_crate_outside_the_committed_scope_is_refused() {
+        let fixture = Fixture::new("scope-unclassified");
+        let members = manifest_workspace_members(&fixture.root).unwrap();
+        let error = check_committed_scope_with(&fixture.root, &members, &[], &[]).unwrap_err();
+        assert!(error.contains("committed-scope-crate-unclassified"), "{error}");
+        assert!(error.contains("\"crate\":\"d2b-core\""), "{error}");
+        assert!(error.contains("\"crate\":\"d2b-provider-fixture-example\""), "{error}");
+    }
+
+    #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_crate_inside_the_committed_scope_passes() {
+        let fixture = Fixture::new("scope-pass");
+        let members = manifest_workspace_members(&fixture.root).unwrap();
+        let scope = vec![
+            CommittedScopeEntry { crate_name: "d2b-core", class: CommittedScopeClass::Shared, reason: "fixture" },
+            CommittedScopeEntry { crate_name: "d2b-provider-fixture-example", class: CommittedScopeClass::Provider, reason: "fixture" },
+        ];
+        check_committed_scope_with(&fixture.root, &members, &scope, &[]).unwrap();
+    }
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn a_stale_committed_scope_row_is_refused() {
+        let fixture = Fixture::new("scope-stale");
+        fixture.set_members(&["d2b-core"]);
+        let members = manifest_workspace_members(&fixture.root).unwrap();
+        let scope = vec![
+            CommittedScopeEntry { crate_name: "d2b-core", class: CommittedScopeClass::Shared, reason: "fixture" },
+            CommittedScopeEntry { crate_name: "d2b-provider-fixture-example", class: CommittedScopeClass::Provider, reason: "fixture" },
+        ];
+        let error = check_committed_scope_with(&fixture.root, &members,&scope, &[]).unwrap_err();
+        assert!(error.contains("committed-scope-crate-stale"), "{error}");
+        assert!(error.contains("\"crate\":\"d2b-provider-fixture-example\""), "{error}");
     }
 }
