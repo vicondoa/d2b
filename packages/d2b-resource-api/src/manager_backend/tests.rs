@@ -1042,9 +1042,8 @@ async fn every_converted_type_is_served_by_the_manager_path() {
 /// layers, for which the universal strict envelope is the whole boundary.
 #[test]
 fn converted_type_status_layers_round_trip_through_their_typed_decoders() {
-    use d2b_contracts_resource::v3::{
-        DeviceStatusResource, QuotaStatusResource, VolumeBindingStatusResource,
-    };
+    use d2b_contracts_resource::v3::{ DeviceStatusResource, VolumeBindingStatusResource };
+use d2b_provider_quota::quota::{ QuotaStatusResource };
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::resource::ResourceStatus;
     use d2b_resource_runtime::spec_store::{ResourceKey, ResourceProvenance};

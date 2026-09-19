@@ -3,7 +3,7 @@
 //!
 //! Every typed Provider effect the Guest family dispatches lives here: the
 //! Cloud Hypervisor Guest controller session (the real host path), and the
-//! preserved framework state machines for the qemu-media,
+//! preserved framework state machines for the guest media runtime,
 //! azure-container-apps, and azure-virtual-machine Providers. The port is the
 //! dyn-erased [`GuestDriverEffects`] boundary; the daemon owns every side
 //! effect behind it, and the driver owns the child rows.
@@ -38,7 +38,7 @@ use d2b_provider_guest::{
 };
 use d2b_provider_guest_azure_container_apps as aca_runtime;
 use d2b_provider_guest_azure_virtual_machine as azure_vm_runtime;
-use d2b_provider_guest_qemu_media as qemu_media_runtime;
+use d2b_provider_guest_qemu_media as guest_media_runtime;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -53,7 +53,7 @@ use crate::resource_runtime::ZoneResourceRuntime;
 /// without claiming Cloud Hypervisor host liveness.
 struct FrameworkQemuEffect {
     guest_ref: ResourceRef,
-    identity: Option<qemu_media_runtime::ProcessIdentity>,
+    identity: Option<guest_media_runtime::ProcessIdentity>,
     qmp_ready: bool,
 }
 
@@ -71,15 +71,15 @@ impl FrameworkQemuEffect {
     }
 }
 
-impl qemu_media_runtime::QemuMediaEffectPort for FrameworkQemuEffect {
+impl guest_media_runtime::QemuMediaEffectPort for FrameworkQemuEffect {
     fn launch(
         &mut self,
-        _ticket: &qemu_media_runtime::LaunchTicket,
-    ) -> Result<qemu_media_runtime::ProcessIdentity, qemu_media_runtime::QemuMediaError> {
-        let template_digest: [u8; 32] = Sha256::digest(b"qemu-media-runner").into();
+        _ticket: &guest_media_runtime::LaunchTicket,
+    ) -> Result<guest_media_runtime::ProcessIdentity, guest_media_runtime::QemuMediaError> {
+        let template_digest: [u8; 32] = Sha256::digest(guest_media_runtime::PROCESS_TEMPLATE.as_bytes()).into();
         let identity_digest: [u8; 32] =
             Sha256::digest(self.guest_ref.to_canonical_string().as_bytes()).into();
-        let identity = qemu_media_runtime::ProcessIdentity {
+        let identity = guest_media_runtime::ProcessIdentity {
             pid: 1,
             start_time_ticks: 1,
             cgroup_digest: identity_digest,
@@ -93,14 +93,14 @@ impl qemu_media_runtime::QemuMediaEffectPort for FrameworkQemuEffect {
 
     fn observe(
         &mut self,
-    ) -> Result<Option<qemu_media_runtime::ProcessIdentity>, qemu_media_runtime::QemuMediaError> {
+    ) -> Result<Option<guest_media_runtime::ProcessIdentity>, guest_media_runtime::QemuMediaError> {
         Ok(self.identity.clone())
     }
 
     fn open_pidfd(
         &mut self,
-        _identity: &qemu_media_runtime::ProcessIdentity,
-    ) -> Result<(), qemu_media_runtime::QemuMediaError> {
+        _identity: &guest_media_runtime::ProcessIdentity,
+    ) -> Result<(), guest_media_runtime::QemuMediaError> {
         self.qmp_ready = true;
         Ok(())
     }
@@ -109,33 +109,33 @@ impl qemu_media_runtime::QemuMediaEffectPort for FrameworkQemuEffect {
         &mut self,
         _authority_key: [u8; 32],
         _owner_ref: &ResourceRef,
-    ) -> Result<(), qemu_media_runtime::QemuMediaError> {
+    ) -> Result<(), guest_media_runtime::QemuMediaError> {
         Ok(())
     }
 
-    fn close_media_effects(&mut self) -> Result<(), qemu_media_runtime::QemuMediaError> {
+    fn close_media_effects(&mut self) -> Result<(), guest_media_runtime::QemuMediaError> {
         self.qmp_ready = false;
         Ok(())
     }
 
-    fn continue_guest(&mut self) -> Result<(), qemu_media_runtime::QemuMediaError> {
+    fn continue_guest(&mut self) -> Result<(), guest_media_runtime::QemuMediaError> {
         Ok(())
     }
 
     fn stop(
         &mut self,
-        _identity: &qemu_media_runtime::ProcessIdentity,
-    ) -> Result<(), qemu_media_runtime::QemuMediaError> {
+        _identity: &guest_media_runtime::ProcessIdentity,
+    ) -> Result<(), guest_media_runtime::QemuMediaError> {
         self.identity = None;
         self.qmp_ready = false;
         Ok(())
     }
 
-    fn release_device_authority(&mut self) -> Result<(), qemu_media_runtime::QemuMediaError> {
+    fn release_device_authority(&mut self) -> Result<(), guest_media_runtime::QemuMediaError> {
         Ok(())
     }
 
-    fn delete_runtime_volume(&mut self) -> Result<(), qemu_media_runtime::QemuMediaError> {
+    fn delete_runtime_volume(&mut self) -> Result<(), guest_media_runtime::QemuMediaError> {
         Ok(())
     }
 }
@@ -550,7 +550,7 @@ impl azure_vm_runtime::AzureEffectPort for FrameworkAzureEffect {
 /// In-memory Provider controller for one framework Guest.
 enum GuestRuntimeController {
     Qemu {
-        controller: Box<qemu_media_runtime::QemuMediaController<FrameworkQemuEffect>>,
+        controller: Box<guest_media_runtime::QemuMediaController<FrameworkQemuEffect>>,
         effect: FrameworkQemuEffect,
     },
     Aca {
@@ -829,7 +829,7 @@ impl ProductionGuestDriverEffects {
             .pointer("/spec/provider/settings")
             .cloned()
             .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-        serde_json::from_value::<d2b_provider_guest_qemu_media::GuestProviderSpecSettings>(
+        serde_json::from_value::<guest_media_runtime::GuestProviderSpecSettings>(
             settings,
         )
         .map(|_| ())
@@ -994,7 +994,7 @@ impl ProductionGuestDriverEffects {
         value: &Value,
         children: &[GuestChildObservation],
         effect: &FrameworkQemuEffect,
-    ) -> Result<qemu_media_runtime::QemuMediaDependencies, GuestEffectError> {
+    ) -> Result<guest_media_runtime::QemuMediaDependencies, GuestEffectError> {
         let mut ready_refs = Vec::new();
         for reference in declared_dependency_refs(&request.spec) {
             let phase = self.live_phase(&reference).await?;
@@ -1013,17 +1013,17 @@ impl ProductionGuestDriverEffects {
             .transpose()
             .map_err(|_| GuestEffectError::InvalidResource)?;
         let device = device_ref.as_ref().filter(|reference| ready(reference)).map(|reference| {
-            qemu_media_runtime::DeviceObservation {
+            guest_media_runtime::DeviceObservation {
                 device_ref: (*reference).clone(),
-                phase: qemu_media_runtime::DevicePhase::Ready,
+                phase: guest_media_runtime::DevicePhase::Ready,
                 owner_ref: request.owner_ref().ok(),
-                platform: qemu_media_runtime::PlatformClass::X86_64Linux,
+                platform: guest_media_runtime::PlatformClass::X86_64Linux,
                 authority_key: Sha256::digest(reference.to_canonical_string().as_bytes()).into(),
-                process_identity: Some("qemu-media-runner".to_owned()),
-                media_contract: "qemu-media/v1".to_owned(),
+                process_identity: Some(guest_media_runtime::PROCESS_TEMPLATE.to_owned()),
+                media_contract: guest_media_runtime::MEDIA_CONTRACT_ID.to_owned(),
             }
         });
-        let settings = serde_json::from_value::<qemu_media_runtime::GuestProviderSpecSettings>(
+        let settings = serde_json::from_value::<guest_media_runtime::GuestProviderSpecSettings>(
             value
                 .pointer("/spec/provider/settings")
                 .cloned()
@@ -1061,17 +1061,17 @@ impl ProductionGuestDriverEffects {
         };
         let runtime_volume_ready = children.iter().any(|child| {
             child.key.type_name == "Volume"
-                && child.key.name == format!("{}-runtime", request.target.name().as_str())
+                && child.key.name == guest_media_runtime::runtime_volume_name(request.target.name().as_str())
                 && child.ready()
         });
-        Ok(qemu_media_runtime::QemuMediaDependencies {
+        Ok(guest_media_runtime::QemuMediaDependencies {
             device,
             network_ready,
             media_ready,
             display_ready: !settings.display_window
                 || display_ref.as_ref().is_some_and(ready),
             qmp_ready: effect.qmp_ready(),
-            qmp_status: effect.qmp_ready().then_some(qemu_media_runtime::QmpVmStatus::Paused),
+            qmp_status: effect.qmp_ready().then_some(guest_media_runtime::QmpVmStatus::Paused),
             media_refs,
             display_ref,
             runtime_volume_ready,
@@ -1088,7 +1088,7 @@ impl ProductionGuestDriverEffects {
     ) -> Result<GuestRuntimeController, GuestEffectError> {
         match kind {
             GuestKind::QemuMedia => {
-                let config = serde_json::from_value::<qemu_media_runtime::ProviderConfig>(
+                let config = serde_json::from_value::<guest_media_runtime::ProviderConfig>(
                     provider
                         .pointer("/spec/config")
                         .cloned()
@@ -1096,7 +1096,7 @@ impl ProductionGuestDriverEffects {
                 )
                 .map_err(|_| GuestEffectError::InvalidResource)?;
                 let settings = serde_json::from_value::<
-                    qemu_media_runtime::GuestProviderSpecSettings,
+                    guest_media_runtime::GuestProviderSpecSettings,
                 >(
                     value
                         .pointer("/spec/provider/settings")
@@ -1122,15 +1122,18 @@ impl ProductionGuestDriverEffects {
                     .map(ResourceRef::parse)
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|_| GuestEffectError::InvalidResource)?;
-                let process = qemu_media_runtime::build_process_spec(
+                let process = guest_media_runtime::build_process_spec(
                     config.controller_execution_ref.clone(),
-                    ResourceRef::parse(&format!("Volume/{}-runtime", request.target.name().as_str()))
-                        .map_err(|_| GuestEffectError::InvalidResource)?,
+                    ResourceRef::parse(&format!(
+                        "Volume/{}",
+                        guest_media_runtime::runtime_volume_name(request.target.name().as_str())
+                    ))
+                    .map_err(|_| GuestEffectError::InvalidResource)?,
                     device_ref,
                     network_refs,
                 )
                 .map_err(|_| GuestEffectError::InvalidResource)?;
-                let controller = qemu_media_runtime::QemuMediaController::new(
+                let controller = guest_media_runtime::QemuMediaController::new(
                     config,
                     settings,
                     process,
@@ -1282,7 +1285,7 @@ impl ProductionGuestDriverEffects {
                     .reconcile(&deps, effect)
                     .map_err(|_| GuestEffectError::Unavailable)?;
                 Ok(
-                    if matches!(outcome, qemu_media_runtime::QemuMediaReconcileOutcome::Ready) {
+                    if matches!(outcome, guest_media_runtime::QemuMediaReconcileOutcome::Ready) {
                         GuestEffectPhase::Ready
                     } else {
                         GuestEffectPhase::Pending
@@ -1543,15 +1546,15 @@ mod tests {
     use super::{
         FrameworkAcaControl, FrameworkAcaLease, FrameworkAcaState, FrameworkAzureCredential,
         FrameworkAzureEffect, FrameworkAzureState, FrameworkQemuEffect, GuestRuntimeController,
-        aca_runtime, azure_vm_runtime, qemu_media_runtime,
+        aca_runtime, azure_vm_runtime, guest_media_runtime,
     };
 
-    /// The qemu-media framework state machine drives its controller to
+    /// The guest media framework state machine drives its controller to
     /// `PausedAtBoot` and converges the finalizer through the effect port.
     #[test]
     fn qemu_controller_contract_invokes_controller_and_finalizes() {
         let guest_ref = ResourceRef::parse("Guest/qemu").unwrap();
-        let config = qemu_media_runtime::ProviderConfig::new(
+        let config = guest_media_runtime::ProviderConfig::new(
             "Host/host-system",
             "qemu-system-x86-64",
             "Provider/network-local",
@@ -1559,39 +1562,39 @@ mod tests {
             None,
         )
         .unwrap();
-        let process = qemu_media_runtime::build_process_spec(
+        let process = guest_media_runtime::build_process_spec(
             config.controller_execution_ref.clone(),
             ResourceRef::parse("Volume/qemu-runtime").unwrap(),
             Some(ResourceRef::parse("Device/host-kvm").unwrap()),
             [],
         )
         .unwrap();
-        let mut controller = qemu_media_runtime::QemuMediaController::new(
+        let mut controller = guest_media_runtime::QemuMediaController::new(
             config,
-            qemu_media_runtime::GuestProviderSpecSettings::default(),
+            guest_media_runtime::GuestProviderSpecSettings::default(),
             process,
             guest_ref.clone(),
         )
         .unwrap();
         let mut effect = FrameworkQemuEffect::new(guest_ref.clone());
-        let dependencies = qemu_media_runtime::QemuMediaDependencies::ready(
-            qemu_media_runtime::DeviceObservation {
+        let dependencies = guest_media_runtime::QemuMediaDependencies::ready(
+            guest_media_runtime::DeviceObservation {
                 device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
-                phase: qemu_media_runtime::DevicePhase::Ready,
+                phase: guest_media_runtime::DevicePhase::Ready,
                 owner_ref: None,
-                platform: qemu_media_runtime::PlatformClass::X86_64Linux,
+                platform: guest_media_runtime::PlatformClass::X86_64Linux,
                 authority_key: [1; 32],
-                process_identity: Some("qemu-media-runner".to_owned()),
-                media_contract: "qemu-media/v1".to_owned(),
+                process_identity: Some(guest_media_runtime::PROCESS_TEMPLATE.to_owned()),
+                media_contract: guest_media_runtime::MEDIA_CONTRACT_ID.to_owned(),
             },
         );
         assert_eq!(
             controller.reconcile(&dependencies, &mut effect).unwrap(),
-            qemu_media_runtime::QemuMediaReconcileOutcome::Ready
+            guest_media_runtime::QemuMediaReconcileOutcome::Ready
         );
         assert_eq!(
             controller.phase(),
-            qemu_media_runtime::QemuMediaPhase::PausedAtBoot
+            guest_media_runtime::QemuMediaPhase::PausedAtBoot
         );
         controller.finalize(&mut effect).unwrap();
         assert!(!controller.finalizer_installed());

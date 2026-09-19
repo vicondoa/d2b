@@ -1019,7 +1019,11 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
         .map_err(|_| VolumeLocalError::EffectFailed)?;
         let backend = FdLockBackend { fd: lock_fd };
         let spec = LockSpec::new(
-            LockId::parse(format!("volume-lock-{}", root_uid(root)?.as_str()))
+            LockId::parse(format!(
+                "{}{}",
+                d2b_provider_volume_local::lock::VOLUME_LOCK_PREFIX,
+                root_uid(root)?.as_str()
+            ))
                 .map_err(|_| VolumeLocalError::EffectFailed)?,
             root_uid(root)?.clone(),
             1,

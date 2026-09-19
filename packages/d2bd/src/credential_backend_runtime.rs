@@ -37,9 +37,11 @@ use crate::process_provider_runtime::{
     GuestCredentialBackendSupervisor, ProcessResourceContext,
 };
 
-const SECRET_SERVICE_PROVIDER: &str = "credential-secret-service";
-const ENTRA_PROVIDER: &str = "credential-entra";
-const MANAGED_IDENTITY_PROVIDER: &str = "credential-managed-identity";
+use d2b_provider_credential::{
+    ENTRA_BACKEND_REF as ENTRA_PROVIDER,
+    MANAGED_IDENTITY_BACKEND_REF as MANAGED_IDENTITY_PROVIDER,
+    SECRET_SERVICE_BACKEND_REF as SECRET_SERVICE_PROVIDER,
+};
 
 /// A typed operation dispatched by the Guest-local credential source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,9 +141,9 @@ trait GuestCredentialProviderAdapter: Send + Sync + 'static {
 /// metadata and zeroizing delivery through the authenticated backend session.
 pub(crate) struct GuestCredentialBackendAdapters {
     expected_execution_ref: Option<ResourceRef>,
-    secret_service: Arc<dyn GuestCredentialProviderAdapter>,
-    entra: Arc<dyn GuestCredentialProviderAdapter>,
-    managed_identity: Arc<dyn GuestCredentialProviderAdapter>,
+    collection: Arc<dyn GuestCredentialProviderAdapter>,
+    identity_endpoint: Arc<dyn GuestCredentialProviderAdapter>,
+    imds: Arc<dyn GuestCredentialProviderAdapter>,
 }
 
 impl std::fmt::Debug for GuestCredentialBackendAdapters {
@@ -155,48 +157,48 @@ impl GuestCredentialBackendAdapters {
         let unavailable = Arc::new(FailClosedGuestCredentialAdapter);
         Self::with_execution_ref(
             Some(sources.execution_ref),
-            sources.secret_service.unwrap_or_else(|| unavailable.clone()),
-            sources.entra.unwrap_or_else(|| unavailable.clone()),
+            sources.collection.unwrap_or_else(|| unavailable.clone()),
+            sources.identity_endpoint.unwrap_or_else(|| unavailable.clone()),
             sources
-                .managed_identity
+                .imds
                 .unwrap_or_else(|| unavailable.clone()),
         )
     }
 
     fn with_execution_ref(
         expected_execution_ref: Option<ResourceRef>,
-        secret_service: Arc<dyn GuestCredentialProviderAdapter>,
-        entra: Arc<dyn GuestCredentialProviderAdapter>,
-        managed_identity: Arc<dyn GuestCredentialProviderAdapter>,
+        collection: Arc<dyn GuestCredentialProviderAdapter>,
+        identity_endpoint: Arc<dyn GuestCredentialProviderAdapter>,
+        imds: Arc<dyn GuestCredentialProviderAdapter>,
     ) -> Arc<Self> {
         Arc::new(Self {
             expected_execution_ref,
-            secret_service,
-            entra,
-            managed_identity,
+            collection,
+            identity_endpoint,
+            imds,
         })
     }
 
     #[cfg(test)]
     fn test_registry() -> Arc<Self> {
-        let secret_service = Arc::new(GuestCredentialLeaseRegistry::new());
-        let entra = Arc::new(GuestCredentialLeaseRegistry::new());
-        let managed_identity = Arc::new(GuestCredentialLeaseRegistry::new());
+        let collection = Arc::new(GuestCredentialLeaseRegistry::new());
+        let identity_endpoint = Arc::new(GuestCredentialLeaseRegistry::new());
+        let imds = Arc::new(GuestCredentialLeaseRegistry::new());
         Self::with_execution_ref(
             None,
-            Arc::new(GuestSecretServiceCollectionPort { registry: secret_service }),
-            Arc::new(GuestEntraIdentityEndpointClient { registry: entra }),
-            Arc::new(GuestManagedIdentityImdsClient {
-                registry: managed_identity,
+            Arc::new(GuestCollectionPort { registry: collection }),
+            Arc::new(GuestIdentityEndpointClient { registry: identity_endpoint }),
+            Arc::new(GuestImdsClient {
+                registry: imds,
             }),
         )
     }
 
     fn adapter(&self, provider: &str) -> Option<&Arc<dyn GuestCredentialProviderAdapter>> {
         match provider {
-            SECRET_SERVICE_PROVIDER => Some(&self.secret_service),
-            ENTRA_PROVIDER => Some(&self.entra),
-            MANAGED_IDENTITY_PROVIDER => Some(&self.managed_identity),
+            SECRET_SERVICE_PROVIDER => Some(&self.collection),
+            ENTRA_PROVIDER => Some(&self.identity_endpoint),
+            MANAGED_IDENTITY_PROVIDER => Some(&self.imds),
             _ => None,
         }
     }
@@ -207,9 +209,9 @@ impl GuestCredentialBackendAdapters {
 /// identity Endpoint, or IMDS client. Missing sources remain fail-closed.
 pub(crate) struct GuestCredentialBackendSources {
     execution_ref: ResourceRef,
-    secret_service: Option<Arc<dyn GuestCredentialProviderAdapter>>,
-    entra: Option<Arc<dyn GuestCredentialProviderAdapter>>,
-    managed_identity: Option<Arc<dyn GuestCredentialProviderAdapter>>,
+    collection: Option<Arc<dyn GuestCredentialProviderAdapter>>,
+    identity_endpoint: Option<Arc<dyn GuestCredentialProviderAdapter>>,
+    imds: Option<Arc<dyn GuestCredentialProviderAdapter>>,
 }
 
 impl GuestCredentialBackendSources {
@@ -219,23 +221,23 @@ impl GuestCredentialBackendSources {
     pub(crate) fn from_guest_context(execution_ref: ResourceRef) -> Self {
         Self {
             execution_ref,
-            secret_service: None,
-            entra: None,
-            managed_identity: None,
+            collection: None,
+            identity_endpoint: None,
+            imds: None,
         }
     }
 
     #[cfg(test)]
     fn new(
-        secret_service: Option<Arc<dyn GuestCredentialProviderAdapter>>,
-        entra: Option<Arc<dyn GuestCredentialProviderAdapter>>,
-        managed_identity: Option<Arc<dyn GuestCredentialProviderAdapter>>,
+        collection: Option<Arc<dyn GuestCredentialProviderAdapter>>,
+        identity_endpoint: Option<Arc<dyn GuestCredentialProviderAdapter>>,
+        imds: Option<Arc<dyn GuestCredentialProviderAdapter>>,
     ) -> Self {
         Self {
             execution_ref: ResourceRef::parse("Guest/test").expect("test Guest execution"),
-            secret_service,
-            entra,
-            managed_identity,
+            collection,
+            identity_endpoint,
+            imds,
         }
     }
 }
@@ -249,22 +251,22 @@ impl GuestCredentialProviderAdapter for FailClosedGuestCredentialAdapter {
 }
 
 #[cfg(test)]
-struct GuestSecretServiceCollectionPort {
+struct GuestCollectionPort {
     registry: Arc<GuestCredentialLeaseRegistry>,
 }
 
 #[cfg(test)]
-struct GuestEntraIdentityEndpointClient {
+struct GuestIdentityEndpointClient {
     registry: Arc<GuestCredentialLeaseRegistry>,
 }
 
 #[cfg(test)]
-struct GuestManagedIdentityImdsClient {
+struct GuestImdsClient {
     registry: Arc<GuestCredentialLeaseRegistry>,
 }
 
 #[cfg(test)]
-impl GuestCredentialProviderAdapter for GuestSecretServiceCollectionPort {
+impl GuestCredentialProviderAdapter for GuestCollectionPort {
     fn execute(&self, request: GuestCredentialBackendRequest) -> GuestCredentialAdapterFuture<'_> {
         let registry = Arc::clone(&self.registry);
         Box::pin(async move {
@@ -276,7 +278,7 @@ impl GuestCredentialProviderAdapter for GuestSecretServiceCollectionPort {
 }
 
 #[cfg(test)]
-impl GuestCredentialProviderAdapter for GuestEntraIdentityEndpointClient {
+impl GuestCredentialProviderAdapter for GuestIdentityEndpointClient {
     fn execute(&self, request: GuestCredentialBackendRequest) -> GuestCredentialAdapterFuture<'_> {
         let registry = Arc::clone(&self.registry);
         Box::pin(async move { registry.execute(request, ENTRA_PROVIDER).await })
@@ -284,7 +286,7 @@ impl GuestCredentialProviderAdapter for GuestEntraIdentityEndpointClient {
 }
 
 #[cfg(test)]
-impl GuestCredentialProviderAdapter for GuestManagedIdentityImdsClient {
+impl GuestCredentialProviderAdapter for GuestImdsClient {
     fn execute(&self, request: GuestCredentialBackendRequest) -> GuestCredentialAdapterFuture<'_> {
         let registry = Arc::clone(&self.registry);
         Box::pin(async move {

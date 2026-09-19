@@ -1,0 +1,16 @@
+{
+  "crate": "d2b-provider-endpoint",
+  "types": [
+    {
+      "resourceType": "Endpoint",
+      "allowedSources": ["builtin", "startup"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": false,
+      "reads": ["Process", "Guest", "VolumeBinding"]
+    }
+  ],
+  "provides": [],
+  "roles": [],
+  "principals": []
+}

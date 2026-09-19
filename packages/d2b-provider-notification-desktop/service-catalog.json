@@ -1,0 +1,5 @@
+{
+  "provider": "notification-desktop",
+  "providerRef": "Provider/notification-desktop",
+  "services": ["d2b.notification.v3"]
+}

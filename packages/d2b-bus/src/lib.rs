@@ -4,10 +4,11 @@
 //! A Zone runtime must own the single registration authority and provide
 //! authenticated session claims before any route becomes reachable.
 //!
-//! The retired raw committed-subject configuration is not a public API:
+//! The retired raw committed-subject configuration is not a public API; the
+//! bus takes the validated process-subject input through `d2b_bus::router`:
 //!
 //! ```compile_fail
-//! use d2b_bus::CommittedInteractionSubjectInput;
+//! use d2b_bus::router::CommittedInteractionSubjectInput;
 //!
 //! fn construct() {
 //!     let _ = CommittedInteractionSubjectInput {};

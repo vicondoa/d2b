@@ -175,7 +175,9 @@ impl HostProbeEffectPort for HostProbe {
             HostCapabilityClass::UserNamespace => Path::new("/proc/self/ns/user").exists(),
             HostCapabilityClass::Virtiofs => Path::new("/dev/fuse").is_file(),
             HostCapabilityClass::AudioPipewire => {
-                d2bd_runtime::resource_runtime_support::is_socket(&self.runtime_path("pipewire-0"))
+                d2bd_runtime::resource_runtime_support::is_socket(
+                    &self.runtime_path(d2b_provider_audio_pipewire::PIPEWIRE_RUNTIME_SOCKET)
+                )
             }
             HostCapabilityClass::Wayland => {
                 d2bd_runtime::resource_runtime_support::is_socket(&self.runtime_path("wayland-0"))
@@ -186,8 +188,16 @@ impl HostProbeEffectPort for HostProbe {
                 Path::new("/dev/tpmrm0").is_file() || Path::new("/dev/tpm0").is_file()
             }
             HostCapabilityClass::Usbip => {
-                Path::new("/sys/module/usbip_core").exists()
-                    || Path::new("/sys/module/usbip_host").exists()
+                Path::new(&format!(
+                    "/sys/module/{}",
+                    d2b_provider_device_usbip::vocabulary::USBIP_CORE_MODULE
+                ))
+                .exists()
+                    || Path::new(&format!(
+                        "/sys/module/{}",
+                        d2b_provider_device_usbip::vocabulary::USBIP_HOST_MODULE
+                    ))
+                    .exists()
             }
         };
         Ok(available)

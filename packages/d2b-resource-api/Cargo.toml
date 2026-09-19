@@ -35,6 +35,9 @@ sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 ttrpc = { workspace = true, features = ["async"] }
 
+
+
+d2b-provider-quota = { path = "../d2b-provider-quota", version = "0.0.0-bootstrap" }
 [dev-dependencies]
 ractor.workspace = true
 tempfile = "3"

@@ -15,9 +15,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::ResourceRef;
-use super::payload_schema::PayloadSchema;
-use super::execution_policy::{BoundedText, BoundedToken, PrimitiveSpecError, redacted_debug};
+use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::payload_schema::PayloadSchema;
+use d2b_contracts_resource::v3::execution_policy::{BoundedText, BoundedToken, PrimitiveSpecError, redacted_debug};
 
 /// Canonical `Command` ResourceType name.
 pub const COMMAND_RESOURCE_TYPE: &str = "Command";
@@ -101,7 +101,7 @@ impl CommandArgvSlot {
             else {
                 return Err(CommandContractError::InvalidArgvSlot);
             };
-            if !super::payload_schema::valid_property_name(name) {
+            if !d2b_contracts_resource::v3::payload_schema::valid_property_name(name) {
                 return Err(CommandContractError::InvalidArgvSlot);
             }
             Ok(Self(format!("{{{name}}}")))
@@ -199,7 +199,7 @@ impl CommandSpec {
         if argv.is_empty() || argv.len() > MAX_COMMAND_ARGV_SLOTS {
             return Err(CommandContractError::InvalidArgvSlot);
         }
-        super::execution_policy::require_resource_type(&role_ref, "Role")
+        d2b_contracts_resource::v3::execution_policy::require_resource_type(&role_ref, "Role")
             .map_err(|_| CommandContractError::InvalidRoleRef)?;
         for slot in &argv {
             if let Some(name) = slot.placeholder()
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn the_wire_shape_round_trips_and_refuses_unknown_fields() {
         let command = virtiofsd();
-        let bytes = super::super::resource_schema::canonical_json_bytes(&command).expect("canonical");
+        let bytes = d2b_contracts_resource::v3::resource_schema::canonical_json_bytes(&command).expect("canonical");
         let restored: CommandSpec = serde_json::from_slice(&bytes).expect("parses");
         assert_eq!(restored, command);
         let unknown = json!({

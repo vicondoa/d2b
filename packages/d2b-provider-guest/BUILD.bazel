@@ -9,7 +9,7 @@ load(
 
 # Provider crates link only from the daemon composition root and the
 # enumerated consumers; broker/shared crates cannot depend on them (U14).
-package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2bd:__pkg__"])
+package(default_visibility = ["//bazel/checks:__pkg__", "//packages/d2b-provider-network-local:__pkg__", "//packages/d2bd:__pkg__", "//packages/xtask:__pkg__"])
 
 exports_files(
     ["BUILD.bazel"],
@@ -21,6 +21,7 @@ d2b_rust_library(
     srcs = glob(["src/**/*.rs"], allow_empty = True),
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2bd-runtime:d2bd_runtime",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-guest-azure-container-apps:d2b_provider_guest_azure_container_apps",
         "//packages/d2b-provider-guest-azure-virtual-machine:d2b_provider_guest_azure_virtual_machine",
@@ -38,6 +39,7 @@ d2b_rust_library(
     crate_features = ["test-support"],
     crate_name = "d2b_provider_guest",
     deps = [
+        "//packages/d2bd-runtime:d2bd_runtime",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-guest-azure-container-apps:d2b_provider_guest_azure_container_apps_test_support",
         "//packages/d2b-provider-guest-azure-virtual-machine:d2b_provider_guest_azure_virtual_machine",
@@ -59,6 +61,7 @@ d2b_rust_test(
     srcs = ["tests/registration.rs"],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2bd-runtime:d2bd_runtime",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-guest-azure-container-apps:d2b_provider_guest_azure_container_apps",
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",

@@ -3172,3 +3172,84 @@ impl<'a> BinaryReader<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod wire_enum_vectors {
+    use super::*;
+
+    /// Golden canonical wire vectors for the closed wire enums behind the service,
+    /// transport, and attachment surfaces. A change to any row is a wire
+    /// break on the zone-plane session contract.
+    const SERVICE_VECTORS: &[(ServicePackage, u8, &str)] = &[
+        (ServicePackage::ResourceV3, 1, "d2b.resource.v3"),
+        (ServicePackage::ControllerV3, 2, "d2b.controller.v3"),
+        (ServicePackage::ProviderV3, 3, "d2b.provider.v3"),
+        (ServicePackage::AuditV3, 4, "d2b.audit.v3"),
+        (ServicePackage::SupportV3, 5, "d2b.support.v3"),
+        (ServicePackage::CredentialV3, 6, "d2b.credential.v3"),
+        (ServicePackage::DisplayV3, 9, "d2b.display.v3"),
+        (ServicePackage::ClipboardV3, 10, "d2b.clipboard.v3"),
+        (ServicePackage::ClipboardBridgeV3, 11, "d2b.clipboard.bridge.v3"),
+        (ServicePackage::ClipboardPickerCoordV3, 12, "d2b.clipboard.picker-coord.v3"),
+        (ServicePackage::NotificationV3, 13, "d2b.notification.v3"),
+        (ServicePackage::ConfigNixosV3, 14,"d2b.config-nixos.v3"),
+    ];
+
+    const TRANSPORT_VECTORS: &[(TransportClass, u8, &str)] = &[
+        (TransportClass::UnixStream, 1, "unix-stream"),
+        (TransportClass::UnixSeqpacket, 2, "unix-seqpacket"),
+        (TransportClass::InheritedSocketpair, 3,"inherited-socketpair"),
+        (TransportClass::NativeVsock, 4,"native-vsock"),
+        (TransportClass::CloudHypervisorVsock, 5,"cloud-hypervisor-vsock"),
+        (TransportClass::ProviderStream, 6,"provider-stream"),
+        (TransportClass::DirectConfigured, 7,"direct-configured"),
+    ];
+
+    const ATTACHMENT_KIND_VECTORS: &[(AttachmentKind, u8, &str)] = &[
+        (AttachmentKind::FileDescriptor, 1,"file-descriptor"),
+        (AttachmentKind::Credentials, 2,"credentials"),
+    ];
+
+    const ATTACHMENT_PURPOSE_VECTORS: &[(AttachmentPurpose, u8, &str)] = &[
+        (AttachmentPurpose::RequestInput, 1,"request-input"),
+        (AttachmentPurpose::ResponseOutput, 2,"response-output"),
+        (AttachmentPurpose::Terminal, 3,"terminal"),
+        (AttachmentPurpose::Wayland, 4,"wayland"),
+        (AttachmentPurpose::ClipboardTransfer, 5,"clipboard-transfer"),
+        (AttachmentPurpose::Listener, 6,"listener"),
+        (AttachmentPurpose::ProcessIdentity, 7,"process-identity"),
+        (AttachmentPurpose::DeviceLease, 8,"device-lease"),
+        (AttachmentPurpose::RuntimeHandle, 9,"runtime-handle"),
+    ];
+
+    #[test]
+    fn wire_enum_vectors_are_frozen() {
+        assert_eq!(SERVICE_VECTORS.len(), ServicePackage::ALL.len());
+        for (index, (value, tag, wire)) in SERVICE_VECTORS.iter().enumerate() {
+            assert_eq!(ServicePackage::ALL[index], *value);
+            assert_eq!(value.tag(), *tag);
+            assert_eq!(value.as_str(), *wire);
+        }
+
+        assert_eq!(TRANSPORT_VECTORS.len(), TransportClass::ALL.len());
+        for (index, (value, tag, wire)) in TRANSPORT_VECTORS.iter().enumerate() {
+            assert_eq!(TransportClass::ALL[index], *value);
+            assert_eq!(value.tag(), *tag);
+            assert_eq!(value.as_str(), *wire);
+        }
+
+        assert_eq!(ATTACHMENT_KIND_VECTORS.len(), AttachmentKind::ALL.len());
+        for (index, (value, tag, wire)) in ATTACHMENT_KIND_VECTORS.iter().enumerate() {
+            assert_eq!(AttachmentKind::ALL[index], *value);
+            assert_eq!(value.tag(), *tag);
+            assert_eq!(value.as_str(), *wire);
+        }
+
+        assert_eq!(ATTACHMENT_PURPOSE_VECTORS.len(), AttachmentPurpose::ALL.len());
+        for (index, (value, tag, wire)) in ATTACHMENT_PURPOSE_VECTORS.iter().enumerate() {
+            assert_eq!(AttachmentPurpose::ALL[index], *value);
+            assert_eq!(value.tag(), *tag);
+            assert_eq!(value.as_str(), *wire);
+        }
+    }
+}

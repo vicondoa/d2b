@@ -23,7 +23,13 @@ d2b_rust_binary(
     deps = ["//packages/d2b-core:d2b_core",
             "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, cargo_only = True),
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        "//packages/d2b-provider-command:d2b_provider_command",
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
+        "//packages/d2b-provider-guest:d2b_provider_guest",
+        "//packages/d2b-provider-operation:d2b_provider_operation",
+        "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
+    ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 d2b_rust_binary(
@@ -46,6 +52,11 @@ d2b_rust_binary(
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-control:d2b_contracts_control",
         "//packages/d2b-core:d2b_core",
+        "//packages/d2b-provider-command:d2b_provider_command",
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
+        "//packages/d2b-provider-guest:d2b_provider_guest",
+        "//packages/d2b-provider-operation:d2b_provider_operation",
+        "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -317,7 +328,13 @@ d2b_rust_test(
     tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-provider-command:d2b_provider_command",
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
+        "//packages/d2b-provider-guest:d2b_provider_guest",
+        "//packages/d2b-provider-operation:d2b_provider_operation",
+        "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 d2b_rust_test(
@@ -337,7 +354,13 @@ d2b_rust_test(
     tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-provider-command:d2b_provider_command",
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
+        "//packages/d2b-provider-guest:d2b_provider_guest",
+        "//packages/d2b-provider-operation:d2b_provider_operation",
+        "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 d2b_rust_test(
@@ -425,7 +448,13 @@ d2b_rust_test(
         "no-sandbox",
     ],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-provider-command:d2b_provider_command",
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
+        "//packages/d2b-provider-guest:d2b_provider_guest",
+        "//packages/d2b-provider-operation:d2b_provider_operation",
+        "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 d2b_rust_test(
@@ -448,7 +477,13 @@ d2b_rust_test(
     tags = ["no-remote-cache"],
     visibility = ["//visibility:public"],
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",  "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-provider-command:d2b_provider_command",
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
+        "//packages/d2b-provider-guest:d2b_provider_guest",
+        "//packages/d2b-provider-operation:d2b_provider_operation",
+        "//packages/d2b-provider-seccomp-profile:d2b_provider_seccomp_profile",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 test_suite(

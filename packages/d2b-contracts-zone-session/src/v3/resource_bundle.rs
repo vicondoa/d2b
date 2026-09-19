@@ -1122,4 +1122,103 @@ mod tests {
         value["resources"][0]["metadata"]["name"] = serde_json::json!("b");
         assert!(ResourceBundle::from_json(&serde_json::to_vec(&value).unwrap()).is_err());
     }
+
+    #[test]
+    fn declared_process_templates_require_the_system_minijail_provider() {
+        let owner = BundleResource::new(
+            ResourceTypeName::parse("Provider").unwrap(),
+            BundleResourceMetadata::new(
+                ResourceName::parse("system-minijail").unwrap(),
+                ZoneId::parse("dev").unwrap(),
+                None,
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(br#"{"artifactId":"runtime"}"#).unwrap(),
+        )
+        .unwrap();
+        let process = BundleResource::new(
+            ResourceTypeName::parse("Process").unwrap(),
+            BundleResourceMetadata::new(
+                ResourceName::parse("controller").unwrap(),
+                ZoneId::parse("dev").unwrap(),
+                Some(ResourceRef::parse("Provider/system-minijail").unwrap()),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"executionRef":"Host/host","template":"controller-runtime","providerRef":"Provider/system-minijail","processClass":"controller"}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let binding = ProcessTemplateBinding::new(
+            ResourceRef::parse("Process/controller").unwrap(),
+            ResourceRef::parse("Provider/system-minijail").unwrap(),
+            ResourceRef::parse("Host/host").unwrap(),
+            BoundedToken::parse("controller-runtime").unwrap(),
+            ArtifactId::parse("runtime").unwrap(),
+            BinaryRef::parse("controller").unwrap(),
+            ArtifactDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            "/nix/store/runtime/bin/controller",
+        )
+        .unwrap();
+        let resources = vec![owner, process];
+        let content_hash = digest_resources(&resources).unwrap();
+        ResourceBundle::new(
+            ZoneId::parse("dev").unwrap(),
+            resources,
+            content_hash,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            timestamp(),
+        )
+        .unwrap()
+        .with_process_templates(vec![binding.clone()])
+        .unwrap();
+
+        // A different provider cannot own a declared process template row.
+ 
+        let rogue_owner = BundleResource::new(
+            ResourceTypeName::parse("Provider").unwrap(),
+            BundleResourceMetadata::new(
+                ResourceName::parse("system-minijail").unwrap(),
+                ZoneId::parse("dev").unwrap(),
+                None,
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(br#"{"artifactId":"runtime"}"#).unwrap(),
+        )
+        .unwrap();
+        let rogue = BundleResource::new(
+            ResourceTypeName::parse("Process").unwrap(),
+            BundleResourceMetadata::new(
+                ResourceName::parse("controller").unwrap(),
+                ZoneId::parse("dev").unwrap(),
+                Some(ResourceRef::parse("Provider/system-minijail").unwrap()),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            CanonicalJsonObject::parse(
+                br#"{"executionRef":"Host/host","template":"controller-runtime","providerRef":"Provider/other","processClass":"controller"}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let rogue_resources = vec![rogue_owner, rogue];
+        let rogue_hash = digest_resources(&rogue_resources).unwrap();
+        let err = ResourceBundle::new(
+            ZoneId::parse("dev").unwrap(),
+            rogue_resources,
+            rogue_hash,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            timestamp(),
+        )
+        .unwrap()
+        .with_process_templates(vec![binding])
+        .unwrap_err();
+        assert_eq!(err, ResourceBundleError::ProcessTemplateMismatch);
+    }
 }

@@ -104,7 +104,7 @@ impl fmt::Display for CreditError {
                 formatter.write_str("transport-credit-attachment-allowance-exceeded")
             }
             Self::ScopePool(inner) => {
-                write!(formatter, "transport-credit-scope-pool({inner:?})")
+                write!(formatter, "credit-scope-pool({inner:?})")
             }
         }
     }

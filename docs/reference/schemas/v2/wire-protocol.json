@@ -1523,7 +1523,7 @@
               ]
             },
             "payload": {
-              "$ref": "#/definitions/SystemdUnitRequest"
+              "$ref": "#/definitions/UnitRequest"
             }
           }
         },
@@ -1542,7 +1542,7 @@
               ]
             },
             "payload": {
-              "$ref": "#/definitions/SystemdUnitRequest"
+              "$ref": "#/definitions/UnitRequest"
             }
           }
         },
@@ -1561,7 +1561,7 @@
               ]
             },
             "payload": {
-              "$ref": "#/definitions/SystemdUnitRequest"
+              "$ref": "#/definitions/UnitRequest"
             }
           }
         },
@@ -1580,7 +1580,7 @@
               ]
             },
             "payload": {
-              "$ref": "#/definitions/OpenSystemdUnitPidfdRequest"
+              "$ref": "#/definitions/OpenUnitPidfdRequest"
             }
           }
         },
@@ -1599,7 +1599,7 @@
               ]
             },
             "payload": {
-              "$ref": "#/definitions/StopSystemdUnitRequest"
+              "$ref": "#/definitions/StopUnitRequest"
             }
           }
         },
@@ -2268,7 +2268,7 @@
               ]
             },
             "payload": {
-              "$ref": "#/definitions/CheckSystemdUserManagerResponse"
+              "$ref": "#/definitions/CheckUserManagerResponse"
             }
           }
         },
@@ -2287,7 +2287,7 @@
               ]
             },
             "payload": {
-              "$ref": "#/definitions/ObserveSystemdUnitResponse"
+              "$ref": "#/definitions/ObserveUnitResponse"
             }
           }
         },
@@ -2306,7 +2306,7 @@
               ]
             },
             "payload": {
-              "$ref": "#/definitions/OpenSystemdUnitPidfdResponse"
+              "$ref": "#/definitions/OpenUnitPidfdResponse"
             }
           }
         },
@@ -2325,7 +2325,7 @@
               ]
             },
             "payload": {
-              "$ref": "#/definitions/StopSystemdUnitResponse"
+              "$ref": "#/definitions/StopUnitResponse"
             }
           }
         },
@@ -2463,7 +2463,7 @@
       "maxItems": 64,
       "uniqueItems": true
     },
-    "CheckSystemdUserManagerResponse": {
+    "CheckUserManagerResponse": {
       "description": "Response from a same-UID per-user manager reachability check.",
       "type": "object",
       "required": [
@@ -5700,7 +5700,7 @@
         "time"
       ]
     },
-    "ObserveSystemdUnitResponse": {
+    "ObserveUnitResponse": {
       "description": "Observation response. `present = false` has no identity payload.",
       "type": "object",
       "required": [
@@ -5712,7 +5712,7 @@
         "identity": {
           "anyOf": [
             {
-              "$ref": "#/definitions/SystemdUnitIdentity"
+              "$ref": "#/definitions/UnitIdentity"
             },
             {
               "type": "null"
@@ -5869,7 +5869,7 @@
       },
       "additionalProperties": false
     },
-    "OpenSystemdUnitPidfdRequest": {
+    "OpenUnitPidfdRequest": {
       "description": "Request to re-open a pidfd after identity re-verification.",
       "type": "object",
       "required": [
@@ -5897,7 +5897,7 @@
           "description": "System or verified user manager.",
           "allOf": [
             {
-              "$ref": "#/definitions/SystemdUnitDomain"
+              "$ref": "#/definitions/UnitDomain"
             }
           ]
         },
@@ -5917,7 +5917,7 @@
           "description": "Identity observed before the local descriptor was requested.",
           "allOf": [
             {
-              "$ref": "#/definitions/SystemdUnitIdentity"
+              "$ref": "#/definitions/UnitIdentity"
             }
           ]
         },
@@ -6029,7 +6029,7 @@
       },
       "additionalProperties": false
     },
-    "OpenSystemdUnitPidfdResponse": {
+    "OpenUnitPidfdResponse": {
       "description": "Re-open response. The exact-main pidfd is the first SCM_RIGHTS fd.",
       "type": "object",
       "required": [
@@ -6040,7 +6040,7 @@
       ],
       "properties": {
         "identity": {
-          "$ref": "#/definitions/SystemdUnitIdentity"
+          "$ref": "#/definitions/UnitIdentity"
         },
         "pidfdIndex": {
           "type": "integer",
@@ -8565,7 +8565,7 @@
       ],
       "properties": {
         "identity": {
-          "$ref": "#/definitions/SystemdUnitIdentity"
+          "$ref": "#/definitions/UnitIdentity"
         },
         "pidfdIndex": {
           "type": "integer",
@@ -8622,7 +8622,7 @@
       },
       "additionalProperties": false
     },
-    "StopSystemdUnitRequest": {
+    "StopUnitRequest": {
       "description": "Request to stop one exact transient systemd unit.",
       "type": "object",
       "required": [
@@ -8651,7 +8651,7 @@
           "description": "Graceful drain or forced termination.",
           "allOf": [
             {
-              "$ref": "#/definitions/SystemdStopClass"
+              "$ref": "#/definitions/UnitStopClass"
             }
           ]
         },
@@ -8659,7 +8659,7 @@
           "description": "System or verified user manager.",
           "allOf": [
             {
-              "$ref": "#/definitions/SystemdUnitDomain"
+              "$ref": "#/definitions/UnitDomain"
             }
           ]
         },
@@ -8679,7 +8679,7 @@
           "description": "Identity that must still match before the stop is sent.",
           "allOf": [
             {
-              "$ref": "#/definitions/SystemdUnitIdentity"
+              "$ref": "#/definitions/UnitIdentity"
             }
           ]
         },
@@ -8791,7 +8791,7 @@
       },
       "additionalProperties": false
     },
-    "StopSystemdUnitResponse": {
+    "StopUnitResponse": {
       "description": "Stop response after systemd confirmed the unit is inactive.",
       "type": "object",
       "required": [
@@ -8904,26 +8904,34 @@
       },
       "additionalProperties": false
     },
-    "SystemdStopClass": {
-      "description": "Stop class for transient systemd units.",
-      "oneOf": [
-        {
-          "description": "Request systemd to stop the unit and wait for it to become inactive.",
-          "type": "string",
-          "enum": [
-            "drain"
-          ]
+    "TerminalSize": {
+      "type": "object",
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         },
-        {
-          "description": "Kill the exact unit cgroup and verify it becomes inactive.",
-          "type": "string",
-          "enum": [
-            "terminate"
-          ]
+        "rows": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
         }
+      },
+      "additionalProperties": false
+    },
+    "TerminalStream": {
+      "type": "string",
+      "enum": [
+        "stdout",
+        "stderr"
       ]
     },
-    "SystemdUnitDomain": {
+    "UnitDomain": {
       "description": "Closed systemd execution domain. User-manager execution remains subject to same-UID verification by the broker; no manager address crosses the wire.",
       "oneOf": [
         {
@@ -8942,7 +8950,7 @@
         }
       ]
     },
-    "SystemdUnitIdentity": {
+    "UnitIdentity": {
       "description": "Stable systemd identity returned only after the broker has queried the manager and re-read the process start time under the pidfd boundary.",
       "type": "object",
       "required": [
@@ -9036,7 +9044,7 @@
       },
       "additionalProperties": false
     },
-    "SystemdUnitRequest": {
+    "UnitRequest": {
       "description": "Shared trusted request fields for systemd unit operations.",
       "type": "object",
       "required": [
@@ -9063,7 +9071,7 @@
           "description": "System or verified user manager.",
           "allOf": [
             {
-              "$ref": "#/definitions/SystemdUnitDomain"
+              "$ref": "#/definitions/UnitDomain"
             }
           ]
         },
@@ -9187,31 +9195,23 @@
       },
       "additionalProperties": false
     },
-    "TerminalSize": {
-      "type": "object",
-      "required": [
-        "cols",
-        "rows"
-      ],
-      "properties": {
-        "cols": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
+    "UnitStopClass": {
+      "description": "Stop class for transient systemd units.",
+      "oneOf": [
+        {
+          "description": "Request systemd to stop the unit and wait for it to become inactive.",
+          "type": "string",
+          "enum": [
+            "drain"
+          ]
         },
-        "rows": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
+        {
+          "description": "Kill the exact unit cgroup and verify it becomes inactive.",
+          "type": "string",
+          "enum": [
+            "terminate"
+          ]
         }
-      },
-      "additionalProperties": false
-    },
-    "TerminalStream": {
-      "type": "string",
-      "enum": [
-        "stdout",
-        "stderr"
       ]
     },
     "UsbProbeEntryKind": {

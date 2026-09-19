@@ -40,7 +40,7 @@ use d2b_contracts_resource::v3::{
     execution_policy::ExecutionDomain,
 };
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent, is_device_worker_role};
-use d2b_core::minijail_profile::CgroupPlacement;
+use d2b_core::sandbox_profile::CgroupPlacement;
 use d2b_core::processes::ProcessRole;
 use d2b_resource_types::{
     KernelCaller, OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,
@@ -2709,6 +2709,13 @@ impl OperationHandler for SpawnRunnerHandler {
                     "stateRoot": identity.state_root.display().to_string(),
                     "stateVolume": identity.state_volume,
                 })),
+                // The stale-socket preflight paths the guest runtime
+                // Provider declares from its own argv; the broker's spawn
+                // kernel unlinks provably-stale sockets before spawning.
+                "preflightSocketPaths": d2b_provider_guest_cloud_hypervisor::preflight_socket_paths(&argv)
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>(),
                 "deviceWorker": {
                     "scope": device_worker.scope.as_ref().map(|scope| serde_json::json!({
                         "zoneUid": scope.zone_uid.as_str(),

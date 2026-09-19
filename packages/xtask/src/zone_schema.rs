@@ -1160,7 +1160,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Guest",
-            dto_resource_schema::<d2b_contracts_resource::v3::guest::GuestSpec>(
+            dto_resource_schema::<d2b_provider_guest::GuestSpec>(
                 "Guest",
                 "VM, sandbox, cloud, or remote execution parent.",
                 true,
@@ -1232,7 +1232,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Command",
-            dto_resource_schema::<d2b_contracts_resource::v3::CommandSpec>(
+            dto_resource_schema::<d2b_provider_command::CommandSpec>(
                 "Command",
                 "Declared launch shape: executable, argv placeholder slots, parameters, worker role, and intent.",
                 true,
@@ -1240,7 +1240,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Operation",
-            dto_resource_schema::<d2b_contracts_resource::v3::OperationSpec>(
+            dto_resource_schema::<d2b_provider_operation::OperationSpec>(
                 "Operation",
                 "Committed broker operation: payload schema, authority, audit, fd, bounds, and provenance facets.",
                 true,
@@ -1248,7 +1248,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "SeccompProfile",
-            dto_resource_schema::<d2b_contracts_resource::v3::SeccompProfileSpec>(
+            dto_resource_schema::<d2b_provider_seccomp_profile::SeccompProfileSpec>(
                 "SeccompProfile",
                 "Posture row: syscall allowlist, namespace and cgroup sets, and inline device-node binds.",
                 true,

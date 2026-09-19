@@ -574,8 +574,13 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
     let members = cargo_workspace_members(&repo_root)?;
     check_members(&repo_root, members.clone())?;
     check_closed_matrix(&repo_root, &members)?;
+    check_committed_scope(&repo_root, &members)?;
     check_shared_driver_placements(&repo_root)?;
     check_shared_family_knowledge(&repo_root)?;
+    check_provider_crate_family_knowledge(&repo_root)?;
+    check_shared_structural_knowledge(&repo_root)?;
+    check_shared_provider_dependencies(&repo_root)?;
+    check_self_binding_scope(&repo_root)?;
     check_generated_provenance(&repo_root)?;
     check_broker_manifest(&repo_root)?;
     check_banned_api_allows(&repo_root)?;
@@ -687,13 +692,14 @@ fn check_closed_matrix(repo_root: &Path, members: &[WorkspaceMember]) -> Result<
 /// driver.
 ///
 /// A driver belongs to the per-type crate that declares its resource type.
-/// These roots are the shared platform - the daemon, the broker, the core
-/// contracts, the controller session library, and the resource runtime and
-/// resource types the framework itself lives in - so a driver declaration here
-/// is resource knowledge living outside the crate that owns it. The framework
-/// roots are monitored so the shared declaration-only metadata driver is
-/// policed in place: [`FRAMEWORK_DRIVER_DECLARATIONS`] names the one allowed
-/// case, and a per-resource driver parked in either crate still fails.
+/// These roots are the shared platform - the daemon, the broker, the service
+/// bus, the core contracts, the controller session library, the resource API
+/// and compiler, and the resource runtime, resource types, and host vocabulary
+/// the framework itself lives in - so a driver declaration here is resource
+/// knowledge living outside the crate that owns it. The framework roots are
+/// monitored so the shared declaration-only metadata driver is policed in
+/// place: [`FRAMEWORK_DRIVER_DECLARATIONS`] names the one allowed case, and a
+/// per-resource driver parked in either crate still fails.
 const SHARED_CRATE_SOURCE_ROOTS: &[&str] = &[
     "packages/d2b-broker/src",
     "packages/d2b-contracts-broker/src",
@@ -707,6 +713,10 @@ const SHARED_CRATE_SOURCE_ROOTS: &[&str] = &[
     "packages/d2b-resource-runtime/src",
     "packages/d2b-resource-types/src",
     "packages/d2bd/src",
+    "packages/d2b-bus/src",
+    "packages/d2b-resource-api/src",
+    "packages/d2b-resource-compiler/src",
+    "packages/d2b-host/src",
 ];
 
 /// One shared-crate module that still declares a resource driver.
@@ -1089,43 +1099,43 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/sysctl.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the daemon's activation dispatch and host-prep arms hold committed views of the provider-declared vocabulary; the config-nixos and network-sysctl references are other families' declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/exec_reconcile.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/modprobe.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
+    SharedFamilyKnowledgeExemption {
     // U10 ported the retired process-family arm's privileged behaviors
     // into the spawn-process kernel (kernel_ops.rs); the kernel keeps the
     // family knowledge these tokens name until each family's own U12
     // census step moves it into its provider crate.
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/kernel_ops.rs",
         token: "usbip",
         family: "device-usbip",
@@ -1138,52 +1148,36 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 observability census step (kernel stale-socket cleanup moves into d2b-provider-observability-otel)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/kernel_ops.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U12 cloud-hypervisor census step (kernel stale-socket cleanup moves into d2b-provider-runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/audio.rs",
         token: "audio_pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/operations/seal.rs",
         token: "credential_managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/operations/seal.rs",
         token: "managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "credential_managed_identity",
-        family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "managed_identity",
-        family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
-    },
+
+
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/media.rs",
         token: "credential_managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/media.rs",
         token: "managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
@@ -1195,25 +1189,25 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "device_gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/sys.rs",
         token: "device_gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/swtpm_dir.rs",
         token: "device_gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
@@ -1231,7 +1225,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/media.rs",
         token: "device_gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
@@ -1243,19 +1237,19 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "device_security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/sys.rs",
         token: "device_security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/swtpm_dir.rs",
         token: "device_security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
@@ -1267,13 +1261,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/media.rs",
         token: "device_security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/swtpm_dir.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/kernel_ops.rs",
@@ -1303,7 +1297,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/tpm_effect_port.rs",
@@ -1318,40 +1312,34 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 tpm/device step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/shared_provider_effects.rs",
-        token: "swtpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "device_tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/sys.rs",
         token: "device_tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/state_dir.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/swtpm_dir.rs",
         token: "device_tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/swtpm_dir.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
@@ -1369,7 +1357,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/media.rs",
         token: "device_tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_runtime.rs",
@@ -1405,37 +1393,37 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/usbip_host.rs",
         token: "device_usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/usbip_host.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/usbip.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "device_usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/sys.rs",
         token: "device_usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
@@ -1453,25 +1441,25 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/swtpm_dir.rs",
         token: "device_usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/exec_reconcile.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/usbip_lock.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/media.rs",
         token: "device_usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/nft.rs",
@@ -1492,36 +1480,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (observability-otel)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "runtime_azure_container_apps",
-        family: "runtime-azure-container-apps",
-        retires_with: "U10-U12 family rollout (runtime-azure-container-apps)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/media.rs",
-        token: "runtime_azure_container_apps",
-        family: "runtime-azure-container-apps",
-        retires_with: "U10-U12 family rollout (runtime-azure-container-apps)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "runtime_azure_virtual_machine",
-        family: "runtime-azure-virtual-machine",
-        retires_with: "U10-U12 family rollout (runtime-azure-virtual-machine)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/media.rs",
-        token: "runtime_azure_virtual_machine",
-        family: "runtime-azure-virtual-machine",
-        retires_with: "U10-U12 family rollout (runtime-azure-virtual-machine)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "runtime_cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
@@ -1534,52 +1492,40 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/media.rs",
-        token: "runtime_cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "runtime_qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "runtime_qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/media.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/media.rs",
         token: "runtime_qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "runtime_qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
@@ -1689,317 +1635,306 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "volume-local",
         retires_with: "U12 volume/store step",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/volume_effect_adapter.rs",
-        token: "volume_virtiofs",
-        family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
-    },
+
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/modprobe.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/error.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the ProcessRole vocabulary unifies into declared Role rows (U13 structural residue)",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the ProcessRole vocabulary unifies into declared Role rows (U13 structural residue)",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/error.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the ArtifactKind enum is declared by the network provider; the daemon's match arm is a committed view",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/provider_capabilities.rs",
-        token: "nixos",
-        family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the daemon's activation dispatch and host-prep arms hold committed views of the provider-declared vocabulary; the config-nixos and network-sysctl references are other families' declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/privileges_w3.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/privileges_w3.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/host_w3.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/activation_nixos.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/interaction_composition.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the config-nixos provider references are another family's declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/network_effect_port.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the network sysctl intents are the network family's declared vocabulary; the daemon's network effect adapter reads them through the generic resolver",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the daemon's activation dispatch and host-prep arms hold committed views of the provider-declared vocabulary; the config-nixos and network-sysctl references are other families' declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_plane_v3.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the daemon's plane wires the provider's driver factory and family declaration; the crate reference and family id are the dependency itself",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_plane_v3.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the daemon's plane wires the provider's driver factory and family declaration; the crate reference and family id are the dependency itself",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/runtime.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/activation_effects.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the daemon's activation effects implement the provider's effect port; the crate reference is the dependency itself",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/activation_effects.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the daemon's activation effects implement the provider's effect port; the crate reference is the dependency itself",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/bootstrap.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/bootstrap.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/audit_op.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/audit_op.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/processes.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/processes.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/catalog.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/catalog.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-zone-session/src/v3/zone_session.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `frozen_tag_and_wire_string_vectors_are_exact` at zone_session.rs:788 pins the wire string d2b.config-nixos.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/mod.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/mod.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/mod.rs",
         token: "sysctl",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the ServicePackage wire string d2b.config-nixos.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/exec_reconcile.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-zone-session/src/v3/services.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `service_package_wire_values_are_frozen` at services.rs:385 pins V3Service::package() wire d2b.config-nixos.v3;the bus routes an exact closed package and the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/mod.rs",
         token: "modprobe",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/audio_dispatch.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the RuntimeKind vocabulary is generic runtime metadata the daemon matches; the token heuristic maps the nixos spelling to this family",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/audio_resource_runtime.rs",
@@ -2065,7 +2000,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/device.rs",
         token: "pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/audio_host_controller.rs",
@@ -2083,7 +2018,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_runtime.rs",
@@ -2119,49 +2054,31 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "clipboard",
         family: "clipboard-wayland",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the ServicePackage wire string d2b.clipboard.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-zone-session/src/v3/zone_session.rs",
         token: "clipboard",
         family: "clipboard-wayland",
-        retires_with: "R4 zone-plane surface - permanent",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "entra",
-        family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
+        retires_with: "permanent: golden test `frozen_tag_and_wire_string_vectors_are_exact` at zone_session.rs:788 pins d2b.clipboard.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "entra",
         family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "managed_identity",
-        family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "secret_service",
-        family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "secret_service",
         family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/device.rs",
@@ -2173,7 +2090,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/gpu.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/device.rs",
@@ -2191,7 +2108,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core-controller/src/authority.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: shared controller-session crate; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
@@ -2209,7 +2126,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/capability.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
@@ -2227,7 +2144,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core/src/runtime.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_effects.rs",
@@ -2245,13 +2162,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/systemd.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/manifest_v04.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/processes.rs",
@@ -2263,19 +2180,19 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/device_worker.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/public_wire.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
@@ -2287,13 +2204,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-control/src/cli_output.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/mod.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
@@ -2305,7 +2222,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/security_key.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
@@ -2335,25 +2252,25 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-control/src/public_wire.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/semantic_services/mod.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/security_key.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
@@ -2371,31 +2288,31 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/privileges_w3.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/audit_op.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/manifest_v04.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/lib.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/processes.rs",
@@ -2407,7 +2324,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/catalog.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
@@ -2415,11 +2332,19 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "device-security-key",
         retires_with: "U12 security-key step",
     },
+    // U7 permanent carve-out: the host document's guest runtime shapes
+    // (`HostQemuMedia`, `QemuMediaSourceIntent`, `CloudHypervisorCapability`,
+    // `HostChConfig`, `ChNetHandoffMode`) stay in the shared core crate.
+    // The host document is shared state the broker's media kernel, the
+    // daemon, and the resolver all read; placing the shapes in the owning
+    // provider crates would give the shared core crate a provider
+    // dependency, which the dependency-direction detector refuses. The
+    // family rows below stay because the shapes carry the family spellings.
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/host.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
@@ -2431,19 +2356,19 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/mod.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/semantic_services/security_key.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/semantic_services/child_resources.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_runtime.rs",
@@ -2479,37 +2404,37 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/error.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/migration.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: shared controller-session crate; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/authority.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: shared controller-session crate; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/authority.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: shared controller-session crate; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/runtime.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/privileges_w3.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
@@ -2533,13 +2458,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core/src/runtime.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
@@ -2557,13 +2482,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/systemd.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/cli_output.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/processes.rs",
@@ -2575,61 +2500,61 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/device_worker.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/device_worker.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/manifest_v04.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/audit_op.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/public_wire.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/state_dir.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/public_wire.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/mod.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/device.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/tpm_effect_port.rs",
@@ -2653,7 +2578,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/catalog.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
@@ -2671,7 +2596,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-control/src/cli_output.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_runtime.rs",
@@ -2701,7 +2626,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core/src/runtime.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
@@ -2713,7 +2638,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/error.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_plane_v3.rs",
@@ -2724,18 +2649,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_plane_v3.rs",
         token: "device_usbip",
-        family: "device-usbip",
-        retires_with: "U12 usbip step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/lib.rs",
-        token: "device_usbip",
-        family: "device-usbip",
-        retires_with: "U12 usbip step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/lib.rs",
-        token: "usbip",
         family: "device-usbip",
         retires_with: "U12 usbip step",
     },
@@ -2743,25 +2656,19 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core-controller/src/authority.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: shared controller-session crate; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/coordinator.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/device_usbip_adapter.rs",
-        token: "usbip",
-        family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: shared controller-session crate; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/security_key.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/usbip_production.rs",
@@ -2773,25 +2680,31 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/bootstrap.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/public_wire.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/privileges_w3.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "usbip",
         family: "device-usbip",
         retires_with: "U12 usbip step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/system_core_effects.rs",
+        token: "device_usbip",
+        family: "device-usbip",
+        retires_with: "pending: the daemon reads the usbip kernel-module names from d2b-provider-device-usbip; the import carries the family crate name",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/system_core_effects.rs",
@@ -2803,7 +2716,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/usbip_production.rs",
@@ -2815,31 +2728,31 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/systemd.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/host.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/usbip_firewall.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/cli_output.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/manifest_v04.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/processes.rs",
@@ -2851,31 +2764,31 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/catalog.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/lib.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/audit_op.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/device.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/mod.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
@@ -2989,7 +2902,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "wayland",
         family: "display-wayland",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the AttachmentPurpose wire string wayland and wayland-socket;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/site.rs",
@@ -3050,18 +2963,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "wayland",
         family: "display-wayland",
         retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/network_effect_port.rs",
-        token: "nftables",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/network_effect_port.rs",
-        token: "dnsmasq",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
@@ -3214,18 +3115,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 network-fds step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/shared_provider_effects.rs",
-        token: "dnsmasq",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/shared_provider_effects.rs",
-        token: "nftables",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_runtime.rs",
         token: "network_local",
         family: "network-local",
@@ -3295,7 +3184,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/zone_session.rs",
         token: "notification",
         family: "notification-desktop",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `frozen_tag_and_wire_string_vectors_are_exact` at zone_session.rs:788 pins d2b.notification.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
@@ -3307,7 +3196,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "notification",
         family: "notification-desktop",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the ServicePackage wire string d2b.notification.v3;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/audit.rs",
@@ -3388,19 +3277,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/provider_shutdown.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/guest_effects.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/provider_capabilities.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
@@ -3463,7 +3340,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the TransportClass wire string cloud-hypervisor-vsock;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_plane_v3.rs",
@@ -3475,121 +3352,109 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/guest_effects.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the daemon's media effect and composition adapters spell the provider's own typed API (QemuMedia*);the daemon reads the media contract, runner identity, and runtime naming from the provider declarations",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:trusted-bundle/manifest wire shapes across d2b-core/daemon;d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the daemon's composition/effects/dispatch adapters spell the provider's own typed API (QemuMedia*);the daemon reads the media contract, runner identity, and runtime naming from the provider declarations",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/host.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:trusted-bundle/manifest wire shapes across d2b-core/daemon;d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the daemon's composition and dispatch adapters spell the provider's own typed API (QemuMedia*);the daemon reads the media contract, runner identity, and runtime naming from the provider declarations",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/provider_capabilities.rs",
-        token: "qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/provider_shutdown.rs",
-        token: "qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:trusted-bundle/manifest wire shapes across d2b-core/daemon;d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/workload_identity.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/public_wire.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/workload.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/systemd.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/processes.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:trusted-bundle/manifest wire shapes across d2b-core/daemon;d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/catalog.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/audit_op.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/cli_output.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/controller_config.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/runtime.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/audio_dispatch.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the daemon's composition/effects/dispatch adapters spell the provider's own typed API (QemuMedia*);the daemon reads the media contract, runner identity, and runtime naming from the provider declarations",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/interaction_composition.rs",
@@ -3613,7 +3478,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/zone.rs",
         token: "system_core",
         family: "system-core",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `system_core_handler_names_use_exact_hyphenated_wire_values` at zone.rs:530 pins every ZoneHandlerName serde wire string, including system-core-host and system-core-user;the zone-plane status surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/main.rs",
@@ -3628,16 +3493,23 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (system-core)",
     },
     SharedFamilyKnowledgeExemption {
+    // U4 permanent carve-out: the Host and User primitive shapes stay in the
+    // shared contracts crate. A shared runtime consumer (d2bd-runtime) needs
+    // the shapes, so placing them in the owning provider crate makes a shared
+    // crate depend on a provider crate, which the runtime boundary test
+    // refuses; the guard wins over the re-homing. Host carries the
+    // system-core token here; User carries no family token, so it needs no
+    // ratchet row, only this record.
+        module: "packages/d2b-contracts-resource/src/v3/host.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U4 permanent carve-out - shared runtime consumer needs the shapes; the runtime boundary test refuses a shared-crate-to-provider dependency",
+    },
+    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/interaction_composition.rs",
         token: "system_core",
         family: "system-core",
         retires_with: "U10-U12 family rollout (system-core)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/error.rs",
@@ -3664,19 +3536,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (system-minijail)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/sys.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/system_core_effects.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/lib.rs",
         token: "minijail",
         family: "system-minijail",
         retires_with: "U10-U12 family rollout (system-minijail)",
@@ -3695,36 +3555,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/catalog.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/spawn_runner.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/live_handlers.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/bundle_resolver.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/minijail_profile.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/test_support.rs",
         token: "minijail",
         family: "system-minijail",
         retires_with: "U10-U12 family rollout (system-minijail)",
@@ -3811,7 +3641,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/component_session.rs",
         token: "vsock",
         family: "transport-vsock",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `wire_enum_vectors_are_frozen` at component_session.rs:3227 pins the TransportClass wire strings native-vsock and cloud-hypervisor-vsock;the zone-plane surface is frozen wire, not knowledge that can move",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/capability.rs",
@@ -3880,12 +3710,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (transport-vsock)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts-resource/src/v3/endpoint.rs",
-        token: "vsock",
-        family: "transport-vsock",
-        retires_with: "U10-U12 family rollout (transport-vsock)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "vsock",
         family: "transport-vsock",
@@ -3925,19 +3749,19 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/capability.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/volume.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/runtime.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/binding_effects.rs",
@@ -3967,13 +3791,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core/src/runtime.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/processes.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
@@ -3991,13 +3815,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/controller_config.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_plane_v3.rs",
@@ -4015,91 +3839,89 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/runtime.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/activation_nixos.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
+    // U6 permanent carve-out: the Process and EphemeralProcess shapes stay
+    // in the shared contracts crate. The broker's spawn validation reads the
+    // namespace, capability, environment, and mapping classes from
+    // `v3::process` in its own runtime module, and d2b-core's resolver and
+    // the resource compiler consume the spec shapes; placing the shapes in
+    // d2b-provider-process would give the broker and the shared core crates
+    // a dependency on a provider crate, which the broker manifest pin and
+    // the shared-crate dependency detector both refuse. The shapes carry no
+    // process-family token of their own, so they need no ratchet row, only
+    // this record; the activation-nixos rows below are the U12 lane's.
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/process.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/process.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/error.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-resource-types/src/resource_type.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: shared type registry; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-resource-types/src/resource_type.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: shared type registry; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/resource_schema.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/resource_schema.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
-        token: "activation_nixos",
-        family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
-        token: "nixos",
-        family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "activation_nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "nixos",
         family: "activation-nixos",
-        retires_with: "U12 activation/host-maintenance step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/privileges.rs",
@@ -4111,79 +3933,29 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "credential_entra",
         family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "credential_entra",
-        family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "entra",
-        family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "credential_entra",
-        family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
-    },
+
+
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "credential_managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "credential_managed_identity",
-        family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "credential_secret_service",
         family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "credential_secret_service",
-        family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "secret_service",
-        family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/credential_backend_runtime.rs",
-        token: "credential_secret_service",
-        family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
-    },
+
+
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "gpu",
         family: "device-gpu",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/device_usbip_adapter.rs",
-        token: "device_security_key",
-        family: "device-security-key",
-        retires_with: "U12 security-key step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/device_usbip_adapter.rs",
-        token: "security_key",
-        family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/device.rs",
@@ -4195,25 +3967,19 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-resource-types/src/resource_type.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: shared type registry; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/privileges.rs",
         token: "security_key",
         family: "device-security-key",
-        retires_with: "U12 security-key step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
-        token: "security_key",
-        family: "device-security-key",
-        retires_with: "U12 security-key step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "swtpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
@@ -4225,7 +3991,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/state_dir.rs",
         token: "device_tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/device.rs",
@@ -4237,19 +4003,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core/src/static_invariants.rs",
         token: "tpm",
         family: "device-tpm",
-        retires_with: "U12 tpm/device step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/device_usbip_adapter.rs",
-        token: "device_usbip",
-        family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/device.rs",
@@ -4267,7 +4027,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core/src/static_invariants.rs",
         token: "usbip",
         family: "device-usbip",
-        retires_with: "U12 usbip step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
@@ -4304,24 +4064,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "wayland",
         family: "display-wayland",
         retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
-        token: "display_wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
-        token: "wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts-resource/src/v3/network.rs",
-        token: "network_local",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/authority.rs",
@@ -4399,25 +4141,25 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-provider/src/v3/telemetry_policy.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "runtime_qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the daemon's composition and dispatch adapters spell the provider's own typed API (QemuMedia*);the daemon reads the media contract, runner identity, and runtime naming from the provider declarations",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/network.rs",
         token: "qemu_media",
         family: "runtime-qemu-media",
-        retires_with: "U12 qemu-media step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_runtime/interaction_effects.rs",
@@ -4438,18 +4180,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (shell-terminal)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/identity.rs",
-        token: "shell_terminal",
-        family: "shell-terminal",
-        retires_with: "U10-U12 family rollout (shell-terminal)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts-resource/src/v3/network.rs",
-        token: "system_core",
-        family: "system-core",
-        retires_with: "U10-U12 family rollout (system-core)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/telemetry_policy.rs",
         token: "system_core",
         family: "system-core",
@@ -4457,12 +4187,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-provider/src/v3/provider.rs",
-        token: "system_core",
-        family: "system-core",
-        retires_with: "U10-U12 family rollout (system-core)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts-resource/src/v3/host.rs",
         token: "system_core",
         family: "system-core",
         retires_with: "U10-U12 family rollout (system-core)",
@@ -4549,13 +4273,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-zone-session/src/v3/resource_bundle.rs",
         token: "minijail",
         family: "system-minijail",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `declared_process_templates_require_the_system_minijail_provider` at resource_bundle.rs:1127 pins the Provider/system-minijail wire string that the template binding validation enforces;the bundle wire contract is frozen",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-zone-session/src/v3/resource_bundle.rs",
         token: "system_minijail",
         family: "system-minijail",
-        retires_with: "R4 zone-plane surface - permanent",
+        retires_with: "permanent: golden test `declared_process_templates_require_the_system_minijail_provider` at resource_bundle.rs:1127 pins the Provider/system-minijail wire string that the template binding validation enforces;the bundle wire contract is frozen",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
@@ -4663,57 +4387,322 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/failure_kinds.rs",
         token: "volume_local",
         family: "volume-local",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/static_invariants.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/failure_kinds.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/failure_kinds.rs",
         token: "volume_virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "volume_virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "volume_virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/store_sync.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+        token: "activation_nixos",
+        family: "activation-nixos",
+        retires_with: "permanent: the host is a shared crate that may not depend on a provider crate; it keeps a committed view of the provider-declared host surface",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/bin/d2b-activation-helper.rs",
+        token: "nixos",
+        family: "activation-nixos",
+        retires_with: "permanent: the host is a shared crate that may not depend on a provider crate; it keeps a committed view of the provider-declared host surface",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/hardlink_farm.rs",
+        token: "nixos",
+        family: "activation-nixos",
+        retires_with: "permanent: the host is a shared crate that may not depend on a provider crate; it keeps a committed view of the provider-declared host surface",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/host_prep_dag.rs",
+        token: "nixos",
+        family: "activation-nixos",
+        retires_with: "permanent: the host is a shared crate that may not depend on a provider crate; it keeps a committed view of the provider-declared host surface",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/host_prep_dag.rs",
+        token: "sysctl",
+        family: "activation-nixos",
+        retires_with: "permanent: the host is a shared crate that may not depend on a provider crate; it keeps a committed view of the provider-declared host surface",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/ioctl_policy.rs",
+        token: "sysctl",
+        family: "activation-nixos",
+        retires_with: "permanent: the host is a shared crate that may not depend on a provider crate; it keeps a committed view of the provider-declared host surface",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/netlink.rs",
+        token: "sysctl",
+        family: "activation-nixos",
+        retires_with: "permanent: the host is a shared crate that may not depend on a provider crate; it keeps a committed view of the provider-declared host surface",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/devices.rs",
+        token: "pipewire",
+        family: "audio-pipewire",
+        retires_with: "permanent:the host is a shared crate that may not depend on a provider crate;it keeps a committed view of the provider-declared host surface",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/ioctl_policy.rs",
+        token: "pipewire",
+        family: "audio-pipewire",
+        retires_with: "permanent:the host is a shared crate that may not depend on a provider crate;it keeps a committed view of the provider-declared host surface",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        token: "clipboard",
+        family: "clipboard-wayland",
+        retires_with: "U10-U12 family rollout (clipboard-wayland)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        token: "credential_managed_identity",
+        family: "credential-managed-identity",
+        retires_with: "permanent: shared resource-compiler crate; no shared crate may depend on a provider crate;the generated bundle templates keep committed backend identities",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        token: "managed_identity",
+        family: "credential-managed-identity",
+        retires_with: "permanent: shared resource-compiler crate; no shared crate may depend on a provider crate;the generated bundle templates keep committed backend identities",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        token: "device_security_key",
+        family: "device-security-key",
+        retires_with: "permanent: shared bus crate; no shared crate may depend on a provider crate",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        token: "security_key",
+        family: "device-security-key",
+        retires_with: "permanent: shared bus crate; no shared crate may depend on a provider crate",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/devices.rs",
+        token: "tpm",
+        family: "device-tpm",
+        retires_with: "permanent: d2b-host is a shared crate that may not depend on a provider crate; the host device matrix is a committed view of the provider-declared classes",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/ioctl_policy.rs",
+        token: "tpm",
+        family: "device-tpm",
+        retires_with: "permanent: d2b-host is a shared crate that may not depend on a provider crate; the host device matrix is a committed view of the provider-declared classes",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/devices.rs",
+        token: "usbip",
+        family: "device-usbip",
+        retires_with: "permanent: d2b-host is a shared crate that may not depend on a provider crate; the host device matrix is a committed view of the provider-declared classes",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/ioctl_policy.rs",
+        token: "usbip",
+        family: "device-usbip",
+        retires_with: "permanent: d2b-host is a shared crate that may not depend on a provider crate; the host device matrix is a committed view of the provider-declared classes",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/nftables.rs",
+        token: "usbip",
+        family: "device-usbip",
+        retires_with: "permanent: d2b-host is a shared crate that may not depend on a provider crate; the host device matrix is a committed view of the provider-declared classes",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/dnsmasq.rs",
+        token: "dnsmasq",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/host_prep_dag.rs",
+        token: "dnsmasq",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/host_prep_dag.rs",
+        token: "nftables",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/lib.rs",
+        token: "dnsmasq",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/lib.rs",
+        token: "nftables",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/routes.rs",
+        token: "dnsmasq",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-host/src/routes.rs",
+        token: "nftables",
+        family: "network-local",
+        retires_with: "U12 network-fds step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        token: "notification",
+        family: "notification-desktop",
+        retires_with: "U10-U12 family rollout (notification-desktop)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U10-U12 family rollout (system-core)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U10-U12 family rollout (system-core)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/manager_backend/tests.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U10-U12 family rollout (system-core)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/service.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U10-U12 family rollout (system-core)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        token: "minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        token: "system_minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        token: "minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        token: "system_minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/manager_backend/tests.rs",
+        token: "minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/manager_backend/tests.rs",
+        token: "system_minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        token: "minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        token: "system_minijail",
+        family: "system-minijail",
+        retires_with: "U10-U12 family rollout (system-minijail)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/manager_backend/tests.rs",
+        token: "system_systemd",
+        family: "system-systemd",
+        retires_with: "U12 systemd step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/metrics.rs",
+        token: "vsock",
+        family: "transport-vsock",
+        retires_with: "U10-U12 family rollout (transport-vsock)",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session/noise_vectors.rs",
+        token: "vsock",
+        family: "transport-vsock",
+        retires_with: "permanent: golden test `exact_nn_kk_and_ikpsk2_vectors_are_frozen` at noise_vectors.rs:252 pins TransportClass::NativeVsock in the Ikpsk2 policy table;the noise handshake vectors are frozen wire",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-bus/src/session/prologue.rs",
+        token: "vsock",
+        family: "transport-vsock",
+        retires_with: "permanent: golden test `evidence_class_labels_are_frozen` at prologue.rs:279 pins the EvidenceClass wire label native-vsock;the subject-context digest is frozen wire",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        token: "vsock",
+        family: "transport-vsock",
+        retires_with: "U10-U12 family rollout (transport-vsock)",
+    }
 ];
+
 
 /// The framework's own driver declarations, the one allowed implementation
 /// shape under the framework roots.
@@ -4806,6 +4795,57 @@ fn opens_test_module(lines: &[&str], index: usize) -> Option<usize> {
     None
 }
 
+/// Whether a module file's parent declares it under `#[cfg(test)] mod <name>;`.
+///
+/// A test module can be a separate file declared by its parent
+/// (`#[cfg(test)] mod tests;` in `manager_backend.rs`) rather than an in-file
+/// `#[cfg(test)] mod tests`, so the driver probe consults the declaring file
+/// to see the guard the file itself cannot show.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn parent_declares_test_module(path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    let Some(directory) = path.parent() else {
+        return false;
+    };
+    let mut candidates = vec![
+        directory.join("mod.rs"),
+        directory.join("lib.rs"),
+        directory.join("main.rs"),
+    ];
+    if let Some(name) = directory.file_name().and_then(|name| name.to_str()) {
+        candidates.push(directory.with_file_name(format!("{name}.rs")));
+    }
+    candidates.into_iter().any(|parent| {
+        fs::read_to_string(&parent)
+            .ok()
+            .is_some_and(|text| declares_test_module(&text, stem))
+    })
+}
+
+/// Whether `text` opens a `mod <stem>;` declaration under `#[cfg(test)]`.
+fn declares_test_module(text: &str, stem: &str) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim() != "#[cfg(test)]" {
+            continue;
+        }
+        let declaration = lines[index + 1..]
+            .iter()
+            .map(|line| line.trim())
+            .find(|line| !line.is_empty() && !line.starts_with("#[") && !line.starts_with("//"));
+        if let Some(declaration) = declaration
+            && (declaration == format!("mod {stem};")
+                || declaration == format!("pub mod {stem};")
+                || declaration == format!("pub(crate) mod {stem};"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Whether one line closes a block opened at `indent`.
 ///
 /// rustfmt keeps a block's own closing brace at the opener's indent and every
@@ -4865,6 +4905,9 @@ fn collect_shared_drivers(
             continue;
         }
         if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        if parent_declares_test_module(&path) {
             continue;
         }
         let text = fs::read_to_string(&path)
@@ -5571,6 +5614,1541 @@ fn check_shared_family_knowledge(repo_root: &Path) -> Result<(), String> {
     check_shared_family_knowledge_with(repo_root, SHARED_FAMILY_KNOWLEDGE_RATCHET)
 }
 
+/// The per-provider role vocabularies the structural probes recognize by
+/// shape. These enums' variants name provider family roles (sidecars,
+/// runners, workers), so a branch over any of them is per-family
+/// knowledge no matter how a family's own spelling reads. Generic
+/// authz/call/bus/network role enums are not on this list:their variants
+/// are platform roles, not provider roles, and the token probe polices the
+/// family literals they may carry.
+const STRUCTURAL_ROLE_VOCABULARIES: &[&str] = &[
+    "ProcessRole",
+    "RunnerRole",
+    "GpuProcessRole",
+    "SecurityKeyProcessRole",
+    "DisplayProcessRole",
+];
+
+/// The runner-role id strings the shared wire vocabulary spells. A string
+/// literal equal to one of these in a shared Nix module is a role literal:
+/// the role vocabulary is knowledge the owning providers must declare,and
+/// a hand-spelled id cannot hide behind a family's renamed spelling.
+const ROLE_ID_LITERALS: &[&str] = &[
+    "provider-controller",
+    "cloud-hypervisor",
+    "qemu-media",
+    "activation-nixos-runner",
+    "virtiofsd",
+    "swtpm",
+    "swtpm-flush",
+    "gpu",
+    "audio",
+    "video",
+    "vsock-relay",
+    "usbip",
+    "otel-host-bridge",
+    "wayland-proxy",
+];
+
+/// One structural knowledge signal a shared-crate or shared-Nix probe
+/// found: the shape the token list cannot express, reported with the file
+/// and the symbol the shape carries.
+struct StructuralKnowledgeSignal {
+    /// Repository-relative path that holds the signal.
+    module: String,
+    /// The violation class./
+    class: StructuralSignalClass,
+    /// The symbol the shape carries: a role variant (`ProcessRole::Audio`),
+    /// a table name, a type-name arm literal, a provider id, or a role id.
+    symbol: String,
+    /// One-based line number inside the module.
+    line: usize,
+}
+
+/// The structural knowledge classes the issue's classes name./
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum StructuralSignalClass {
+    /// A branch or comparison over a per-provider role vocabulary.
+    PerFamilyBranch,
+    /// A data table whose rows are keyed by per-provider role variants.
+    PerRoleOrSeccompTable,
+    /// A data table whose rows are keyed by provider id literals.
+    PerFamilyTable,
+    /// A record row binding an operation to a subject.
+    AuthorizationRow,
+    /// A data table mapping runner roles to launch identities.
+    LaunchIntentTable,
+    /// A match arm over a resource-type name string.
+    TypeNameMatchArm,
+    /// A provider id literal (`"Provider/<name>"`) in a shared Nix module.
+    ProviderId,
+    /// A role id literal in a shared Nix module.
+    RoleLiteral,
+}
+
+impl StructuralSignalClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PerFamilyBranch => "per-family-branch",
+            Self::PerRoleOrSeccompTable => "per-role-or-seccomp-table",
+            Self::PerFamilyTable => "per-family-table",
+            Self::AuthorizationRow => "authorization-row",
+            Self::LaunchIntentTable => "launch-intent-table",
+            Self::TypeNameMatchArm => "type-name-match-arm",
+            Self::ProviderId => "provider-id",
+            Self::RoleLiteral => "role-literal",
+        }
+    }
+}
+
+/// One structural knowledge exemption row. A signal without a row beside it
+/// fails,arow whose signal the tree no longer carries fails the same way,and
+/// no row may be added because that is what a reintroduction looks like./
+///
+/// Where a Rust structural signal's symbol contains a family token the module's
+/// family-knowledge ratchet already records, the signal is covered by that
+/// row instead:the structural ratchet records only the sites the token probe
+/// cannot see./
+#[derive(Debug, Clone, Copy)]
+struct SharedStructuralKnowledgeExemption {
+    /// Repository-relative module (Rust source or Nix module) that holds the site.
+    module: &'static str,
+    /// The violation class name (`StructuralSignalClass::as_str`).
+    class: &'static str,
+    /// The symbol the site carries (role variant, table name, arm literal,
+    /// provider id, or role id)./
+    symbol: &'static str,
+    /// What deletes the row (census step, or the R4 surface carve-out)./
+    retires_with: &'static str,
+}
+
+/// The structural knowledge the tree still carries in shared crates and Nix
+/// modules, seeded from the current tree and only shrinking from here./
+/// The composition root crates that exist to link provider crates. d2bd is
+/// the daemon's composition root: its provider dependencies are the link
+/// contract the composition rule reserves for it, not family knowledge
+/// shipping through Cargo. Every other shared crate stays provider-free./
+const COMPOSITION_LINK_CRATES: &[&str] = &["packages/d2bd"];
+const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption] = &[
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/kernel_ops.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/ops/systemd.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/ops/systemd.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/ops/systemd.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ComponentSessionHealth",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::HostReconcile",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-broker/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ComponentSessionHealth",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::HostReconcile",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/bundle_resolver.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ComponentSessionHealth",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::HostReconcile",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core/src/runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/audio_host_controller.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::ComponentSessionHealth",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::ProviderController",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "per-family-branch",
+        symbol: "RunnerRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/interaction_composition.rs",
+        class: "per-family-branch",
+        symbol: "DisplayProcessRole::GuestFrontend",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/interaction_composition.rs",
+        class: "per-family-branch",
+        symbol: "DisplayProcessRole::HostProxy",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/process_provider_runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Audio",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/process_provider_runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Video",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/process_provider_runtime.rs",
+        class: "per-family-branch",
+        symbol: "ProcessRole::Virtiofsd",
+        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-qemu-media",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-unix",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-vsock",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/guest-closures.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "provider-id",
+        symbol: "Provider/device-tpm",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/options-zones-resources.nix",
+        class: "provider-id",
+        symbol: "Provider/credential-entra",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/options-zones.nix",
+        class: "provider-id",
+        symbol: "Provider/system-core",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/credential-entra",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/credential-managed-identity",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-azure-container-apps",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-azure-virtual-machine",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-azure-relay",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-unix",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-runtime-contracts.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-vsock",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/providers/system-minijail.nix",
+        class: "provider-id",
+        symbol: "Provider/system-minijail",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/providers/system-systemd.nix",
+        class: "provider-id",
+        symbol: "Provider/system-systemd",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/activation-nixos",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/audio-pipewire",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/device-gpu",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/device-security-key",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/device-tpm",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/device-usbip",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/display-wayland",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/observability-otel",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/runtime-qemu-media",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/system-minijail",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/system-systemd",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/transport-vsock",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/resources-zones-processes.nix",
+        class: "provider-id",
+        symbol: "Provider/volume-virtiofs",
+        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "role-literal",
+        symbol: "audio",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "role-literal",
+        symbol: "provider-controller",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "role-literal",
+        symbol: "qemu-media",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/assertions.nix",
+        class: "role-literal",
+        symbol: "video",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/components/observability/guest.nix",
+        class: "role-literal",
+        symbol: "cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+
+        symbol: "audio",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "gpu",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "qemu-media",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "swtpm",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "usbip",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "video",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/lib.nix",
+        class: "role-literal",
+        symbol: "virtiofsd",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/privileges-json.nix",
+        class: "role-literal",
+        symbol: "audio",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/provider-catalog.nix",
+        class: "role-literal",
+        symbol: "audio",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "nixos-modules/vm-options.nix",
+        class: "role-literal",
+        symbol: "cloud-hypervisor",
+        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-bus/src/router.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-resource/src/v3/execution_policy.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-resource/src/v3/execution_policy.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-zone-session/src/v3/resource_bundle.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-zone-session/src/v3/resource_bundle.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-zone-session/src/v3/role.rs",
+        class: "type-name-match-arm",
+        symbol: "Provider",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-zone-session/src/v3/role.rs",
+        class: "type-name-match-arm",
+        symbol: "ZoneLink",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        class: "type-name-match-arm",
+        symbol: "EphemeralProcess",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        class: "type-name-match-arm",
+        symbol: "Process",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/process_provider_runtime.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/process_provider_runtime.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/resource_runtime/plane_controller_bridge.rs",
+        class: "type-name-match-arm",
+        symbol: "Volume",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/resource_runtime/plane_controller_bridge.rs",
+        class: "type-name-match-arm",
+        symbol: "VolumeBinding",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/shared_provider_effects.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/shared_provider_effects.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-bus/src/metrics.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-bus/src/session_seam_tests.rs",
+        class: "type-name-match-arm",
+        symbol: "Provider",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-provider/src/v3/provider.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-provider/src/v3/semantic_services/child_resources.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-resource/src/v3/resource_schema.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-contracts-resource/src/v3/volume_binding.rs",
+        class: "type-name-match-arm",
+        symbol: "Volume",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core-controller/src/controller_assignment.rs",
+        class: "type-name-match-arm",
+        symbol: "Guest",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core-controller/src/controller_assignment.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-core-controller/src/owner_reconcile.rs",
+        class: "type-name-match-arm",
+        symbol: "Volume",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        class: "type-name-match-arm",
+        symbol: "Role",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-resource-api/src/authz.rs",
+        class: "type-name-match-arm",
+        symbol: "Zone",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2b-resource-compiler/src/lib.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/composition.rs",
+        class: "type-name-match-arm",
+        symbol: "{}.host.d2b",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/foundation_seed.rs",
+        class: "type-name-match-arm",
+        symbol: "Zone",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/provider_registry.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+    SharedStructuralKnowledgeExemption {
+        module: "packages/d2bd/src/resource_runtime.rs",
+        class: "type-name-match-arm",
+        symbol: "Host",
+        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
+    },
+];
+
+/// The shared Nix surface the structural probes monitor. The generated views
+/// under `generated/` are produced by `gen-nix-inventories` and covered by
+/// the generated-artifact provenance gate, so they are not hand tables./
+const NIX_SURFACE_ROOTS: &[&str] = &["nixos-modules"];
+
+/// One line opens a structural table block: a const, static, or let whose
+/// initializer is an array(`&[`, `[`, or `vec![`). The block tracks table
+/// knowledge until its bracket depth closes./
+fn table_block_name(line: &str) -> Option<&str> {
+    let code = code_text(line);
+    let code = code.split_once("/*").map_or(code, |(before, _)| before);
+    let keyword_str = ["const ", "static ", "let "]
+        .iter()
+        .find(|keyword| code.starts_with(**keyword))?;
+    let rest = &code[keyword_str.len()..];
+    let after_name = rest.find(char::is_whitespace).or_else(|| rest.find(':'))?;
+    if after_name == 0 {
+        return None;
+    }
+    let name = &rest[..after_name];
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    let init = &rest[after_name..];
+    if init.contains('=') && (init.contains("[") || init.contains("vec![")) {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+/// Whether one code line references a per-provider role variant./
+fn structural_role_variant(code: &str) -> Option<(&str, &str)> {
+    for vocabulary in STRUCTURAL_ROLE_VOCABULARIES {
+        let needle = [vocabulary, "::"].concat();
+        if let Some(start) = code.find(&needle).filter(|offset| {
+            (*offset == 0) || !code.as_bytes()[*offset - 1].is_ascii_alphanumeric()
+        }) {
+            let rest = &code[start + needle.len()..];
+            let end = rest
+                .find(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .unwrap_or(rest.len());
+            if end > 0 {
+                return Some((vocabulary, &rest[..end]));
+            }
+        }
+    }
+    None
+}
+
+/// Every structural signal carried by one line of Rust code, given the
+/// current table-block state./
+fn line_structural_signals(
+    module: &str,
+    line_number: usize,
+    line: &str,
+    table_name: Option<&str>,
+    prev_type_match: bool,
+    signals: &mut Vec<StructuralKnowledgeSignal>,
+) {
+    let code = code_text(line);
+    let code = code.split_once("/*").map_or(code, |(before, _)| before);
+    let in_table = table_name.is_some();
+    if let Some((vocabulary, variant)) = structural_role_variant(code) {
+        let class = if in_table {
+            StructuralSignalClass::PerRoleOrSeccompTable
+        } else {
+            StructuralSignalClass::PerFamilyBranch
+        };
+        signals.push(StructuralKnowledgeSignal {
+            module: module.to_owned(),
+            class,
+            symbol: format!("{vocabulary}::{variant}"),
+            line: line_number,
+        });
+        if in_table {
+            let role_count = code.matches("Role::").count();
+            if role_count >= 2 {
+                signals.push(StructuralKnowledgeSignal {
+                    module: module.to_owned(),
+                    class: StructuralSignalClass::LaunchIntentTable,
+                    symbol: table_name.unwrap_or("launch-intent-table").to_owned(),
+                    line: line_number,
+                });
+            }
+        }
+    }
+    let literals = string_literal_spans(code);
+    if in_table {
+        let has_provider = literals
+            .iter()
+            .any(|(_, _, content)| content.starts_with("Provider/"));
+        if has_provider {
+            signals.push(StructuralKnowledgeSignal {
+                module: module.to_owned(),
+                class: StructuralSignalClass::PerFamilyTable,
+                symbol: table_name.unwrap_or("provider-table").to_owned(),
+                line: line_number,
+            });
+        }
+        if code.contains("operation:") && code.contains("subject:") {
+            signals.push(StructuralKnowledgeSignal {
+                module: module.to_owned(),
+                class: StructuralSignalClass::AuthorizationRow,
+                symbol: table_name.unwrap_or("authorization-row").to_owned(),
+                line: line_number,
+            });
+        }
+    } else {
+        if code.contains("operation:") && code.contains("subject:") {
+            signals.push(StructuralKnowledgeSignal {
+                module: module.to_owned(),
+                class: StructuralSignalClass::AuthorizationRow,
+                symbol: "authorization-row".to_owned(),
+                line: line_number,
+            });
+        }
+    }
+    if !in_table
+        && (code.contains("resource_type") || prev_type_match)
+        && (code.contains("match") || code.contains("=>"))
+    {
+        for (_, _, content) in &literals {
+            signals.push(StructuralKnowledgeSignal {
+                module: module.to_owned(),
+                class: StructuralSignalClass::TypeNameMatchArm,
+                symbol: content.clone(),
+                line: line_number,
+            });
+        }
+    }
+}
+
+/// The structural signals one Rust module carries, ignoring test-only code
+/// and the generated views.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn module_structural_signals(
+    repo_root: &Path,
+    module: &str,
+    signals: &mut Vec<StructuralKnowledgeSignal>,
+) -> Result<(), String> {
+    let path = repo_root.join(module);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    let lines: Vec<&str> = text.lines().collect();
+    let mut index = 0;
+    let mut table_depth = 0;
+    let mut table_name: Option<&str> = None;
+    while index < lines.len() {
+        if let Some(indent) = opens_test_module(&lines, index) {
+            index += 1;
+            while index < lines.len() && !closes_indented_block(lines[index], indent) {
+                index += 1;
+            }
+            index += 1;
+            continue;
+        }
+        let line = lines[index];
+        let code = code_text(line);
+        let code = code.split_once("/*").map_or(code, |(before, _)| before);
+        if table_depth == 0 {
+            if let Some(name) = table_block_name(line) {
+                table_name = Some(name);
+                table_depth = 1;
+            }
+        } else {
+            table_depth += code.matches('[').count();
+            table_depth -= code.matches(']').count();
+            if table_depth == 0 {
+                table_name = None;
+            }
+        }
+        let prev_type_match = index > 0
+            && code_text(lines[index - 1]).contains("resource_type")
+            && code_text(lines[index - 1]).contains("match");
+        line_structural_signals(
+            module,
+            index + 1,
+            line,
+            table_name,
+            prev_type_match,
+            signals,
+        );
+        index += 1;
+    }
+    Ok(())
+}
+
+/// The structural signals one shared Nix module carries./
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn nix_module_structural_signals(
+    repo_root: &Path,
+    module: &str,
+    signals: &mut Vec<StructuralKnowledgeSignal>,
+) -> Result<(), String> {
+    let path = repo_root.join(module);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    for (line_number, line) in text.lines().enumerate() {
+        let code = code_text(line);
+        let code = code.split_once("/*").map_or(code, |(before, _)| before);
+        let literals = string_literal_spans(code);
+        for (_, _, content) in &literals {
+            if content.starts_with("Provider/") && !content.contains("${") {
+                signals.push(StructuralKnowledgeSignal {
+                    module: module.to_owned(),
+                    class: StructuralSignalClass::ProviderId,
+                    symbol: content.clone(),
+                    line: line_number + 1,
+                });
+            }
+            if ROLE_ID_LITERALS.contains(&content.as_str()) {
+                signals.push(StructuralKnowledgeSignal {
+                    module: module.to_owned(),
+                    class: StructuralSignalClass::RoleLiteral,
+                    symbol: content.clone(),
+                    line: line_number + 1,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every structural signal under the shared-crate source roots and the shared
+/// Nix surface, sorted deterministically./
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_structural_signals(repo_root: &Path) -> Result<Vec<StructuralKnowledgeSignal>, String> {
+    let mut signals = Vec::new();
+    for root in SHARED_CRATE_SOURCE_ROOTS {
+        let directory = repo_root.join(root);
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_module_structural_signals(repo_root, &directory, &mut signals)?;
+    }
+    for root in NIX_SURFACE_ROOTS {
+        let directory = repo_root.join(root);
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_nix_structural_signals(repo_root, &directory, &mut signals)?;
+    }
+    signals.sort_by(|left, right| {
+        left.module
+            .cmp(&right.module)
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.class.cmp(&right.class))
+            .then_with(|| left.symbol.cmp(&right.symbol))
+    });
+    Ok(signals)
+}
+
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_module_structural_signals(
+    repo_root: &Path,
+    directory: &Path,
+    signals: &mut Vec<StructuralKnowledgeSignal>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        if file_type.is_dir() {
+            if entry.file_name().to_string_lossy() != "generated" {
+                collect_module_structural_signals(repo_root, &path, signals)?;
+            }
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        module_structural_signals(repo_root, &relative, signals)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_nix_structural_signals(
+    repo_root: &Path,
+    directory: &Path,
+    signals: &mut Vec<StructuralKnowledgeSignal>,
+) -> Result<(), String> {
+    if directory.file_name().map(|name| name.to_string_lossy()) == Some("generated".into()) {
+        return Ok(());
+    }
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        if file_type.is_dir() {
+            collect_nix_structural_signals(repo_root, &path, signals)?;
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("nix") {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        nix_module_structural_signals(repo_root, &relative, signals)?;
+    }
+    Ok(())
+}
+
+/// Render one structural knowledge violation as canonical JSON./
+fn render_structural_violation(signal: &StructuralKnowledgeSignal, class_prefix: &str) -> String {
+    serde_json::json!({
+        "error": format!("{class_prefix}-{}", signal.class.as_str()),
+        "module": signal.module,
+        "class": signal.class.as_str(),
+        "symbol": signal.symbol,
+        "line": signal.line,
+    })
+    .to_string()
+}
+
+/// The family token one structural symbol's words contain, when one exists./
+fn structural_symbol_token(symbol: &str) -> Option<&'static str> {
+    let words = identifier_words(symbol);
+    for entry in FAMILY_KNOWLEDGE_TOKENS {
+        let token_words: Vec<&str> = entry
+            .token
+            .split('_')
+            .filter(|word| !word.is_empty())
+            .collect();
+        if token_words.is_empty() || words.len() < token_words.len() {
+            continue;
+        }
+        if (0..=words.len() - token_words.len()).any(|start| {
+            words[start..start + token_words.len()]
+                .iter()
+                .zip(&token_words)
+                .all(|(word, token_word)| word == token_word)
+        }) {
+            return Some(entry.token);
+        }
+    }
+    None
+}
+
+/// Fail every structural signal a shared crate or Nix module still carries
+/// without an exemption row beside it, and fail every row whose signal the
+/// tree no longer carries. A Rust structural signal whose symbol names a
+/// family token the module's family-knowledge ratchet already records is
+/// covered by that row instead, so the structural ratchet records only the
+/// sites the token probe cannot see. Passed both ratchets as parameters so
+/// the tests can exercise both directions on fixtures.
+fn check_shared_structural_knowledge_with(
+    repo_root: &Path,
+    structural_ratchet: &[SharedStructuralKnowledgeExemption],
+    family_ratchet: &[SharedFamilyKnowledgeExemption],
+) -> Result<(), String> {
+    let signals = collect_structural_signals(repo_root)?;
+    let structural_exempt: BTreeSet<(&str, &str, &str)> = structural_ratchet
+        .iter()
+        .map(|row| (row.module, row.class, row.symbol))
+        .collect();
+    let family_exempt: BTreeSet<(String, &str)> = family_ratchet
+        .iter()
+        .map(|row| (row.module.to_owned(), row.token))
+        .collect();
+    let mut violations = Vec::new();
+
+    let rust_prefix = "shared-crate-structural";
+    let nix_prefix = "shared-nix-structural";
+    for signal in &signals {
+        let class = signal.class.as_str();
+        if structural_exempt.contains(&(signal.module.as_str(), class, signal.symbol.as_str())) {
+            continue;
+        }
+        let covered_by_family = signal.class != StructuralSignalClass::ProviderId
+            && signal.class != StructuralSignalClass::RoleLiteral
+            && structural_symbol_token(&signal.symbol)
+                .is_some_and(|token| family_exempt.contains(&(signal.module.clone(), token)));
+        if covered_by_family {
+            continue;
+        }
+        let prefix = if signal.module.starts_with("nixos-modules/") {
+            nix_prefix
+        } else {
+            rust_prefix
+        };
+        violations.push(render_structural_violation(signal, prefix));
+    }
+    for row in structural_ratchet {
+        if !repo_root.join(shared_source_root(row.module)).is_dir() {
+            continue;
+        }
+        if !signals.iter().any(|signal| {
+            signal.module == row.module
+                && signal.class.as_str() == row.class
+                && signal.symbol == row.symbol
+        }) {
+            violations.push(
+                serde_json::json!({
+                    "error": "stale-shared-structural-knowledge-exemption",
+                    "module": row.module,
+                    "class": row.class,
+                    "symbol": row.symbol,
+                    "retiresWith": row.retires_with,
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations.join("\n"))
+    }
+}
+
+/// Fail when structural knowledge reappears in a shared crate or Nix
+/// module, against the shrinking structural ratchet./
+fn check_shared_structural_knowledge(repo_root: &Path) -> Result<(), String> {
+    check_shared_structural_knowledge_with(
+        repo_root,
+        SHARED_STRUCTURAL_KNOWLEDGE_RATCHET,
+        SHARED_FAMILY_KNOWLEDGE_RATCHET,
+    )
+}
+/// The named shared-crate-to-provider dependency edges the
+/// dependency-direction detector lists. A shared crate may depend on
+/// a provider crate only through an edge named here;the list is empty
+/// today and only the owning crates' moves add edges to it./
+///
+/// U4 re-homed the laneless primitive types into their owning provider
+/// crates, and the consumers that use the moved shapes follow them
+/// (KTD3): the resource contracts crate keeps only generic machinery,
+/// and each typed consumer below takes a named edge to the owning type's
+/// crate. The generic modules stay put; no shared crate gains a provider
+/// dependency for anything else.
+const ALLOWED_SHARED_PROVIDER_DEPENDENCY_EDGES: &[(&str, &str)] = &[
+    // U4: the quota status projection the manager backend reads lives in
+    // d2b-provider-quota.
+    ("packages/d2b-resource-api", "d2b-provider-quota"),
+    // U4: the daemon composes and seeds the re-homed command, operation,
+    // seccomp-profile, endpoint, host, and user shapes from their owning
+    // crates.
+    ("packages/d2bd", "d2b-provider-command"),
+    ("packages/d2bd", "d2b-provider-endpoint"),
+    ("packages/d2bd", "d2b-provider-operation"),
+    ("packages/d2bd", "d2b-provider-seccomp-profile"),
+    ("packages/d2bd", "d2b-provider-system-core"),
+];
+
+/// The provider crate name one manifest dependency line declares, when
+/// the line names one (either as the key or via `package =`)./
+fn manifest_provider_dependency(line: &str) -> Option<&str> {
+    let starts = line.find("d2b-provider")?;
+    let rest = &line[starts..];
+    let end = rest
+        .find(|ch: char| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'))
+        .unwrap_or(rest.len());
+    let name = &rest[..end];
+    if name == "d2b-provider" {
+        return None;
+    }
+    Some(name)
+}
+
+/// provider crate, unless the edge is one the check lists./
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn check_shared_provider_dependencies_with(
+    repo_root: &Path,
+    allowed: &[(&str, &str)],
+) -> Result<(), String> {
+    let mut shared_dirs: BTreeSet<&str> = BTreeSet::new();
+    for root in SHARED_CRATE_SOURCE_ROOTS {
+        shared_dirs.insert(root.strip_suffix("/src").unwrap_or(root));
+    }
+    let mut violations = Vec::new();
+    for crate_dir in shared_dirs {
+        if COMPOSITION_LINK_CRATES.contains(&crate_dir) {
+            continue;
+        }
+        let manifest_path = repo_root.join(crate_dir).join("Cargo.toml");
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let text = fs::read_to_string(&manifest_path)
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let mut section = String::new();
+        for line in text.lines() {
+            let line = line.split('#').next().unwrap_or(line);
+            let trimmed = line.trim();
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                section = trimmed.to_owned();
+                continue;
+            }
+            if section != "[dependencies]" && section != "[build-dependencies]" {
+                continue;
+            }
+            let Some(provider) = manifest_provider_dependency(trimmed) else {
+                continue;
+            };
+            if name_kind(provider, false) != ProviderNameKind::Provider {
+                continue;
+            }
+            let listed = allowed.iter().any(|(crate_name, provider_name)| {
+                *crate_name == crate_dir && *provider_name == provider
+            });
+            if !listed {
+                violations.push(
+                    serde_json::json!({
+                        "error": "shared-crate-provider-dependency",
+                        "crate": crate_dir,
+                        "provider": provider,
+                    })
+                    .to_string(),
+                );
+            }
+        }
+    }
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations.join("\n"))
+    }
+}
+
+/// provider crate, unless the edge is one the check lists./
+fn check_shared_provider_dependencies(repo_root: &Path) -> Result<(), String> {
+    check_shared_provider_dependencies_with(repo_root, ALLOWED_SHARED_PROVIDER_DEPENDENCY_EDGES)
+}
+
+/// The provider name one `provider_ref:` line names./
+fn provider_ref_name(line: &str) -> Option<&str> {
+    let prefix = "Provider/";
+    let starts = line.find(prefix)?;
+    let rest = &line[starts + prefix.len()..];
+    let end = rest
+        .find(|ch: char| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'))
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// The role name one `role_ref:` or `roles:` line names, one per call./
+fn role_ref_name(line: &str) -> Option<&str> {
+    let prefix = "Role/";
+    let starts = line.find(prefix)?;
+    let rest = &line[starts + prefix.len()..];
+    let end = rest
+        .find(|ch: char| !(ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-'))
+        .unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+/// Fail when a self-binding names a subject other than its declaring
+/// provider, or a role the declaring provider does not itself declare./
+fn check_self_binding_scope(repo_root: &Path) -> Result<(), String> {
+    let mut violations = Vec::new();
+    for root in SHARED_CRATE_SOURCE_ROOTS {
+        let directory = repo_root.join(root);
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_self_binding_scope(repo_root, &directory, &mut violations)?;
+    }
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(violations.join("\n"))
+    }
+}
+
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_self_binding_scope(
+    repo_root: &Path,
+    directory: &Path,
+    violations: &mut Vec<String>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        if file_type.is_dir() {
+            if entry.file_name().to_string_lossy() != "generated" {
+                collect_self_binding_scope(repo_root, &path, violations)?;
+            }
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        let text = fs::read_to_string(&path)
+            .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
+        let lines: Vec<&str> = text.lines().collect();
+        let mut index = 0;
+        while index < lines.len() {
+            let line = lines[index];
+            if code_text(line).contains("SeedProvider {") {
+                let mut provider_name = None;
+                let mut roles = Vec::new();
+                let mut pending_subject = None;
+                let mut pending_role = None;
+                let mut stop = index + 1;
+                while stop < lines.len() {
+                    let inner = code_text(lines[stop]);
+                    if inner.contains("provider_ref:") && provider_name.is_none() {
+                        provider_name = provider_ref_name(inner);
+                    }
+                    if inner.contains("Role/")
+                        && !inner.contains("role_ref:")
+                        && !inner.contains("subject_ref:")
+                        && let Some(role) = role_ref_name(inner)
+                    {
+                        roles.push(role.to_owned());
+                    }
+                    if inner.contains("subject_ref:") {
+                        pending_subject = provider_ref_name(inner).map(str::to_owned);
+                    }
+                    if inner.contains("role_ref:") && !inner.contains("roles:") {
+                        pending_role = role_ref_name(inner).map(str::to_owned);
+                    }
+                    if pending_subject.is_some()
+                        && pending_role.is_some()
+                        && let (Some(subject), Some(role)) =
+                            (pending_subject.take(), pending_role.take())
+                    {
+                        if provider_name != Some(subject.as_str()) {
+                                violations.push(
+                                    serde_json::json!({
+                                        "error": "self-binding-subject-escape",
+                                        "module": relative,
+                                        "subject": subject,
+                                        "provider": provider_name,
+                                    })
+                                    .to_string(),
+                                );
+                            }
+                            if !roles.contains(&role) {
+                                violations.push(
+                                    serde_json::json!({
+                                        "error": "self-binding-role-escape",
+                                        "module": relative,
+                                        "role": role,
+                                        "provider": provider_name,
+                                    })
+                                    .to_string(),
+                                );
+                        }
+                    }
+                    if inner.contains("}") && inner.contains("SeedSelfBinding") {
+                        pending_subject = None;
+                        pending_role = None;
+                    }
+                    if code_text(lines[stop]).trim() == "}" {
+                        // A SeedSelfBinding row closes at a line whose trim is "}";
+                        // a multi-line row ends there too; clearing pendings keep
+                        // the next row from inheriting a stale half.
+                        if inner.contains("SeedSelfBinding") {
+                            pending_subject = None;
+                            pending_role = None;
+                        }
+                    }
+                    stop += 1;
+                }
+            }
+            index += 1;
+        }
+    }
+    Ok(())
+}
 /// The xtask generators that may produce a `generated/` view file, in the
 /// exact command spelling the provenance annotation uses.
 const GENERATOR_COMMANDS: &[&str] = &[
@@ -5630,6 +7208,8 @@ fn generated_view_has_producer(header: &str) -> bool {
 /// generated marker: the classification only follows a provenance annotation
 /// naming a real generator, so a view can never be hand-edited into looking
 /// generated and a generator template cannot masquerade as production code.
+/// A `mod.rs` under a `generated/` directory is the registry that names the
+/// views, not a view, so it needs no producer.
 fn check_generated_provenance(repo_root: &Path) -> Result<(), String> {
     let mut violations = Vec::new();
     for root in SHARED_CRATE_SOURCE_ROOTS {
@@ -5675,7 +7255,8 @@ fn collect_generated_provenance(
         let text = fs::read_to_string(&path)
             .map_err(|_| "provider-crate-layout-shared-unreadable".to_owned())?;
         let header = text.lines().take(3).collect::<Vec<_>>().join("\n");
-        if inside_generated && !generated_view_has_producer(&header) {
+        let registry = path.file_name().and_then(|name| name.to_str()) == Some("mod.rs");
+        if inside_generated && !registry && !generated_view_has_producer(&header) {
             violations.push(
                 serde_json::json!({
                     "error": "generated-view-without-producer",
@@ -6405,6 +7986,9 @@ fn use_binding(statement: &str, name: &str) -> bool {
 /// The mechanical repair for one dangling citation, when removing it cannot
 /// change what the sentence says.
 ///
+/// `start` and `end` are byte spans into the comment (`line[comment_start..]`),
+/// and the returned rewrite uses line byte offsets.
+///
 /// Three shapes qualify: a parenthetical that holds only the citation, a
 /// trailing clause after a comma or dash that is only the citation, and a
 /// comment line that holds only the citation. Everything else - a citation
@@ -6418,8 +8002,8 @@ fn mechanical_rewrite(
     end: usize,
 ) -> Option<CitationRewrite> {
     let comment = &line[comment_start..];
-    let token_start = start - comment_start;
-    let token_end = end - comment_start;
+    let token_start = start;
+    let token_end = end;
     let token = &comment[token_start..token_end];
     whole_line_rewrite(comment, previous, token)
         .or_else(|| parenthetical_rewrite(comment, comment_start, token_start, token_end))
@@ -6946,7 +8530,7 @@ fn contains_rust_file(root: &Path) -> Result<bool, String> {
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn integration_has_rust_scenario(integration: &Path) -> Result<bool, String> {
+fn integration_has_rust_scenario(integration:&Path) -> Result<bool, String> {
     let entries = fs::read_dir(integration)
         .map_err(|_| "provider-crate-layout-integration-unreadable".to_owned())?;
     for entry in entries {
@@ -6964,6 +8548,746 @@ fn integration_has_rust_scenario(integration: &Path) -> Result<bool, String> {
         }
     }
     Ok(false)
+}
+
+// ---------------------------------------------------------------------------
+// U14: provider-crate content and committed scope (zero-outside-edit)
+// ---------------------------------------------------------------------------
+
+/// One family-knowledge signal a provider crate's own sources carries:the
+/// family identity token names a different family than the crate's own.
+struct ProviderFamilySignal {
+    /// The provider crate that carries the signal (its Cargo package name).
+    crate_name: String,
+    /// Repository-relative module that holds the signal.
+    module: String,
+    /// The family identity token the signal writes.
+    token: &'static str,
+    /// The family that owns the token.
+    family: &'static str,
+    /// One-based line number inside the module.
+    line: usize,
+    /// How the signal appeared.
+    class: FamilySignalClass,
+    /// The literal or identifier that carried the signal.
+    text: String,
+}
+
+/// Whether one family-token entry names a family identity: its snake_case
+/// spelling dashes into exactly the family's identity (`device_usbip` names
+/// `device-usbip`). The FAMILY_KNOWLEDGE_TOKENS list additionally carries
+/// shorter hand-written identifiers the shared crates still write
+/// (`usbip`, `systemd`, `wayland`); those are polysemous platform words a
+/// provider crate legitimately carries everywhere, so a token-level gate
+/// over them cannot stay silent on the tree without restating it. The
+/// identity spellings are unambiguous: a provider crate carrying another
+/// family's identity is the mistake this gate refuses.
+fn is_family_identity_token(entry: &FamilyToken) -> bool {
+    entry.token.replace('_', "-") == entry.family
+}
+
+/// The family one provider crate belongs to: the closed matrix is the
+/// family authority, and a crate the matrix does not name owns the family its
+/// name suffix spells.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn provider_crate_family(crate_name: &str) -> String {
+    PROVIDER_MATRIX
+        .iter()
+        .find(|row| row.crate_name == crate_name)
+        .map_or_else(|| crate_name.strip_prefix("d2b-provider-").unwrap_or(crate_name).replace('_', "-"), |row| row.identity.to_owned())
+}
+
+/// Whether one literal's content is a resource reference: `Provider/<name>`,
+/// `Process/<name>`, `Host/<name>`, `User/<name>`, or `Guest/<name>`. The
+/// resource model addresses providers and processes by name; naming the
+/// provider one delegates a child to is the one legitimate cross-family
+/// shape ((`d2b-provider-device-usbip/src/lifecycle.rs:25` names the
+/// system-minijail provider that owns its guest-proxy child). A reference
+/// names a provider; it is not knowledge about that provider.
+fn is_resource_reference_literal(content: &str) -> bool {
+    const KINDS: &[&str] = &["Provider/", "Process/", "Host/", "User/", "Guest/"];
+    KINDS.iter().any(|kind| content.starts_with(kind))
+}
+
+/// Whether one identifier names a reference to another family rather than
+/// knowledge: a `*_ref`/`*_REF` field or constant holds a reference (a
+/// provider ref, a display ref, a controller ref. The rule cannot tell
+/// a reference identifier from a knowledge identifier by any other shape,
+/// so the suffix is the recorded reference marker.
+fn is_reference_identifier(identifier: &str) -> bool {
+    identifier.ends_with("_ref") || identifier.ends_with("_REF")
+}
+
+/// The family-knowledge signals one provider-crate module carries, ignoring
+/// test-only code, generated views, reference literals and identifiers. The
+/// token probe matches family identities only: a token whose snake case
+/// spells another family's identity is a signal wherever it appears, unless
+/// the line is a sibling-crate path (a dependency reference), the literal
+/// is a resource reference, or the identifier ends in `_ref`/`_REF`.)
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn provider_module_family_signals(
+    repo_root: &Path,
+    module: &str,
+    crate_name: &str,
+    family: &str,
+    signals: &mut Vec<ProviderFamilySignal>,
+) -> Result<(), String> {
+    let path = repo_root.join(module);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|_| "provider-crate-layout-provider-unreadable".to_owned())?;
+    let lines: Vec<&str> = text.lines().collect();
+
+    let mut index = 0;
+    while index < lines.len() {
+        if let Some(indent) = opens_test_module(&lines, index) {
+            index += 1;
+            while index < lines.len() && !closes_indented_block(lines[index], indent) {
+                index += 1;
+            }
+            index += 1;
+            continue;
+        }
+        let line = lines[index];
+        let code = code_text(line);
+        let code = code.split_once("/*").map_or(code, |(before, _)| before);
+        let literals = string_literal_spans(code);
+        let assembles = is_name_assembling_macro_line(code);
+        let identifier_runs = identifier_spans(code, &literals);
+
+        if !code.contains("d2b_provider_") {
+            for (_, _, content)in &literals {
+                if is_resource_reference_literal(content) {
+                    continue;
+                }
+                if assembles {
+                    for entry in FAMILY_KNOWLEDGE_TOKENS {
+                        if !is_family_identity_token(entry) || entry.family == family {
+                            continue;
+                        }
+                        if literal_contains_token(content, entry.token)
+                            || token_segments(entry.token)
+                                .iter()
+                                .any(|segment| literal_has_glued_segment(content, segment))
+                        {
+                            signals.push(ProviderFamilySignal {
+                                crate_name: crate_name.to_owned(),
+                                module: module.to_owned(),
+                                token: entry.token,
+                                family: entry.family,
+                                line: index + 1,
+                                class: FamilySignalClass::Assembled,
+                                text: content.clone(),
+                            });
+                        }
+                    }
+                } else {
+                    for entry in FAMILY_KNOWLEDGE_TOKENS {
+                        if !is_family_identity_token(entry) || entry.family == family {
+                            continue;
+                        }
+                        if literal_contains_token(content, entry.token) {
+                            signals.push(ProviderFamilySignal {
+                                crate_name: crate_name.to_owned(),
+                                module: module.to_owned(),
+                                token: entry.token,
+                                family: entry.family,
+                                line: index + 1,
+                                class: FamilySignalClass::Literal,
+                                text: content.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            for (start, end)in identifier_runs {
+                let identifier = &code[start..end];
+                if is_reference_identifier(identifier) {
+                    continue;
+                }
+                for entry in FAMILY_KNOWLEDGE_TOKENS {
+                    if !is_family_identity_token(entry) || entry.family == family {
+                        continue;
+                    }
+                    if identifier_contains_token(identifier, entry.token) {
+                        signals.push(ProviderFamilySignal {
+                            crate_name: crate_name.to_owned(),
+                            module: module.to_owned(),
+                            token: entry.token,
+                            family: entry.family,
+                            line: index + 1,
+                            class: FamilySignalClass::Identifier,
+                            text: identifier.to_owned(),
+                        });
+                    }
+                }
+            }
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_provider_module_signals(
+    repo_root: &Path,
+    directory:&Path,
+    crate_name: &str,
+    family: &str,
+    signals: &mut Vec<ProviderFamilySignal>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "provider-crate-layout-provider-unreadable".to_owned())?;
+    for entry in entries {
+        let entry = entry.map_err(|_| "provider-crate-layout-provider-unreadable".to_owned())?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|_| "provider-crate-layout-provider-unreadable".to_owned())?;
+        if file_type.is_dir() {
+            if entry.file_name().to_string_lossy() != "generated" {
+                collect_provider_module_signals(repo_root, &path, crate_name, family, signals)?;
+            }
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root).unwrap_or(&path);
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        provider_module_family_signals(repo_root, &relative, crate_name, family, signals)?;
+    }
+    Ok(())
+}
+
+/// Every family-identity signal a provider crate's own sources carries,
+/// sorted deterministically. The crate's own family tokens are not signals;
+/// test-only code and generated views are skipped like the shared probes.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_provider_family_signals(
+    repo_root:&Path,
+    provider_crates: &[&str],
+) -> Result<Vec<ProviderFamilySignal>, String> {
+    let mut signals = Vec::new();
+    for crate_name in provider_crates {
+        let family = provider_crate_family(crate_name);
+        let directory = repo_root.join("packages").join(crate_name).join("src");
+        if !directory.is_dir() {
+            continue;
+        }
+        collect_provider_module_signals(repo_root, &directory, crate_name, &family, &mut signals)?;
+    }
+    signals.sort_by(|left, right| {
+        left.crate_name
+            .cmp(&right.crate_name)
+            .then_with(|| left.module.cmp(&right.module))
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.token.cmp(right.token))
+            .then_with(|| left.text.cmp(&right.text))
+    });
+    Ok(signals)
+}
+
+/// Render one provider-crate family-knowledge violation as canonical JSON.
+fn render_provider_family_violation(signal: &ProviderFamilySignal) -> String {
+    let error = match signal.class {
+        FamilySignalClass::Literal => "provider-crate-family-literal",
+        FamilySignalClass::Assembled => "provider-crate-family-assembled-name",
+        FamilySignalClass::Identifier => "provider-crate-family-identifier",
+        FamilySignalClass::ServerState => "provider-crate-family-server-state",
+    };
+    serde_json::json!({
+        "error": error,
+        "crate": signal.crate_name,
+        "module": signal.module,
+        "line": signal.line,
+        "family": signal.family,
+        "token": signal.token,
+        "text": signal.text,
+    })
+    .to_string()
+}
+
+/// One committed exemption row: a provider crate module that legitimately
+/// carries another family's identity token. The list only shrinks: a signal
+/// without a row is a policy failure ((a reintroduction),and a row whose
+/// signal the tree no longer carries is stale. No row may be added unless the
+/// change that introduces a legitimate cross-family reference also records
+/// its reason here.
+
+
+#[derive(Clone)]
+struct ProviderFamilyKnowledgeExemption {
+    /// The provider crate that carries the token ((its Cargo package name).
+    crate_name: &'static str,
+    /// Repository-relative module path that carries the token.
+
+    module: &'static str,
+    /// The family identity token the module writes.
+
+    token: &'static str,
+    /// The family that owns the token.
+
+    family: &'static str,
+    /// What the reference is and why it stays.
+
+    reason: &'static str,
+}
+
+/// The committed family-knowledge exemptions, seeded from the tree the plan
+/// refactors: every current site where a provider crate legitimately carries
+/// another family's identity token. The list only shrinks: a new cross-family
+/// signal anywhere else fails the layout check until its reason is recorded
+/// here.
+const PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS: &[ProviderFamilyKnowledgeExemption] = &[
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device", module: "packages/d2b-provider-device/src/driver.rs", token: "device_gpu", family: "device-gpu", reason: "family effect-id strings route provider effects through the shared device driver" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device", module: "packages/d2b-provider-device/src/driver.rs", token: "device_security_key", family: "device-security-key", reason: "family effect-id strings route provider effects through the shared device driver" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device", module: "packages/d2b-provider-device/src/driver.rs", token: "device_tpm", family: "device-tpm", reason: "family effect-id strings route provider effects through the shared device driver" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device", module: "packages/d2b-provider-device/src/driver.rs", token: "device_usbip", family: "device-usbip", reason: "family effect-id strings route provider effects through the shared device driver" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-gpu", module: "packages/d2b-provider-device-gpu/src/process.rs", token: "device_security_key", family: "device-security-key", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-gpu", module: "packages/d2b-provider-device-gpu/src/process.rs", token: "device_tpm", family: "device-tpm", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-gpu", module: "packages/d2b-provider-device-gpu/src/process.rs", token: "device_usbip", family: "device-usbip", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-security-key", module: "packages/d2b-provider-device-security-key/src/process.rs", token: "device_gpu", family: "device-gpu", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-security-key", module: "packages/d2b-provider-device-security-key/src/process.rs", token: "device_tpm", family: "device-tpm", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-security-key", module: "packages/d2b-provider-device-security-key/src/process.rs", token: "device_usbip", family: "device-usbip", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-tpm", module: "packages/d2b-provider-device-tpm/src/resources.rs", token: "device_gpu", family: "device-gpu", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-tpm", module: "packages/d2b-provider-device-tpm/src/resources.rs", token: "device_security_key", family: "device-security-key", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-tpm", module: "packages/d2b-provider-device-tpm/src/resources.rs", token: "device_usbip", family: "device-usbip", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-device-usbip", module: "packages/d2b-provider-device-usbip/src/core_adapter.rs", token: "device_security_key", family: "device-security-key", reason: "runner-role id union the provider-name dispatch shares" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-display-wayland", module: "packages/d2b-provider-display-wayland/src/bin/d2b-wayland-proxy.rs", token: "clipboard_wayland", family: "clipboard-wayland", reason: "the wayland proxy binary's messages name the wayland surface it serves" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-display-wayland", module: "packages/d2b-provider-display-wayland/src/wayland_proxy/identity.rs", token: "network_local", family: "network-local", reason: "shared local-resource role suffix used by the local namespace providers" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-display-wayland", module: "packages/d2b-provider-display-wayland/src/wayland_proxy/identity.rs", token: "volume_local", family: "volume-local", reason: "shared local-resource role suffix used by the local namespace providers" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest", module: "packages/d2b-provider-guest/src/driver.rs", token: "runtime_azure_container_apps", family: "runtime-azure-container-apps", reason: "the guest-kind runtime resource names assemble from the runtime family ids" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest", module: "packages/d2b-provider-guest/src/driver.rs", token: "runtime_azure_virtual_machine", family: "runtime-azure-virtual-machine", reason: "the guest-kind runtime resource names assemble from the runtime family ids" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest", module: "packages/d2b-provider-guest/src/driver.rs", token: "runtime_cloud_hypervisor", family: "runtime-cloud-hypervisor", reason: "the guest-kind runtime resource names assemble from the runtime family ids" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest", module: "packages/d2b-provider-guest/src/driver.rs", token: "runtime_qemu_media", family: "runtime-qemu-media", reason: "the guest-kind runtime resource names assemble from the runtime family ids" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest-cloud-hypervisor", module: "packages/d2b-provider-guest-cloud-hypervisor/src/guest_local.rs", token: "activation_nixos", family: "activation-nixos", reason: "module-path reference to the activation family's declared type" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest-qemu-media", module: "packages/d2b-provider-guest-qemu-media/src/types/guest.rs", token: "runtime_azure_container_apps", family: "runtime-azure-container-apps", reason: "guest-kind runtime resource name template" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest-qemu-media", module: "packages/d2b-provider-guest-qemu-media/src/types/guest.rs", token: "runtime_azure_virtual_machine", family: "runtime-azure-virtual-machine", reason: "guest-kind runtime resource name template" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest-qemu-media", module: "packages/d2b-provider-guest-qemu-media/src/types/guest.rs", token: "runtime_cloud_hypervisor", family: "runtime-cloud-hypervisor", reason: "guest-kind runtime resource name template" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-host", module: "packages/d2b-provider-host/src/driver.rs", token: "system_core", family: "system-core", reason: "the host error-code strings keep the system-core prefix stable" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-observability-otel", module: "packages/d2b-provider-observability-otel/src/agent.rs", token: "system_core", family: "system-core", reason: "the otel agent names the system-core user workload" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "device_gpu", family: "device-gpu", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "device_security_key", family: "device-security-key", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "device_tpm", family: "device-tpm", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "device_usbip", family: "device-usbip", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "activation_nixos", family: "activation-nixos", reason: "the process provider runs the activation-nixos activation runner" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "system_minijail", family: "system-minijail", reason: "runner-role id union the process supervisor dispatch shares" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "system_systemd", family: "system-systemd", reason: "runner-role id union the process supervisor dispatch shares" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-provider", module: "packages/d2b-provider-provider/src/providers.rs", token: "system_core", family: "system-core", reason: "the provider-composition plan names its system-core handlers" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-provider", module: "packages/d2b-provider-provider/src/driver.rs", token: "system_core", family: "system-core", reason: "the provider-composition plan names its system-core handlers" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-shell-pool", module: "packages/d2b-provider-shell-pool/src/shell_pool.rs", token: "shell_terminal", family: "shell-terminal", reason: "family-qualified resource type names the shell-terminal family's type" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-shell-session", module: "packages/d2b-provider-shell-session/src/shell_session.rs", token: "shell_terminal", family: "shell-terminal", reason: "family-qualified resource type names the shell-terminal family's type" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "activation_nixos", family: "activation-nixos", reason: "the supervisor dispatches the activation-nixos activation runner role" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "system_minijail", family: "system-minijail", reason: "the supervisor dispatches runner roles" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "system_systemd", family: "system-systemd", reason: "the supervisor dispatches runner roles" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-system-core", module: "packages/d2b-provider-system-core/src/host.rs", token: "audio_pipewire", family: "audio-pipewire", reason: "the system-core host names the audio-pipewire workload kind" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/driver.rs", token: "system_core", family: "system-core", reason: "the user error-code strings keep the system-core prefix stable" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/test_support.rs", token: "system_core", family: "system-core", reason: "test-support fixture provider names the system-core provider" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-volume", module: "packages/d2b-provider-volume/src/driver.rs", token: "volume_local", family: "volume-local", reason: "the volume provider's own name const uses its sibling family's id" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/wayland_policy.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-policy provider's interface types name the display-wayland surface" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/interaction.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-policy provider's interface types name the display-wayland surface" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-session", module: "packages/d2b-provider-wayland-session/src/wayland_session.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-session provider's interface types name the display-wayland surface" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-zone", module: "packages/d2b-provider-zone/src/zone_status.rs", token: "system_core", family: "system-core", reason: "the zone status emitter names the system-core session phases" },
+];
+
+fn provision_family_exemptions() -> Vec<ProviderFamilyKnowledgeExemption> {
+    PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS.to_vec()
+}
+
+/// Fail every family-identity signal a provider crate still carries
+/// without an exemption row beside it, and fail every row whose signal the
+/// tree no longer carries. Passed the ratchet as a parameter so the tests can
+/// exercise both directions on fixtures.
+fn check_provider_crate_family_knowledge_with(
+    repo_root:&Path,
+    provider_crates: &[&str],
+    ratchet: &[ProviderFamilyKnowledgeExemption],
+) -> Result<(), String> {
+    let signals = collect_provider_family_signals(repo_root, provider_crates)?;
+    let exempt: BTreeSet<(String, String, &str)> = ratchet
+        .iter()
+        .map(|row| (row.crate_name.to_owned(), row.module.to_owned(), row.token))
+        .collect();
+    let mut violations = Vec::new();
+
+    for signal in &signals {
+        if !exempt.contains(&(signal.crate_name.clone(), signal.module.clone(), signal.token)) {
+
+            violations.push(render_provider_family_violation(signal));
+        }
+    }
+    for row in ratchet {
+        if family_of_token(row.token) != Some(row.family) {
+            violations.push(
+                serde_json::json!({
+                    "error": "provider-family-knowledge-exemption-mismatch",
+                    "crate": row.crate_name,
+                    "module": row.module,
+                    "token": row.token,
+                    "family": row.family,
+                })
+                .to_string(),
+            );
+        }
+        if !signals
+            .iter()
+            .any(|signal| {
+                signal.crate_name == row.crate_name
+                    && signal.module == row.module
+                    && signal.token == row.token
+            })
+        {
+            violations.push(
+                serde_json::json!({
+                    "error": "stale-provider-family-knowledge-exemption",
+                    "crate": row.crate_name,
+                    "module": row.module,
+                    "token": row.token,
+                    "family": row.family,
+                    "reason": row.reason,
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "provider-crate family-knowledge violations:\n{}",
+            violations.join("\n")
+        ))
+    }
+}
+
+/// Fail when family knowledge reappears in a provider crate: a family
+/// identity token inside a provider crate's own sources that names a different
+/// family, other than the committed reference exemptions. The child-placement
+/// provider reference is the one legitimate cross-family shape the rule names;
+/// every other current site is recorded with its reason instead of weakening
+/// the rule.
+fn check_provider_crate_family_knowledge(repo_root:&Path) -> Result<(), String> {
+    let provider_crates: Vec<&str> = COMMITTED_SCOPE
+        .iter()
+        .filter(|row| matches!(row.class, CommittedScopeClass::Provider))
+        .map(|row| row.crate_name)
+        .collect();
+    let ratchet = provision_family_exemptions();
+    check_provider_crate_family_knowledge_with(repo_root, &provider_crates, &ratchet)
+}
+
+/// The classes the committed program scope names. A provider crate, a
+/// shared crate, the daemon, the broker, or the check's own tooling crate;
+/// the plan's lanes edit exactly those crates. The declared generated-artifact
+/// and digest roots are additionally part of the scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommittedScopeClass {
+    Provider,
+    Shared,
+    Daemon,
+    Broker,
+    Tooling,
+}
+
+/// One row in the committed program scope: a workspace crate the plan's
+/// program may edit,classified into the class the plan names. The list is
+/// closed: a workspace crate without a row is an edit outside the declared
+/// scope (a crate no unit names),and a row whose crate no longer exists is
+/// stale. A committed-scope check cannot police every file outside these
+/// classes without encoding the whole plan's touch surface,so it polices
+/// the crate set and the declared artifact roots,the two surfaces the plan
+/// names; every other surface (docs/plans, changelog.d, tests/, Nix
+/// modules, Bazel files, ...) is out of its scope by construction.
+struct CommittedScopeEntry {
+    crate_name: &'static str,
+    class: CommittedScopeClass,
+    reason: &'static str,
+}
+
+/// The committed workspace-crate scope, seeded from the tree the plan
+/// refactors. Every workspace member must appear exactly once;every entry
+/// must stay a live member. The classes are the plan's own naming: the plan
+/// names provider crates as a class, the shared crates its lanes read
+/// through, the daemon, the broker, and the tooling its own check lives in.
+const COMMITTED_SCOPE: &[CommittedScopeEntry] = &[
+    CommittedScopeEntry { crate_name: "d2b-host-activation-helper", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-core", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-host", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-unsafe-local-helper", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-sk-frontend", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-audit", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-telemetry", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts-broker", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts-control", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts-resource", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts-provider", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-contracts-zone-session", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-bus", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-zone-routing", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-resource-client", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-resource-compiler", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-provider", class: CommittedScopeClass::Shared,
+        reason: "the provider base library; a shared platform crate not edited by family lanes" },
+    CommittedScopeEntry { crate_name: "d2b-provider-toolkit", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-activation-nixos", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-config-nixos", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-audio-pipewire", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-clipboard-wayland", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-display-wayland", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-notification-desktop", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-guest", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-guest-azure-container-apps", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-guest-azure-virtual-machine", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-guest-cloud-hypervisor", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-guest-qemu-media", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-shell-terminal", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-transport-azure-relay", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-transport-unix", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-transport-vsock", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-process-conformance", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-provider-system-core", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-process-systemd", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-process-minijail", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-volume-local", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-volume-virtiofs", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-supervisor", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-credential-secret-service", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-credential-entra", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-credential-managed-identity", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-credential", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-network-local", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-device", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-device-gpu", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-device-security-key", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-device-tpm", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-device-usbip", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-observability-otel", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-process", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-host", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-user", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-session", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-session-unix", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-controller-toolkit", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-core-controller", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-provider-test-controller", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-resource-api", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-resource-runtime", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b-resource-types", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2b", class: CommittedScopeClass::Shared,
+        reason: "the shared platform the plan reads through and keeps provider-free" },
+    CommittedScopeEntry { crate_name: "d2bd-runtime", class: CommittedScopeClass::Daemon,
+        reason: "the daemon composition root (and its runtime)" },
+    CommittedScopeEntry { crate_name: "d2bd", class: CommittedScopeClass::Daemon,
+        reason: "the daemon composition root (and its runtime)" },
+    CommittedScopeEntry { crate_name: "xtask", class: CommittedScopeClass::Tooling,
+        reason: "the check's own home; every U-unit touches the tooling" },
+    CommittedScopeEntry { crate_name: "d2b-broker", class: CommittedScopeClass::Broker,
+        reason: "the broker binary and its composition/fixture support crates" },
+    CommittedScopeEntry { crate_name: "d2b-broker-composition", class: CommittedScopeClass::Broker,
+        reason: "the broker binary and its composition/fixture support crates" },
+    CommittedScopeEntry { crate_name: "d2b-broker-fixture-handlers", class: CommittedScopeClass::Broker,
+        reason: "the broker binary and its composition/fixture support crates" },
+    CommittedScopeEntry { crate_name: "d2b-broker-fixture-syscall-surface", class: CommittedScopeClass::Broker,
+        reason: "the broker binary and its composition/fixture support crates" },
+    CommittedScopeEntry { crate_name: "d2b-provider-endpoint", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-telemetry-service", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-telemetry-binding", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-volume", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-volume-binding", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-wayland-policy", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-wayland-session", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-audio-service", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-audio-binding", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-shell-pool", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-shell-session", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-zone", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-zone-link", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-provider", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-role", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-role-binding", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-quota", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-emergency-policy", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-resource-export", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-resource-import", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-command", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-operation", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+    CommittedScopeEntry { crate_name: "d2b-provider-seccomp-profile", class: CommittedScopeClass::Provider,
+        reason: "the plan's provider crate class; a family or per-type provider crate" },
+];
+const COMMITTED_SCOPE_ARTIFACT_ROOTS: &[&str] = &["docs/reference", "packages/policy-inputs"];
+
+/// Fail when a workspace crate has no committed scope row ((an edit to a
+/// crate no unit names),when a row names a crate the workspace no longer has,
+/// or when a declared artifact root has vanished. The committed scope is
+/// compared against the workspace rather than a diff: any crate present without
+/// a row is an edit outside the scope that happened, whiche is what a
+/// committed scope gate can prove without a diff..
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn check_committed_scope(repo_root:&Path, members: &[WorkspaceMember]) -> Result<(), String> {
+    check_committed_scope_with(
+        repo_root,
+        members,
+        COMMITTED_SCOPE,
+        COMMITTED_SCOPE_ARTIFACT_ROOTS,
+    )
+}
+
+/// The committed-scope gate against a caller-supplied scope: fixtures and
+/// ratchet tests exercise both directions on tiny scopes instead of the real
+/// 94-row table.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn check_committed_scope_with(
+    repo_root:&Path,
+    members: &[WorkspaceMember],
+    scope: &[CommittedScopeEntry],
+    artifact_roots: &[&str],
+) -> Result<(), String> {
+    let expected: BTreeSet<&str> = scope
+        .iter()
+        .map(|row| row.crate_name)
+        .collect();
+    let actual: BTreeSet<&str> = members
+        .iter()
+        .map(|member| member.package_name.as_str())
+        .collect();
+    let mut violations = Vec::new();
+
+    for crate_name in actual.difference(&expected) {
+        violations.push(
+            serde_json::json!({
+                "error": "committed-scope-crate-unclassified",
+                "crate": crate_name,
+            })
+            .to_string(),
+        );
+    }
+    for row in scope {
+        if !actual.contains(row.crate_name) {
+            violations.push(
+                serde_json::json!({
+                    "error": "committed-scope-crate-stale",
+                    "crate": row.crate_name,
+                    "class": format!("{:?}", row.class),
+                    "reason": row.reason,
+                })
+                .to_string(),
+            );
+        }
+    }
+    for root in artifact_roots {
+        if !repo_root.join(root).is_dir() {
+            violations.push(
+                serde_json::json!({
+                    "error": "committed-scope-artifact-root-missing",
+                    "root": root,
+                })
+                .to_string(),
+            );
+        }
+    }
+
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "committed scope violations:\n{}",
+            violations.join("\n")
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -7737,6 +10061,28 @@ mod tests {
         assert!(mechanical_rewrite(definition, 0, None, start, definition.len()).is_none());
     }
 
+    /// A citation on an indented comment line rewrites with comment-relative
+    /// spans: the offsets are measured from the comment, not the line, so a
+    /// deeper indent cannot underflow the arithmetic.
+    #[test]
+    fn an_indented_comment_citation_rewrites_without_underflow() {
+        let line = "            // (see d2bd::gone)";
+        let comment_start = line.find("//").unwrap();
+        let comment = &line[comment_start..];
+        let start = comment.find("d2bd::gone").unwrap();
+        let end = start + "d2bd::gone".len();
+        let Some(CitationRewrite::DropSpan {
+            start: drop_start,
+            end: drop_end,
+            keep,
+        }) = mechanical_rewrite(line, comment_start, None, start, end)
+        else {
+            panic!("a parenthetical citation on an indented comment is mechanical");
+        };
+        assert_eq!(&line[drop_start..drop_end], "(see d2bd::gone)");
+        assert_eq!(keep, None);
+    }
+
     /// A family string literal introduced into a shared crate fails the check
     /// with a named violation: the module, the family, and the literal.
     #[test]
@@ -8093,8 +10439,8 @@ mod tests {
             "#![allow(clippy::disallowed_methods)]\n",
         )
         .unwrap();
-        let error = check_banned_api_allows_with(&fixture.root, &[])
-            .expect_err("blanket allow must fail");
+        let error =
+            check_banned_api_allows_with(&fixture.root, &[]).expect_err("blanket allow must fail");
         assert!(error.contains("blanket allow"), "error: {error}");
         assert!(error.contains("clippy::disallowed_methods"));
     }
@@ -8110,10 +10456,16 @@ mod tests {
             "#[allow(clippy::disallowed_methods, reason = \"trust me\")]\npub fn f() {}\n",
         )
         .unwrap();
-        let error = check_banned_api_allows_with(&fixture.root, &[])
-            .expect_err("unknown reason must fail");
-        assert!(error.contains("without a sanctioned reason"), "error: {error}");
-        assert!(error.contains("dedicated bounded worker per plan R4"), "error: {error}");
+        let error =
+            check_banned_api_allows_with(&fixture.root, &[]).expect_err("unknown reason must fail");
+        assert!(
+            error.contains("without a sanctioned reason"),
+            "error: {error}"
+        );
+        assert!(
+            error.contains("dedicated bounded worker per plan R4"),
+            "error: {error}"
+        );
 
         fs::write(
             fixture.root.join("packages/d2b-core/src/lib.rs"),
@@ -8122,7 +10474,10 @@ mod tests {
         .unwrap();
         let error = check_banned_api_allows_with(&fixture.root, &[])
             .expect_err("reasonless allow must fail");
-        assert!(error.contains("without a sanctioned reason"), "error: {error}");
+        assert!(
+            error.contains("without a sanctioned reason"),
+            "error: {error}"
+        );
     }
 
     /// A per-site allow carrying a sanctioned reason passes the policy
@@ -8173,5 +10528,275 @@ mod tests {
             Ok(()),
             "the committed tree must carry only sanctioned banned-API suppressions"
         );
+    }
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_per_role_posture_table_in_a_shared_crate_is_refused() {
+        let fixture = Fixture::new("role-posture-table");
+        let broker = fixture.root.join("packages/d2b-broker/src");
+        fs::create_dir_all(&broker).unwrap();
+        let table = broker.join("posture.rs");
+        fs::write(
+            &table,
+            "const ROLE_POSTURE: &[(ProcessRole, &str)] = &[\n    (ProcessRole::Audio, \"posture-a\"),\n    (ProcessRole::Video, \"posture-v\"),\n];\n",
+        )
+        .unwrap();
+        let error = check_shared_structural_knowledge_with(&fixture.root, &[], &[])
+            .expect_err("a per-role posture table in a shared crate is refused");
+        assert!(
+            error.contains("per-family-branch") || error.contains("per-role-or-seccomp-table"),
+            "{error}"
+        );
+        assert!(
+            error.contains("packages/d2b-broker/src/posture.rs"),
+            "{error}"
+        );
+        assert!(error.contains("ProcessRole::Audio"), "{error}");
+        fs::remove_file(&table).unwrap();
+        assert_eq!(
+            check_shared_structural_knowledge_with(&fixture.root, &[], &[]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_per_family_branch_and_type_name_match_arm_are_refused() {
+        let fixture = Fixture::new("family-branch");
+        let broker = fixture.root.join("packages/d2b-broker/src");
+        fs::create_dir_all(&broker).unwrap();
+        let leak = broker.join("branch.rs");
+        fs::write(
+            &leak,
+            "fn dispatch(role: ProcessRole) {\n    match role {\n        ProcessRole::Audio => (),\n        _ => (),\n    }\n}\nfn kind(resource_type: &str) {\n    match resource_type {\n        \"audio\" => (),\n        _ => (),\n    }\n}\n",
+        )
+        .unwrap();
+        let error = check_shared_structural_knowledge_with(&fixture.root, &[], &[])
+            .expect_err("a per-family branch and a type-name match arm are refused");
+        assert!(error.contains("per-family-branch"), "{error}");
+        assert!(error.contains("ProcessRole::Audio"), "{error}");
+        assert!(error.contains("type-name-match-arm"), "{error}");
+        assert!(error.contains("\"audio\""), "{error}");
+        fs::remove_file(&leak).unwrap();
+        assert_eq!(
+            check_shared_structural_knowledge_with(&fixture.root, &[], &[]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_provider_id_and_role_literal_in_a_shared_nix_module_are_refused() {
+        let fixture = Fixture::new("nix-knowledge");
+        let nix = fixture.root.join("nixos-modules");
+        fs::create_dir_all(&nix).unwrap();
+        let leak = nix.join("roles.nix");
+        fs::write(
+            &leak,
+            "{\n  providerRef = \"Provider/aud\";\n  role = \"qemu-media\";\n}\n",
+        )
+        .unwrap();
+        let error = check_shared_structural_knowledge_with(&fixture.root, &[], &[])
+            .expect_err("a provider id and a role literal in a shared Nix module are refused");
+        assert!(error.contains("provider-id"), "{error}");
+        assert!(error.contains("Provider/aud"), "{error}");
+        assert!(error.contains("role-literal"), "{error}");
+        assert!(error.contains("qemu-media"), "{error}");
+        fs::remove_file(&leak).unwrap();
+        assert_eq!(
+            check_shared_structural_knowledge_with(&fixture.root, &[], &[]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_shared_crate_dependency_on_a_provider_crate_is_refused_unless_listed() {
+        let fixture = Fixture::new("provider-dependency");
+        let core = fixture.root.join("packages/d2b-core");
+        fs::create_dir_all(core.join("src")).unwrap();
+        fs::write(
+            core.join("Cargo.toml"),
+            "[package]\nname = \"d2b-core\"\nversion = \"0.0.0\"\n\n[dependencies]\nd2b-provider-process-systemd = { path = \"../d2b-provider-process-systemd\" }\n",
+        )
+        .unwrap();
+        let error = check_shared_provider_dependencies_with(&fixture.root, &[])
+            .expect_err("a shared crate depending on a provider crate is refused");
+        assert!(
+            error.contains("shared-crate-provider-dependency"),
+            "{error}"
+        );
+        assert!(error.contains("d2b-provider-process-systemd"), "{error}");
+        assert_eq!(
+            check_shared_provider_dependencies_with(
+                &fixture.root,
+                &[("packages/d2b-core", "d2b-provider-process-systemd")]
+            ),
+            Ok(()),
+            "a listed edge passes"
+        );
+        fs::write(
+            core.join("Cargo.toml"),
+            "[package]\nname = \"d2b-core\"\nversion = \"0.0.0\"\n\n[dependencies]\nserde = \"1\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            check_shared_provider_dependencies_with(&fixture.root, &[]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_self_binding_outside_its_declaring_scope_is_refused() {
+        let fixture = Fixture::new("self-binding-escape");
+        let d2bd = fixture.root.join("packages/d2bd/src");
+        fs::create_dir_all(&d2bd).unwrap();
+        let leak = d2bd.join("seed.rs");
+        fs::write(
+            &leak,
+            "SeedProvider {\n    provider_ref: ResourceRef::parse(\"Provider/system-minijail\"),\n    roles: vec![ResourceRef::parse(\"Role/worker\")],\n    self_bindings: vec![SeedSelfBinding {\n        subject_ref: ResourceRef::parse(\"Provider/other\"),\n        role_ref: ResourceRef::parse(\"Role/other\"),\n    }],\n}\n",
+        )
+        .unwrap();
+        let error = check_self_binding_scope(&fixture.root)
+            .expect_err("a self-binding naming another subject or role is refused");
+        assert!(error.contains("self-binding-subject-escape"), "{error}");
+        assert!(error.contains("other"), "{error}");
+        assert!(error.contains("self-binding-role-escape"), "{error}");
+        assert!(error.contains("other"), "{error}");
+        fs::remove_file(&leak).unwrap();
+        assert_eq!(check_self_binding_scope(&fixture.root), Ok(()));
+    }
+
+    #[test]
+    fn the_structural_ratchet_matches_the_committed_tree() {
+        let root = repo_root().expect("resolve repository root");
+        assert_eq!(
+            check_shared_structural_knowledge(root),
+            Ok(()),
+            "the committed tree must be exactly the seeded structural-knowledge ratchet"
+        );
+    }
+
+    #[test]
+    fn the_dependency_direction_matches_the_committed_tree() {
+        let root = repo_root().expect("resolve repository root");
+        assert_eq!(
+            check_shared_provider_dependencies(root),
+            Ok(()),
+            "no shared crate may depend on a provider crate outside the listed edges"
+        );
+    }
+
+    #[test]
+    fn the_self_binding_scope_matches_the_committed_tree() {
+        let root = repo_root().expect("resolve repository root");
+        assert_eq!(
+            check_self_binding_scope(root),
+            Ok(()),
+            "every committed self-binding stays inside its declaring provider's scope"
+        );
+    }
+
+    #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_family_identity_in_a_provider_crate_is_refused() {
+        let fixture = Fixture::new("family-leak");
+        let leak = fixture.provider_dir().join("src/leak.rs");
+        fs::write(
+            &leak,
+            "pub const TYPE: &str = \"device-usbip.d2bus.org.Widget\";\n",
+        )
+        .unwrap();
+        let error = check_provider_crate_family_knowledge_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.contains("provider-crate-family-literal"), "{error}");
+        assert!(error.contains("\"family\":\"device-usbip\""), "{error}");
+        assert!(error.contains("packages/d2b-provider-fixture-example/src/leak.rs"), "{error}");
+
+        fs::remove_file(&leak).unwrap();
+        check_provider_crate_family_knowledge_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+            &[],
+        )
+        .unwrap();
+    }
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn the_provider_family_ratchet_only_shrinks_with_its_signals() {
+        let fixture = Fixture::new("family-ratchet");
+        let leak = fixture.provider_dir().join("src/leak.rs");
+        fs::write(
+            &leak,
+            "pub const TYPE: &str = \"system-core-user\";\n",
+        )
+        .unwrap();
+        let rows = vec![ProviderFamilyKnowledgeExemption {
+            crate_name: "d2b-provider-fixture-example",
+            module: "packages/d2b-provider-fixture-example/src/leak.rs",
+            token: "system_core",
+            family: "system-core",
+            reason: "fixture",
+        }];
+        check_provider_crate_family_knowledge_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+            &rows,
+        )
+        .unwrap();
+
+        fs::remove_file(&leak).unwrap();
+        let error = check_provider_crate_family_knowledge_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+            &rows,
+        )
+        .unwrap_err();
+        assert!(error.contains("stale-provider-family-knowledge-exemption"), "{error}");
+        assert!(error.contains("\"crate\":\"d2b-provider-fixture-example\""), "{error}");
+    }
+
+    #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_crate_outside_the_committed_scope_is_refused() {
+        let fixture = Fixture::new("scope-unclassified");
+        let members = manifest_workspace_members(&fixture.root).unwrap();
+        let error = check_committed_scope_with(&fixture.root, &members, &[], &[]).unwrap_err();
+        assert!(error.contains("committed-scope-crate-unclassified"), "{error}");
+        assert!(error.contains("\"crate\":\"d2b-core\""), "{error}");
+        assert!(error.contains("\"crate\":\"d2b-provider-fixture-example\""), "{error}");
+    }
+
+    #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_crate_inside_the_committed_scope_passes() {
+        let fixture = Fixture::new("scope-pass");
+        let members = manifest_workspace_members(&fixture.root).unwrap();
+        let scope = vec![
+            CommittedScopeEntry { crate_name: "d2b-core", class: CommittedScopeClass::Shared, reason: "fixture" },
+            CommittedScopeEntry { crate_name: "d2b-provider-fixture-example", class: CommittedScopeClass::Provider, reason: "fixture" },
+        ];
+        check_committed_scope_with(&fixture.root, &members, &scope, &[]).unwrap();
+    }
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn a_stale_committed_scope_row_is_refused() {
+        let fixture = Fixture::new("scope-stale");
+        fixture.set_members(&["d2b-core"]);
+        let members = manifest_workspace_members(&fixture.root).unwrap();
+        let scope = vec![
+            CommittedScopeEntry { crate_name: "d2b-core", class: CommittedScopeClass::Shared, reason: "fixture" },
+            CommittedScopeEntry { crate_name: "d2b-provider-fixture-example", class: CommittedScopeClass::Provider, reason: "fixture" },
+        ];
+        let error = check_committed_scope_with(&fixture.root, &members,&scope, &[]).unwrap_err();
+        assert!(error.contains("committed-scope-crate-stale"), "{error}");
+        assert!(error.contains("\"crate\":\"d2b-provider-fixture-example\""), "{error}");
     }
 }

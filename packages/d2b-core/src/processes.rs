@@ -1,4 +1,4 @@
-use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+use crate::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
 use crate::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -305,7 +305,7 @@ pub struct RoleProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_namespace: Option<RoleUserNamespace>,
     /// v1.1.2fu36: file-creation mask installed in the spawned
-    /// child before execve. See `MinijailProfile::umask` for the
+    /// child before execve. See `SandboxProfile::umask` for the
     /// rationale. Roles that bind shared Unix sockets
     /// (vhost-user-sound, crosvm-gpu, crosvm video, swtpm) declare
     /// `0o007` so downstream consumers (cloud-hypervisor) can

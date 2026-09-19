@@ -19,7 +19,11 @@ use d2b_contracts_broker::kernel_client::{
     KernelInvocation, KernelInvokeError, envelope_invoke_kernel,
 };
 use d2b_provider_network_local::{
-    broker::{BrokerNetworkEffectPort, NetworkBroker, NetworkBrokerError, NetworkEffectContext},
+    KERNEL_APPLY_NFTABLES_PROJECTION, KERNEL_SEED_DNSMASQ_LEASE,
+    broker::{
+        BrokerNetworkEffectPort, FirewallProjectionAction, NetworkBroker, NetworkBrokerError,
+        NetworkEffectContext,
+    },
     controller::FirewallDigest,
 };
 
@@ -145,7 +149,7 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
     fn apply_projection(
         &self,
         context: &NetworkEffectContext,
-        action: d2b_contracts_broker::broker_wire::NftablesProjectionAction,
+        action: FirewallProjectionAction,
     ) -> Result<FirewallDigest, NetworkBrokerError> {
         let provenance = context.provenance()?;
         let zone = self.zone_for(context)?;
@@ -165,7 +169,7 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
             .installed_generation_identity()
             .ok_or(NetworkBrokerError::StaleGeneration)?;
         self.invoke_kernel(
-            "apply-nftables-projection",
+            KERNEL_APPLY_NFTABLES_PROJECTION,
             &zone,
             serde_json::json!({
                 "scriptBody": intent.script_body,
@@ -175,8 +179,8 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
                 "expectedGenerationId": context.expected_generation_id().as_str(),
                 "installedGenerationId": installed.as_str(),
                 "action": match action {
-                    d2b_contracts_broker::broker_wire::NftablesProjectionAction::Apply => "apply",
-                    d2b_contracts_broker::broker_wire::NftablesProjectionAction::Remove => "remove",
+                    FirewallProjectionAction::Apply => "apply",
+                    FirewallProjectionAction::Remove => "remove",
                 },
             }),
         )?;
@@ -318,10 +322,10 @@ impl NetworkBroker for DaemonNetworkBroker<'_> {
         let provenance = context.provenance()?;
         let zone = self.zone_for(context)?;
         self.invoke_kernel(
-            "seed-dnsmasq-lease",
+            KERNEL_SEED_DNSMASQ_LEASE,
             &zone,
             serde_json::json!({
-                "vmId": context.dnsmasq_vm_id().as_str(),
+                "vmId": context.dhcp_vm_id().as_str(),
                 "scopeId": context.scope_id().as_str(),
                 "zoneUid": provenance.zone_uid().as_str(),
                 "networkUid": provenance.network_uid().as_str(),

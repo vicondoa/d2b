@@ -1,4 +1,4 @@
-use d2b_core::device_usbip_adapter::{
+use d2b_provider_device_usbip::core_adapter::{
     USBIP_HOST_MODULE_DOMAIN, USBIP_NETWORK_RELAY_DOMAIN, UsbipCoreAdapter, UsbipCoreAdapterError,
 };
 

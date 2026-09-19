@@ -10,13 +10,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
-    ConditionState, IfName, ManagedBy, ResourceBundleGenerationId, ResourceGeneration,
-    ResourcePhase, ResourceRef, ResourceUid, UpdateState,
+    IfName, ResourceBundleGenerationId, ResourceGeneration, ResourceRef, ResourceUid,
+    UpdateState,
     execution_policy::{
         BoundedToken, PrimitiveSpecError, parsed_deserialize, redacted_debug,
         require_execution_ref, string_schema,
     },
-    user::{OsUsername, UserSpec},
 };
 
 /// Immutable Network identity carried through every host effect.
@@ -115,15 +114,6 @@ pub const DEFAULT_HOST_BLOCKLIST: [&str; 4] = [
     "192.168.0.0/16",
     "169.254.0.0/16",
 ];
-/// Canonical reserved User resource name for the Network controller account.
-pub const NET_LOCAL_CONTROLLER_USER_NAME: &str = "net-local-controller";
-/// Canonical OS account resolved for the Network controller User resource.
-pub const NET_LOCAL_CONTROLLER_OS_USERNAME: &str = "net-local-controller";
-/// Provider that owns the reserved Network controller User resource.
-pub const NET_LOCAL_CONTROLLER_OWNER_REF: &str = "Provider/network-local";
-/// Provider that verifies the reserved account through NSS.
-pub const NET_LOCAL_CONTROLLER_VERIFIER_REF: &str = "Provider/system-core";
-
 /// A validated IPv4 CIDR in `a.b.c.d/prefix` form.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -1610,104 +1600,6 @@ pub fn admit_external_nic_claims(
     Ok(())
 }
 
-/// Fixed lifecycle declaration for the reserved Network controller User.
-#[derive(Clone, PartialEq, Eq)]
-pub struct NetLocalControllerUserResource {
-    resource_ref: ResourceRef,
-    owner_ref: ResourceRef,
-    verifier_ref: ResourceRef,
-    managed_by: ManagedBy,
-    spec: UserSpec,
-}
-
-impl NetLocalControllerUserResource {
-    /// Build the exact User declaration controllers and compilers share.
-    pub fn declared() -> Self {
-        Self {
-            resource_ref: ResourceRef::parse(&format!("User/{NET_LOCAL_CONTROLLER_USER_NAME}"))
-                .expect("fixed User reference is valid"),
-            owner_ref: ResourceRef::parse(NET_LOCAL_CONTROLLER_OWNER_REF)
-                .expect("fixed owner reference is valid"),
-            verifier_ref: ResourceRef::parse(NET_LOCAL_CONTROLLER_VERIFIER_REF)
-                .expect("fixed verifier reference is valid"),
-            managed_by: ManagedBy::Controller,
-            spec: UserSpec::minimal(
-                OsUsername::parse(NET_LOCAL_CONTROLLER_OS_USERNAME)
-                    .expect("fixed OS username is valid"),
-            ),
-        }
-    }
-
-    /// Borrow the canonical User resource reference.
-    pub const fn resource_ref(&self) -> &ResourceRef {
-        &self.resource_ref
-    }
-
-    /// Borrow the owning Network Provider reference.
-    pub const fn owner_ref(&self) -> &ResourceRef {
-        &self.owner_ref
-    }
-
-    /// Borrow the system Provider that verifies the account through NSS.
-    pub const fn verifier_ref(&self) -> &ResourceRef {
-        &self.verifier_ref
-    }
-
-    /// Return the controller-managed lifecycle class.
-    pub const fn managed_by(&self) -> ManagedBy {
-        self.managed_by
-    }
-
-    /// Borrow the User base spec, which contains no numeric identity.
-    pub const fn spec(&self) -> &UserSpec {
-        &self.spec
-    }
-
-    /// Decide the config-Volume precondition from the universal User phase only.
-    pub const fn config_volume_gate(&self, phase: ResourcePhase) -> NetLocalControllerUserGate {
-        if matches!(phase, ResourcePhase::Ready) {
-            NetLocalControllerUserGate::Ready
-        } else {
-            NetLocalControllerUserGate::AbortUserNotReady
-        }
-    }
-}
-
-redacted_debug!(NetLocalControllerUserResource);
-
-/// Config-Volume action after checking the reserved User resource phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NetLocalControllerUserGate {
-    Ready,
-    AbortUserNotReady,
-}
-
-impl NetLocalControllerUserGate {
-    /// Return the affected Network condition when the gate blocks.
-    pub const fn condition(self) -> Option<NetworkConditionType> {
-        match self {
-            Self::Ready => None,
-            Self::AbortUserNotReady => Some(NetworkConditionType::ConfigVolumeReady),
-        }
-    }
-
-    /// Return the condition state when the gate blocks.
-    pub const fn condition_state(self) -> Option<ConditionState> {
-        match self {
-            Self::Ready => None,
-            Self::AbortUserNotReady => Some(ConditionState::False),
-        }
-    }
-
-    /// Return the stable failure reason when the gate blocks.
-    pub const fn reason(self) -> Option<&'static str> {
-        match self {
-            Self::Ready => None,
-            Self::AbortUserNotReady => Some("user-not-ready"),
-        }
-    }
-}
-
 /// Return whether two validated IPv4 CIDRs overlap, including containment.
 pub fn cidr_overlaps(left: &Ipv4Cidr, right: &Ipv4Cidr) -> bool {
     let (left_address, left_prefix) = left.address_and_prefix();
@@ -2245,48 +2137,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reserved_controller_user_lifecycle_uses_resource_phase_not_numeric_identity() {
-        let user = NetLocalControllerUserResource::declared();
-        assert_eq!(
-            user.resource_ref(),
-            &ResourceRef::parse("User/net-local-controller").unwrap()
-        );
-        assert_eq!(
-            user.owner_ref(),
-            &ResourceRef::parse("Provider/network-local").unwrap()
-        );
-        assert_eq!(
-            user.verifier_ref(),
-            &ResourceRef::parse("Provider/system-core").unwrap()
-        );
-        assert_eq!(user.managed_by(), ManagedBy::Controller);
-        assert_eq!(
-            user.spec().os_username().as_str(),
-            NET_LOCAL_CONTROLLER_OS_USERNAME
-        );
-
-        assert_eq!(
-            user.config_volume_gate(ResourcePhase::Ready),
-            NetLocalControllerUserGate::Ready
-        );
-        let blocked = user.config_volume_gate(ResourcePhase::Pending);
-        assert_eq!(blocked, NetLocalControllerUserGate::AbortUserNotReady);
-        assert_eq!(
-            blocked.condition(),
-            Some(NetworkConditionType::ConfigVolumeReady)
-        );
-        assert_eq!(blocked.condition_state(), Some(ConditionState::False));
-        assert_eq!(blocked.reason(), Some("user-not-ready"));
-
-        let spec = canonical_json_bytes(user.spec()).unwrap();
-        let spec_text = String::from_utf8(spec).unwrap();
-        for forbidden in ["uid", "gid", "managedBy", "ownerRef"] {
-            assert!(!spec_text.contains(forbidden));
-        }
-        assert_eq!(
-            format!("{user:?}"),
-            "NetLocalControllerUserResource(<redacted>)"
-        );
-    }
 }

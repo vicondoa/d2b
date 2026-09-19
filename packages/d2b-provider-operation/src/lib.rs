@@ -16,4 +16,8 @@
 
 mod driver;
 
+/// The Operation ResourceType spec and status shapes owned by this crate.
+pub mod operation;
+
 pub use driver::operation_descriptor;
+pub use operation::*;

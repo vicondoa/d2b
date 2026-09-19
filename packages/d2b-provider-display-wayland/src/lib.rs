@@ -49,3 +49,5 @@ pub const HOST_CLIPBOARD_SERVICE: &str = "d2b.display.host-clipboard.v3";
 pub const CLIPBOARD_BRIDGE_SERVICE: &str = "d2b.clipboard.bridge.v3";
 /// Display-session finalizer.
 pub const FINALIZER: &str = "display-wayland.d2bus.org/proxy-stopped";
+/// The role id the display wayland proxy process carries in launcher rows.
+pub const WAYLAND_PROXY_ROLE: &str = "wayland-proxy";

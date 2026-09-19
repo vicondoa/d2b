@@ -1,0 +1,9 @@
+{
+  "provider": "clipboard-wayland",
+  "providerRef": "Provider/clipboard-wayland",
+  "services": [
+    "d2b.clipboard.v3",
+    "d2b.clipboard.bridge.v3",
+    "d2b.clipboard.picker-coord.v3"
+  ]
+}

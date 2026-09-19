@@ -3763,7 +3763,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::no_fds(
                 BrokerResponse::CheckSystemdUserManager(
-                    d2b_contracts_broker::broker_wire::CheckSystemdUserManagerResponse {
+                    d2b_contracts_broker::broker_wire::CheckUserManagerResponse {
                         vm_id: req.vm_id,
                         role_id: req.role_id,
                         available,
@@ -3796,7 +3796,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::ObserveSystemdUnit(
-                d2b_contracts_broker::broker_wire::ObserveSystemdUnitResponse {
+                d2b_contracts_broker::broker_wire::ObserveUnitResponse {
                     vm_id: req.vm_id,
                     role_id: req.role_id,
                     present: identity.is_some(),
@@ -3830,7 +3830,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             )?;
             Ok(DispatchResult::with_fd(
                 BrokerResponse::OpenSystemdUnitPidfd(
-                    d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdResponse {
+                    d2b_contracts_broker::broker_wire::OpenUnitPidfdResponse {
                         vm_id: req.unit.vm_id,
                         role_id: req.unit.role_id,
                         identity,
@@ -3865,7 +3865,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 },
             )?;
             Ok(DispatchResult::no_fds(BrokerResponse::StopSystemdUnit(
-                d2b_contracts_broker::broker_wire::StopSystemdUnitResponse {
+                d2b_contracts_broker::broker_wire::StopUnitResponse {
                     vm_id: req.unit.vm_id,
                     role_id: req.unit.role_id,
                     stopped: true,
@@ -5257,11 +5257,11 @@ fn runner_signal_name(signal: d2b_contracts_broker::broker_wire::RunnerSignal) -
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn systemd_domain_name(
-    domain: d2b_contracts_broker::broker_wire::SystemdUnitDomain,
+    domain: d2b_contracts_broker::broker_wire::UnitDomain,
 ) -> &'static str {
     match domain {
-        d2b_contracts_broker::broker_wire::SystemdUnitDomain::System => "system",
-        d2b_contracts_broker::broker_wire::SystemdUnitDomain::User => "user",
+        d2b_contracts_broker::broker_wire::UnitDomain::System => "system",
+        d2b_contracts_broker::broker_wire::UnitDomain::User => "user",
     }
 }
 
@@ -6322,7 +6322,7 @@ fn store_sync_error_kind(stage: crate::ops::store_sync_audit::ErrorStage) -> &'s
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 type SystemdUnitHandleFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<(d2b_contracts_broker::broker_wire::SystemdUnitIdentity, OwnedFd), BrokerError>> + Send + 'a>,
+    Box<dyn Future<Output = Result<(d2b_contracts_broker::broker_wire::UnitIdentity, OwnedFd), BrokerError>> + Send + 'a>,
 >;
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -6397,16 +6397,16 @@ trait DispatchBackend {
     fn check_systemd_user_manager<'a>(
         &'a self,
         resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
+        request: &'a d2b_contracts_broker::broker_wire::CheckUserManagerRequest,
     ) -> Pin<Box<dyn Future<Output = Result<bool, BrokerError>> + Send + 'a>>;
 
     fn observe_systemd_unit<'a>(
         &'a self,
         resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
+        request: &'a d2b_contracts_broker::broker_wire::ObserveUnitRequest,
     ) -> Pin<
         Box<
-            dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError>>
+            dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::UnitIdentity>, BrokerError>>
                 + Send
                 + 'a,
         >,
@@ -6415,13 +6415,13 @@ trait DispatchBackend {
     fn reopen_systemd_unit<'a>(
         &'a self,
         resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
+        request: &'a d2b_contracts_broker::broker_wire::OpenUnitPidfdRequest,
     ) -> SystemdUnitHandleFuture<'a>;
 
     fn stop_systemd_unit<'a>(
         &'a self,
         resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::StopSystemdUnitRequest,
+        request: &'a d2b_contracts_broker::broker_wire::StopUnitRequest,
     ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
     fn signal_runner<'a>(
@@ -6898,7 +6898,7 @@ impl DispatchBackend for LiveDispatchBackend {
             dyn Future<
                     Output = Result<
                         (
-                            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+                            d2b_contracts_broker::broker_wire::UnitIdentity,
                             OwnedFd,
                         ),
                         BrokerError,
@@ -6917,7 +6917,7 @@ impl DispatchBackend for LiveDispatchBackend {
     fn check_systemd_user_manager<'a>(
         &'a self,
         resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
+        request: &'a d2b_contracts_broker::broker_wire::CheckUserManagerRequest,
     ) -> Pin<Box<dyn Future<Output = Result<bool, BrokerError>> + Send + 'a>> {
         Box::pin(async move {
             crate::ops::systemd::check_user_manager(resolver, request)
@@ -6929,10 +6929,10 @@ impl DispatchBackend for LiveDispatchBackend {
     fn observe_systemd_unit<'a>(
         &'a self,
         resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
+        request: &'a d2b_contracts_broker::broker_wire::ObserveUnitRequest,
     ) -> Pin<
         Box<
-            dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError>>
+            dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::UnitIdentity>, BrokerError>>
                 + Send
                 + 'a,
         >,
@@ -6947,13 +6947,13 @@ impl DispatchBackend for LiveDispatchBackend {
     fn reopen_systemd_unit<'a>(
         &'a self,
         resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
+        request: &'a d2b_contracts_broker::broker_wire::OpenUnitPidfdRequest,
     ) -> Pin<
         Box<
             dyn Future<
                     Output = Result<
                         (
-                            d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+                            d2b_contracts_broker::broker_wire::UnitIdentity,
                             OwnedFd,
                         ),
                         BrokerError,
@@ -6972,7 +6972,7 @@ impl DispatchBackend for LiveDispatchBackend {
     fn stop_systemd_unit<'a>(
         &'a self,
         resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::StopSystemdUnitRequest,
+        request: &'a d2b_contracts_broker::broker_wire::StopUnitRequest,
     ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
         Box::pin(async move {
             crate::ops::systemd::stop(resolver, request)
@@ -9610,11 +9610,11 @@ fn runtime_scope_segment(scope: [u8; 32]) -> String {
 
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn private_cgroup_placement(
-    placement: &d2b_core::minijail_profile::CgroupPlacement,
+    placement: &d2b_core::sandbox_profile::CgroupPlacement,
     vm_name: &str,
     runtime_scope: Option<[u8; 32]>,
     typed: bool,
-) -> Result<d2b_core::minijail_profile::CgroupPlacement, BrokerError> {
+) -> Result<d2b_core::sandbox_profile::CgroupPlacement, BrokerError> {
     if !typed {
         return Ok(placement.clone());
     }
@@ -9986,7 +9986,7 @@ pub(crate) async fn extend_usbip_backend_device_binds(
     vm_id: &str,
     role_id: &str,
     role: &d2b_contracts_broker::broker_wire::RunnerRole,
-    mount_policy: &mut d2b_core::minijail_profile::MountPolicy,
+    mount_policy: &mut d2b_core::sandbox_profile::MountPolicy,
 ) -> Result<(), BrokerError> {
     if !matches!(role, d2b_contracts_broker::broker_wire::RunnerRole::Usbip)
         || role_id != "backend"
@@ -10127,59 +10127,11 @@ fn audio_state_value<'a>(
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) async fn cleanup_cloud_hypervisor_stale_sockets(
-    role: &d2b_contracts_broker::broker_wire::RunnerRole,
-    argv: &[String],
-) -> Result<(), BrokerError> {
-    if !matches!(
-        role,
-        d2b_contracts_broker::broker_wire::RunnerRole::CloudHypervisor
-    ) {
-        return Ok(());
-    }
-    for path in cloud_hypervisor_socket_paths(argv) {
-        cleanup_stale_unix_socket(&path).await?;
+pub(crate) async fn cleanup_stale_sockets(paths: &[PathBuf]) -> Result<(), BrokerError> {
+    for path in paths {
+        cleanup_stale_unix_socket(path).await?;
     }
     Ok(())
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn bind_cloud_hypervisor_guest_uid(
-    role: RunnerRole,
-    owner_uid: Option<&d2b_contracts_resource::v3::ResourceUid>,
-    argv: &[String],
-) -> Result<Vec<String>, BrokerError> {
-    if role != RunnerRole::CloudHypervisor {
-        return Ok(argv.to_vec());
-    }
-    let owner_uid = owner_uid.ok_or_else(|| BrokerError::SpawnRunnerIntentMismatch {
-        field: "owner_uid",
-        requested: "missing".to_owned(),
-        resolved: "required-for-cloud-hypervisor".to_owned(),
-    })?;
-    let mut bound = argv.to_vec();
-    let cmdline_index = bound
-        .iter()
-        .position(|argument| argument == "--cmdline")
-        .and_then(|index| bound.get(index + 1).map(|_| index + 1))
-        .ok_or_else(|| BrokerError::SpawnRunnerIntentMismatch {
-            field: "argv",
-            requested: "cloud-hypervisor-without-cmdline".to_owned(),
-            resolved: "cmdline-required".to_owned(),
-        })?;
-    if bound[cmdline_index]
-        .split_ascii_whitespace()
-        .any(|argument| argument.starts_with("d2b.guest_uid="))
-    {
-        return Err(BrokerError::SpawnRunnerIntentMismatch {
-            field: "argv",
-            requested: "prebound-guest-uid".to_owned(),
-            resolved: "broker-owned".to_owned(),
-        });
-    }
-    bound[cmdline_index].push_str(" d2b.guest_uid=");
-    bound[cmdline_index].push_str(owner_uid.as_str());
-    Ok(bound)
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -10266,52 +10218,26 @@ fn otel_host_bridge_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError>
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn cloud_hypervisor_socket_paths(argv: &[String]) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    let mut iter = argv.iter();
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--api-socket" => {
-                if let Some(path) = iter.next() {
-                    paths.push(PathBuf::from(path));
-                }
-            }
-            "--vsock" => {
-                if let Some(spec) = iter.next() {
-                    for field in spec.split(',') {
-                        if let Some(path) = field.strip_prefix("socket=") {
-                            paths.push(PathBuf::from(path));
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    paths
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 async fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
     let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(err) => {
             return Err(BrokerError::LiveHandler(format!(
-                "cloud-hypervisor socket preflight could not stat {}: {err}",
+                "runner socket preflight could not stat {}: {err}",
                 path.display()
             )));
         }
     };
     if !metadata.file_type().is_socket() {
         return Err(BrokerError::LiveHandler(format!(
-            "cloud-hypervisor socket preflight refusing to remove non-socket path {}",
+            "runner socket preflight refusing to remove non-socket path {}",
             path.display()
         )));
     }
     match tokio::net::UnixStream::connect(path).await {
         Ok(_) => Err(BrokerError::LiveHandler(format!(
-            "cloud-hypervisor socket preflight found active listener at {}",
+            "runner socket preflight found active listener at {}",
             path.display()
         ))),
         Err(err)
@@ -10322,13 +10248,13 @@ async fn cleanup_stale_unix_socket(path: &Path) -> Result<(), BrokerError> {
         {
             tokio::fs::remove_file(path).await.map_err(|remove_err| {
                 BrokerError::LiveHandler(format!(
-                    "cloud-hypervisor socket preflight could not remove stale {}: {remove_err}",
+                    "runner socket preflight could not remove stale {}: {remove_err}",
                     path.display()
                 ))
             })
         }
         Err(err) => Err(BrokerError::LiveHandler(format!(
-            "cloud-hypervisor socket preflight could not prove {} stale: {err}",
+            "runner socket preflight could not prove {} stale: {err}",
             path.display()
         ))),
     }
@@ -13044,7 +12970,7 @@ mod tests {
         use d2b_core::manifest_v04::{
             ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
         };
-        use d2b_core::minijail_profile::CgroupPlacement;
+        use d2b_core::sandbox_profile::CgroupPlacement;
         use d2b_core::processes::{
             NodeId, ProcessNode, ProcessRole, ProcessesJson, VmProcessDag, VmProcessInvariants,
         };
@@ -13174,7 +13100,7 @@ mod tests {
                             .with_profile_id("profile-ch")
                             .with_uid(1001)
                             .with_gid(1001)
-                            .with_namespaces(d2b_core::minijail_profile::NamespaceSet {
+                            .with_namespaces(d2b_core::sandbox_profile::NamespaceSet {
                                 mount: true,
                                 pid: false,
                                 net: false,
@@ -13514,7 +13440,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn typed_process_cgroup_scope_is_private_and_collision_safe() {
-        let placement = d2b_core::minijail_profile::CgroupPlacement {
+        let placement = d2b_core::sandbox_profile::CgroupPlacement {
             subtree: "d2b.slice/corp-vm/cloud-hypervisor".to_owned(),
             controllers: vec!["cpu".to_owned()],
             delegated: false,
@@ -13531,7 +13457,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
     fn typed_zone_guest_cgroup_scope_is_private_and_collision_safe() {
-        let placement = d2b_core::minijail_profile::CgroupPlacement {
+        let placement = d2b_core::sandbox_profile::CgroupPlacement {
             subtree: "d2b.slice/work/desktop/cloud-hypervisor".to_owned(),
             controllers: vec!["cpu".to_owned()],
             delegated: false,
@@ -13659,7 +13585,7 @@ mod tests {
             .with_role_id("cloud-hypervisor")
             .with_role(d2b_core::processes::ProcessRole::CloudHypervisorRunner)
             .with_execution_ref("Host/host-system")
-            .with_cgroup_placement(d2b_core::minijail_profile::CgroupPlacement {
+            .with_cgroup_placement(d2b_core::sandbox_profile::CgroupPlacement {
                 subtree: "d2b.slice/corp-vm/cloud-hypervisor".to_owned(),
                 controllers: vec!["cpu".to_owned()],
                 delegated: false,
@@ -14591,7 +14517,7 @@ mod tests {
             _request: &'a d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
         ) -> Pin<Box<dyn Future<Output = Result<
             (
-                d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+                d2b_contracts_broker::broker_wire::UnitIdentity,
                 OwnedFd,
             ),
             BrokerError,
@@ -14608,7 +14534,7 @@ mod tests {
         fn check_systemd_user_manager<'a>(
             &'a self,
             _resolver: &'a BundleResolver,
-            _request: &'a d2b_contracts_broker::broker_wire::CheckSystemdUserManagerRequest,
+            _request: &'a d2b_contracts_broker::broker_wire::CheckUserManagerRequest,
         ) -> Pin<Box<dyn Future<Output = Result<bool, BrokerError>> + Send + 'a>> {
             Box::pin(async move {
             Err(BrokerError::Unimplemented {
@@ -14622,8 +14548,8 @@ mod tests {
         fn observe_systemd_unit<'a>(
             &'a self,
             _resolver: &'a BundleResolver,
-            _request: &'a d2b_contracts_broker::broker_wire::ObserveSystemdUnitRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::SystemdUnitIdentity>, BrokerError>> + Send + 'a>> {
+            _request: &'a d2b_contracts_broker::broker_wire::ObserveUnitRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::UnitIdentity>, BrokerError>> + Send + 'a>> {
             Box::pin(async move {
             Err(BrokerError::Unimplemented {
                 operation: "ObserveSystemdUnit",
@@ -14636,10 +14562,10 @@ mod tests {
         fn reopen_systemd_unit<'a>(
             &'a self,
             _resolver: &'a BundleResolver,
-            _request: &'a d2b_contracts_broker::broker_wire::OpenSystemdUnitPidfdRequest,
+            _request: &'a d2b_contracts_broker::broker_wire::OpenUnitPidfdRequest,
         ) -> Pin<Box<dyn Future<Output = Result<
             (
-                d2b_contracts_broker::broker_wire::SystemdUnitIdentity,
+                d2b_contracts_broker::broker_wire::UnitIdentity,
                 OwnedFd,
             ),
             BrokerError,
@@ -14656,7 +14582,7 @@ mod tests {
         fn stop_systemd_unit<'a>(
             &'a self,
             _resolver: &'a BundleResolver,
-            _request: &'a d2b_contracts_broker::broker_wire::StopSystemdUnitRequest,
+            _request: &'a d2b_contracts_broker::broker_wire::StopUnitRequest,
         ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
             Box::pin(async move {
             Err(BrokerError::Unimplemented {
@@ -16088,9 +16014,22 @@ mod tests {
         role_id: &str,
         bundle_runner_intent_ref: &str,
     ) -> serde_json::Value {
+        spawn_payload_with_preflight(argv, role, serving_worker, vm_id, role_id, bundle_runner_intent_ref, Vec::new())
+    }
+
+    fn spawn_payload_with_preflight(
+        argv: Vec<String>,
+        role: &str,
+        serving_worker: bool,
+        vm_id: &str,
+        role_id: &str,
+        bundle_runner_intent_ref: &str,
+        preflight_socket_paths: Vec<String>,
+    ) -> serde_json::Value {
         serde_json::json!({
             "binaryPath": argv[0],
             "argv": argv,
+            "preflightSocketPaths": preflight_socket_paths,
             "uid": nix::unistd::Uid::current().as_raw(),
             "gid": Gid::current().as_raw(),
             "supplementaryGroups": [],
@@ -16384,7 +16323,7 @@ mod tests {
             harness
                 .invoke(
                     "spawn-process",
-                    spawn_payload(
+                    spawn_payload_with_preflight(
                         vec![
                             spawn_test_binary("true"),
                             "--api-socket".to_owned(),
@@ -16395,6 +16334,7 @@ mod tests {
                         "vm-stale",
                         "ch-runner",
                         "runner:vm-stale:ch-runner",
+                        vec![stale.display().to_string()],
                     ),
                     Vec::new(),
                 )

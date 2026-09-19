@@ -1,0 +1,16 @@
+{
+  "crate": "d2b-provider-shell-session",
+  "types": [
+    {
+      "resourceType": "shell-terminal.d2bus.org.ShellSession",
+      "allowedSources": ["builtin", "startup", "runtime"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host", "guest"],
+      "exportable": false,
+      "reads": ["shell-terminal.d2bus.org.ShellPool", "Host", "Guest", "User"]
+    }
+  ],
+  "provides": ["Provider/shell-terminal"],
+  "roles": [],
+  "principals": []
+}

@@ -31,8 +31,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceRef, ResourceUid, execution_policy::ExecutionPolicy,
-    guest::GuestSpec, network::NetworkSpec,
+    network::NetworkSpec,
 };
+use d2b_provider_guest::GuestSpec;
 use d2b_provider_toolkit::{
     ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
     SharedProviderDriverFactory, SharedProviderEffectError, SharedProviderEffectOutcome,
@@ -50,6 +51,9 @@ use crate::operations::network_family_operations;
 
 /// The Network ResourceType served by the network-local Provider.
 pub const NETWORK_TYPE_NAME: &str = "Network";
+
+/// The family name the daemon's plane registration keys on.
+pub const NETWORK_FAMILY_NAME: &str = "network-local";
 
 /// The Provider identity this family's row declares.
 pub const NETWORK_PROVIDER_REF: &str = "Provider/network-local";

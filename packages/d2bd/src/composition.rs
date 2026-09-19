@@ -52,18 +52,13 @@ use d2b_contracts_control::public_wire::{
 };
 use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
-use d2b_contracts_resource::v3::{
-    NetworkProvenance, ResourceEnvelope,
-    ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
-    ZoneResourceIdentity, ZoneRevision,
-    endpoint::{
-        EndpointClass, EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport,
-        EndpointVisibility,
-    },
-    process::ProcessSpec,
-};
+use d2b_contracts_resource::v3::{ NetworkProvenance, ResourceEnvelope, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId, ZoneResourceIdentity, ZoneRevision, process::ProcessSpec };
+use d2b_provider_endpoint::endpoint::{ EndpointClass, EndpointLocality, EndpointOperation, EndpointSpec, EndpointTransport,
+        EndpointVisibility, };
 use d2b_contracts_resource::v3::ResourceBundleGenerationId;
-use d2b_contracts_resource::v3::{ResourceName, activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE};
+use d2b_contracts_resource::v3::{
+    ActivationMode, ResourceName, activation_nixos::NIXOS_GENERATION_RESOURCE_TYPE,
+};
 use d2b_contracts_zone_session::v3::ZoneLinkSpec;
 use d2b_contracts_zone_session::v3::component_session::{OperationClass, OperationId};
 use d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle;
@@ -16386,7 +16381,11 @@ fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
         Some(RunnerRole::SwtpmFlush)
     } else if role_id == RunnerRole::Swtpm.as_str() || role_id.starts_with("swtpm") {
         Some(RunnerRole::Swtpm)
-    } else if role_id == RunnerRole::Virtiofsd.as_str() || role_id.contains("virtiofsd") {
+    } else if role_id == RunnerRole::Virtiofsd.as_str()
+        || role_id
+            .split(':')
+            .any(|segment| segment.starts_with(RunnerRole::Virtiofsd.as_str()))
+    {
         Some(RunnerRole::Virtiofsd)
     } else if role_id == RunnerRole::Gpu.as_str() || role_id.contains("gpu") {
         Some(RunnerRole::Gpu)
@@ -17407,7 +17406,7 @@ fn stop_vmm_runner_with_provider(
     let force_generation_baseline = force_shutdown_generation(state, input.vm);
     let provider: Box<dyn provider_shutdown::GracefulVmShutdown> = match target.kind {
         provider_shutdown::ProviderKind::CloudHypervisor => {
-            Box::new(provider_shutdown::CloudHypervisorShutdown::default())
+            Box::new(d2b_provider_guest::CloudHypervisorShutdown::default())
         }
         provider_shutdown::ProviderKind::QemuMedia => Box::new(QemuBrokerShutdownProvider {
             socket_path: broker_socket_path(state),
@@ -19007,8 +19006,21 @@ fn dispatch_broker_vm_start_inner(
     // `SshHostKeyPreflight` still cover the two stubs that intentionally
     // remain typed-Unimplemented at the broker layer pending sibling
     // handlers.
-    let host_prep_steps =
-        d2b_host::host_prep_dag::build_host_prep_dag(request.vm.as_str(), &resolver);
+    // The daemon resolves the runtime kind from the Guest provider ref
+    // it already holds and passes neutral parameters to the host DAG
+    // builder: whether the NixOS-only preflight steps apply, and the
+    // runner intent role for the tap step.
+    let is_qemu_media = vm_is_qemu_media(state, &resolver, &request.vm)?;
+    let host_prep_steps = d2b_host::host_prep_dag::build_host_prep_dag(
+        request.vm.as_str(),
+        &resolver,
+        !is_qemu_media,
+        if is_qemu_media {
+            RunnerRole::QemuMedia.as_str()
+        } else {
+            "ch"
+        },
+    );
     log_host_prep_dag(&request.vm, &host_prep_steps);
     if std::env::var("D2B_HOST_PREP_DAG_EXECUTE")
         .map(|v| v == "1")
@@ -20558,9 +20570,13 @@ fn dispatch_live_guest_activation_resource(
 
 fn activation_generation_name(vm: &str, ordinal: u64, mode: DaemonActivationMode) -> String {
     let suffix = match mode {
-        DaemonActivationMode::Switch => "gen",
-        DaemonActivationMode::Boot => "boot",
-        DaemonActivationMode::Test => "test",
+        DaemonActivationMode::Switch => {
+            activation_runner_step(ActivationMode::Switch).generation_suffix
+        }
+        DaemonActivationMode::Boot => {
+            activation_runner_step(ActivationMode::Boot).generation_suffix
+        }
+        DaemonActivationMode::Test => activation_runner_step(ActivationMode::Test).generation_suffix,
         DaemonActivationMode::Rollback => "rollback",
     };
     let readable = format!("{vm}--{suffix}-{ordinal}");
@@ -20583,13 +20599,22 @@ fn activation_generation_name(vm: &str, ordinal: u64, mode: DaemonActivationMode
     format!("activation-gen-{suffix}")
 }
 
-const fn resource_activation_mode_label(mode: DaemonActivationMode) -> &'static str {
+fn resource_activation_mode_label(mode: DaemonActivationMode) -> &'static str {
     match mode {
-        DaemonActivationMode::Switch => "switch",
-        DaemonActivationMode::Boot => "boot",
-        DaemonActivationMode::Test => "test",
+        DaemonActivationMode::Switch => activation_runner_step(ActivationMode::Switch).label,
+        DaemonActivationMode::Boot => activation_runner_step(ActivationMode::Boot).label,
+        DaemonActivationMode::Test => activation_runner_step(ActivationMode::Test).label,
         DaemonActivationMode::Rollback => "switch",
     }
+}
+
+/// The declared runner step for one activation mode.
+///
+/// The daemon passes only the modes the family declares; a mode without a
+/// declared step would be a programming error, not a runtime refusal.
+fn activation_runner_step(mode: ActivationMode) -> &'static d2b_provider_activation_nixos::ActivationRunnerStep {
+    d2b_provider_activation_nixos::declared_runner_step(mode)
+        .expect("the daemon passes only declared activation modes")
 }
 
 fn dispatch_broker_switch_as(

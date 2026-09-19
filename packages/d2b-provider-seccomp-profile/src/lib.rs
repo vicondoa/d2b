@@ -15,4 +15,8 @@
 
 mod driver;
 
+/// The Seccomp Profile ResourceType spec and status shapes owned by this crate.
+pub mod seccomp_profile;
+
 pub use driver::seccomp_profile_descriptor;
+pub use seccomp_profile::*;

@@ -5,11 +5,15 @@
 //! optional NixOS system artifact ID that local VM Providers boot.
 //! Provider-specific boot, identity, and runtime settings belong to the Layer
 //! 3 `spec.provider` envelope on the universal `ResourceSpec`, never here.
+//!
+//! The shape lives beside the driver that declares the `Guest` type (U7);
+//! the generic execution-policy machinery it composes stays in the shared
+//! resource contracts crate.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{
+use d2b_contracts_resource::v3::{
     ResourceRef,
     execution_policy::{
         BoundedToken, BudgetSpec, DeviceAttachment, ExecutionDomain, ExecutionPolicy,
@@ -127,7 +131,7 @@ fn system_domains() -> Vec<ExecutionDomain> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::{execution_policy::to_base_object, resource_schema::canonical_json_bytes};
+    use d2b_contracts_resource::v3::{execution_policy::to_base_object, resource_schema::canonical_json_bytes};
 
     const MINIMAL_GUEST_SPEC: &[u8] = br#"{"allowedDomains":["system"],"budget":{},"defaultDomain":"system","defaultUserRef":null,"deviceAttachments":[],"networkAttachments":[],"systemArtifactId":null,"volumeAttachmentDefaults":[]}"#;
 

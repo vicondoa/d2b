@@ -168,6 +168,44 @@ fn adopted_outcome_is_rejected_for_switch_mode() {
 }
 
 #[test]
+fn activation_refuses_a_runner_step_outside_the_declared_set() {
+    let controller = ActivationController::new();
+    // The runner performs only the steps the family declares: switch, boot,
+    // and test. Adoption records an already-active generation and is not a
+    // runner step, and a rollback is a daemon-side operation, not a runner
+    // step - each is outside the declared set and refused.
+    assert_eq!(
+        d2b_provider_activation_nixos::declared_runner_step(ActivationMode::Adopt),
+        None
+    );
+    assert!(
+        controller
+            .refuse_undeclared_runner_step("adopt")
+            .is_err(),
+        "the adopt step is outside the declared runner step set"
+    );
+    assert!(
+        controller
+            .refuse_undeclared_runner_step("rollback")
+            .is_err(),
+        "the rollback step is outside the declared runner step set"
+    );
+    assert_eq!(controller.refuse_undeclared_runner_step("switch"), Ok(()));
+    assert_eq!(controller.refuse_undeclared_runner_step("boot"), Ok(()));
+    assert_eq!(controller.refuse_undeclared_runner_step("test"), Ok(()));
+    assert_eq!(
+        d2b_provider_activation_nixos::declared_runner_step(ActivationMode::Switch)
+            .map(|step| step.label),
+        Some("switch")
+    );
+    assert_eq!(
+        d2b_provider_activation_nixos::declared_runner_step(ActivationMode::Switch)
+            .map(|step| step.generation_suffix),
+        Some("gen")
+    );
+}
+
+#[test]
 fn adopt_mode_accepts_adoption_without_starting_a_runner() {
     let controller = ActivationController::new();
     let adopt = spec_with_mode(ActivationMode::Adopt);

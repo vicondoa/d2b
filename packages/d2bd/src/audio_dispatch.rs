@@ -55,11 +55,11 @@ pub fn audio_capability_for_vm(vm: &ManifestVmEntry) -> Option<AudioProviderCapa
     let cap = match vm.runtime.kind {
         RuntimeKind::Nixos => match vm.runtime.provider.driver {
             RuntimeProviderDriver::CloudHypervisor | RuntimeProviderDriver::Crosvm => {
-                AudioProviderCapability::cloud_hypervisor_nixos()
+                d2b_provider_guest_cloud_hypervisor::audio_capability()
             }
-            RuntimeProviderDriver::Qemu => AudioProviderCapability::qemu_media(),
+            RuntimeProviderDriver::Qemu => d2b_provider_guest_qemu_media::audio_capability(),
         },
-        RuntimeKind::QemuMedia => AudioProviderCapability::qemu_media(),
+        RuntimeKind::QemuMedia => d2b_provider_guest_qemu_media::audio_capability(),
     };
     Some(cap)
 }
@@ -693,7 +693,7 @@ mod tests {
 
     #[test]
     fn ch_nixos_cap_is_pipewire_target_process() {
-        let cap = AudioProviderCapability::cloud_hypervisor_nixos();
+        let cap = d2b_provider_guest_cloud_hypervisor::audio_capability();
         assert_eq!(
             cap.host_enforcement,
             AudioHostEnforcementKind::PipeWireVhostUserSound
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn qemu_media_cap_is_host_only() {
-        let cap = AudioProviderCapability::qemu_media();
+        let cap = d2b_provider_guest_qemu_media::audio_capability();
         assert_eq!(
             cap.host_enforcement,
             AudioHostEnforcementKind::QemuAudioBackend
@@ -732,13 +732,13 @@ mod tests {
 
     #[test]
     fn enforcement_posture_mapping() {
-        let ch_cap = AudioProviderCapability::cloud_hypervisor_nixos();
+        let ch_cap = d2b_provider_guest_cloud_hypervisor::audio_capability();
         assert_eq!(
             public_enforcement_posture(&ch_cap),
             AudioEnforcementPosture::HostOnly
         );
 
-        let qemu_cap = AudioProviderCapability::qemu_media();
+        let qemu_cap = d2b_provider_guest_qemu_media::audio_capability();
         assert_eq!(
             public_enforcement_posture(&qemu_cap),
             AudioEnforcementPosture::HostOnly
@@ -756,7 +756,7 @@ mod tests {
     #[test]
     fn fake_controller_success_guest_unavailable_maps_to_host_only() {
         use crate::audio_host_controller::FakeHostController;
-        let cap = AudioProviderCapability::cloud_hypervisor_nixos();
+        let cap = d2b_provider_guest_cloud_hypervisor::audio_capability();
         let ctrl = FakeHostController::success();
         let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Applied);
@@ -773,7 +773,7 @@ mod tests {
         use crate::audio_host_controller::FakeHostController;
         // When enforcement fails, the host boundary is NOT sealed; we must
         // report Unsupported, never HostOnly.
-        let cap = AudioProviderCapability::cloud_hypervisor_nixos();
+        let cap = d2b_provider_guest_cloud_hypervisor::audio_capability();
         let ctrl = FakeHostController::failed();
         let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Failed);
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn fake_controller_failure_on_level_maps_to_unsupported() {
         use crate::audio_host_controller::FakeHostController;
-        let cap = AudioProviderCapability::qemu_media();
+        let cap = d2b_provider_guest_qemu_media::audio_capability();
         let ctrl = FakeHostController::failed();
         let level = LevelPercent::new(80).unwrap();
         let host_result = ctrl.enforce_level("corp-vm", level, AudioChannel::Microphone);
@@ -801,7 +801,7 @@ mod tests {
     #[test]
     fn qemu_controller_applied_maps_to_host_only() {
         use crate::audio_host_controller::QemuAudioController;
-        let cap = AudioProviderCapability::qemu_media();
+        let cap = d2b_provider_guest_qemu_media::audio_capability();
         let ctrl = QemuAudioController;
         let host_result = ctrl.enforce_grant("qemu-vm", AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Applied);
@@ -814,7 +814,7 @@ mod tests {
         use crate::audio_host_controller::QemuAudioController;
         // qemu-media VMs have guest_enforcement = Unsupported. Verify the
         // applied result with Unsupported guest kind, not ProcessCapable.
-        let cap = AudioProviderCapability::qemu_media();
+        let cap = d2b_provider_guest_qemu_media::audio_capability();
         let ctrl = QemuAudioController;
         let host_result = ctrl.enforce_level(
             "qemu-vm",

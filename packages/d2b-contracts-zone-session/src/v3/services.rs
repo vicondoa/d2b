@@ -382,6 +382,26 @@ mod tests {
     }
 
     #[test]
+    fn service_package_wire_values_are_frozen() {
+        const PACKAGE_VECTORS: &[(V3Service, &str)] = &[
+            (V3Service::Resource, "d2b.resource.v3"),
+            (V3Service::Zone, "d2b.zone.v3"),
+            (V3Service::ZoneLink,"d2b.zonelink.v3"),
+            (V3Service::Provider,"d2b.provider.v3"),
+            (V3Service::Controller,"d2b.controller.v3"),
+            (V3Service::Audit,"d2b.audit.v3"),
+            (V3Service::Support,"d2b.support.v3"),
+            (V3Service::Credential,"d2b.credential.v3"),
+            (V3Service::ConfigNixos,"d2b.config-nixos.v3"),
+        ];
+        assert_eq!(PACKAGE_VECTORS.len(), V3Service::ALL.len());
+        for (index, (service, wire)) in PACKAGE_VECTORS.iter().enumerate() {
+            assert_eq!(V3Service::ALL[index], *service);
+            assert_eq!(service.package(), *wire);
+        }
+    }
+
+    #[test]
     fn audit_gap_detection_covers_each_missing_segment() {
         let missing = missing_audit_segments(&[
             AuditSegment::Authentication,

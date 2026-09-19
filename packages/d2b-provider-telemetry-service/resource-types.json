@@ -1,0 +1,35 @@
+{
+  "crate": "d2b-provider-telemetry-service",
+  "types": [
+    {
+      "resourceType": "telemetry.d2bus.org.TelemetryService",
+      "allowedSources": ["builtin", "startup"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host"],
+      "exportable": true,
+      "reads": ["Endpoint"]
+    }
+  ],
+  "provides": [],
+  "roles": [
+    {
+      "name": "authority",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    },
+    {
+      "name": "projection",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": []
+    }
+  ],
+  "principals": []
+}

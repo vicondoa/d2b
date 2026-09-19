@@ -23,7 +23,7 @@
   "additionalProperties": false,
   "definitions": {
     "BindMount": {
-      "description": "Cross-domain bind mount declaration for a minijail role.",
+      "description": "Cross-domain bind mount declaration for a sandbox role.",
       "type": "object",
       "required": [
         "dst",
@@ -100,7 +100,7 @@
       "additionalProperties": false
     },
     "MountPolicy": {
-      "description": "Mount policy for a minijail role.",
+      "description": "Mount policy for a sandbox role.",
       "type": "object",
       "required": [
         "hideDeviceNodesByDefault",
@@ -149,7 +149,7 @@
       "additionalProperties": false
     },
     "NamespaceSet": {
-      "description": "Namespace flags for a minijail profile.",
+      "description": "Namespace flags for a sandbox profile.",
       "type": "object",
       "required": [
         "ipc",
@@ -788,7 +788,7 @@
           "minimum": 0.0
         },
         "umask": {
-          "description": "v1.1.2fu36: file-creation mask installed in the spawned child before execve. See `MinijailProfile::umask` for the rationale. Roles that bind shared Unix sockets (vhost-user-sound, crosvm-gpu, crosvm video, swtpm) declare `0o007` so downstream consumers (cloud-hypervisor) can connect via the per-VM-runtime default ACL.",
+          "description": "v1.1.2fu36: file-creation mask installed in the spawned child before execve. See `SandboxProfile::umask` for the rationale. Roles that bind shared Unix sockets (vhost-user-sound, crosvm-gpu, crosvm video, swtpm) declare `0o007` so downstream consumers (cloud-hypervisor) can connect via the per-VM-runtime default ACL.",
           "type": [
             "integer",
             "null"

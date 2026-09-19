@@ -1,0 +1,24 @@
+{
+  "crate": "d2b-provider-process",
+  "types": [
+    {
+      "resourceType": "Process",
+      "allowedSources": ["builtin", "startup"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host", "guest"],
+      "exportable": false,
+      "reads": ["VolumeBinding", "Volume", "Device", "Guest", "Provider"]
+    },
+    {
+      "resourceType": "EphemeralProcess",
+      "allowedSources": ["builtin", "startup"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host", "guest"],
+      "exportable": false,
+      "reads": ["VolumeBinding", "Volume", "Device", "Guest", "Provider"]
+    }
+  ],
+  "provides": [],
+  "roles": [],
+  "principals": []
+}

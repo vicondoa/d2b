@@ -1,0 +1,16 @@
+{
+  "crate": "d2b-provider-wayland-session",
+  "types": [
+    {
+      "resourceType": "display-wayland.d2bus.org.WaylandSession",
+      "allowedSources": ["builtin", "startup", "runtime"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host", "guest"],
+      "exportable": false,
+      "reads": ["Guest", "Host", "User", "display-wayland.d2bus.org.WaylandPolicy"]
+    }
+  ],
+  "provides": ["Provider/display-wayland"],
+  "roles": [],
+  "principals": []
+}

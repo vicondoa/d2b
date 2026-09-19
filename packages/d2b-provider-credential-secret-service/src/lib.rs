@@ -38,6 +38,8 @@ pub use controller::{
     SecretServiceControllerHealth, SecretServiceStatusProjection,
 };
 
+/// Canonical wire backend identity the envelope binds this Provider under.
+pub const BACKEND_REF: &str = "credential-secret-service";
 /// Canonical Provider reference.
 pub const PROVIDER_REF: &str = "Provider/credential-secret-service";
 /// Maximum active leases supported by one Provider instance.

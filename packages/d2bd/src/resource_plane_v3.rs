@@ -532,7 +532,11 @@ fn nix_closure_volume_anchor(
             Ok((owner.clone(), ZoneNixClosureVolumeRole::SystemVolume))
         }
         (None, Some(guest))
-            if volume_name == format!("store-view-{}", guest.name().as_str()) =>
+            if volume_name == format!(
+                    "{}{}",
+                    d2b_provider_volume_local::STORE_VIEW_VOLUME_NAME_PREFIX,
+                    guest.name().as_str()
+                ) =>
         {
             Ok((guest, ZoneNixClosureVolumeRole::StoreView))
         }
@@ -605,7 +609,7 @@ fn resource_uid_string(bytes: &[u8; 16]) -> String {
 /// contract): the private virtiofs socket path for one (volume, guest)
 /// serving pair. The rendered accessor is crate-private in the provider
 /// today; U14 collapses this mirror behind a provider-owned probe.
-pub(crate) fn virtiofs_socket_path(
+pub(crate) fn serving_socket_path(
     socket_runtime_dir: &Path,
     zone: &BoundedToken,
     volume_ref: &ResourceRef,
@@ -684,7 +688,7 @@ impl BindingSocketProbe {
             .registry
             .socket_target_by_identity(&self.zone_token, socket)
             .await?;
-        virtiofs_socket_path(
+        serving_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
             &target.volume_ref,
@@ -712,7 +716,7 @@ impl SocketWaitEffect {
             .registry
             .socket_target_by_ref(&self.zone_token, producer_ref)
             .await?;
-        virtiofs_socket_path(
+        serving_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
             &target.volume_ref,
@@ -973,7 +977,7 @@ impl SocketRemoveEffect {
             .registry
             .socket_target_by_ref(&self.zone_token, producer_ref)
             .await?;
-        virtiofs_socket_path(
+        serving_socket_path(
             &self.socket_runtime_dir,
             &self.zone_token,
             &target.volume_ref,
@@ -1935,7 +1939,7 @@ impl ResourcePlaneV3 {
         // Providers) through the Device family's. Each declaration carries its
         // decoder, so the registry serves it for the type.
         set = set.with(
-            family_declaration("network-local"),
+            family_declaration(d2b_provider_network_local::NETWORK_FAMILY_NAME),
             vec![network_descriptor(NetworkDriverArgs {
                 zone: inputs.zone.as_str().to_owned(),
                 controller_generation: inputs.authority.controller_generation,
@@ -2781,7 +2785,7 @@ mod tests {
                 "activation-nixos",
                 "telemetry-service",
                 "telemetry-binding",
-                "network-local",
+                d2b_provider_network_local::NETWORK_FAMILY_NAME,
                 "device-usbip",
                 "device-security-key",
                 "device",
@@ -2863,7 +2867,7 @@ mod tests {
         let provider_generation =
             d2b_contracts_resource::v3::ResourceGeneration::new(4).expect("generation");
         inputs.committed_provider_identities = BTreeMap::from([(
-            ResourceRef::parse("Provider/network-local").expect("provider ref"),
+            ResourceRef::parse(d2b_provider_network_local::NETWORK_PROVIDER_REF).expect("provider ref"),
             (provider_uid.clone(), provider_generation),
         )]);
         let registry = Arc::clone(&inputs.registry);
@@ -2871,7 +2875,7 @@ mod tests {
         let source = &*registry;
         assert_eq!(
             source.committed_provider_identity(
-                &ResourceRef::parse("Provider/network-local").expect("provider ref")
+                &ResourceRef::parse(d2b_provider_network_local::NETWORK_PROVIDER_REF).expect("provider ref")
             ),
             Some((provider_uid, provider_generation))
         );

@@ -622,10 +622,10 @@ fn validate_network_config_volume_spec(spec: &Value) -> Result<(), NetworkEffect
     let volume: VolumeSpec =
         serde_json::from_value(base).map_err(|_| NetworkEffectError::ConfigVolume)?;
     let required = [
-        "dnsmasq.conf",
-        "nftables.rules",
-        "routing.conf",
-        "attachments.json",
+        d2b_provider_network_local::controller::NETWORK_CONFIG_FILE_DNSMASQ,
+        d2b_provider_network_local::controller::NETWORK_CONFIG_FILE_NFTABLES,
+        d2b_provider_network_local::controller::NETWORK_CONFIG_FILE_ROUTING,
+        d2b_provider_network_local::controller::NETWORK_CONFIG_FILE_ATTACHMENTS,
     ];
     if !required.iter().all(|path| {
         volume.layout().iter().any(|entry| {
@@ -740,8 +740,8 @@ fn network_config_provider_extension(
         file_owner.clone(),
         file_owner,
         NETWORK_CONFIG_FILE_MODE,
-        content.dnsmasq.clone(),
-        content.nftables.clone(),
+        content.dhcp_bytes().to_vec(),
+        content.firewall_bytes().to_vec(),
         content.routing.clone(),
         content.attachments.clone(),
         content.digest(),
@@ -824,7 +824,7 @@ impl NetworkResourcePort for NetworkChildPort<'_> {
 
     async fn upsert_guest(
         &self,
-        spec: &d2b_contracts_resource::v3::guest::GuestSpec,
+        spec: &d2b_provider_guest::GuestSpec,
     ) -> Result<(), NetworkEffectError> {
         let mut value = serde_json::to_value(spec).map_err(|_| NetworkEffectError::ConfigVolume)?;
         value
@@ -1188,7 +1188,7 @@ impl ProductionSharedProviderEffects {
             .and_then(Value::as_str)
             .unwrap_or(request.target.name.as_str());
         let physical_key =
-            d2b_core::device_usbip_adapter::UsbipCoreAdapter::physical_usb_backing_key(
+            d2b_provider_device_usbip::core_adapter::UsbipCoreAdapter::physical_usb_backing_key(
                 device_uid.as_str().as_bytes(),
             )
             .as_bytes();
@@ -1766,12 +1766,13 @@ impl ProductionSharedProviderEffects {
                 ))
                 .map_err(|_| SharedProviderEffectError::InvalidResource)?;
         }
-        let mut token_values = vec!["dri"];
-        if !settings.render_node_only {
-            token_values.extend(["kvm", "udmabuf"]);
-        }
+        let mut token_values = if settings.render_node_only {
+            d2b_provider_device_gpu::vocabulary::GPU_RENDER_NODE_GRANT_CLASSES.to_vec()
+        } else {
+            d2b_provider_device_gpu::vocabulary::GPU_GRANT_CLASSES.to_vec()
+        };
         if settings.video_sidecar && settings.video_nvidia_decode {
-            token_values.extend(["nvidia-ctl", "nvidia-device", "nvidia-uvm"]);
+            token_values.extend(d2b_provider_device_gpu::vocabulary::GPU_VIDEO_GRANT_CLASSES);
         }
         let tokens = d2b_provider_device_gpu::GpuEffectTokenSet::from_core(
             token_values
@@ -1896,7 +1897,11 @@ impl ProductionSharedProviderEffects {
             );
         })?;
         let vm_id = VmId::new(holder.name().as_str());
-        let migration_intent = BundleOpId::new(format!("legacy-swtpm:vm:{}", vm_id.as_str()));
+        let migration_intent = BundleOpId::new(format!(
+            "{}{}",
+            d2b_provider_device_tpm::vocabulary::TPM_LEGACY_MIGRATION_INTENT_PREFIX,
+            vm_id.as_str()
+        ));
         let decision = runtime
             .tpm_device_is_admitted(
                 &request.uid,
@@ -2768,7 +2773,11 @@ impl ProductionSharedProviderEffects {
             .unwrap_or_else(|| ResourceRef::parse(HOST_REF).expect("Host ref"));
         let runtime = self.runtime()?;
         let vm_id = VmId::new(holder.name().as_str());
-        let migration_intent = BundleOpId::new(format!("legacy-swtpm:vm:{}", vm_id.as_str()));
+        let migration_intent = BundleOpId::new(format!(
+            "{}{}",
+            d2b_provider_device_tpm::vocabulary::TPM_LEGACY_MIGRATION_INTENT_PREFIX,
+            vm_id.as_str()
+        ));
         let decision = runtime
             .tpm_device_is_admitted(
                 &request.uid,

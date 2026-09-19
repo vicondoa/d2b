@@ -1,0 +1,16 @@
+{
+  "crate": "d2b-provider-shell-pool",
+  "types": [
+    {
+      "resourceType": "shell-terminal.d2bus.org.ShellPool",
+      "allowedSources": ["builtin", "startup", "runtime"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host", "guest"],
+      "exportable": false,
+      "reads": ["Host", "Guest", "User"]
+    }
+  ],
+  "provides": ["Provider/shell-terminal"],
+  "roles": [],
+  "principals": []
+}

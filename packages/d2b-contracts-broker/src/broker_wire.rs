@@ -114,13 +114,13 @@ pub enum BrokerRequest {
     /// Check whether the exact user manager selected by the trusted runner
     /// intent is reachable. The manager connection never crosses the broker
     /// boundary.
-    CheckSystemdUserManager(CheckSystemdUserManagerRequest),
+    CheckSystemdUserManager(CheckUserManagerRequest),
     /// Observe one trusted transient systemd unit without opening a pidfd.
-    ObserveSystemdUnit(ObserveSystemdUnitRequest),
+    ObserveSystemdUnit(ObserveUnitRequest),
     /// Re-open a pidfd after re-verifying a trusted transient unit identity.
-    OpenSystemdUnitPidfd(OpenSystemdUnitPidfdRequest),
+    OpenSystemdUnitPidfd(OpenUnitPidfdRequest),
     /// Stop one exact transient systemd unit identity.
-    StopSystemdUnit(StopSystemdUnitRequest),
+    StopSystemdUnit(StopUnitRequest),
     OpenVhostNet(OpenVhostNetRequest),
     ReconcileStorageScope(ReconcileStorageScopeRequest),
     ValidateLockSpec(ValidateLockSpecRequest),
@@ -1071,14 +1071,14 @@ pub enum BrokerResponse {
     /// SCM_RIGHTS alongside this identity envelope.
     StartSystemdUnit(StartSystemdUnitResponse),
     /// Result of a same-UID user-manager reachability check.
-    CheckSystemdUserManager(CheckSystemdUserManagerResponse),
+    CheckSystemdUserManager(CheckUserManagerResponse),
     /// Observation of a transient systemd unit. `None` is represented by
     /// `present = false` and a zero identity.
-    ObserveSystemdUnit(ObserveSystemdUnitResponse),
+    ObserveSystemdUnit(ObserveUnitResponse),
     /// Re-open response for a previously verified transient unit.
-    OpenSystemdUnitPidfd(OpenSystemdUnitPidfdResponse),
+    OpenSystemdUnitPidfd(OpenUnitPidfdResponse),
     /// Stop response for an exact transient unit identity.
-    StopSystemdUnit(StopSystemdUnitResponse),
+    StopSystemdUnit(StopUnitResponse),
     ReconcileStorageScope(ReconcileStorageScopeResponse),
     /// Typed response carrying the activated generation (collision-free
     /// `generation_id` plus the u32 `generation_token`), the resolved
@@ -1877,7 +1877,7 @@ pub struct PipeWireAudioResponse {
 /// same-UID verification by the broker; no manager address crosses the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub enum SystemdUnitDomain {
+pub enum UnitDomain {
     /// The host system manager.
     System,
     /// The verified per-user manager.
@@ -1888,7 +1888,7 @@ pub enum SystemdUnitDomain {
 /// manager and re-read the process start time under the pidfd boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SystemdUnitIdentity {
+pub struct UnitIdentity {
     /// systemd's 16-byte InvocationID.
     pub invocation_id: [u8; 16],
     /// Digest of the exact ControlGroup path; the path never crosses IPC.
@@ -1913,7 +1913,7 @@ pub struct SystemdUnitIdentity {
 /// Shared trusted request fields for systemd unit operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SystemdUnitRequest {
+pub struct UnitRequest {
     /// Execution target represented by the trusted runner intent.
     pub vm_id: VmId,
     /// Process role identifier within the execution target.
@@ -1937,7 +1937,7 @@ pub struct SystemdUnitRequest {
     /// Nonzero Process resource generation.
     pub generation: u64,
     /// System or verified user manager.
-    pub domain: SystemdUnitDomain,
+    pub domain: UnitDomain,
     /// Canonical Host or Guest execution target, when supplied by a v3
     /// Process ticket. Legacy VM runner callers omit this field.
     #[serde(default)]
@@ -1957,43 +1957,43 @@ pub struct SystemdUnitRequest {
 }
 
 /// Request to start one transient systemd unit.
-pub type StartTransientUnitRequest = SystemdUnitRequest;
+pub type StartTransientUnitRequest = UnitRequest;
 /// Compatibility spelling used by the BrokerRequest variant.
 pub type StartSystemdUnitRequest = StartTransientUnitRequest;
 /// Request to check the trusted per-user systemd manager.
-pub type CheckSystemdUserManagerRequest = SystemdUnitRequest;
+pub type CheckUserManagerRequest = UnitRequest;
 
 /// Request to observe one transient systemd unit.
-pub type ObserveSystemdUnitRequest = SystemdUnitRequest;
+pub type ObserveUnitRequest = UnitRequest;
 
 /// Request to re-open a pidfd after identity re-verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpenSystemdUnitPidfdRequest {
+pub struct OpenUnitPidfdRequest {
     /// Trusted unit selector and binding inputs.
     #[serde(flatten)]
-    pub unit: SystemdUnitRequest,
+    pub unit: UnitRequest,
     /// Identity observed before the local descriptor was requested.
-    pub expected: SystemdUnitIdentity,
+    pub expected: UnitIdentity,
 }
 
 /// Request to stop one exact transient systemd unit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StopSystemdUnitRequest {
+pub struct StopUnitRequest {
     /// Trusted unit selector and binding inputs.
     #[serde(flatten)]
-    pub unit: SystemdUnitRequest,
+    pub unit: UnitRequest,
     /// Identity that must still match before the stop is sent.
-    pub expected: SystemdUnitIdentity,
+    pub expected: UnitIdentity,
     /// Graceful drain or forced termination.
-    pub class: SystemdStopClass,
+    pub class: UnitStopClass,
 }
 
 /// Stop class for transient systemd units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-pub enum SystemdStopClass {
+pub enum UnitStopClass {
     /// Request systemd to stop the unit and wait for it to become inactive.
     Drain,
     /// Kill the exact unit cgroup and verify it becomes inactive.
@@ -2006,7 +2006,7 @@ pub enum SystemdStopClass {
 pub struct StartTransientUnitResponse {
     pub vm_id: VmId,
     pub role_id: RoleId,
-    pub identity: SystemdUnitIdentity,
+    pub identity: UnitIdentity,
     pub pidfd_index: u32,
 }
 /// Compatibility spelling used by the BrokerResponse variant.
@@ -2015,7 +2015,7 @@ pub type StartSystemdUnitResponse = StartTransientUnitResponse;
 /// Response from a same-UID per-user manager reachability check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CheckSystemdUserManagerResponse {
+pub struct CheckUserManagerResponse {
     pub vm_id: VmId,
     pub role_id: RoleId,
     pub available: bool,
@@ -2024,28 +2024,28 @@ pub struct CheckSystemdUserManagerResponse {
 /// Observation response. `present = false` has no identity payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ObserveSystemdUnitResponse {
+pub struct ObserveUnitResponse {
     pub vm_id: VmId,
     pub role_id: RoleId,
     pub present: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub identity: Option<SystemdUnitIdentity>,
+    pub identity: Option<UnitIdentity>,
 }
 
 /// Re-open response. The exact-main pidfd is the first SCM_RIGHTS fd.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpenSystemdUnitPidfdResponse {
+pub struct OpenUnitPidfdResponse {
     pub vm_id: VmId,
     pub role_id: RoleId,
-    pub identity: SystemdUnitIdentity,
+    pub identity: UnitIdentity,
     pub pidfd_index: u32,
 }
 
 /// Stop response after systemd confirmed the unit is inactive.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StopSystemdUnitResponse {
+pub struct StopUnitResponse {
     pub vm_id: VmId,
     pub role_id: RoleId,
     pub stopped: bool,
@@ -4326,7 +4326,7 @@ mod tests {
         assert!(matches!(
             decoded,
             BrokerRequest::CheckSystemdUserManager(request)
-                if request.domain == SystemdUnitDomain::User
+                if request.domain == UnitDomain::User
         ));
     }
 

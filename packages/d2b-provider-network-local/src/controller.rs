@@ -7,7 +7,6 @@ use d2b_contracts_resource::v3::{
     IfName, NetworkProvenance, ResourceBundleGenerationId, ResourceGeneration, ResourceRef,
     ResourceUid,
     execution_policy::{BoundedToken, BudgetSpec, ExecutionPolicy},
-    guest::GuestSpec,
     network::{
         AttachmentGenerationFence, AttachmentHandle, Ipv4Cidr, MacvtapMode, NetworkSpec,
         SharingPolicy, cidr_overlaps,
@@ -24,6 +23,7 @@ use d2b_contracts_resource::v3::{
         VolumeSource, VolumeSpec,
     },
 };
+use d2b_provider_guest::GuestSpec;
 
 use crate::artifact::{
     ArtifactCatalogEntry, ArtifactResolutionError, resolve_net_vm_system_artifact,
@@ -869,6 +869,15 @@ pub trait NetworkResourcePort: Send + Sync {
     fn delete_volume(&self) -> impl Future<Output = Result<(), NetworkEffectError>> + Send;
 }
 
+/// The config Volume file carrying the DHCP (dnsmasq) configuration.
+pub const NETWORK_CONFIG_FILE_DNSMASQ: &str = "dnsmasq.conf";
+/// The config Volume file carrying the firewall (nftables) rules.
+pub const NETWORK_CONFIG_FILE_NFTABLES: &str = "nftables.rules";
+/// The config Volume file carrying the routing table.
+pub const NETWORK_CONFIG_FILE_ROUTING: &str = "routing.conf";
+/// The config Volume file carrying the attachment table.
+pub const NETWORK_CONFIG_FILE_ATTACHMENTS: &str = "attachments.json";
+
 /// Four bounded files carried in the desired Volume content projection.
 #[derive(Clone, PartialEq, Eq)]
 pub struct NetworkConfigContent {
@@ -895,6 +904,16 @@ impl NetworkConfigContent {
     /// Borrow the provenance bound to the rendered content.
     pub const fn provenance(&self) -> Option<&NetworkProvenance> {
         self.provenance.as_ref()
+    }
+
+    /// Borrow the DHCP configuration bytes.
+    pub fn dhcp_bytes(&self) -> &[u8] {
+        &self.dnsmasq
+    }
+
+    /// Borrow the firewall rule bytes.
+    pub fn firewall_bytes(&self) -> &[u8] {
+        &self.nftables
     }
 }
 

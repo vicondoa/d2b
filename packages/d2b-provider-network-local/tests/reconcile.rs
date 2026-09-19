@@ -156,7 +156,7 @@ impl NetworkResourcePort for FakePorts {
 
     async fn upsert_guest(
         &self,
-        _: &d2b_contracts_resource::v3::guest::GuestSpec,
+        _: &d2b_provider_guest::GuestSpec,
     ) -> Result<(), NetworkEffectError> {
         self.push("guest-upsert")
     }

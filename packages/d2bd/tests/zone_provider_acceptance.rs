@@ -24,7 +24,6 @@ use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid,
     SchemaFingerprint, SchemaVersion, ZoneId, ZoneRevision,
     execution_policy::BoundedToken,
-    guest::GuestSpec,
     identity::ReconnectGeneration,
     network::{
         AttachmentGenerationFence, AttachmentHandle, DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec,
@@ -45,6 +44,7 @@ use d2b_provider_network_local::{
         ReconcileProgress,
     },
 };
+use d2b_provider_guest::GuestSpec;
 use d2b_provider_guest_cloud_hypervisor::{
     AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph,
     BootstrapHandoff, CloudHypervisorConfig, CloudHypervisorController,

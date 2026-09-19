@@ -60,3 +60,11 @@ pub const PROVIDER_NAME: &str = "system-core";
 /// This is the only value admitted by `Host.spec.providerRef`, and it is
 /// the same constant the Host primitive contract pins.
 pub const PROVIDER_REF: &str = d2b_contracts_resource::v3::host::HOST_PROVIDER_REF;
+
+/// The canonical `Provider/system-core` resource UID.
+///
+/// This is the fixed UID the daemon's bootstrap admits for the bootstrap
+/// Provider's own subject row. It is not part of any wire contract; the
+/// bus keeps its own copy until the daemon's composition re-homes its
+/// subject installation onto this constant.
+pub const PROVIDER_UID: &str = "11111111-1111-4111-8111-111111111111";

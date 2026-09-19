@@ -746,6 +746,9 @@ async fn spawn_process(
     let role = parse_role(invocation.payload)?;
     let serving_worker = optional_field_bool(invocation.payload, "servingWorker")?.unwrap_or(false);
     let identity = parse_runner_identity(invocation.payload)?;
+    let preflight_socket_paths: Vec<std::path::PathBuf> =
+        optional_parse_field(invocation.payload, "preflightSocketPaths")?
+            .unwrap_or_default();
     let activation_input: Option<d2b_contracts_resource::v3::ActivationRunnerInput> =
         optional_parse_field(invocation.payload, "activationInput")?;
     let swtpm_identity = optional_parse_swtpm_identity(invocation.payload)?;
@@ -820,9 +823,10 @@ async fn spawn_process(
         })?;
     }
     // The stale-socket preflight cleanups (the retired arm's three
-    // `cleanup_*_stale_socket` calls), on the final argv the daemon-side
-    // handler composed.
-    crate::runtime::cleanup_cloud_hypervisor_stale_sockets(&role, &plan_input.argv)
+    // `cleanup_*_stale_socket` calls). The guest runtime Provider declares
+    // its socket-carrying argv paths; the kernel unlinks provably-stale
+    // sockets before the spawn proceeds.
+    crate::runtime::cleanup_stale_sockets(&preflight_socket_paths)
         .await
         .map_err(|error| {
             errored(format!(

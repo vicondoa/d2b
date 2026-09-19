@@ -7,14 +7,24 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use d2b_contracts_resource::v3::{
-    COMMAND_RESOURCE_TYPE, OPERATION_RESOURCE_TYPE, ResourceName, ResourceRef, ResourceTypeName,
-    SECCOMP_PROFILE_RESOURCE_TYPE, ZoneId,
-    execution_policy::{
+use d2b_contracts_resource::v3::{ ResourceName, ResourceRef, ResourceTypeName, ZoneId, execution_policy::{
         BoundedText, BoundedToken, MAX_PATH_BYTES, parsed_deserialize, redacted_debug,
         require_resource_type,
-    },
-};
+    } };
+
+/// Frozen wire role vocabulary: the Role contract names the resources its
+/// authority facets may reference. These are the canonical ResourceType
+/// names of the ownership-declared authority, restated here because the
+/// zone-session contract is frozen wire and must not depend on the owning
+/// provider crates (their own crates depend on the declaration layer that
+/// reaches back to this contract). The generated type authority in
+/// `d2b_contracts::identity::STANDARD_RESOURCE_TYPES` pins the same names;
+/// a rename there cannot happen without a concurrent wire change.
+const COMMAND_RESOURCE_TYPE: &str = "Command";
+/// Frozen wire role vocabulary: the canonical Operation ResourceType name.
+const OPERATION_RESOURCE_TYPE: &str = "Operation";
+/// Frozen wire role vocabulary: the canonical SeccompProfile ResourceType name.
+const SECCOMP_PROFILE_RESOURCE_TYPE: &str = "SeccompProfile";
 
 /// Canonical Role ResourceType name.
 pub const ROLE_RESOURCE_TYPE: &str = "Role";

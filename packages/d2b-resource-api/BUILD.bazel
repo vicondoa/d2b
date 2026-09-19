@@ -42,7 +42,7 @@ d2b_rust_library(
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-provider-role:d2b_provider_role",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-    ] + all_crate_deps(normal = True, cargo_only = True),
+        "//packages/d2b-provider-quota:d2b_provider_quota",] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 d2b_rust_library(
@@ -64,7 +64,7 @@ d2b_rust_library(
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
         "//packages/d2b-provider-role:d2b_provider_role",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-    ] + all_crate_deps(normal = True, cargo_only = True),
+        "//packages/d2b-provider-quota:d2b_provider_quota",] + all_crate_deps(normal = True, cargo_only = True),
 )
 
 d2b_rust_test(
@@ -75,7 +75,7 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+        "//packages/d2b-provider-quota:d2b_provider_quota",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

@@ -34,6 +34,8 @@ pub use controller::{
     PROVIDER_REVOKE_FINALIZER,
 };
 
+/// Canonical wire backend identity the envelope binds this Provider under.
+pub const BACKEND_REF: &str = "credential-entra";
 /// Canonical Provider reference.
 pub const PROVIDER_REF: &str = "Provider/credential-entra";
 /// Canonical identity-Guest login Endpoint purpose.

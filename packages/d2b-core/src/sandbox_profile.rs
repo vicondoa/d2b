@@ -1,17 +1,17 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Typed minijail profile metadata referenced by process roles.
+/// Typed sandbox profile metadata referenced by process roles.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MinijailProfile {
+pub struct SandboxProfile {
     /// Stable profile identifier used from processes.json.
     pub profile_id: String,
     /// Human-readable role the profile constrains.
     pub role: String,
-    /// Numeric uid used after minijail drops privilege.
+    /// Numeric uid used after the sandbox drops privilege.
     pub uid: u32,
-    /// Numeric gid used after minijail drops privilege.
+    /// Numeric gid used after the sandbox drops privilege.
     pub gid: u32,
     /// ADR or plan carve-out reference for uid/root-capable exceptions.
     #[serde(rename = "adr_carve_out")]
@@ -88,7 +88,7 @@ impl From<UserNamespaceProfile> for crate::processes::RoleUserNamespace {
     }
 }
 
-/// Namespace flags for a minijail profile.
+/// Namespace flags for a sandbox profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NamespaceSet {
@@ -106,7 +106,7 @@ pub struct NamespaceSet {
     pub user: bool,
 }
 
-/// Mount policy for a minijail role.
+/// Mount policy for a sandbox role.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MountPolicy {
@@ -133,7 +133,7 @@ pub struct MountPolicy {
     pub bind_mounts: Vec<BindMount>,
 }
 
-/// Cross-domain bind mount declaration for a minijail role.
+/// Cross-domain bind mount declaration for a sandbox role.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BindMount {

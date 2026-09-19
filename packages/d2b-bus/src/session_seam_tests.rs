@@ -39,6 +39,7 @@ use d2b_contracts_zone_session::v3::component_session::{
     IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass, Remediation,
     ServicePackage, TransportBinding, TransportClass,
 };
+use d2b_contracts_zone_session::v3::{BOOTSTRAP_PROVIDER_REF, BOOTSTRAP_PROVIDER_UID};
 use d2b_core_controller::controller_assignment::{
     AssignmentError, AssignmentRequest, AssignmentVerb, ControllerAssignmentRegistry,
     ControllerRoleContract, ScopedCommitTransport,
@@ -588,8 +589,8 @@ fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         CompiledRole::new(ResourceRef::parse("Role/session-seam").unwrap(), vec![rule]).unwrap();
     let subjects = [
         (
-            "Provider/system-core",
-            "11111111-1111-4111-8111-111111111111",
+            BOOTSTRAP_PROVIDER_REF,
+            BOOTSTRAP_PROVIDER_UID,
         ),
         ("Host/alice", "22222222-2222-4222-8222-222222222222"),
         ("Provider/audit", "33333333-3333-4333-8333-333333333333"),
@@ -662,8 +663,8 @@ async fn registrar_rejects_ambiguous_same_peer_subject_registration() {
     let expected_peer = proof_socket.acceptor_peer_credentials().unwrap();
     for subject in [
         (
-            "Provider/system-core",
-            "11111111-1111-4111-8111-111111111111",
+            BOOTSTRAP_PROVIDER_REF,
+            BOOTSTRAP_PROVIDER_UID,
         ),
         (
             "Provider/system-minijail",
@@ -1029,13 +1030,13 @@ async fn a_shared_provider_uid_cannot_select_a_resource_controller() {
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
-async fn explicitly_installed_system_core_subject_still_registers() {
+async fn explicitly_installed_bootstrap_provider_subject_still_registers() {
     let (_bus, registrar) = bus();
     let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
     let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
     let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
     registrar
-        .install_system_core_subject(&verified_peer)
+        .install_bootstrap_provider_subject(&verified_peer)
         .unwrap();
     registrar
         .component_session_acceptor(
@@ -1060,9 +1061,9 @@ async fn service_registration_returns_the_only_transport_reader() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let (ingress, service_driver) = registrar
@@ -1091,9 +1092,9 @@ async fn registrar_rejects_a_session_minted_for_another_bus_instance() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
 
@@ -1286,8 +1287,8 @@ fn scoped_bus() -> (
     .unwrap();
     let subjects = [
         (
-            "Provider/system-core",
-            "11111111-1111-4111-8111-111111111111",
+            BOOTSTRAP_PROVIDER_REF,
+            BOOTSTRAP_PROVIDER_UID,
         ),
         ("Host/alice", "22222222-2222-4222-8222-222222222222"),
     ]
@@ -1515,7 +1516,7 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
     let (_bus, mut registrar, assignments, native, state) = scoped_bus();
     let resource = assignment_resource();
     let role = ControllerRoleContract::from_signed_manifest(
-        ResourceRef::parse("Provider/system-core").unwrap(),
+        ResourceRef::parse(BOOTSTRAP_PROVIDER_REF).unwrap(),
         ResourceRef::parse("Process/process-controller").unwrap(),
         &assignment_manifest(),
     )
@@ -1577,9 +1578,9 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let endpoint_subject = native
@@ -1608,7 +1609,7 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -1622,7 +1623,7 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
                     "d2b.resource.v3",
                     &format!("ResourceService/{method}"),
                     1,
-                    "Provider/system-core",
+                    BOOTSTRAP_PROVIDER_REF,
                 ),
                 OperationSpec::new(
                     OperationId::parse(format!("owner-child-{method}")).unwrap(),
@@ -1701,7 +1702,7 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
     let (_bus, mut registrar, assignments, native, state) = scoped_bus();
     let resource = assignment_resource();
     let role = ControllerRoleContract::from_signed_manifest(
-        ResourceRef::parse("Provider/system-core").unwrap(),
+        ResourceRef::parse(BOOTSTRAP_PROVIDER_REF).unwrap(),
         ResourceRef::parse("Process/process-controller").unwrap(),
         &assignment_manifest(),
     )
@@ -1736,9 +1737,9 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let store_identity = StoreSealIdentity::new(
@@ -1793,7 +1794,7 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -1801,7 +1802,7 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
         "d2b.resource.v3",
         "ResourceService/CommitBatch",
         1,
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     );
 
     assignments
@@ -2000,9 +2001,9 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let resource_endpoint = registrar
@@ -2018,7 +2019,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let resource_caller = registrar
@@ -2029,7 +2030,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         "d2b.resource.v3",
         "ResourceService/Get",
         1,
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     );
     let response = resource_caller
         .invoke_resource(
@@ -2048,9 +2049,9 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
             EndpointPurpose::ResourceService,
             2,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let resource_endpoint = registrar
@@ -2066,7 +2067,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let resource_caller = registrar
@@ -2077,7 +2078,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         "d2b.resource.v3",
         "ResourceService/Get",
         2,
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     );
     let response = resource_caller
         .invoke_resource(
@@ -2198,9 +2199,9 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     endpoint_echo.abort();
@@ -2217,7 +2218,7 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2225,7 +2226,7 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
         "d2b.resource.v3",
         "ResourceService/Get",
         1,
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     );
     let first_id = OperationId::parse("reuse-first").unwrap();
     let second_id = OperationId::parse("reuse-second").unwrap();
@@ -2303,9 +2304,9 @@ async fn preseeded_counter_response_is_not_accepted_by_a_later_invocation() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     endpoint_echo.abort();
@@ -2322,7 +2323,7 @@ async fn preseeded_counter_response_is_not_accepted_by_a_later_invocation() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2336,7 +2337,7 @@ async fn preseeded_counter_response_is_not_accepted_by_a_later_invocation() {
             "d2b.resource.v3",
             "ResourceService/Get",
             1,
-            "Provider/system-core",
+            BOOTSTRAP_PROVIDER_REF,
         ),
         OperationSpec::new(
             OperationId::parse("unpredictable-correlation").unwrap(),
@@ -2377,9 +2378,9 @@ async fn concurrent_invocations_dispatch_out_of_order_responses() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     endpoint_echo.abort();
@@ -2396,7 +2397,7 @@ async fn concurrent_invocations_dispatch_out_of_order_responses() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2406,7 +2407,7 @@ async fn concurrent_invocations_dispatch_out_of_order_responses() {
                 "d2b.resource.v3",
                 "ResourceService/Get",
                 1,
-                "Provider/system-core",
+                BOOTSTRAP_PROVIDER_REF,
             ),
             OperationSpec::new(OperationId::parse(id).unwrap(), 10_000).unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
@@ -2464,9 +2465,9 @@ async fn uncorrelatable_response_terminates_every_waiter() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     endpoint_echo.abort();
@@ -2483,7 +2484,7 @@ async fn uncorrelatable_response_terminates_every_waiter() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2491,7 +2492,7 @@ async fn uncorrelatable_response_terminates_every_waiter() {
         "d2b.resource.v3",
         "ResourceService/Get",
         1,
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     );
     let remote_task = tokio::spawn(async move {
         let first = remote.receive_ttrpc().await.unwrap();
@@ -2554,9 +2555,9 @@ async fn revocation_waits_for_an_admitted_batch_before_returning() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
         Some(Arc::clone(&pause)),
     )
     .await;
@@ -2573,7 +2574,7 @@ async fn revocation_waits_for_an_admitted_batch_before_returning() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2584,7 +2585,7 @@ async fn revocation_waits_for_an_admitted_batch_before_returning() {
                     "d2b.resource.v3",
                     "ResourceService/Get",
                     1,
-                    "Provider/system-core",
+                    BOOTSTRAP_PROVIDER_REF,
                 ),
                 OperationSpec::new(OperationId::parse("revoked-write").unwrap(), 10_000).unwrap(),
                 ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
@@ -2627,9 +2628,9 @@ async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
         Some(Arc::clone(&pause)),
     )
     .await;
@@ -2645,9 +2646,9 @@ async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
             EndpointPurpose::ResourceService,
             2,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let (caller, _, caller_echo) = admit(
@@ -2659,7 +2660,7 @@ async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2669,7 +2670,7 @@ async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
             "d2b.resource.v3",
             "ResourceService/Get",
             1,
-            "Provider/system-core",
+            BOOTSTRAP_PROVIDER_REF,
         ),
         OperationSpec::new(operation_id, 10_000).unwrap(),
         ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
@@ -2718,9 +2719,9 @@ async fn receive_failure_terminates_without_retaining_the_operation() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     endpoint_echo.abort();
@@ -2737,7 +2738,7 @@ async fn receive_failure_terminates_without_retaining_the_operation() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2748,7 +2749,7 @@ async fn receive_failure_terminates_without_retaining_the_operation() {
             "d2b.resource.v3",
             "ResourceService/Get",
             1,
-            "Provider/system-core",
+            BOOTSTRAP_PROVIDER_REF,
         ),
         operation.clone(),
         ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
@@ -2786,9 +2787,9 @@ async fn deadline_signals_the_correlated_remote_request() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     echo.abort();
@@ -2805,7 +2806,7 @@ async fn deadline_signals_the_correlated_remote_request() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -2830,7 +2831,7 @@ async fn deadline_signals_the_correlated_remote_request() {
                     "d2b.resource.v3",
                     "ResourceService/Get",
                     1,
-                    "Provider/system-core",
+                    BOOTSTRAP_PROVIDER_REF,
                 ),
                 OperationSpec::new(OperationId::parse("deadline-cancel").unwrap(), 500).unwrap(),
                 ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
@@ -2874,9 +2875,9 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     echo.abort();
@@ -2893,7 +2894,7 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = std::sync::Arc::new(registrar.register_component_session(caller).await.unwrap());
@@ -2922,7 +2923,7 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
                     "d2b.resource.v3",
                     "ResourceService/Get",
                     1,
-                    "Provider/system-core",
+                    BOOTSTRAP_PROVIDER_REF,
                 ),
                 invoked_operation,
                 ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
@@ -2962,9 +2963,9 @@ async fn dropped_invoke_signals_the_correlated_remote_request() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/system-core",
-        "11111111-1111-4111-8111-111111111111",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
+        BOOTSTRAP_PROVIDER_UID,
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     echo.abort();
@@ -2981,7 +2982,7 @@ async fn dropped_invoke_signals_the_correlated_remote_request() {
         ),
         "Host/alice",
         "22222222-2222-4222-8222-222222222222",
-        "Provider/system-core",
+        BOOTSTRAP_PROVIDER_REF,
     )
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
@@ -3006,7 +3007,7 @@ async fn dropped_invoke_signals_the_correlated_remote_request() {
                     "d2b.resource.v3",
                     "ResourceService/Get",
                     1,
-                    "Provider/system-core",
+                    BOOTSTRAP_PROVIDER_REF,
                 ),
                 OperationSpec::new(OperationId::parse("dropped-invoke").unwrap(), 10_000).unwrap(),
                 ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),

@@ -4346,6 +4346,12 @@
                 "bundleRunnerIntentRef"
               ],
               "additionalProperties": false
+            },
+            "preflightSocketPaths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [

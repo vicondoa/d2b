@@ -1,0 +1,16 @@
+{
+  "crate": "d2b-provider-audio-service",
+  "types": [
+    {
+      "resourceType": "audio.d2bus.org.AudioService",
+      "allowedSources": ["builtin", "startup", "runtime"],
+      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
+      "execution": ["host", "guest"],
+      "exportable": false,
+      "reads": []
+    }
+  ],
+  "provides": ["Provider/audio-pipewire"],
+  "roles": [],
+  "principals": []
+}
