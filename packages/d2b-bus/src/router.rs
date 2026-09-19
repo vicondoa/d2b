@@ -17,6 +17,9 @@ use d2b_contracts_resource::v3::{
     ControllerGeneration, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_RESOURCE_TYPES,
     ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
 };
+use d2b_contracts_zone_session::v3::{
+    BOOTSTRAP_PROVIDER_REF, BOOTSTRAP_PROVIDER_UID, provider_ref_for_service,
+};
 use d2b_core_controller::controller_assignment::{
     ASSIGNMENT_UID_FILTER, AssignmentIdentity, AssignmentVerb, OWNER_UID_FILTER,
     ScopedCommitTransport, ScopedResourceFilter, ScopedResourceMutation, ScopedResourceQuery,
@@ -67,8 +70,6 @@ const FIRST_CORRELATION_ID: u32 = RESERVED_CORRELATION_MAX + 1;
 const DEFAULT_MAX_CORRELATIONS_PER_GENERATION: u64 =
     (u32::MAX as u64 - FIRST_CORRELATION_ID as u64) / 2 + 1;
 const CANCEL_DELIVERY_TIMEOUT: Duration = Duration::from_secs(5);
-const SYSTEM_CORE_PROVIDER_REF: &str = "Provider/system-core";
-const SYSTEM_CORE_PROVIDER_UID: &str = "11111111-1111-4111-8111-111111111111";
 
 /// Monotonic clock used for operation deadlines.
 pub trait BusClock: Send + Sync + 'static {
@@ -1688,18 +1689,10 @@ impl UnixSubjectRecord {
                 d2b_session::contract::SessionErrorCode::SubjectMismatch,
             ));
         }
-        let provider_ref = if self.subject_ref.to_canonical_string() == SYSTEM_CORE_PROVIDER_REF {
-            match binding.service().as_str() {
-                "d2b.display.v3" => ResourceRef::parse("Provider/display-wayland").ok(),
-                "d2b.clipboard.v3"
-                | "d2b.clipboard.bridge.v3"
-                | "d2b.clipboard.picker-coord.v3" => {
-                    ResourceRef::parse("Provider/clipboard-wayland").ok()
-                }
-                "d2b.notification.v3" => ResourceRef::parse("Provider/notification-desktop").ok(),
-                "d2b.config-nixos.v3" => ResourceRef::parse("Provider/config-nixos").ok(),
-                _ => self.provider_ref,
-            }
+        let provider_ref = if self.subject_ref.to_canonical_string() == BOOTSTRAP_PROVIDER_REF {
+            provider_ref_for_service(binding.service().as_str())
+                .and_then(|provider_ref| ResourceRef::parse(provider_ref).ok())
+                .or(self.provider_ref)
         } else {
             self.provider_ref
         };
@@ -2216,15 +2209,15 @@ impl SessionRegistrationCapability<ComponentSessionRegistrar> for ComponentSessi
 }
 
 impl ZoneRegistrar {
-    /// Install the fixed system-core Provider subject for one verified peer.
-    pub fn install_system_core_subject(
+    /// Install the fixed bootstrap Provider subject for one verified peer.
+    pub fn install_bootstrap_provider_subject(
         &self,
         verified_peer: &VerifiedUnixPeer,
     ) -> d2b_session::Result<()> {
         let subject = UnixSubjectRecord::new(
             UnixSubjectKind::Provider,
-            ResourceRef::parse(SYSTEM_CORE_PROVIDER_REF).expect("fixed Provider ref"),
-            ResourceUid::parse(SYSTEM_CORE_PROVIDER_UID).expect("fixed Provider uid"),
+            ResourceRef::parse(BOOTSTRAP_PROVIDER_REF).expect("fixed Provider ref"),
+            ResourceUid::parse(BOOTSTRAP_PROVIDER_UID).expect("fixed Provider uid"),
             ResourceRef::parse(&format!("Zone/{}", self.core.zone.as_str()))
                 .expect("fixed Zone ref"),
             verified_peer.credentials(),
@@ -3122,7 +3115,10 @@ impl ZoneRegistrar {
         let controller_generation = interaction_subjects.authority.controller_generation;
         let services = [(
             ServicePackage::DisplayV3,
-            ResourceRef::parse("Provider/display-wayland").expect("fixed display Provider ref"),
+            ResourceRef::parse(
+                provider_ref_for_service("d2b.display.v3").expect("fixed display Provider ref"),
+            )
+            .expect("fixed display Provider ref"),
             display_generation,
         )];
         let mut subjects = Vec::with_capacity(6);
@@ -3159,18 +3155,24 @@ impl ZoneRegistrar {
             let (subject_ref, subject_uid, provider_ref) =
                 if let Some(provider_uid) = clipboard_provider_uid {
                     (
-                        ResourceRef::parse("Provider/clipboard-wayland")
-                            .expect("fixed clipboard Provider ref"),
+                        ResourceRef::parse(
+                            provider_ref_for_service("d2b.clipboard.v3").expect("fixed clipboard Provider ref"),
+                        )
+                        .expect("fixed clipboard Provider ref"),
                         provider_uid,
-                        ResourceRef::parse("Provider/clipboard-wayland")
-                            .expect("fixed clipboard Provider ref"),
+                        ResourceRef::parse(
+                            provider_ref_for_service("d2b.clipboard.v3").expect("fixed clipboard Provider ref"),
+                        )
+                        .expect("fixed clipboard Provider ref"),
                     )
                 } else {
                     (
                         display_subject_ref.clone(),
                         display_subject_uid.clone(),
-                        ResourceRef::parse("Provider/clipboard-wayland")
-                            .expect("fixed clipboard Provider ref"),
+                        ResourceRef::parse(
+                            provider_ref_for_service("d2b.clipboard.v3").expect("fixed clipboard Provider ref"),
+                        )
+                        .expect("fixed clipboard Provider ref"),
                     )
                 };
             for service in [
@@ -3205,18 +3207,27 @@ impl ZoneRegistrar {
             let (subject_ref, subject_uid, provider_ref) =
                 if let Some(provider_uid) = notification_provider_uid {
                     (
-                        ResourceRef::parse("Provider/notification-desktop")
-                            .expect("fixed notification Provider ref"),
+                        ResourceRef::parse(
+                            provider_ref_for_service("d2b.notification.v3")
+                                .expect("fixed notification Provider ref"),
+                        )
+                        .expect("fixed notification Provider ref"),
                         provider_uid,
-                        ResourceRef::parse("Provider/notification-desktop")
-                            .expect("fixed notification Provider ref"),
+                        ResourceRef::parse(
+                            provider_ref_for_service("d2b.notification.v3")
+                                .expect("fixed notification Provider ref"),
+                        )
+                        .expect("fixed notification Provider ref"),
                     )
                 } else {
                     (
                         display_subject_ref,
                         display_subject_uid,
-                        ResourceRef::parse("Provider/notification-desktop")
-                            .expect("fixed notification Provider ref"),
+                        ResourceRef::parse(
+                            provider_ref_for_service("d2b.notification.v3")
+                                .expect("fixed notification Provider ref"),
+                        )
+                        .expect("fixed notification Provider ref"),
                     )
                 };
             subjects.push(
@@ -3421,15 +3432,7 @@ fn routes_for_admitted_session(
     binding: &AuthenticatedSessionRouteBinding,
 ) -> Result<Vec<RouteKey>, BusError> {
     let guest_provider_service = binding.subject_ref().resource_type().as_str() == "Guest"
-        && matches!(
-            binding.service().as_str(),
-            "d2b.display.v3"
-                | "d2b.clipboard.v3"
-                | "d2b.clipboard.bridge.v3"
-                | "d2b.clipboard.picker-coord.v3"
-                | "d2b.notification.v3"
-                | "d2b.config-nixos.v3"
-        );
+        && provider_ref_for_service(binding.service().as_str()).is_some();
     if binding.provider_ref().is_none()
         || (binding.subject_ref().resource_type().as_str() != "Provider" && !guest_provider_service)
     {

@@ -55,3 +55,10 @@ pub use zone::*;
 pub use zone_link::*;
 pub use zone_routing::*;
 pub use zone_session::*;
+
+// The service-to-provider catalog is generated from the per-crate
+// `service-catalog.json` declarations;the layout check's parity and drift
+// gates own it (`cargo xtask check-provider-crate-layout`),and `--fix`
+// regenerates it.
+
+include!("../generated/service_provider_catalog.rs");
