@@ -168,12 +168,17 @@ const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 /// Bounded wait budget for endpoint socket realization.
 const SOCKET_REALIZE_BUDGET: Duration = Duration::from_secs(5);
 
-/// The anchor projection drain window: one bounded
-/// re-materialization per drain, at most one window after the first notice
-/// of the drain. The window is measured from the first notice, not from the
-/// stream emptying, so a burst coalesces into one re-materialization and
-/// sustained traffic cannot starve it.
-const ANCHOR_DRAIN_WINDOW: Duration = Duration::from_millis(50);
+/// The anchor projection drain window: one bounded re-materialization per
+/// drain, at most one window after the first notice of the drain. The window
+/// is measured from the first notice, not from the stream emptying, so a
+/// burst coalesces into one re-materialization and sustained traffic cannot
+/// starve it.
+///
+/// The window is short on purpose. A committing effect returns before its
+/// notice is drained, so this window is the delay before that commit's
+/// anchor exists; a lone commit must not wait longer than the synchronous
+/// refresh it replaced. A tight burst still publishes well inside it.
+const ANCHOR_DRAIN_WINDOW: Duration = Duration::from_millis(3);
 
 /// Consecutive busy drains before the subscription reports that it is
 /// falling behind: one busy drain is a burst, several in a row is overload.
@@ -4806,7 +4811,7 @@ mod tests {
                         source: ChangeSource::Desired,
                     })
                    .await;
-                tokio::time::sleep(Duration::from_millis(5)).await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         });
         // The bounded window still re-materializes under sustained traffic.
