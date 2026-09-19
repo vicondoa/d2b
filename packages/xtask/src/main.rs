@@ -290,14 +290,14 @@ fn run_provider_crate_layout(args: &[String]) -> std::process::ExitCode {
 .and_then(|root| {
             if fix {
                 provider_crate_policy::fix(root).and_then(|mut paths| {
-                    resource_type_authority::regenerate(&root).map(move |generated| {
+                    resource_type_authority::regenerate(root).map(move |generated| {
                         paths.extend(generated);
                         paths
                     })
                 })
             } else {
                 provider_crate_policy::check(root).and_then(|()| {
-                    resource_type_authority::check(&root).map(|()| Vec::new())
+                    resource_type_authority::check(root).map(|()| Vec::new())
                 })
             }
         });
