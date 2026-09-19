@@ -27,7 +27,7 @@ use std::{collections::BTreeSet, future::Future, future::ready};
 
 use tracing::{debug, warn};
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
-use crate::host_spec::{HOST_RESOURCE_TYPE, HostSpec, IsolationPosture};
+use d2b_contracts_resource::v3::host::{HOST_RESOURCE_TYPE, HostSpec, IsolationPosture};
 use d2b_contracts_resource::v3::resource_status::ResourcePhase;
 use serde::Serialize;
 

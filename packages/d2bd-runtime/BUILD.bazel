@@ -90,7 +90,7 @@ d2b_rust_test(
     compile_data = d2bd_runtime_srcs + ["BUILD.bazel", "Cargo.toml"],
     visibility = ["//visibility:public"],
     deps = [":d2bd_runtime",
-        "//packages/d2b-provider-system-core:d2b_provider_system_core",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 d2b_rust_doc_test(

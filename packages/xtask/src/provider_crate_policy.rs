@@ -3635,6 +3635,19 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "system-core",
         retires_with: "U10-U12 family rollout (system-core)",
     },
+    // U4 permanent carve-out: the Host and User primitive shapes stay in the
+    // shared contracts crate. A shared runtime consumer (d2bd-runtime) needs
+    // the shapes, so placing them in the owning provider crate makes a shared
+    // crate depend on a provider crate, which the runtime boundary test
+    // refuses; the guard wins over the re-homing. Host carries the
+    // system-core token here; User carries no family token, so it needs no
+    // ratchet row, only this record.
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-contracts-resource/src/v3/host.rs",
+        token: "system_core",
+        family: "system-core",
+        retires_with: "U4 permanent carve-out - shared runtime consumer needs the shapes; the runtime boundary test refuses a shared-crate-to-provider dependency",
+    },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/interaction_composition.rs",
         token: "system_core",
@@ -7202,7 +7215,6 @@ const ALLOWED_SHARED_PROVIDER_DEPENDENCY_EDGES: &[(&str, &str)] = &[
     ("packages/d2bd", "d2b-provider-operation"),
     ("packages/d2bd", "d2b-provider-seccomp-profile"),
     ("packages/d2bd", "d2b-provider-system-core"),
-    ("packages/d2bd-runtime", "d2b-provider-system-core"),
 ];
 
 /// The provider crate name one manifest dependency line declares, when

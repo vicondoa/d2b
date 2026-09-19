@@ -28,8 +28,12 @@ use d2b_contracts_resource::v3::identity::{
     ReconnectGeneration, ServiceName, SessionBinding, SessionPurpose, TranscriptHash,
     TransportBinding,
 };
-use d2b_contracts_resource::v3::{ ConfigurationGeneration, ControllerGeneration, MAX_PAGE_CURSOR_BYTES, MAX_RESPONSE_CANONICAL_BYTES, ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceErrorReason, ResourceGeneration, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, RetryClass, SchemaFingerprint, Timestamp, ZoneId, ZoneRevision };
-use d2b_provider_system_core::user_spec::{ UserSpec };
+use d2b_contracts_resource::v3::{
+    ConfigurationGeneration, ControllerGeneration, MAX_PAGE_CURSOR_BYTES,
+    MAX_RESPONSE_CANONICAL_BYTES, ResourceEnvelope, ResourceError, ResourceErrorKind,
+    ResourceErrorReason, ResourceGeneration, ResourcePhase, ResourceRef, ResourceTypeName,
+    ResourceUid, RetryClass, SchemaFingerprint, Timestamp, ZoneId, ZoneRevision, user::UserSpec,
+};
 pub use d2b_contracts_resource::v3::{
     RESOURCE_BUNDLE_MATERIALIZATION_OPERATION_PREFIX, SYSTEM_CORE_BOOTSTRAP_ZONE_OPERATION_ID,
 };

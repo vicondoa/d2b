@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use std::task::{Context, Poll, Waker};
 
 use d2b_contracts_resource::v3::ResourceRef;
-use crate::user_spec::{OsUsername, UserSpec};
+use d2b_contracts_resource::v3::user::{OsUsername, UserSpec};
 
 use crate::error::SystemCoreError;
 use crate::user::{DiscoveredUser, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest};
@@ -99,8 +99,8 @@ impl UserDiscoveryEffectPort for ScriptedDiscoveryPort {
 pub mod fixtures {
     use super::*;
     use d2b_contracts_resource::v3::execution_policy::BoundedText;
-    use crate::host_spec::{HostSpec, IsolationPosture};
-    use crate::user_spec::OsGroupName;
+    use d2b_contracts_resource::v3::host::{HostSpec, IsolationPosture};
+    use d2b_contracts_resource::v3::user::OsGroupName;
 
     /// The canonical Host reference.
     pub fn host_ref() -> ResourceRef {

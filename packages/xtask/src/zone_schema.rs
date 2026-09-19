@@ -1152,7 +1152,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Host",
-            dto_resource_schema::<d2b_provider_system_core::host_spec::HostSpec>(
+            dto_resource_schema::<d2b_contracts_resource::v3::host::HostSpec>(
                 "Host",
                 "Physical or local execution and policy parent.",
                 true,
@@ -1216,7 +1216,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "User",
-            dto_resource_schema::<d2b_provider_system_core::user_spec::UserSpec>(
+            dto_resource_schema::<d2b_contracts_resource::v3::user::UserSpec>(
                 "User",
                 "Zone-local named operating-system identity.",
                 false,

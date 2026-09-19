@@ -37,8 +37,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ ResourceRef, ResourceSpec };
-use d2b_provider_system_core::user_spec::{ USER_RESOURCE_TYPE, UserSpec };
+use d2b_contracts_resource::v3::{ResourceRef, ResourceSpec, user::{USER_RESOURCE_TYPE, UserSpec}};
 use d2b_provider_system_core::UserStatusReport;
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
 use d2b_resource_runtime::driver::{
@@ -394,8 +393,11 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
 
-    use d2b_contracts_resource::v3::{ ResourcePhase, ResourceSpec, execution_policy::to_base_object };
-use d2b_provider_system_core::user_spec::{ OsUsername, UserSpec };
+    use d2b_contracts_resource::v3::{
+        ResourcePhase, ResourceSpec,
+        execution_policy::to_base_object,
+        user::{OsUsername, UserSpec},
+    };
     use d2b_provider_system_core::UserDiscoveryCondition;
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,

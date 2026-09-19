@@ -19,4 +19,3 @@ d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-
 tracing = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
-schemars.workspace = true

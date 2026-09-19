@@ -10,7 +10,7 @@
 use std::{collections::BTreeSet, future::Future};
 
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
-use d2b_provider_system_core::host_spec::IsolationPosture;
+use d2b_contracts_resource::v3::host::IsolationPosture;
 use d2b_contracts_resource::v3::resource_status::ResourcePhase;
 use d2b_provider_system_core::testing::{block_on, fixtures};
 use d2b_provider_system_core::{
@@ -124,7 +124,7 @@ fn a_user_domain_host_must_name_the_exact_user_it_resolves() {
         Vec::new(),
     )
     .expect("the mixed-domain policy is well formed");
-    let spec = d2b_provider_system_core::host_spec::HostSpec::new(policy, None)
+    let spec = d2b_contracts_resource::v3::host::HostSpec::new(policy, None)
         .expect("a mixed-domain host carries no posture");
     let status = HostReconciler::new()
         .reconcile(

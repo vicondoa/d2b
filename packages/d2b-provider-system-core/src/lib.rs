@@ -37,13 +37,6 @@ mod error;
 mod host;
 mod user;
 
-/// The Host ResourceType spec and status shapes owned by the system-core
-/// Provider (the census-resolved home of the host primitive contract).
-pub mod host_spec;
-/// The User ResourceType spec and status shapes owned by the system-core
-/// Provider (the census-resolved home of the user primitive contract).
-pub mod user_spec;
-
 pub mod ownership;
 pub mod testing;
 
@@ -53,13 +46,11 @@ pub use host::{
     HostProbeMetadata, HostProbeSnapshot, HostReconciler, HostStatusReport,
     ISOLATION_POSTURE_MESSAGE, MinijailPlatformGate, NO_ISOLATION_STATUS_FIELDS,
 };
-pub use host_spec::*;
 pub use ownership::{DISOWNED_RESOURCE_TYPES, OWNED_RESOURCE_TYPES};
 pub use user::{
     DiscoveredUser, UserBinding, UserDiscoveryCondition, UserDiscoveryEffectPort,
     UserIdentityDigest, UserObservation, UserReconciler, UserStatusReport,
 };
-pub use user_spec::*;
 
 /// The Provider name this bootstrap controller implements.
 pub const PROVIDER_NAME: &str = "system-core";
@@ -68,7 +59,7 @@ pub const PROVIDER_NAME: &str = "system-core";
 ///
 /// This is the only value admitted by `Host.spec.providerRef`, and it is
 /// the same constant the Host primitive contract pins.
-pub const PROVIDER_REF: &str = host_spec::HOST_PROVIDER_REF;
+pub const PROVIDER_REF: &str = d2b_contracts_resource::v3::host::HOST_PROVIDER_REF;
 
 /// The canonical `Provider/system-core` resource UID.
 ///

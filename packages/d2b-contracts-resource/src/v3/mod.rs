@@ -7,6 +7,7 @@ pub mod device;
 pub mod error;
 pub mod execution_policy;
 pub mod guest;
+pub mod host;
 pub mod identity;
 pub mod limits;
 pub mod network;
@@ -17,6 +18,7 @@ pub mod resource;
 pub mod resource_schema;
 pub mod resource_status;
 pub mod storage;
+pub mod user;
 pub mod volume;
 pub mod volume_binding;
 pub mod volume_state;
@@ -31,6 +33,7 @@ pub use error::{
 };
 pub use execution_policy::*;
 pub use guest::*;
+pub use host::*;
 pub use identity::{
     ConfigurationGeneration, ControllerGeneration, IdentityClass, IdentityError,
     ObservedGeneration, ResourceBundleGenerationId, ResourceGeneration, ResourceName,
@@ -65,5 +68,6 @@ pub use resource::{
 pub use resource_schema::*;
 pub use resource_status::*;
 pub use storage::*;
+pub use user::*;
 pub use volume_binding::*;
 pub use volume_state::*;
