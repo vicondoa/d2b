@@ -622,10 +622,10 @@ fn validate_network_config_volume_spec(spec: &Value) -> Result<(), NetworkEffect
     let volume: VolumeSpec =
         serde_json::from_value(base).map_err(|_| NetworkEffectError::ConfigVolume)?;
     let required = [
-        "dnsmasq.conf",
-        "nftables.rules",
-        "routing.conf",
-        "attachments.json",
+        d2b_provider_network_local::controller::NETWORK_CONFIG_FILE_DNSMASQ,
+        d2b_provider_network_local::controller::NETWORK_CONFIG_FILE_NFTABLES,
+        d2b_provider_network_local::controller::NETWORK_CONFIG_FILE_ROUTING,
+        d2b_provider_network_local::controller::NETWORK_CONFIG_FILE_ATTACHMENTS,
     ];
     if !required.iter().all(|path| {
         volume.layout().iter().any(|entry| {
@@ -740,8 +740,8 @@ fn network_config_provider_extension(
         file_owner.clone(),
         file_owner,
         NETWORK_CONFIG_FILE_MODE,
-        content.dnsmasq.clone(),
-        content.nftables.clone(),
+        content.dhcp_bytes().to_vec(),
+        content.firewall_bytes().to_vec(),
         content.routing.clone(),
         content.attachments.clone(),
         content.digest(),

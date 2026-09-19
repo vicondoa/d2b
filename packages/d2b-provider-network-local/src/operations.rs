@@ -83,6 +83,14 @@ pub const UPDATE_HOSTS_FILE: &str = "UpdateHostsFile";
 /// The family's `SeedDnsmasqLease` operation (U12).
 pub const SEED_DNSMASQ_LEASE: &str = "SeedDnsmasqLease";
 
+/// The broker-generic firewall projection kernel the family's
+/// `ApplyNftablesProjection` operation invokes (U12).
+pub const KERNEL_APPLY_NFTABLES_PROJECTION: &str = "apply-nftables-projection";
+
+/// The broker-generic DHCP lease kernel the family's `SeedDnsmasqLease`
+/// operation invokes (U12).
+pub const KERNEL_SEED_DNSMASQ_LEASE: &str = "seed-dnsmasq-lease";
+
 /// The refusal of a family operation whose kernel seam was never wired.
 ///
 /// The composition point wires one [`KernelCaller`] per Zone alongside the

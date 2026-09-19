@@ -3060,18 +3060,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (display-wayland)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/network_effect_port.rs",
-        token: "nftables",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/network_effect_port.rs",
-        token: "dnsmasq",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
         token: "network_local",
         family: "network-local",
@@ -3218,18 +3206,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/network.rs",
         token: "dnsmasq",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/shared_provider_effects.rs",
-        token: "dnsmasq",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/shared_provider_effects.rs",
-        token: "nftables",
         family: "network-local",
         retires_with: "U12 network-fds step",
     },
