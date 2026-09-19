@@ -672,3 +672,138 @@ Named rather than papered over:
   carry per-crate `cargo check` and test results and name the points where
   `make check` was red from other lanes' in-flight state; those claims were
   not re-verified here.
+
+## 2026-09-19: Provider-crate isolation finish
+
+The follow-on program (2026-09-18-002) finished the provider-crate isolation
+started by the campaign this record audited. Every resource type now has a
+per-crate declaration (`resource-types.json`), the check derives every
+generated registry and inventory from those declarations, and the shared-crate
+exemption inventories were reduced to the documented permanent carve-outs
+backed by live guarantees. What follows is what the closing unit verified
+against the current tree; numbers come from commands named in the report the
+closing unit left, not from this record's own audit runs.
+
+### Removed
+
+- **Per-crate declarations land.** Each family crate now declares its types,
+  verbs, execution class, roles, principals, storage, security, and
+  capability rows in its own `resource-types.json`, and its child-creation
+  and effect-port licenses in its `driver.rs` (the `DriverDescriptor`,
+  `ChildCreation`, `AllowedSources`, and `WellKnownType` metadata). The
+  daemon's per-family driver tables, spec decoders, and hand-held row
+  readers left the shared crates for those declarations. The declaration
+  JSON is the type authority the generators re-derive every Nix registry and
+  inventory from.
+- **Generated authority shrank.** The generated type authority
+  (`packages/d2b-contracts/src/generated/v3_converted_resource_types.rs`),
+the Nix type registry and inventories, the provider projections, the
+  zone and zone-link shapes, the client-layer catalogs, and the host
+  user allocation rows now derive from the declarations instead of from the
+  daemon's old hand-built tables.
+- **Family ratchet rows retired as vocabulary moved.** The family-knowledge
+  ratchet was re-derived from the tree by U1 (net +60 rows as the widened scan
+  caught more sites), then fell as each lane moved vocabulary: U2 -6, U2-f3
+  -4, U5 -4, U6 -8, U7 -13, U8 -6, U9 -7, U12 -6 (first
+  pass) and -6 (service catalog pass), U4-f2 +1 (host-and-user stay
+  shared), U13 pass two -10 (residue rows retired). The ratchet went from
+  616 rows at the program start to 607 at its end, of which 258 now carry
+  a `permanent:...` reason and the remaining 349 are live sites whose
+  tokens the tree still carries, and whose rows keep their census-step text as
+  history; any stale row (one whose module or token moved) fails the gate.
+- **Structural residue reduces.** U13 retired ten residue rows (the
+  per-provider Nix tables are now generated from declarations), and the
+  shared state component now carries only the structural state the daemon
+  owns. The structural ratchet (introduced by U3's widened scan) holds 120
+  rows:119 name their reason (per-provider Role vocabulary unifies into
+  declared Role rows; the hand per-provider Nix tables are generated from
+  declarations), and one row (`packages/d2bd/src/composition.rs`, class
+  `type-name-match-arm`) carries no reason field.
+- **Scaffolding and hand-held tables are gone from the daemon.** The daemon's
+  per-family driver modules and the residual migration scaffolding were
+  removed in the earlier campaign's sweep; this program removed the last
+  hand-written per-family tables the census still carried, so the plugin,
+  contracts, and d2bd-state families ended at their ratchet floors.
+
+### Deliberately left, with the blocker that refuses its move
+
+The permanent shared-crate carve-outs cluster into a handful of reasons, each
+backed by a detector or test:
+
+- **Broker pinned provider-free (94 permanent rows).** The privileged
+  open/kernel operation vocabulary stays in the broker, as a committed
+  view of the provider-declared rows. The broker's manifest pins it
+  provider-free, and any row that moved back would break the provider-free
+  pin and the broker completeness gates comparing every derived view against
+  the canonical row table.
+
+- **Wire vocabulary crossing CLI/daemon/broker boundaries (60 rows).** A
+  shared crate may not depend on a provider crate; the dependency-direction
+  detector in the layout check refuses the added edge if the vocabulary moved
+  back into a provider crate. This cluster includes the v3 contract files
+  (shared wire vocabulary consumed by the bus, broker, daemon, and core(
+  and the shared contracts-provider crate's boundaries.
+
+- **Trusted-bundle/manifest wire shapes (33 rows).** `d2b-core` may not
+  depend on a provider crate; the same detector refuses the move.
+
+- **Golden wire-vector tests (15 rows).** The frozen wire strings the
+  zone-session, component-session, service(s), resource-bundle,
+  noise-vectors, and prologue contracts pin stay in shared crates as
+  committed constants; the golden tests (`frozen_tag_and_wire_string_vectors_are_exact`,
+  `wire_enum_vectors_are_frozen`, `service_package_wire_values_are_frozen`,
+  `declared_process_templates_require_the_system_minijail_provider`,
+  `exact_nn_kk_and_ikpsk2_vectors_are_frozen`,
+  `evidence_class_labels_are_frozen`) refuse their move.
+
+- **Dependency-direction detector edges (38 rows).** Several shared crates
+  (host, contracts-resource, core-controller, core-controller's shared
+   type registry, resource-compiler, bus, controller-session) keep a
+  committed view of the provider-declared surface (role/capability matrices,
+   generated bundle templates, wire vocabularies); the detector refuses any
+  shared-to-provider dependency edge, so those views stay put.
+
+- **Daemon plane wiring (10 rows).** The daemon's plane wires the provider's
+  driver factory and family declaration; the crate reference and family id are
+  the dependency itself (2 rows); the activation dispatch and host-prep arms
+  hold committed views (3 rows); the composition/effects/dispatch
+  adapters spell the provider's own typed API (2+2+2 rows); the
+  media effect and composition adapters spell the provider's API (1 row).
+
+- **ProcessRole vocabulary and effect ports (4 rows).** The ProcessRole
+  vocabulary unifies into declared Role rows (2 rows); the daemon's
+  activation effects implement the provider's effect port (2 rows).
+
+- **Per-family committed views (4 rows).** The network sysctl intents (1),
+  the ArtifactKind match arm (1), the RuntimeKind heuristic (1), and
+  the config-nixos provider references (1) are declared vocabulary kept in
+  shared crates as committed views.
+
+The structural ratchet rows are doubly bounded: any new tokenless signal in a
+shared crate fails the widened scan, and any stale row (whose module no longer
+carries the signal) fails too. The two live classes it keeps are the
+per-family hand-written Nix literals that are now views of generated facts (the
+  tables are generated from declarations, so the literal is a committed view),
+and the per-family match arms the compiler cannot see (type-name matches,
+  per-family branches(`.
+
+Per-provider crates keep their own smaller ratchet (`PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS`,
+49 rows) routing provider effects through the shared device driver etc.; the
+U14 crate-content proof refuses any provider crate carrying another family's
+identity token, so those rows are the only in-crate family knowledge the gate
+admits. `README_ONLY_INTEGRATION_RATCHET` records 18 scaffold crates,
+`FRAMEWORK_DRIVER_DECLARATIONS` records 2 metadata drivers, `and
+`BLANKET_ALLOW_EXEMPTIONS` has one entry (the broker-composition audit
+tool's own synchronous-path reads). `SHARED_DRIVER_EXEMPTIONS` is empty.
+
+### Gates the closing unit ran
+
+The closing unit ran four checks against the current tree: the layout check
+(`xtask check-provider-crate-layout`, exit 0), the full generator aggregate
+(`tests/tools/generate-artifacts.sh` commands run directly; zero diff after the
+run), the host-contract golden digest eval (`nix eval --impure`; digest
+`sha256:f6c138da465614a39091a6eabb41d8a3b86782a85ff51e14e46e1f10b60b6cc0`,
+unchanged from the pinned case), and the privileges-json drift surface eval
+(green, `expr == expected == []`). The commit-triggered gates (Bazel `gen_*_drift`,
+`make test-policy`, the rest of the Nix surface suite, formatters, and lints(
+were not run by the closing unit; they run once after the closing unit lands.
