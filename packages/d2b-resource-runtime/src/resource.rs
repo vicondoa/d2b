@@ -58,6 +58,19 @@ use crate::provider::ProviderDirectory;
 /// timer per actor, delete cancels) is already final here.
 pub const DEFAULT_REQUEUE_BACKOFF: Duration = Duration::from_millis(200);
 
+/// The ceiling of the actor's retry ladder (R13). Every retryable operational
+/// failure doubles the wait it schedules, so a transient failure is retried
+/// quickly while a persistent one cannot spin: the wait stops doubling here.
+/// A `NotYet` deferral never escalates - the driver names the delay it wants,
+/// or the configured backoff stands unchanged.
+pub const DEFAULT_REQUEUE_BACKOFF_MAX: Duration = Duration::from_secs(30);
+
+/// The next rung of the retry ladder: one doubling, bounded by
+/// [`DEFAULT_REQUEUE_BACKOFF_MAX`].
+pub(crate) fn next_retry_backoff(current: Duration) -> Duration {
+    (current * 2).min(DEFAULT_REQUEUE_BACKOFF_MAX)
+}
+
 /// In-memory resource status (R11, spec section 19). Closed: the manager's
 /// runtime view and the watch hub see this classification and nothing else.
 /// Never persisted.
@@ -301,6 +314,11 @@ pub struct ResourceActorState {
     target_binding: Option<crate::target::TargetBinding>,
     /// Runtime-only retryable-failure backoff (R13).
     backoff: Duration,
+    /// The rung of the retry ladder the next operational failure schedules
+    /// (R13): it starts at `backoff`, doubles per consecutive retryable
+    /// failure up to `DEFAULT_REQUEUE_BACKOFF_MAX`, and a pass that converges
+    /// resets it.
+    retry_backoff: Duration,
     /// The owning resource's key (see [`ResourceActorArgs::owner_key`]).
     owner_key: Option<crate::identity::ResourceKey>,
     /// Requeue timers (ractor timers, runtime-only, R13).
@@ -385,9 +403,32 @@ impl ResourceActorState {
         }
     }
 
+    /// The wait before the next pass for one deferring failure (R13, spec
+    /// section 32).
+    ///
+    /// A `NotYet` verdict is a deferral, not a failure: the driver alone knows
+    /// why the world is not ready, so its named delay wins, and a deferral
+    /// that names none keeps the configured backoff - it never escalates. A
+    /// retryable operational error has no such knowledge, so the actor's own
+    /// ladder paces it: the wait doubles per consecutive error, bounded by
+    /// [`DEFAULT_REQUEUE_BACKOFF_MAX`], and a pass that converges resets it.
+    fn retry_delay(&mut self, failure: &DriverFailure) -> Duration {
+        match failure.verdict() {
+            crate::error::DriverVerdict::NotYet { retry_after, .. } => {
+                retry_after.unwrap_or(self.backoff)
+            }
+            crate::error::DriverVerdict::Error { .. } => {
+                let delay = self.retry_backoff;
+                self.retry_backoff = next_retry_backoff(delay);
+                delay
+            }
+            crate::error::DriverVerdict::Refused { .. } => self.backoff,
+        }
+    }
+
     /// Schedule the single runtime-only requeue (R13, spec section 32).
-    fn schedule_requeue(&mut self) {
-        let id = self.ctx.requeue_after(self.backoff);
+    fn schedule_requeue(&mut self, delay: Duration) {
+        let id = self.ctx.requeue_after(delay);
         self.pending_requeue = Some(id);
     }
 
@@ -416,15 +457,15 @@ impl ResourceActorState {
             "{}",
             failure.log_line(),
         );
-        let defer = failure.defers();
+        let retry_delay = failure.defers().then(|| self.retry_delay(&failure));
         debug_assert!(
             !matches!(failure.verdict(), crate::error::DriverVerdict::NotYet { .. })
                 || failure.class() == crate::error::FailureClass::Retryable,
             "a NotYet verdict is never terminal"
         );
         self.transition(ResourceStatus::Failed(failure));
-        if defer {
-            self.schedule_requeue();
+        if let Some(delay) = retry_delay {
+            self.schedule_requeue(delay);
             return;
         }
         if self.reconcile_pending && !self.deleting {
@@ -543,6 +584,10 @@ impl ResourceActorState {
             Ok(crate::driver::ReconcileOutcome::Satisfied) => {
                 self.effect_running = false;
                 let projection = self.ctx.take_status_projection();
+                // The row converged, so the next operational failure starts
+                // from the configured backoff again instead of the rung the
+                // previous streak climbed to.
+                self.retry_backoff = self.backoff;
                 self.transition_published(ResourceStatus::Ready, projection);
             }
             Ok(crate::driver::ReconcileOutcome::RetryScheduled) => {
@@ -695,6 +740,7 @@ impl Actor for ResourceActor {
             target: args.target,
             target_binding: args.target_binding,
             backoff: args.backoff,
+            retry_backoff: args.backoff,
             owner_key: args.owner_key,
             timers,
             row: args.row.clone(),
@@ -847,8 +893,25 @@ pub(crate) mod test_support {
         Failed,
         #[error("fake driver deferral")]
         NotYet,
+        #[error("fake driver deferral with a named delay")]
+        NotYetWithRetryAfter,
+        #[error("fake driver operational error")]
+        Errored,
         #[error("fake driver refusal")]
         Refused,
+    }
+
+    /// The delay the fake driver names for the deferral in
+    /// [`ReconcileMode::NotYetWithRetryAfter`]: longer than any backoff the
+    /// actor would compute on its own, so a test can tell the driver's delay
+    /// from the actor's.
+    pub(crate) const FAKE_NOT_YET_RETRY_AFTER: Duration = Duration::from_millis(400);
+
+    /// The structured `NotYet` the fake driver reports in
+    /// [`ReconcileMode::NotYetWithRetryAfter`]: a deferral that names how long
+    /// it wants the actor to wait.
+    pub(crate) fn fake_not_yet_failure_with_retry_after() -> DriverFailure {
+        fake_not_yet_failure().with_retry_after(FAKE_NOT_YET_RETRY_AFTER)
     }
 
     /// The structured `NotYet` the fake driver reports in
@@ -902,14 +965,23 @@ pub(crate) mod test_support {
         GatedRefusedEffectOnce,
         /// Panic on the first invocation, then `Satisfied` (actor crash).
         PanicOnce,
-        /// Fail retryably (requeue path, R13).
+        /// Fail retryably (requeue path, R13). The verdict is a `NotYet`
+        /// *deferral*, so the actor keeps its configured cadence.
         FailRetryable,
+        /// Fail with a retryable operational *error* on every pass
+        /// ([`FakeDriverError::Errored`]): the actor's retry ladder is the only
+        /// thing pacing it, and a test can watch it escalate.
+        FailErrored,
         /// Fail once with the structured `NotYet` deferral
         /// ([`fake_not_yet_failure`]), then satisfy: proves the driver
         /// default on `NotYet` is defer-with-requeue and that the published
         /// status and the log line are projections of the same structured
         /// detail (issue #508).
         NotYetOnceWithDetail,
+        /// Fail once with a `NotYet` that names its own retry delay
+        /// ([`FAKE_NOT_YET_RETRY_AFTER`]), then satisfy: proves the driver's
+        /// named delay is what the actor schedules, not its own backoff.
+        NotYetWithRetryAfter,
         /// First pass spawns a long effect that completes with a retryable
         /// failure; every later pass is satisfied. Proves the effect-failure
         /// path backs off through the requeue timer instead of re-entering
@@ -1048,6 +1120,12 @@ pub(crate) mod test_support {
             match error {
                 FakeDriverError::Failed => DriverFailure::retryable(DriverOp::Reconcile),
                 FakeDriverError::NotYet => fake_not_yet_failure(),
+                FakeDriverError::NotYetWithRetryAfter => fake_not_yet_failure_with_retry_after(),
+                FakeDriverError::Errored => DriverFailure::error(
+                    DriverOp::Reconcile,
+                    crate::error::FailureKinds::DRIVER_ERROR,
+                    crate::error::FailureClass::Retryable,
+                ),
                 FakeDriverError::Refused => fake_refused_failure(),
             }
         }
@@ -1103,6 +1181,7 @@ pub(crate) mod test_support {
                     panic!("fake reconcile crash");
                 }
                 ReconcileMode::FailRetryable => Err(FakeDriverError::Failed),
+                ReconcileMode::FailErrored => Err(FakeDriverError::Errored),
                 ReconcileMode::ProjectionThenFailOnce => {
                     if self.shared.reconcile_calls.load(Ordering::SeqCst) == 1 {
                         ctx.set_status_projection(serde_json::json!({
@@ -1121,6 +1200,13 @@ pub(crate) mod test_support {
                         return Ok(ReconcileOutcome::Satisfied);
                     }
                     Err(FakeDriverError::NotYet)
+                }
+                ReconcileMode::NotYetWithRetryAfter => {
+                    if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {
+                        *self.shared.reconcile_mode.lock().await = ReconcileMode::Satisfied;
+                        return Ok(ReconcileOutcome::Satisfied);
+                    }
+                    Err(FakeDriverError::NotYetWithRetryAfter)
                 }
                 ReconcileMode::EffectFailsRetryableOnce => {
                     if self.shared.reconcile_calls.load(Ordering::SeqCst) > 1 {

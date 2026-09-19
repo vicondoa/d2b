@@ -695,6 +695,13 @@ fn spawn_anchor_subscription(
 /// retained replay, then its live stream, coalescing Desired notices into
 /// one bounded re-materialization per drain, and relist on the hub's
 /// unservable signals.
+///
+/// This subscription is the projection's only law: the writer-side refreshes
+/// are retired, so a commit path never owes the projection a call. A
+/// resolution that races a commit can therefore miss the anchor, and that miss
+/// is a *retryable* failure rather than a permanent one - the row's actor
+/// requeues it, on the delay the driver named or on its own ladder, and the
+/// anchor this subscription registers is there by the next pass.
 async fn run_anchor_subscription(
     hub: Arc<WatchHub>,
     selector: WatchSelector,
@@ -924,9 +931,13 @@ async fn rematerialize_anchor_rows(
 }
 
 /// Type-scoped reload of the rows the anchor projection holds (Volume and
-/// VolumeBinding): the recovery and relist shape, never the store-wide
-/// sweep. Reports whether every row set was read back, so a recovery is not
-/// counted as complete while the projection is still stale.
+/// VolumeBinding): the recovery, relist, and commit-path refresh shape, never
+/// the store-wide sweep. The zone scope is left open because the durable load
+/// the retired reload ran was zone-open too: a system-homed row a Zone plane
+/// resolves against lives outside its own Zone, and a zone-scoped refresh
+/// would leave that row's anchor to the subscription's delivery instead.
+/// Reports whether every row set was read back, so a refresh is not counted
+/// as complete while the projection is still stale.
 async fn reload_anchor_rows(
     registry: &PlaneResourceRegistry,
     zone_token: &BoundedToken,
@@ -935,7 +946,7 @@ async fn reload_anchor_rows(
     let mut complete = true;
     for type_name in ["Volume", "VolumeBinding"] {
         let selector = SpecSelector {
-            zone: Some(zone_token.as_str().to_owned()),
+            zone: None,
             type_name: Some(type_name.to_owned()),
             owner_uid: None,
         };
@@ -2760,6 +2771,8 @@ impl ResourcePlaneV3 {
     }
 
 
+    /// The per-zone registry the production effects resolve per-resource
+    /// anchors from.
     pub fn registry(&self) -> &Arc<PlaneResourceRegistry> {
         &self.registry
     }
@@ -4882,13 +4895,15 @@ mod tests {
         restarted.abort();
     }
 
-    /// The API-apply route: a Volume row committed
-    /// through the manager client resolves with no writer-side refresh call,
-    /// because the manager's own Desired notice drives the projection. This is
-    /// the route the retired ingest trailing reload used to cover.
+    /// The projection's law: a Volume row committed through the manager client
+    /// resolves with no writer-side refresh call and no bridge, because the
+    /// manager's own Desired notice drives the projection. The registration is
+    /// eventual by construction, which is why a resolution that races a commit
+    /// must classify its miss as retryable - this test waits for the anchor the
+    /// retry finds.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_api_applied_volume_resolves_without_a_writer_side_refresh() {
+    async fn an_api_applied_volume_resolves_through_the_projection() {
         let (_dir, inputs, _readiness) = test_inputs();
         let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane prepare");
         plane.complete_initial_load().await.expect("initial load");
@@ -4924,9 +4939,11 @@ mod tests {
 
 
     /// The controller child-mutation bridge route: a Volume row committed
-    /// through the bridge resolves with the bridge's
-    /// per-call registry reload retired, because the manager's own notice
-    /// drives the projection.
+    /// through the bridge resolves with no refresh call from the bridge - the
+    /// manager's own Desired notice drives the projection. A resolution that
+    /// races the commit misses, so the row's actor must treat that miss as
+    /// retryable rather than permanent; the eventual registration this test
+    /// waits for is what makes the retry converge.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_bridge_committed_volume_resolves_without_the_bridge_refresh() {
