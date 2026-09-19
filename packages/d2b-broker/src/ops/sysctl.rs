@@ -201,22 +201,11 @@ fn proc_sys_path(key: &str) -> PathBuf {
     path
 }
 
-pub fn destroy_value_for_key(key: &str) -> Option<&'static str> {
-    if key.ends_with(".disable_ipv6") {
-        Some("0")
-    } else if key.ends_with(".accept_ra") || key.ends_with(".autoconf") {
-        Some("1")
-    } else if key.ends_with(".addr_gen_mode") || key.ends_with(".arp_ignore") {
-        Some("0")
-    } else if key == "net.bridge.bridge-nf-call-iptables"
-        || key == "net.bridge.bridge-nf-call-ip6tables"
-        || key == "net.bridge.bridge-nf-call-arptables"
-    {
-        Some("1")
-    } else {
-        None
-    }
-}
+/// The destroy value the host-maintenance owner declares for one sysctl
+/// key, read from `d2b_host::netlink` (the crate that owns the sysctl
+/// tables). A key with no destroy value cannot be destroyed; the broker
+/// fails closed instead of guessing a value.
+pub use d2b_host::netlink::destroy_value_for_key;
 
 #[cfg(test)]
 mod tests {
@@ -299,6 +288,19 @@ mod tests {
         .unwrap();
         assert_eq!(outcomes[0].value_after, "1");
         tokio::fs::remove_dir_all(dir).await.ok();
+    }
+
+    #[test]
+    fn destroy_value_for_key_fails_closed_outside_the_declared_table() {
+        // The destroy table is declared by the host-maintenance owner
+        // (`d2b_host::netlink`); the broker reads it from there and a key
+        // outside the table has no destroy value, so the destroy path
+        // fails closed instead of guessing.
+        assert_eq!(
+            destroy_value_for_key("net.ipv6.conf.d2b-b.disable_ipv6"),
+            Some("0")
+        );
+        assert_eq!(destroy_value_for_key("net.ipv4.ip_forward"), None);
     }
 
     #[tokio::test]

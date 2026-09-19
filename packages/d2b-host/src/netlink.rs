@@ -66,6 +66,29 @@ pub const BRIDGE_NF_SYSCTLS: &[(&str, &str)] = &[
     ("net.bridge.bridge-nf-call-arptables", "0"),
 ];
 
+/// The destroy value the broker applies when a link's sysctl set is torn
+/// down, keyed by the leaf-name suffix of the sysctl key.
+///
+/// The table is the host-maintenance owner's declared row set: a key that
+/// has no destroy value here cannot be destroyed, and the caller fails
+/// closed instead of guessing a value.
+pub fn destroy_value_for_key(key: &str) -> Option<&'static str> {
+    if key.ends_with(".disable_ipv6") {
+        Some("0")
+    } else if key.ends_with(".accept_ra") || key.ends_with(".autoconf") {
+        Some("1")
+    } else if key.ends_with(".addr_gen_mode") || key.ends_with(".arp_ignore") {
+        Some("0")
+    } else if key == "net.bridge.bridge-nf-call-iptables"
+        || key == "net.bridge.bridge-nf-call-ip6tables"
+        || key == "net.bridge.bridge-nf-call-arptables"
+    {
+        Some("1")
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SysctlFamily {
@@ -511,6 +534,26 @@ mod tests {
                 && up_idx < readback_idx,
             "ordering violated: {ops:?}"
         );
+    }
+
+    #[test]
+    fn destroy_value_for_key_fails_closed_on_unknown_keys() {
+        // Every declared IPv6-off and bridge-netfilter leaf has a destroy
+        // value...
+        assert_eq!(destroy_value_for_key("net.ipv6.conf.d2b-b.disable_ipv6"), Some("0"));
+        assert_eq!(destroy_value_for_key("net.ipv6.conf.d2b-b.accept_ra"), Some("1"));
+        assert_eq!(destroy_value_for_key("net.ipv6.conf.d2b-b.autoconf"), Some("1"));
+        assert_eq!(destroy_value_for_key("net.ipv6.conf.d2b-b.addr_gen_mode"), Some("0"));
+        assert_eq!(destroy_value_for_key("net.ipv4.conf.d2b-b.arp_ignore"), Some("0"));
+        assert_eq!(
+            destroy_value_for_key("net.bridge.bridge-nf-call-iptables"),
+            Some("1")
+        );
+        // ...and a key outside the declared table has no destroy value, so
+        // the caller fails closed instead of guessing.
+        assert_eq!(destroy_value_for_key("net.ipv4.ip_forward"), None);
+        assert_eq!(destroy_value_for_key("net.ipv6.conf.d2b-b.forwarding"), None);
+        assert_eq!(destroy_value_for_key(""), None);
     }
 
     #[test]
