@@ -1155,43 +1155,33 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/audio.rs",
         token: "audio_pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/operations/seal.rs",
         token: "credential_managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/;the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/operations/seal.rs",
         token: "managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/;the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "credential_managed_identity",
-        family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "managed_identity",
-        family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
-    },
+
+
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/media.rs",
         token: "credential_managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/media.rs",
         token: "managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
@@ -1691,12 +1681,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "volume-local",
         retires_with: "U12 volume/store step",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/volume_effect_adapter.rs",
-        token: "volume_virtiofs",
-        family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
-    },
+
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/modprobe.rs",
         token: "sysctl",
@@ -2001,7 +1986,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/runtime.rs",
         token: "pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/audio_resource_runtime.rs",
@@ -2067,7 +2052,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/ops/device.rs",
         token: "pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/audio_host_controller.rs",
@@ -2085,7 +2070,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_runtime.rs",
@@ -2139,7 +2124,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "entra",
         family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/credential_backend_runtime.rs",
@@ -2151,7 +2136,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/credential_backend_runtime.rs",
@@ -2163,7 +2148,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "secret_service",
         family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/device.rs",
@@ -3850,19 +3835,19 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/capability.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/volume.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "guest lane owns packages/d2b-contracts-resource/src/v3/;the move needs its module re-homed into the owning provider crate and the type-authority registry regenerated",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/runtime.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/binding_effects.rs",
@@ -3892,13 +3877,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core/src/runtime.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/processes.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
@@ -3916,13 +3901,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/controller_config.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_plane_v3.rs",
@@ -3940,7 +3925,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-broker/src/runtime.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/activation_nixos.rs",
@@ -4022,7 +4007,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/privileges.rs",
@@ -4034,20 +4019,10 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "credential_entra",
         family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "credential_entra",
-        family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "entra",
-        family: "credential-entra",
-        retires_with: "U10-U12 family rollout (credential-entra)",
-    },
+
+
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/credential_backend_runtime.rs",
         token: "credential_entra",
@@ -4058,7 +4033,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "credential_managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/credential_backend_runtime.rs",
@@ -4070,20 +4045,10 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts-provider/src/v3/credential_controller.rs",
         token: "credential_secret_service",
         family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
+        retires_with: "permanent: shared contracts-provider crate; wire vocabulary crossing provider/daemon boundaries; no shared crate may depend on a provider crate",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "credential_secret_service",
-        family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_provider_runtime.rs",
-        token: "secret_service",
-        family: "credential-secret-service",
-        retires_with: "U10-U12 family rollout (credential-secret-service)",
-    },
+
+
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/credential_backend_runtime.rs",
         token: "credential_secret_service",
@@ -4526,55 +4491,55 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-contracts/src/failure_kinds.rs",
         token: "volume_local",
         family: "volume-local",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/static_invariants.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/failure_kinds.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/failure_kinds.rs",
         token: "volume_virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "volume_virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/bundle_resolver.rs",
         token: "volume_virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/store_sync.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
+        retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-host/src/bin/d2b-activation-helper.rs",
@@ -4622,13 +4587,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-host/src/devices.rs",
         token: "pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent:the host is a shared crate that may not depend on a provider crate;it keeps a committed view of the provider-declared host surface",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-host/src/ioctl_policy.rs",
         token: "pipewire",
         family: "audio-pipewire",
-        retires_with: "U12 audio step",
+        retires_with: "permanent:the host is a shared crate that may not depend on a provider crate;it keeps a committed view of the provider-declared host surface",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-bus/src/router.rs",
@@ -4640,13 +4605,13 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-resource-compiler/src/lib.rs",
         token: "credential_managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent: shared resource-compiler crate; no shared crate may depend on a provider crate;the generated bundle templates keep committed backend identities",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-resource-compiler/src/lib.rs",
         token: "managed_identity",
         family: "credential-managed-identity",
-        retires_with: "U10-U12 family rollout (credential-managed-identity)",
+        retires_with: "permanent: shared resource-compiler crate; no shared crate may depend on a provider crate;the generated bundle templates keep committed backend identities",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-bus/src/session_seam_tests.rs",

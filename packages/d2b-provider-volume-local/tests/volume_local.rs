@@ -35,6 +35,22 @@ fn quota_soft_check_accounts_for_replaced_bytes_and_rejects_overage() {
 }
 
 #[test]
+fn content_projection_refuses_an_out_of_range_mode() {
+    // The `8` group bit is outside the `0[0-7][0-7][0-7]` octet class,
+    // so the mount projection refuses the entry instead of widening the mode.
+    assert_eq!(
+        ContentFile::new(
+            "dnsmasq.conf",
+            ResourceRef::parse("User/net-local-controller").expect("owner"),
+            ResourceRef::parse("User/net-local-controller").expect("group"),
+            "0800",
+            b"lan=192.0.2.0/24\n".to_vec(),
+        ),
+        Err(d2b_provider_volume_local::VolumeLocalError::InvalidSpec)
+    );
+}
+
+#[test]
 fn content_projection_binds_each_file_and_provenance_to_the_volume() {
     let volume_uid =
         ResourceUid::parse("6f9619ff-8b86-4d01-b42d-00cf4fc964ff").expect("volume uid");

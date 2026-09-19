@@ -12,6 +12,11 @@ pub mod resource_type;
 pub mod state;
 pub mod telemetry;
 
+/// The PipeWire runtime socket file name the host capability probe looks for.
+///
+/// The daemon reads this name instead of spelling the host realization itself。
+pub const PIPEWIRE_RUNTIME_SOCKET: &str = "pipewire-0";
+
 pub use argv::{AudioComponentTemplate, AudioTemplateError, RenderedAudioTemplate};
 pub use d2b_contracts::audio::{
     AudioGrant, AudioPolicyError, AudioPolicyState, LevelPercent, LevelPercentError,

@@ -16379,7 +16379,11 @@ fn infer_runner_role_for_vm_stop(role_id: &str) -> Option<RunnerRole> {
         Some(RunnerRole::SwtpmFlush)
     } else if role_id == RunnerRole::Swtpm.as_str() || role_id.starts_with("swtpm") {
         Some(RunnerRole::Swtpm)
-    } else if role_id == RunnerRole::Virtiofsd.as_str() || role_id.contains("virtiofsd") {
+    } else if role_id == RunnerRole::Virtiofsd.as_str()
+        || role_id
+            .split(':')
+            .any(|segment| segment.starts_with(RunnerRole::Virtiofsd.as_str()))
+    {
         Some(RunnerRole::Virtiofsd)
     } else if role_id == RunnerRole::Gpu.as_str() || role_id.contains("gpu") {
         Some(RunnerRole::Gpu)

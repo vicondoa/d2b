@@ -41,3 +41,24 @@ pub use session::{
     CredentialRevocationOutcome, CredentialRevocationRequest, CredentialSession,
     credential_provider_kind, is_credential_provider_ref,
 };
+
+/// The wire backend identity of the Entra backend Provider, as declared by
+/// `d2b-provider-credential-entra`.
+pub const ENTRA_BACKEND_REF: &str = d2b_provider_credential_entra::BACKEND_REF;
+/// The wire backend identity of the Managed Identity backend Provider, as
+/// declared by `d2b-provider-credential-managed-identity`.
+pub const MANAGED_IDENTITY_BACKEND_REF: &str = d2b_provider_credential_managed_identity::BACKEND_REF;
+/// The wire backend identity of the Secret Service backend Provider, as
+/// declared by `d2b-provider-credential-secret-service`.
+pub const SECRET_SERVICE_BACKEND_REF: &str = d2b_provider_credential_secret_service::BACKEND_REF;
+/// The canonical Provider reference of the Entra backend Provider.
+pub const ENTRA_PROVIDER_REF: &str = d2b_provider_credential_entra::PROVIDER_REF;
+/// The canonical Provider reference of the Managed Identity backend Provider.
+pub const MANAGED_IDENTITY_PROVIDER_REF: &str = d2b_provider_credential_managed_identity::PROVIDER_REF;
+/// The canonical Provider reference of the Secret Service backend Provider.
+pub const SECRET_SERVICE_PROVIDER_REF: &str = d2b_provider_credential_secret_service::PROVIDER_REF;
+
+/// The signed agent binary the managed-identity backend's co-located
+/// client-holding agent Process runs, as declared by
+/// `d2b-provider-credential-managed-identity`.
+pub const CREDENTIAL_AGENT_BINARY: &str = d2b_provider_credential_managed_identity::AGENT_BINARY;

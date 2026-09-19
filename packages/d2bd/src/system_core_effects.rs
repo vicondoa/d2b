@@ -175,7 +175,9 @@ impl HostProbeEffectPort for HostProbe {
             HostCapabilityClass::UserNamespace => Path::new("/proc/self/ns/user").exists(),
             HostCapabilityClass::Virtiofs => Path::new("/dev/fuse").is_file(),
             HostCapabilityClass::AudioPipewire => {
-                d2bd_runtime::resource_runtime_support::is_socket(&self.runtime_path("pipewire-0"))
+                d2bd_runtime::resource_runtime_support::is_socket(
+                    &self.runtime_path(d2b_provider_audio_pipewire::PIPEWIRE_RUNTIME_SOCKET)
+                )
             }
             HostCapabilityClass::Wayland => {
                 d2bd_runtime::resource_runtime_support::is_socket(&self.runtime_path("wayland-0"))
