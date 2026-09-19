@@ -308,18 +308,24 @@ fn projection_schema_pointers(
 }
 
 /// Every standard ResourceType's committed schema file, keyed by type.
+///
+/// The standard set is passed in rather than read from
+/// `identity::STANDARD_RESOURCE_TYPES` so the resource-type authority can
+/// drive the same render from the per-crate `resource-types.json`
+/// declarations; `gen-nix-inventories` passes the committed registry.
 fn core_schema_pointers(
     schemas: &BTreeSet<String>,
-) -> Result<BTreeMap<&'static str, String>, Box<dyn std::error::Error>> {
+    standard: &[String],
+) -> Result<BTreeMap<String, String>, Box<dyn std::error::Error>> {
     let mut pointers = BTreeMap::new();
-    for resource_type in STANDARD_RESOURCE_TYPES {
+    for resource_type in standard {
         let file = core_schema_file(resource_type);
         if !schemas.contains(&file) {
             return Err(render_error(format!(
                 "{resource_type}: committed schema {file} is missing"
             )));
         }
-        pointers.insert(resource_type, file);
+        pointers.insert(resource_type.clone(), file);
     }
     Ok(pointers)
 }
@@ -452,9 +458,16 @@ fn provider_projections_module() -> String {
 }
 
 /// Render the resource vocabulary inventory.
-fn resource_inventories_module(repo_root: &Path) -> Result<String, Box<dyn std::error::Error>> {
+///
+/// `pub(crate)` so the resource-type authority (`resource_type_authority.rs`)
+/// drives the same render from the per-crate declarations, keeping one table
+/// authority per vocabulary.
+pub(crate) fn resource_inventories_module(
+    repo_root: &Path,
+    standard: &[String],
+) -> Result<String, Box<dyn std::error::Error>> {
     let schemas = committed_schema_files(repo_root)?;
-    let core = core_schema_pointers(&schemas)?;
+    let core = core_schema_pointers(&schemas, standard)?;
     let projections = projection_schema_pointers(&schemas)?;
     let farm = provider_farm_pointers(&schemas)?;
     let resource_verbs = resource_verbs();
@@ -690,7 +703,13 @@ pub fn gen_nix_inventories(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std
         write(
             repo_root,
             RESOURCE_INVENTORIES_OUT,
-            resource_inventories_module(repo_root)?,
+            resource_inventories_module(
+                repo_root,
+                &STANDARD_RESOURCE_TYPES
+                    .iter()
+                    .map(|resource_type| resource_type.to_string())
+                    .collect::<Vec<_>>(),
+            )?,
         )?,
         write(
             repo_root,

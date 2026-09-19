@@ -16,12 +16,22 @@
 //!   its descriptor registers fails naming both, and a type declared by two
 //!   crates fails naming both crates;
 //! - owns the drift gate over the generated artifact: a hand edit fails
-//!   and regeneration is idempotent.
+//!   and regeneration is idempotent;
+//! - derives the committed Nix type registry (`resource-types.nix`) and the
+//!   per-type inventory (`resource-inventories.nix`) from the same
+//!   declarations: the standard registry's set and the
+//!   `coreSchemaPointers` keys come from the declared standard
+//!   (unqualified) types, and the remaining inventory tables remain
+//!   committed facts the renderer holds, since the declarations do not carry
+//!   them; both files stay byte-identical to the committed ones and share
+//!   the authority's drift and idempotence gates. The historical committed
+//!   registry order is preserved by an order table, so a new declared type
+//!   still needs no shared-crate edit (U14's zero-outside-edit fixture).
 //!
 //! The generator is wired into the existing policy check
 //! (`cargo xtask check-provider-crate-layout`): the check runs the parity
 //! and drift gates after the crate-layout check, and `--fix` regenerates the
-//! artifact. This keeps every gate in the suite the layout check already
+//! artifacts. This keeps every gate in the suite the layout check already
 //! runs, without editing `provider_crate_policy.rs`.
 
 use std::{
@@ -41,6 +51,46 @@ const DECLARATION_FILE: &str = "resource-types.json";
 /// file that `include!`s it,so `include!("generated/...")` resolves it).
 pub(crate) const GENERATED_ARTIFACT: &str =
     "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs";
+
+/// The repository-relative generated Nix standard type registry.
+pub(crate) const NIX_RESOURCE_TYPES_OUT: &str = "nixos-modules/generated/resource-types.nix";
+/// The repository-relative generated Nix resource inventory.
+pub(crate) const NIX_RESOURCE_INVENTORIES_OUT: &str =
+    "nixos-modules/generated/resource-inventories.nix";
+
+/// The committed order of the standard ResourceType registry the Nix
+/// authoring surface consumes (`resource-types.nix`).
+///
+/// The order is the historical hand-written registry order, not derivable
+/// from the per-crate declarations; this table preserves it, mirroring
+/// [`COMMITTED_V3_ORDER`]. A declared standard type absent from this table is
+/// appended after the committed block in sorted order, so adding a type
+/// needs no shared-crate edit.
+const COMMITTED_NIX_STANDARD_ORDER: &[&str] = &[
+    "Zone",
+    "ZoneLink",
+    "Provider",
+    "Role",
+    "RoleBinding",
+    "Quota",
+    "EmergencyPolicy",
+    "Host",
+    "Guest",
+    "Process",
+    "EphemeralProcess",
+    "Volume",
+    "VolumeBinding",
+    "Network",
+    "Device",
+    "User",
+    "Credential",
+    "Endpoint",
+    "ResourceExport",
+    "ResourceImport",
+    "Command",
+    "Operation",
+    "SeccompProfile",
+];
 
 /// The committed order of the type authority const.
 ///
@@ -115,7 +165,9 @@ struct AuthorityRegistry {
     descriptors: BTreeMap<String, BTreeSet<String>>,
 }
 
-/// Run the authority's gates: parity, drift, and regeneration idempotence.
+/// Run the authority's gates: parity, drift, and regeneration idempotence,
+/// over every artifact the authority emits: the Rust type authority const and
+/// the Nix type registry and resource inventory.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let registry = load(repo_root)?;
@@ -126,8 +178,78 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
             errors.join("\n- ")
         ));
     }
-    let rendered = render(&registry)?;
-    let artifact_path = generated_artifact_path(repo_root);
+    let artifacts = render_artifacts(repo_root, &registry)?;
+    for (relative, rendered) in &artifacts {
+        verify_committed(repo_root, relative, rendered)?;
+    }
+    let rendered_again = render_artifacts(repo_root, &registry)?;
+    if rendered_again != artifacts {
+        return Err("resource-type-authority regeneration is not idempotent".to_owned());
+    }
+    Ok(())
+}
+
+/// Regenerate every type-authority artifact from the declarations.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
+    let registry = load(repo_root)?;
+    let errors = parity_errors(&registry);
+    if !errors.is_empty() {
+        return Err(format!(
+            "refusing to regenerate the type authority while the parity gate fails:\n- {}",
+            errors.join("\n- ")
+        ));
+    }
+    let artifacts = render_artifacts(repo_root, &registry)?;
+    let mut written = Vec::with_capacity(artifacts.len());
+    for (relative, rendered) in artifacts {
+        let artifact_path = repo_root.join(&relative);
+        if let Some(parent) = artifact_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "cannot create the generated-artifact directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        fs::write(&artifact_path, &rendered).map_err(|error| {
+            format!(
+                "cannot write the generated artifact {}: {error}",
+                artifact_path.display()
+            )
+        })?;
+        written.push(artifact_path);
+    }
+    Ok(written)
+}
+
+/// Render every artifact the authority owns, in committed order: the Rust
+/// authority const, the Nix standard type registry, and the Nix resource
+/// inventory. The Nix registry and the inventory's `coreSchemaPointers` are
+/// derived from the declared standard (unqualified) types; the inventory's
+/// remaining tables are committed facts the shared renderer holds.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn render_artifacts(
+    repo_root: &Path,
+    registry: &AuthorityRegistry,
+) -> Result<Vec<(String, String)>, String> {
+    let standard = declared_standard_types(registry);
+    let inventory = crate::nix_inventories::resource_inventories_module(repo_root, &standard)
+        .map_err(|error| {
+            format!("resource-type-authority inventory render failed: {error}")
+        })?;
+    Ok(vec![
+        (GENERATED_ARTIFACT.to_owned(), render(registry)?),
+        (NIX_RESOURCE_TYPES_OUT.to_owned(), render_nix_resource_types(&standard)),
+        (NIX_RESOURCE_INVENTORIES_OUT.to_owned(), inventory),
+    ])
+}
+
+/// Fail when the committed copy of one generated artifact differs from the
+/// declarations' render.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn verify_committed(repo_root: &Path, relative: &str, rendered: &str) -> Result<(), String> {
+    let artifact_path = repo_root.join(relative);
     let on_disk = fs::read_to_string(&artifact_path).map_err(|_| {
         format!(
             "resource-type-authority artifact is missing at {}; run `cargo xtask check-provider-crate-layout --fix`",
@@ -140,41 +262,68 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
             artifact_path.display()
         ));
     }
-    let rendered_again = render(&registry)?;
-    if rendered_again != rendered {
-        return Err("resource-type-authority regeneration is not idempotent".to_owned());
-    }
     Ok(())
 }
 
-/// Regenerate the type authority artifact from the declarations.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
-    let registry = load(repo_root)?;
-    let errors = parity_errors(&registry);
-    if !errors.is_empty() {
-        return Err(format!(
-            "refusing to regenerate the type authority while the parity gate fails:\n- {}",
-            errors.join("\n- ")
-        ));
+/// The declared standard (unqualified) ResourceTypes in committed order, with
+/// a declared standard type absent from the committed order appended after it
+/// in sorted order. A qualified type (`<namespace>.d2bus.org.<Name>`) carries
+/// a dot and never enters the standard registry.
+fn declared_standard_types(registry: &AuthorityRegistry) -> Vec<String> {
+    let mut declared = BTreeSet::new();
+    for types in registry.declarations.values() {
+        for name in types {
+            if !name.contains('.') {
+                declared.insert(name.clone());
+            }
+        }
     }
-    let rendered = render(&registry)?;
-    let artifact_path = generated_artifact_path(repo_root);
-    if let Some(parent) = artifact_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "cannot create the generated-artifact directory {}: {error}",
-                parent.display()
-            )
-        })?;
+    let mut ordered = Vec::with_capacity(declared.len());
+    for name in COMMITTED_NIX_STANDARD_ORDER {
+        if let Some(type_name) = declared.take(*name) {
+            ordered.push(type_name);
+        }
     }
-    fs::write(&artifact_path, &rendered).map_err(|error| {
-        format!(
-            "cannot write the generated type authority {}: {error}",
-            artifact_path.display()
-        )
-    })?;
-    Ok(vec![artifact_path])
+    ordered.extend(declared);
+    ordered
+}
+
+/// A Nix double-quoted string.
+fn nix_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '$' => out.push_str("\\$"),
+            _ => out.push(character),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Render the Nix standard type registry from the declared standard types.
+///
+/// The bytes are the committed `resource-types.nix` shape: the historical
+/// registry header and the declared standard types in committed order.
+fn render_nix_resource_types(standard: &[String]) -> String {
+    let mut out = String::new();
+    out.push_str("# Generated by `bazel run //packages/xtask:xtask -- gen-zone-nix-options`.\n");
+    out.push_str("# Do not hand-edit: `make test-drift` compares this\n");
+    out.push_str("# file byte-for-byte against the generator output.\n");
+    out.push_str("#\n");
+    out.push_str("# The canonical ADR 0046 standard ResourceType registry. Qualified\n");
+    out.push_str("# Provider types are appended only from installed signed schemas and\n");
+    out.push_str("# are therefore absent here.\n");
+    out.push_str("# Provider-owned qualified types remain outside this registry: activation-nixos.d2bus.org.NixosGeneration, telemetry.d2bus.org.TelemetryBinding, telemetry.d2bus.org.TelemetryService.\n");
+    out.push_str("[\n");
+    for name in standard {
+        out.push_str(&format!("  {}\n", nix_string(name)));
+    }
+    out.push_str("]\n");
+    out
 }
 
 /// Load the declarations, then the registered descriptors from the tree.
@@ -422,12 +571,7 @@ out.push_str("// @generated\n");
     Ok(out)
 }
 
-fn generated_artifact_path(repo_root: &Path) -> PathBuf {
 
-
-
-    repo_root.join(GENERATED_ARTIFACT)
-}
 
 #[cfg(test)]
 mod tests {
@@ -467,6 +611,33 @@ mod tests {
                  pub const USB_SERVICE: Self = Self(\"usb.d2bus.org.UsbService\");\n\
                  pub const USB_BINDING: Self = Self(\"usb.d2bus.org.UsbBinding\");\n",
             );
+        }
+
+        /// Create the committed schema files the Nix inventory render requires
+        /// for a fixture declaring the given standard types: one Core schema per
+        /// standard type, the four semantic projection schemas,and the two provider
+        /// farm schemas. The render only verifies existence, so empty files
+        /// suffice.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn write_nix_inventory_schemas(&self, standard_types: &[&str]) {
+            for resource_type in standard_types {
+                self.write(
+                    &format!(
+                        "docs/reference/schemas/v3/core.d2bus.org_{resource_type}.schema.json"
+                    ),
+                    "",
+                );
+            }
+            for file in [
+                "audio.d2bus.org_projection_spec.schema.json",
+                "security-key.d2bus.org_projection_spec.schema.json",
+                "telemetry.d2bus.org_projection_spec.schema.json",
+                "usb.d2bus.org_projection_spec.schema.json",
+                "display-wayland.d2bus.org_WaylandPolicy.schema.json",
+                "display-wayland.d2bus.org_WaylandSession.schema.json",
+            ] {
+                self.write(&format!("docs/reference/schemas/v3/{file}"), "");
+            }
         }
     }
 
@@ -551,6 +722,7 @@ mod tests {
     fn the_drift_gate_fails_on_a_hand_edit_to_the_generated_artifact() {
         let fixture = Fixture::new("drift");
         fixture.write_well_known();
+        fixture.write_nix_inventory_schemas(&["Zone"]);
         fixture.write("packages/d2b-provider-zone/resource-types.json", &declaration_json("d2b-provider-zone", &["Zone"]));
         fixture.write(
             "packages/d2b-provider-zone/src/driver.rs",
@@ -574,6 +746,7 @@ mod tests {
     fn regeneration_is_idempotent() {
         let fixture = Fixture::new("idempotent");
         fixture.write_well_known();
+        fixture.write_nix_inventory_schemas(&["Zone"]);
         fixture.write("packages/d2b-provider-zone/resource-types.json", &declaration_json("d2b-provider-zone", &["Zone"]));
         fixture.write(
             "packages/d2b-provider-zone/src/driver.rs",
@@ -596,6 +769,7 @@ mod tests {
     fn the_policy_check_passes_on_a_matching_fixture() {
         let fixture = Fixture::new("happy");
         fixture.write_well_known();
+        fixture.write_nix_inventory_schemas(&["Zone"]);
         fixture.write("packages/d2b-provider-zone/resource-types.json", &declaration_json("d2b-provider-zone", &["Zone"]));
         fixture.write(
             "packages/d2b-provider-zone/src/driver.rs",
@@ -603,5 +777,182 @@ mod tests {
         );
         regenerate(&fixture.root).expect("regenerate");
         check(&fixture.root).expect("the parity and drift gates pass on a matching tree");
+    }
+
+    /// The committed `resource-types.nix` bytes the authority's render must equal.
+    const COMMITTED_RESOURCE_TYPES_NIX: &str = concat!(
+        "# Generated by `bazel run //packages/xtask:xtask -- gen-zone-nix-options`.\n",
+        "# Do not hand-edit: `make test-drift` compares this\n",
+        "# file byte-for-byte against the generator output.\n",
+        "#\n",
+        "# The canonical ADR 0046 standard ResourceType registry. Qualified\n",
+        "# Provider types are appended only from installed signed schemas and\n",
+        "# are therefore absent here.\n",
+        "# Provider-owned qualified types remain outside this registry: activation-nixos.d2bus.org.NixosGeneration, telemetry.d2bus.org.TelemetryBinding, telemetry.d2bus.org.TelemetryService.\n",
+        "[\n",
+        "  \"Zone\"\n",
+        "  \"ZoneLink\"\n",
+        "  \"Provider\"\n",
+        "  \"Role\"\n",
+        "  \"RoleBinding\"\n",
+        "  \"Quota\"\n",
+        "  \"EmergencyPolicy\"\n",
+        "  \"Host\"\n",
+        "  \"Guest\"\n",
+        "  \"Process\"\n",
+        "  \"EphemeralProcess\"\n",
+        "  \"Volume\"\n",
+        "  \"VolumeBinding\"\n",
+        "  \"Network\"\n",
+        "  \"Device\"\n",
+        "  \"User\"\n",
+        "  \"Credential\"\n",
+        "  \"Endpoint\"\n",
+        "  \"ResourceExport\"\n",
+        "  \"ResourceImport\"\n",
+        "  \"Command\"\n",
+        "  \"Operation\"\n",
+        "  \"SeccompProfile\"\n",
+        "]\n",
+    );
+
+    #[test]
+    fn the_nix_registry_is_derived_from_the_declared_standard_types() {
+        let fixture = Fixture::new("nix-registry");
+        fixture.write_well_known();
+        let all = [
+            "Zone",
+            "ZoneLink",
+            "Provider",
+            "Role",
+            "RoleBinding",
+            "Quota",
+            "EmergencyPolicy",
+            "Host",
+            "Guest",
+            "Process",
+            "EphemeralProcess",
+            "Volume",
+            "VolumeBinding",
+            "Network",
+            "Device",
+            "User",
+            "Credential",
+            "Endpoint",
+            "ResourceExport",
+            "ResourceImport",
+            "Command",
+            "Operation",
+            "SeccompProfile",
+        ];
+        fixture.write("packages/d2b-provider-zone/resource-types.json", &declaration_json("d2b-provider-zone", &all));
+        fixture.write(
+            "packages/d2b-provider-zone/src/driver.rs",
+            "pub fn zone_descriptor() -> d2b_resource_types::DriverDescriptor {\n    DriverDescriptor {\n        resource_type: WellKnownType::ZONE,\n    }\n}\n",
+        );
+        let registry = load(&fixture.root).expect("load");
+        let standard = declared_standard_types(&registry);
+        assert_eq!(
+            standard,
+            all.iter().map(|name| name.to_string()).collect::<Vec<_>>(),
+            "the Nix registry is the declared standard set in committed order"
+        );
+        assert_eq!(
+            render_nix_resource_types(&standard),
+            COMMITTED_RESOURCE_TYPES_NIX,
+            "the rendered Nix registry must match the committed bytes byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn qualified_declared_types_do_not_enter_the_nix_registry_and_undocumented_types_append_sorted(
+    ) {
+        let declarations = BTreeMap::from([(
+            "d2b-provider-faux".to_owned(),
+            BTreeSet::from([
+                "Zone".to_owned(),
+                "ZoneLink".to_owned(),
+                "usb.d2bus.org.UsbService".to_owned(),
+                "Alpha".to_owned(),
+                "Frobnicate".to_owned(),
+            ]),
+        )]);
+        let registry = AuthorityRegistry {
+            declarations,
+            descriptors: BTreeMap::new(),
+        };
+        let standard = declared_standard_types(&registry);
+        assert_eq!(
+            standard,
+            [
+                "Zone".to_owned(),
+                "ZoneLink".to_owned(),
+                "Alpha".to_owned(),
+                "Frobnicate".to_owned(),
+            ],
+            "qualified types must stay out and undocumented standard types append sorted"
+        );
+        let rendered = render_nix_resource_types(&standard);
+        assert!(
+            !rendered.contains("usb.d2bus.org.UsbService"),
+            "a qualified type must not enter the standard registry: {rendered}"
+        );
+        assert!(rendered.contains("\"Alpha\"\n  \"Frobnicate\"\n"), "the appended block is sorted: {rendered}");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_hand_edit_to_the_nix_registry_fails_the_drift_gate_and_regeneration_restores_it() {
+        let fixture = Fixture::new("nix-fix");
+        fixture.write_well_known();
+        fixture.write_nix_inventory_schemas(&["Zone"]);
+        fixture.write("packages/d2b-provider-zone/resource-types.json", &declaration_json("d2b-provider-zone", &["Zone"]));
+        fixture.write(
+            "packages/d2b-provider-zone/src/driver.rs",
+            "pub fn zone_descriptor() -> d2b_resource_types::DriverDescriptor {\n    DriverDescriptor {\n        resource_type: WellKnownType::ZONE,\n    }\n}\n",
+        );
+        regenerate(&fixture.root).expect("regenerate");
+        let types_path = fixture.root.join("nixos-modules/generated/resource-types.nix");
+        let before = fs::read_to_string(&types_path).expect("read");
+        fs::write(&types_path, format!("{before}\n# hand edit\n")).expect("hand edit");
+        let error = check(&fixture.root).expect_err("a hand edit must fail the drift gate");
+        assert!(
+            error.contains("drift"),
+            "expected a drift violation naming the gate: {error}"
+        );
+        regenerate(&fixture.root).expect("regeneration restores the committed bytes");
+        check(&fixture.root).expect("the gate passes after regeneration");
+        assert_eq!(
+            fs::read_to_string(&types_path).expect("read"),
+            before,
+            "regeneration must re-emit the committed bytes"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn the_nix_inventory_is_also_gated_for_drift() {
+        let fixture = Fixture::new("nix-inventory-drift");
+        fixture.write_well_known();
+        fixture.write_nix_inventory_schemas(&["Zone"]);
+        fixture.write("packages/d2b-provider-zone/resource-types.json", &declaration_json("d2b-provider-zone", &["Zone"]));
+        fixture.write(
+            "packages/d2b-provider-zone/src/driver.rs",
+            "pub fn zone_descriptor() -> d2b_resource_types::DriverDescriptor {\n    DriverDescriptor {\n        resource_type: WellKnownType::ZONE,\n    }\n}\n",
+        );
+        regenerate(&fixture.root).expect("regenerate");
+        let inventory_path = fixture.root.join("nixos-modules/generated/resource-inventories.nix");
+        fs::write(
+            &inventory_path,
+            format!("{}\n# hand edit\n", fs::read_to_string(&inventory_path).expect("read")),
+        )
+        .expect("hand edit");
+        let error = check(&fixture.root).expect_err("a hand edit must fail the drift gate");
+        assert!(
+            error.contains("drift"),
+            "expected a drift violation naming the gate: {error}"
+        );
+        regenerate(&fixture.root).expect("regeneration restores");
+        check(&fixture.root).expect("the gate passes after regeneration");
     }
 }
