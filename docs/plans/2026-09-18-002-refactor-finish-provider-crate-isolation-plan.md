@@ -164,7 +164,7 @@ Lane order. The lanes are a single serial chain, not parallel tracks: every lane
 | 8 | Session and stream plane | contracts vocabulary, core config, daemon branches | none; not envelope operations - provider constants, generated posture rows, permanent carve-outs |
 | last | Structural residue | the daemon's own state and the check's permanent carve-outs | lanes 1-8, whose targets are the same files |
 
-Broker chokepoint files force the chain: `packages/d2b-broker/src/runtime.rs`, `live_handlers.rs`, `catalog.rs`, `kernel_ops.rs`, `seccomp_compile_tests.rs`, and the `ops/` modules each carry rows for several lanes. The session and stream lane is the exception - it holds no broker chokepoint file - and it is serial by choice rather than by collision, because the delivery model runs one unit at a time.
+Broker chokepoint files force the chain: `packages/d2b-broker/src/runtime.rs`, `live_handlers.rs`, `catalog.rs`, `kernel_ops.rs`, `seccomp_compile_tests.rs`, and the `ops/` modules each carry rows for several lanes. A lane is a single writer on those files for its duration. The session and stream lane holds no broker chokepoint file, so it runs alongside a lane whose provider crates and daemon files it does not touch.
 
 ### Implementation Constraints
 
@@ -179,7 +179,7 @@ Broker chokepoint files force the chain: `packages/d2b-broker/src/runtime.rs`, `
 
 ### Delivery Model
 
-One unit in flight at a time. The lanes share the broker and daemon files, so a second unit started before the first merges rebases onto a moving head for no gain; the chain is serial and the estimate-free consequence is that the order above is the schedule.
+Units whose file sets are disjoint run in parallel, each in its own worktree; units that share a file run in dependency order, because every shared file has exactly one writer at a time. The broker dispatch, catalog, and `ops/` files and the daemon composition files are the constraints that serialize most of the lane chain; the tooling, the provider-crate data, and the lane-local provider crates parallelize around them.
 
 Each unit follows the same lifecycle:
 
