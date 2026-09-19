@@ -468,7 +468,7 @@ impl<R: NodeRunner> DagExecutor<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_core::minijail_profile::CgroupPlacement;
+    use d2b_core::sandbox_profile::CgroupPlacement;
     use d2b_core::processes::{
         DagEdge, NodeId, ProcessNode, ProcessRole, VmProcessDag, VmProcessInvariants,
     };

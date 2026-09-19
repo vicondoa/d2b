@@ -73,7 +73,7 @@ use crate::host::{
 };
 use crate::host_w3::{ModuleRequirementW3, TapRoleW3};
 use crate::manifest_v04::ManifestV04;
-use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet, WritablePath};
+use crate::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet, WritablePath};
 use crate::processes::{
     ProcessExecutionDomain, ProcessMacvtapMode, ProcessNetworkInterfaceType, ProcessNode,
     ProcessRole, ProcessesJson, RoleProfile, VmProcessDag,
@@ -564,8 +564,8 @@ pub fn default_execution_ref(vm_name: &str, role: &ProcessRole) -> String {
 // Convenience From impls across the wire (`UserNamespaceProfile`) and
 // intent (`UserNamespaceSpec`) types so layer boundaries can `.into()`
 // instead of hand-copying fields.
-impl From<crate::minijail_profile::UserNamespaceProfile> for UserNamespaceSpec {
-    fn from(p: crate::minijail_profile::UserNamespaceProfile) -> Self {
+impl From<crate::sandbox_profile::UserNamespaceProfile> for UserNamespaceSpec {
+    fn from(p: crate::sandbox_profile::UserNamespaceProfile) -> Self {
         Self {
             host_uid_for_zero: p.host_uid_for_zero,
             host_gid_for_zero: p.host_gid_for_zero,
@@ -573,7 +573,7 @@ impl From<crate::minijail_profile::UserNamespaceProfile> for UserNamespaceSpec {
     }
 }
 
-impl From<UserNamespaceSpec> for crate::minijail_profile::UserNamespaceProfile {
+impl From<UserNamespaceSpec> for crate::sandbox_profile::UserNamespaceProfile {
     fn from(s: UserNamespaceSpec) -> Self {
         Self {
             host_uid_for_zero: s.host_uid_for_zero,
@@ -5636,7 +5636,7 @@ mod tests {
     use crate::manifest_v04::{
         ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
     };
-    use crate::minijail_profile::WritablePath;
+    use crate::sandbox_profile::WritablePath;
     use crate::processes::{
         DagEdge, NodeId, ProcessMacvtapInterface, ProcessMacvtapMode, ProcessNetworkInterface,
         ProcessNetworkInterfaceType, ProcessNode, ProcessRole, ProcessesJson, RoleProfile,
@@ -7654,7 +7654,7 @@ mod tests {
 
     #[test]
     fn video_runner_has_no_stock_crosvm_legacy_fallback() {
-        use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use crate::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
         use crate::processes::{
             NodeId, ProcessNode, ProcessRole, RoleProfile, VmProcessDag, VmProcessInvariants,
         };
@@ -7676,7 +7676,7 @@ mod tests {
             seccomp_policy_ref: Some("w1-video".to_owned()),
             mount_policy: MountPolicy {
                 read_only_paths: Vec::new(),
-                writable_paths: vec![crate::minijail_profile::WritablePath {
+                writable_paths: vec![crate::sandbox_profile::WritablePath {
                     path: "/run/d2b-video/test-vm".to_owned(),
                     purpose: "test video runtime dir".to_owned(),
                 }],
@@ -7973,7 +7973,7 @@ mod tests {
     // (ADR 0021) and guards against silent drops in the resolver.
     #[test]
     fn swtpm_user_namespace_propagates_to_resolved_intent() {
-        use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use crate::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
         use crate::processes::{
             NodeId, ProcessNode, ProcessRole, RoleProfile, RoleUserNamespace, VmProcessDag,
             VmProcessInvariants,
@@ -8081,7 +8081,7 @@ mod tests {
     // that the legacy arg0 is "d2b-{vm}-gpu-render-node".
     #[test]
     fn gpu_render_node_user_namespace_propagates_to_resolved_intent() {
-        use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use crate::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
         use crate::processes::{
             NodeId, ProcessNode, ProcessRole, RoleProfile, RoleUserNamespace, VmProcessDag,
             VmProcessInvariants,
@@ -8204,7 +8204,7 @@ mod tests {
     // The audio block and review cover CAP_NET_RAW + AF_NETLINK.
     #[test]
     fn audio_user_namespace_propagates_to_resolved_intent() {
-        use crate::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use crate::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
         use crate::processes::{
             NodeId, ProcessNode, ProcessRole, RoleProfile, RoleUserNamespace, VmProcessDag,
             VmProcessInvariants,

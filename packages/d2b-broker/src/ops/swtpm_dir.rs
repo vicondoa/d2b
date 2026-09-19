@@ -1040,7 +1040,7 @@ mod tests {
     use d2b_core::bundle_resolver::BundleResolver;
     use d2b_core::host::HostJson;
     use d2b_core::manifest_v04::ManifestV04;
-    use d2b_core::minijail_profile::WritablePath;
+    use d2b_core::sandbox_profile::WritablePath;
     use d2b_core::processes::{
         NodeId, ProcessNode, ProcessRole, ProcessesJson, VmProcessDag, VmProcessInvariants,
     };
@@ -1114,7 +1114,7 @@ mod tests {
         }
 
         fn spawn_plan(&self, paths: &SwtpmDirPaths) -> SpawnRunnerPlan {
-            use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, WritablePath};
+            use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, WritablePath};
             SpawnRunnerPlan {
                 binary_path: PathBuf::from("/run/current-system/sw/bin/swtpm"),
                 argv: vec!["swtpm".into()],
@@ -1123,7 +1123,7 @@ mod tests {
                 supplementary_groups: vec![],
                 env: vec![],
                 capabilities: vec![],
-                namespaces: d2b_core::minijail_profile::NamespaceSet {
+                namespaces: d2b_core::sandbox_profile::NamespaceSet {
                     mount: true,
                     pid: true,
                     net: false,
@@ -1609,7 +1609,7 @@ mod tests {
 
     #[test]
     fn derive_paths_picks_state_dir_not_runtime() {
-        use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, WritablePath};
+        use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, WritablePath};
         let plan = SpawnRunnerPlan {
             binary_path: PathBuf::from("/run/current-system/sw/bin/swtpm"),
             argv: vec!["swtpm".into()],
@@ -1618,7 +1618,7 @@ mod tests {
             supplementary_groups: vec![],
             env: vec![],
             capabilities: vec![],
-            namespaces: d2b_core::minijail_profile::NamespaceSet {
+            namespaces: d2b_core::sandbox_profile::NamespaceSet {
                 mount: true,
                 pid: true,
                 net: false,
@@ -1681,7 +1681,7 @@ mod tests {
     }
 
     fn resource_backed_plan(argv: Vec<String>, writable_paths: Vec<PathBuf>) -> SpawnRunnerPlan {
-        use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, WritablePath};
+        use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, WritablePath};
         SpawnRunnerPlan {
             binary_path: PathBuf::from("/run/current-system/sw/bin/swtpm"),
             argv,
@@ -1690,7 +1690,7 @@ mod tests {
             supplementary_groups: vec![],
             env: vec![],
             capabilities: vec![],
-            namespaces: d2b_core::minijail_profile::NamespaceSet {
+            namespaces: d2b_core::sandbox_profile::NamespaceSet {
                 mount: true,
                 pid: true,
                 net: false,

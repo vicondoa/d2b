@@ -24,7 +24,7 @@ use std::ffi::{CString, NulError};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
 
 /// Validated launch plan. Produced by [`preflight`] from a
 /// bundle-resolved row; consumed by `clone3_pidfd_or_fork_fallback`.
@@ -48,7 +48,7 @@ pub struct SpawnRunnerPlan {
     /// virtiofsd roles for least-privilege FS serving (ADR 0021).
     pub user_namespace: Option<UserNamespaceSpec>,
     /// File-creation mask the broker installs in the spawned child
-    /// before execve. See `MinijailProfile::umask`.
+    /// before execve. See `SandboxProfile::umask`.
     pub umask: Option<u32>,
 }
 
@@ -274,7 +274,7 @@ fn path_to_cstring(path: &Path) -> Result<CString, NulError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_core::minijail_profile::WritablePath;
+    use d2b_core::sandbox_profile::WritablePath;
 
     fn test_namespaces() -> NamespaceSet {
         NamespaceSet {

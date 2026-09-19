@@ -548,7 +548,7 @@ mod tests {
     // ── helper ───────────────────────────────────────────────────────────────
 
     fn make_audio_node(env: Vec<String>) -> ProcessNode {
-        use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+        use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
         use d2b_core::processes::{NodeId, ProcessRole, RoleProfile};
 
         ProcessNode {

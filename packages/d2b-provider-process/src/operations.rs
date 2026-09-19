@@ -40,7 +40,7 @@ use d2b_contracts_resource::v3::{
     execution_policy::ExecutionDomain,
 };
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent, is_device_worker_role};
-use d2b_core::minijail_profile::CgroupPlacement;
+use d2b_core::sandbox_profile::CgroupPlacement;
 use d2b_core::processes::ProcessRole;
 use d2b_resource_types::{
     KernelCaller, OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,

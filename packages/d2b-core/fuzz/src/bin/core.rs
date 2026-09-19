@@ -19,7 +19,7 @@ use d2b_core::{
         UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
     },
     manifest_v04::ManifestV04,
-    minijail_profile::CgroupPlacement,
+    sandbox_profile::CgroupPlacement,
     privileges::{BROKER_OPERATION_AUTHZ, PUBLIC_OPERATION_AUTHZ, PrivilegesJson},
     processes::{
         DagEdge, NodeId, ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate, VmProcessDag,
@@ -28,7 +28,7 @@ use d2b_core::{
 };
 #[cfg(not(feature = "test-support"))]
 use d2b_core::{
-    minijail_profile::{MountPolicy, NamespaceSet},
+    sandbox_profile::{MountPolicy, NamespaceSet},
     processes::RoleProfile,
 };
 
@@ -387,7 +387,7 @@ fn build_synthetic_resolver() -> BundleResolver {
                             .with_profile_id("ch-runner-default")
                             .with_uid(5001)
                             .with_gid(5001)
-                            .with_namespaces(d2b_core::minijail_profile::NamespaceSet {
+                            .with_namespaces(d2b_core::sandbox_profile::NamespaceSet {
                                 mount: true,
                                 pid: true,
                                 net: false,

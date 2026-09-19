@@ -37,7 +37,7 @@ use crate::ops::spawn_runner::{
 };
 use d2b_contracts_resource::v3::{ActivationRunnerInput, MAX_ACTIVATION_RUNNER_INPUT_BYTES};
 use d2b_core::bundle_resolver::HostRuntime;
-use d2b_core::minijail_profile::CgroupPlacement;
+use d2b_core::sandbox_profile::CgroupPlacement;
 use rustix::fs::{CWD, Mode, OFlags, ResolveFlags};
 
 /// Aggregate error type for live handlers. Kept narrow so the
@@ -3092,7 +3092,7 @@ mod tests {
     use d2b_core::bundle_resolver::{
         HostRuntime, HostRuntimeArtifact, HostRuntimeIfName, ResolvedNmUnmanagedIntent,
     };
-    use d2b_core::minijail_profile::{CgroupPlacement, MountPolicy, NamespaceSet, WritablePath};
+    use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet, WritablePath};
     use d2b_host::cgroup::fake::FakeCgroupBackend;
     use std::future::Future;
     use std::os::unix::fs::symlink;
@@ -4370,7 +4370,7 @@ mod tests {
         media_bind_plan
             .mount_policy
             .bind_mounts
-            .push(d2b_core::minijail_profile::BindMount {
+            .push(d2b_core::sandbox_profile::BindMount {
                 src: "/var/lib/d2b/media/install.iso".to_owned(),
                 dst: "/media/install.iso".to_owned(),
             });

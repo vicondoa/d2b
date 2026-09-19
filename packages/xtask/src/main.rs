@@ -25,7 +25,7 @@ use d2b_contracts_control::unsafe_local_wire::UnsafeLocalHelperWireSchema;
 use d2b_contracts_resource::v3::storage::ZoneStoreStorageRow;
 use d2b_core::{
     allocator_config::AllocatorJson, bundle::Bundle, closures::ClosureMetadata, error::Error,
-    host::HostJson, manifest_v04::ManifestV04, minijail_profile::MinijailProfile,
+    host::HostJson, manifest_v04::ManifestV04, sandbox_profile::SandboxProfile,
     privileges::PrivilegesJson, processes::ProcessesJson, site::SiteJson,
     storage::StorageJson, storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
     unsafe_local_workloads::UnsafeLocalWorkloadsJson,
@@ -608,7 +608,7 @@ fn schema_documents() -> Vec<(&'static str, RootSchema)> {
         ("closures.json", schemars::schema_for!(ClosureMetadata)),
         (
             "minijail-profile.json",
-            schemars::schema_for!(MinijailProfile),
+            schemars::schema_for!(SandboxProfile),
         ),
         (
             "wire-protocol.json",
