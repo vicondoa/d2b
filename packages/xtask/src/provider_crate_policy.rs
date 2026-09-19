@@ -5180,6 +5180,7 @@ fn opens_test_module(lines: &[&str], index: usize) -> Option<usize> {
 /// (`#[cfg(test)] mod tests;` in `manager_backend.rs`) rather than an in-file
 /// `#[cfg(test)] mod tests`, so the driver probe consults the declaring file
 /// to see the guard the file itself cannot show.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn parent_declares_test_module(path: &Path) -> bool {
     let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
         return false;
@@ -7196,8 +7197,7 @@ fn structural_symbol_token(symbol: &str) -> Option<&'static str> {
 /// family token the module's family-knowledge ratchet already records is
 /// covered by that row instead, so the structural ratchet records only the
 /// sites the token probe cannot see. Passed both ratchets as parameters so
-/// the tests can exercise both directions on fixtures./
-
+/// the tests can exercise both directions on fixtures.
 fn check_shared_structural_knowledge_with(
     repo_root: &Path,
     structural_ratchet: &[SharedStructuralKnowledgeExemption],
@@ -7450,10 +7450,9 @@ fn collect_self_binding_scope(
                     if inner.contains("Role/")
                         && !inner.contains("role_ref:")
                         && !inner.contains("subject_ref:")
+                        && let Some(role) = role_ref_name(inner)
                     {
-                        if let Some(role) = role_ref_name(inner) {
-                            roles.push(role.to_owned());
-                        }
+                        roles.push(role.to_owned());
                     }
                     if inner.contains("subject_ref:") {
                         pending_subject = provider_ref_name(inner).map(str::to_owned);
@@ -7461,11 +7460,12 @@ fn collect_self_binding_scope(
                     if inner.contains("role_ref:") && !inner.contains("roles:") {
                         pending_role = role_ref_name(inner).map(str::to_owned);
                     }
-                    if pending_subject.is_some() && pending_role.is_some() {
-                        if let (Some(subject), Some(role)) =
+                    if pending_subject.is_some()
+                        && pending_role.is_some()
+                        && let (Some(subject), Some(role)) =
                             (pending_subject.take(), pending_role.take())
-                        {
-                            if provider_name.as_deref() != Some(subject.as_str()) {
+                    {
+                        if provider_name != Some(subject.as_str()) {
                                 violations.push(
                                     serde_json::json!({
                                         "error": "self-binding-subject-escape",
@@ -7486,7 +7486,6 @@ fn collect_self_binding_scope(
                                     })
                                     .to_string(),
                                 );
-                            }
                         }
                     }
                     if inner.contains("}") && inner.contains("SeedSelfBinding") {
