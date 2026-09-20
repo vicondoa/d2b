@@ -85,9 +85,9 @@ use d2b_contracts_broker::broker_wire::{
     ForwardOperationRequest, ForwardOperationResponse, MAX_CONTEXT_DEADLINE_MS, MAX_FRAME_FDS,
     STALE_CONTEXT,
 };
-use d2b_contracts_resource::v3::{CanonicalJsonObject, canonical_json_bytes};
+use d2b_contracts_resource::v3::CanonicalJsonObject;
 use d2b_provider_toolkit::operations::{UNCOMMITTED_OPERATION, UNGRANTED_CALLER};
-use d2b_resource_types::{KernelCaller, OperationResult};
+use d2b_resource_types::{KernelCaller, MethodFdContract, OperationResult};
 use d2bd_runtime::concurrency::DEFAULT_MAX_INFLIGHT_CONNECTIONS;
 use d2bd_runtime::runtime_process::{RuntimeIdentity, bind_public_socket};
 use d2bd_runtime::typed_error::TypedError;
@@ -99,8 +99,10 @@ use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::Semaphore;
 
-use crate::effect_service_actors::{EffectServiceBinding, EffectServiceError};
+use crate::effect_service_actors::{EffectServiceBinding, ServiceCallData};
 use crate::provider_lifecycle::ProviderRuntime;
+use d2b_provider_toolkit::{EffectResponse, EffectServiceError};
+use d2b_resource_runtime::context::ServiceResourceContext;
 
 /// The refusal code for a forwarded payload this endpoint cannot read as the
 /// canonical object the broker validated.
@@ -204,6 +206,12 @@ struct ZoneBinding {
     /// handlers invoke kernels through. Absent when the composition point
     /// wired no seam.
     kernel: Option<KernelCaller>,
+    /// The Zone's generic driver context for service resource-state reads
+    /// (U3, R7): the manager-plane surface the effect-service leg builds
+    /// each invocation's capability object from. Absent when the
+    /// composition point wired no seam: a service invocation then receives
+    /// a fail-closed context that refuses every read.
+    resources: Option<ServiceResourceContext>,
 }
 
 /// The started providers of every Zone, keyed by Zone label, plus the
@@ -256,6 +264,7 @@ impl ForwardRendezvous {
                 guest_generation: 0,
                 providers: Arc::clone(&providers),
                 kernel: None,
+                resources: None,
             });
             entry.revision = entry.revision.saturating_add(1);
             entry.providers = Arc::clone(&providers);
@@ -342,6 +351,29 @@ impl ForwardRendezvous {
         }
     }
 
+    /// Wire one Zone's service driver context (U3, R7) into its forwarding
+    /// binding: the manager-plane surface effect-service invocations reach
+    /// resource state through.
+    ///
+    /// The composition point calls this once per Zone alongside the
+    /// provider publication and the kernel seam; a Zone whose seam was
+    /// never wired serves effect-service invocations with a fail-closed
+    /// context that refuses every read.
+    pub(crate) async fn set_resource_reader(
+        &self,
+        zone: &str,
+        resources: ServiceResourceContext,
+    ) {
+        let mut zones = self.zones.lock().await;
+        match zones.get_mut(zone) {
+            Some(binding) => binding.resources = Some(resources),
+            None => tracing::warn!(
+                zone = %zone,
+                "resource reader published for a Zone with no provider binding"
+            ),
+        }
+    }
+
     /// Wire this rendezvous's daemon-side chain audit records to `sink`.
     ///
     /// The daemon calls this once at its composition point; a rendezvous
@@ -422,14 +454,15 @@ impl ForwardRendezvous {
         chain: &EvidenceChain,
     ) -> (ForwardOperationResponse, Vec<OwnedFd>) {
         let zone = request.zone.clone();
-        let (providers, kernel) = {
+        let (providers, kernel, resources) = {
             let zones = self.zones.lock().await;
             match zones.get(&zone) {
                 Some(binding) => (
                     Some(Arc::clone(&binding.providers)),
                     binding.kernel.clone(),
+                    binding.resources.clone(),
                 ),
-                None => (None, None),
+                None => (None, None, None),
             }
         };
         let Some(providers) = providers else {
@@ -442,7 +475,10 @@ impl ForwardRendezvous {
         // operation no service declares falls through to the provider
         // tables.
         match providers.resolve_effect_service_for_operation(&request.operation).await {
-            Ok(binding) => return (invoke_effect_service(&binding, request).await, Vec::new()),
+            Ok(binding) => {
+                return invoke_effect_service(&binding, request, fds, kernel.as_ref(), resources)
+                    .await
+            }
             Err(EffectServiceError::OperationUnserved { .. }) => {}
             Err(error) => return (refused(effect_refusal_code(&error)), Vec::new()),
         }
@@ -829,72 +865,132 @@ fn effect_refusal_code(error: &EffectServiceError) -> &'static str {
 /// revision is captured when the call starts and re-checked at dispatch, so
 /// a generation that moved past the call mid-flight is refused with the
 /// dedicated stale-revision code (KTD5). The payload rides the carrier as
-/// the canonical object the broker validated, and the actor's answer
-/// returns the same way - there is no second transport.
+/// the canonical object the broker validated (R8) - the service receives
+/// that object, never a byte fixture - and the actor's answer returns the
+/// same way, with the descriptors it minted for its declared response leg.
 async fn invoke_effect_service(
     binding: &EffectServiceBinding,
     request: &ForwardOperationRequest,
-) -> ForwardOperationResponse {
-    // The distinct name this operation resolves to, for the operator
-    // following the refusal records; the declaration it resolved through
-    // named it, and a binding carries the declaration.
-    let method = binding
+    fds: &[RawFd],
+    kernel: Option<&KernelCaller>,
+    resources: Option<ServiceResourceContext>,
+) -> (ForwardOperationResponse, Vec<OwnedFd>) {
+    // The distinct method this operation resolves to, for the operator
+    // following the refusal records and for the capability facets the
+    // invocation is built from; the declaration it resolved through named
+    // it, and a binding carries the declaration.
+    let Some(method) = binding
         .decl()
         .methods
         .iter()
         .find(|declared| declared.operation == Some(request.operation.as_str()))
-        .map(|declared| declared.name);
+    else {
+        return (refused(UNCOMMITTED_OPERATION), Vec::new());
+    };
+    // The method's declared request-leg contract governs the attached
+    // descriptors: a leg the method did not declare - count or kind - is
+    // refused with the carrier's fd-leg code before any handler runs.
+    if !request_fds_match_method(fds, method.request_fds) {
+        return (refused(FD_LEG), Vec::new());
+    }
     let Ok(bytes) = serde_json::to_vec(&request.payload) else {
-        return refused(INVALID_PAYLOAD);
+        return (refused(INVALID_PAYLOAD), Vec::new());
     };
     let Ok(payload) = CanonicalJsonObject::parse(&bytes) else {
-        return refused(INVALID_PAYLOAD);
+        return (refused(INVALID_PAYLOAD), Vec::new());
     };
-    let Ok(request_bytes) = canonical_json_bytes(&payload) else {
-        return refused(INVALID_PAYLOAD);
+    let call = ServiceCallData {
+        zone: request.zone.clone(),
+        invocation_id: request.invocation_id.clone(),
+        payload,
+        resources: resources.unwrap_or_else(ServiceResourceContext::fail_closed),
+        method: *method,
+        kernel: kernel.cloned(),
+        request_fds: fds.to_vec(),
     };
-    match binding
-        .call_expected(binding.revision(), request_bytes)
-        .await
-    {
-        Ok(response) => match CanonicalJsonObject::parse(&response) {
-            Ok(object) => result_response(&object),
-            Err(_) => {
-                // The actor answered outside the canonical object the
-                // carrier validates; the call is refused by name.
-                tracing::warn!(
-                    operation = %request.operation,
-                    zone = %request.zone,
-                    service = %binding.service(),
-                    method = ?method,
-                    "effect service answered a non-canonical payload; refusing"
-                );
-                refused(INVALID_PAYLOAD)
+    match binding.call_expected(binding.revision(), call).await {
+        Ok(response) => {
+            // The method's declared response-leg contract governs the
+            // service's returned descriptors: a leg the method did not
+            // declare - count or kind - is refused with the carrier's
+            // fd-leg code rather than passed through.
+            if !response_fds_match_method(&response.fds, method.response_fds) {
+                drop(response);
+                return (refused(FD_LEG), Vec::new());
             }
-        },
+            let EffectResponse { payload, fds } = response;
+            (result_response_with_service_fds(payload, &fds), fds)
+        }
         Err(error) => {
             tracing::warn!(
                 operation = %request.operation,
                 zone = %request.zone,
                 service = %binding.service(),
-                method = ?method,
+                method = method.name,
                 error = %error,
                 "effect-service call refused; its generation moved past the call"
             );
-            refused(effect_refusal_code(&error))
+            (refused(effect_refusal_code(&error)), Vec::new())
         }
     }
 }
 
-/// The normal result reply: one canonical object rendered onto the forward
-/// carrier.
-fn result_response(object: &CanonicalJsonObject) -> ForwardOperationResponse {
+/// Whether the attached request descriptors satisfy the method's declared
+/// request-leg contract: count within the declared ceiling, and every
+/// descriptor presenting the declared kernel kind (an `any` declaration
+/// admits every kind).
+fn request_fds_match_method(fds: &[RawFd], contract: MethodFdContract) -> bool {
+    if fds.len() > contract.max_fds as usize {
+        return false;
+    }
+    match contract.fd_kind.and_then(declared_fd_kind) {
+        None => fds.is_empty(),
+        Some(FdKind::Any) => true,
+        Some(kind) => fds.iter().all(|fd| fd_kind_of(*fd) == Some(kind)),
+    }
+}
+
+/// Whether the descriptors a service returned satisfy its method's declared
+/// response-leg contract: count within the declared ceiling, and every
+/// descriptor presenting the declared kernel kind.
+fn response_fds_match_method(fds: &[OwnedFd], contract: MethodFdContract) -> bool {
+    if fds.len() > contract.max_fds as usize {
+        return false;
+    }
+    match contract.fd_kind.and_then(declared_fd_kind) {
+        None => fds.is_empty(),
+        Some(FdKind::Any) => true,
+        Some(kind) => fds.iter().all(|fd| fd_kind_of(fd.as_raw_fd()) == Some(kind)),
+    }
+}
+
+/// The carrier's kernel-kind vocabulary for one declared kind spelling
+/// (the kebab-case `MethodFdContract` facet), when the spelling is a known
+/// kind.
+fn declared_fd_kind(kind: &str) -> Option<FdKind> {
+    serde_json::from_value(serde_json::Value::String(kind.to_owned())).ok()
+}
+
+/// The normal result reply of one effect-service invocation: the canonical
+/// object the service returned plus the descriptors it minted, declared
+/// index-aligned in frame order with their actual kernel kinds (the
+/// broker's forwarder re-validates the leg against the row's declared facet
+/// on its side).
+fn result_response_with_service_fds(
+    payload: CanonicalJsonObject,
+    fds: &[OwnedFd],
+) -> ForwardOperationResponse {
+    let fd_indexes: Vec<u32> = (0..fds.len() as u32).collect();
+    let fd_kinds: Vec<FdKind> = fds
+        .iter()
+        .map(|fd| fd_kind_of(fd.as_raw_fd()).unwrap_or(FdKind::Any))
+        .collect();
     ForwardOperationResponse {
         outcome: ForwardOperationOutcome::Result {
-            result: serde_json::to_value(object)
+            result: serde_json::to_value(&payload)
                 .expect("canonical JSON objects always serialize"),
-            fd_indexes: vec![],
-            fd_kinds: vec![],
+            fd_indexes,
+            fd_kinds,
         },
     }
 }
@@ -1455,13 +1551,13 @@ mod tests {
     use d2b_contracts_resource::v3::canonical_json_bytes;
     use d2b_contracts_resource::v3::process::{EphemeralProcessSpec, ProcessSpec};
     use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
-    use d2b_process_conformance::{AdoptionCandidate, ProcessIdentityDigest};
+    use d2b_process_conformance::AdoptionCandidate;
     use d2b_provider_process::{
-        ExecutionMode, INVALID_PROCESS_TYPE, ProcessDriverArgs, ProcessDriverEffects,
-        ProcessFamilySpec, ProcessResourceIdentity, ProviderAdoption, ProviderLiveness,
-        process_family_descriptors,
+        ExecutionMode, INVALID_PROCESS_TYPE, ProcessDriverArgs, ProcessEffectFacets,
+        ProcessProviderRuntime, ProcessResourceContext, ProviderAdoption, ProviderLaunch,
+        ProviderLiveness, process_family_descriptors,
     };
-    use d2b_resource_runtime::context::SpecDecoder;
+    use d2b_resource_runtime::context::{ManagerEndpoint, ServiceResourceContext, SpecDecoder};
     use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
     use d2b_resource_types::{
@@ -1470,75 +1566,105 @@ mod tests {
         WellKnownType,
     };
     use d2bd_runtime::target_runtime::DaemonMode;
-    use d2bd_runtime::unix_transport::{connect_seqpacket, read_frame, write_frame};
+    use d2bd_runtime::unix_transport::{
+        connect_seqpacket, read_frame, read_frame_with_fds, write_frame,
+    };
     use tokio::sync::{Notify, Semaphore};
 
     use super::*;
-    use crate::effect_service_actors::{
-        EffectRequest, EffectResponse, EffectService, EffectServiceFactory, EffectServiceRow,
-    };
+    use crate::effect_service_actors::EffectServiceRow;
     use crate::provider_lifecycle::{ProviderSet, family_declaration};
+    use d2b_provider_toolkit::{
+        EffectResponse, EffectService, EffectServiceError, EffectServiceFactory,
+        MethodFdContract, ServiceInvocation,
+    };
 
-    /// A port that refuses every effect: the pilot operation answers from the
-    /// family's declaration alone, so an effect call would fail this test
-    /// loudly instead of passing unnoticed.
+    /// A runtime facet that refuses every effect: the pilot operation answers
+    /// from the family's declaration alone, so an effect call would fail
+    /// this test loudly instead of passing unnoticed. The reconciliation
+    /// surface is unreachable in these tests.
     struct RefusingEffects;
 
     #[async_trait::async_trait]
-    impl ProcessDriverEffects for RefusingEffects {
-        async fn launch(
+    impl ProcessProviderRuntime for RefusingEffects {
+        fn bundle(&self) -> &d2b_core::bundle_resolver::BundleResolver {
+            unreachable!("the rendezvous tests never reconcile a row")
+        }
+
+        fn socket_runtime_dir(&self) -> &std::path::Path {
+            unreachable!("the rendezvous tests never reconcile a row")
+        }
+
+        fn guest_setup_descriptor_digest(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _zone: &ZoneId,
+            _guest_ref: &ResourceRef,
+        ) -> Option<d2b_contracts_resource::v3::SchemaFingerprint> {
+            None
+        }
+
+        async fn resolve_device_worker_launch(
+            &self,
+            _ctx: &mut d2b_resource_runtime::context::ResourceContext,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
+            _spec: &d2b_provider_process::ProcessFamilySpec,
+        ) -> Result<Option<d2b_provider_process::DeviceWorkerLaunch>, &'static str> {
+            Err("refused")
+        }
+
+        async fn launch_resource(
+            &self,
+            _context: ProcessResourceContext<'_>,
             _spec: &ProcessSpec,
             _timeout: Duration,
-        ) -> Result<ProcessIdentityDigest, String> {
+        ) -> Result<ProviderLaunch, String> {
             Err("refused".to_owned())
         }
 
-        async fn launch_ephemeral(
+        async fn launch_ephemeral_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &EphemeralProcessSpec,
             _timeout: Duration,
-        ) -> Result<ProcessIdentityDigest, String> {
+        ) -> Result<ProviderLaunch, String> {
             Err("refused".to_owned())
         }
 
-        async fn adopt(
+        async fn adopt_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &ProcessSpec,
         ) -> Result<ProviderAdoption, String> {
             Err("refused".to_owned())
         }
 
-        async fn probe(
+        async fn probe_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &ProcessSpec,
         ) -> Result<ProviderLiveness, String> {
             Err("refused".to_owned())
         }
 
-        async fn adopt_ephemeral(
+        async fn adopt_ephemeral_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &EphemeralProcessSpec,
         ) -> Result<ProviderAdoption, String> {
             Err("refused".to_owned())
         }
 
-        async fn probe_ephemeral(
+        async fn probe_ephemeral_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &EphemeralProcessSpec,
         ) -> Result<ProviderLiveness, String> {
             Err("refused".to_owned())
         }
 
-        async fn stop(
+        async fn stop_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &ProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -1546,9 +1672,9 @@ mod tests {
             Err("refused".to_owned())
         }
 
-        async fn stop_ephemeral(
+        async fn stop_ephemeral_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &EphemeralProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -1556,7 +1682,7 @@ mod tests {
             Err("refused".to_owned())
         }
 
-        async fn stop_stale(
+        async fn stop_stale_resource(
             &self,
             _provider_ref: &ResourceRef,
             _candidate: &AdoptionCandidate,
@@ -1564,26 +1690,29 @@ mod tests {
             Err("refused".to_owned())
         }
 
-        async fn device_worker_launch(
+        async fn finalize_resource(
             &self,
-            _ctx: &mut d2b_resource_runtime::context::ResourceContext,
-            _identity: &ProcessResourceIdentity,
-            _spec: &ProcessFamilySpec,
-        ) -> Result<Option<d2b_provider_process::DeviceWorkerLaunch>, &'static str> {
-            Ok(None)
-        }
-
-        async fn finalize(&self, _identity: &ProcessResourceIdentity) -> Result<(), String> {
+            _context: ProcessResourceContext<'_>,
+        ) -> Result<(), String> {
             Err("refused".to_owned())
         }
 
-        fn has_active(
+        fn has_active_resource_in_zone(
             &self,
             _zone: &ZoneId,
             _zone_uid: Option<&ResourceUid>,
             _resource_ref: &ResourceRef,
         ) -> bool {
             false
+        }
+    }
+
+    /// The facet set the rendezvous tests build the family's driver from.
+    fn refusing_facets() -> ProcessEffectFacets {
+        ProcessEffectFacets {
+            runtime: Arc::new(RefusingEffects),
+            committed: None,
+            guest_owners: None,
         }
     }
 
@@ -1916,12 +2045,45 @@ mod tests {
             .await
         }
 
+        /// The same rendezvous over a set that hosts the given declared
+        /// services with one factory each (U3 fixtures: fd-leg and
+        /// driver-context services).
+        async fn start_serving(
+            services: &'static [ServiceDecl],
+            factory: Arc<dyn EffectServiceFactory>,
+        ) -> Self {
+            Self::served_by_services(services, factory, |rendezvous, listener| {
+                spawn_server(rendezvous, listener, tokio::runtime::Handle::current())
+            })
+            .await
+        }
+
         async fn effect_served_by<F>(factory: Arc<dyn EffectServiceFactory>, serve: F) -> Self
         where
             F: FnOnce(Arc<ForwardRendezvous>, Socket) -> Result<(), TypedError>,
         {
             let (rendezvous, socket_path, scratch, providers) =
                 effect_fixture_with(factory).await;
+            let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
+            serve(Arc::clone(&rendezvous), listener).expect("start the rendezvous server");
+            Self {
+                socket_path,
+                _scratch: scratch,
+                _providers: providers,
+                rendezvous,
+            }
+        }
+
+        async fn served_by_services<F>(
+            services: &'static [ServiceDecl],
+            factory: Arc<dyn EffectServiceFactory>,
+            serve: F,
+        ) -> Self
+        where
+            F: FnOnce(Arc<ForwardRendezvous>, Socket) -> Result<(), TypedError>,
+        {
+            let (rendezvous, socket_path, scratch, providers) =
+                effect_fixture_serving(services, factory).await;
             let listener = bind(&socket_path, &test_identity()).expect("bind the rendezvous");
             serve(Arc::clone(&rendezvous), listener).expect("start the rendezvous server");
             Self {
@@ -1942,7 +2104,7 @@ mod tests {
             let scratch = tempfile::tempdir().expect("test scratch");
             let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
                 zone: zone.clone(),
-                effects: Arc::new(RefusingEffects),
+                facets: refusing_facets(),
                 zone_uid: None,
                 policy_revision: None,
                 provider_assignment_generation: None,
@@ -1987,11 +2149,29 @@ mod tests {
         tempfile::TempDir,
         Arc<ProviderRuntime>,
     ) {
+        effect_fixture_serving(&[ECHO_SERVICE], factory).await
+    }
+
+    /// The same fixture over the given declared services, one factory per
+    /// service (U3: the fd-leg and driver-context services declare their
+    /// own methods).
+    async fn effect_fixture_serving(
+        services: &'static [ServiceDecl],
+        factory: Arc<dyn EffectServiceFactory>,
+    ) -> (
+        Arc<ForwardRendezvous>,
+        PathBuf,
+        tempfile::TempDir,
+        Arc<ProviderRuntime>,
+    ) {
         let zone = ZoneId::parse("test").expect("the test zone label is canonical");
         let scratch = tempfile::tempdir().expect("test scratch");
-        let providers = ProviderSet::new(zone.clone(), scratch.path().to_path_buf())
-            .with(family_declaration("fixture"), vec![effect_descriptor(&[ECHO_SERVICE])])
-            .with_effect_service_factory(ECHO_SERVICE.id, factory)
+        let mut set = ProviderSet::new(zone.clone(), scratch.path().to_path_buf())
+            .with(family_declaration("fixture"), vec![effect_descriptor(services)]);
+        for service in services {
+            set = set.with_effect_service_factory(service.id, Arc::clone(&factory));
+        }
+        let providers = set
             .start()
             .await
             .expect("the fixture provider starts through the base");
@@ -2209,6 +2389,36 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     }
 
+    /// Forward one invocation and read the reply frame's SCM_RIGHTS
+    /// attachments, so a test can observe the descriptors a service
+    /// returned on its declared response leg.
+    fn forward_and_read_fds(
+        socket_path: &Path,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+    ) -> (ForwardOperationResponse, Vec<RawFd>) {
+        let request = ForwardOperationRequest {
+            chain_identities: None,
+            operation: operation.to_owned(),
+            zone: zone.to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload,
+            context: None,
+            fd_indexes: vec![],
+            fd_kinds: vec![],
+        };
+        let encoded =
+            canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
+        let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
+        write_frame(&socket, &encoded).expect("write the request frame");
+        let (frame, fds) = read_frame_with_fds(&socket).expect("read the reply frame with fds");
+        (
+            serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse"),
+            fds,
+        )
+    }
+
     /// Forward one invocation with explicit fd declarations, so a test can
     /// drive a request whose declarations disagree with its frame.
     fn forward_raw_declared(
@@ -2271,9 +2481,9 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     impl EffectService for EchoService {
         async fn handle(
             &self,
-            request: EffectRequest,
+            invocation: ServiceInvocation<'_>,
         ) -> Result<EffectResponse, EffectServiceError> {
-            Ok(request)
+            Ok(EffectResponse::new(invocation.payload.clone()))
         }
     }
 
@@ -2306,11 +2516,11 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     impl EffectService for GatedService {
         async fn handle(
             &self,
-            request: EffectRequest,
+            _invocation: ServiceInvocation<'_>,
         ) -> Result<EffectResponse, EffectServiceError> {
             self.entered.notify_one();
             self.release.notified().await;
-            Ok(request)
+            Ok(EffectResponse::new(CanonicalJsonObject::empty()))
         }
     }
 
@@ -2321,12 +2531,156 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     impl EffectService for DecliningService {
         async fn handle(
             &self,
-            _request: EffectRequest,
+            _invocation: ServiceInvocation<'_>,
         ) -> Result<EffectResponse, EffectServiceError> {
             Err(EffectServiceError::Declined {
                 service: ECHO_SERVICE.id.to_owned(),
                 reason: "fixture refuses".to_owned(),
             })
+        }
+    }
+
+    /// The declared effect service whose `fd-echo` method declares a
+    /// one-descriptor FIFO response leg (U3): the returned descriptor must
+    /// satisfy the declared contract before it crosses the carrier.
+    const FD_SERVICE: ServiceDecl = ServiceDecl {
+        id: "fixture.fd",
+        methods: &[ServiceMethod::serving_with(
+            "fixture-fd-echo",
+            "fd-echo",
+            None,
+            MethodFdContract::NONE,
+            MethodFdContract {
+                max_fds: 1,
+                fd_kind: Some("fifo"),
+            },
+            &[],
+            &[],
+            None,
+        )],
+        attach_kinds: &[],
+        streams: &[],
+        endpoint_policy: None,
+    };
+
+    /// Returns one live FIFO descriptor on its declared response leg.
+    struct FdReturningService;
+
+    #[async_trait::async_trait]
+    impl EffectService for FdReturningService {
+        async fn handle(
+            &self,
+            _invocation: ServiceInvocation<'_>,
+        ) -> Result<EffectResponse, EffectServiceError> {
+            let (read_end, _write_end) = nix::unistd::pipe().expect("pipe");
+            Ok(EffectResponse::with_fds(
+                CanonicalJsonObject::empty(),
+                vec![read_end],
+            ))
+        }
+    }
+
+    /// Answers one fixed view for the row the state-reading service asks
+    /// for; every other manager call is unreachable at the rendezvous site.
+    struct FixedViewManager;
+
+    #[async_trait::async_trait]
+    impl ManagerEndpoint for FixedViewManager {
+        async fn ensure_child(
+            &self,
+            _parent: &ResourceKey,
+            _child: d2b_resource_runtime::context::ChildEnsure,
+        ) -> Result<d2b_resource_runtime::spec_store::EnsureOutcome, d2b_resource_runtime::error::ResourceError>
+        {
+            unreachable!("the rendezvous site ensures no children")
+        }
+
+        async fn get(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::identity::StoredDesiredResource>, d2b_resource_runtime::error::ResourceError>
+        {
+            unreachable!("the rendezvous site reads no stored rows")
+        }
+
+        async fn view(
+            &self,
+            key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, d2b_resource_runtime::error::ResourceError>
+        {
+            Ok(Some(d2b_resource_runtime::manager::ResourceView {
+                key: key.clone(),
+                uid: [7; 16],
+                generation: 42,
+                deleting: false,
+                provenance: d2b_resource_runtime::identity::ResourceProvenance::Api,
+                spec: Vec::new(),
+                metadata: Vec::new(),
+                owner_key: None,
+                status: None,
+                status_generation: None,
+                status_projection: None,
+            }))
+        }
+
+        async fn delete(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<(), d2b_resource_runtime::error::ResourceError> {
+            unreachable!("the rendezvous site deletes no rows")
+        }
+
+        async fn list_owned(
+            &self,
+            _owner_uid: [u8; 16],
+        ) -> Result<Vec<d2b_resource_runtime::identity::StoredDesiredResource>, d2b_resource_runtime::error::ResourceError>
+        {
+            unreachable!("the rendezvous site lists no owned rows")
+        }
+
+        async fn register_watch(
+            &self,
+            _subscriber: &ResourceKey,
+            _registration: d2b_resource_runtime::context::WatchRegistration,
+        ) -> Result<d2b_resource_runtime::context::WatchId, d2b_resource_runtime::error::ResourceError>
+        {
+            unreachable!("the rendezvous site registers no watches")
+        }
+
+        async fn cancel_watch(
+            &self,
+            _watch: d2b_resource_runtime::context::WatchId,
+        ) -> Result<(), d2b_resource_runtime::error::ResourceError> {
+            unreachable!("the rendezvous site cancels no watches")
+        }
+    }
+
+    /// Reads one row through the driver context and answers with the
+    /// observed generation: the service reaches resource state only through
+    /// the generic driver context (R7), never a daemon state type.
+    struct StateReadingService;
+
+    #[async_trait::async_trait]
+    impl EffectService for StateReadingService {
+        async fn handle(
+            &self,
+            invocation: ServiceInvocation<'_>,
+        ) -> Result<EffectResponse, EffectServiceError> {
+            let key = ResourceKey::new(invocation.zone, "Process", "worker-0");
+            match invocation.resources.view(&key).await {
+                Ok(Some(view)) => Ok(EffectResponse::new(serde_json::from_value(
+                    serde_json::json!({ "generation": view.generation }),
+                )
+                .expect("canonical payload"))),
+                Ok(None) => Err(EffectServiceError::Declined {
+                    service: "fixture.state".to_owned(),
+                    reason: "row absent".to_owned(),
+                }),
+                Err(_) => Err(EffectServiceError::Declined {
+                    service: "fixture.state".to_owned(),
+                    reason: "read refused".to_owned(),
+                }),
+            }
         }
     }
 
@@ -3345,7 +3699,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
         let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
             zone: zone.clone(),
-            effects: Arc::new(RefusingEffects),
+            facets: refusing_facets(),
             zone_uid: None,
             policy_revision: None,
             provider_assignment_generation: None,
@@ -3477,7 +3831,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
         let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
             zone: zone.clone(),
-            effects: Arc::new(RefusingEffects),
+            facets: refusing_facets(),
             zone_uid: None,
             policy_revision: None,
             provider_assignment_generation: None,
@@ -3550,7 +3904,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         let rendezvous_socket = scratch.path().join("d2bd-forward.sock");
         let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
             zone: zone.clone(),
-            effects: Arc::new(RefusingEffects),
+            facets: refusing_facets(),
             zone_uid: None,
             policy_revision: None,
             provider_assignment_generation: None,
@@ -3817,6 +4171,78 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
             ForwardOperationOutcome::Refused {
                 code: HANDLER_REFUSED.to_owned(),
             }
+        );
+    }
+
+    /// U3 edge: a service method declaring a response fd leg returns a live
+    /// descriptor to its caller - the descriptor crosses the carrier on the
+    /// reply's SCM_RIGHTS leg, declared index-aligned with its kernel kind,
+    /// and the caller receives it as a live fd.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_service_method_declaring_an_fd_leg_returns_a_live_descriptor() {
+        let serving = ServingRendezvous::start_serving(
+            &[FD_SERVICE],
+            Arc::new(OnceFactory(Arc::new(FdReturningService))),
+        )
+        .await;
+        let (response, received) = forward_and_read_fds(
+            &serving.socket_path,
+            "fixture-fd-echo",
+            "test",
+            serde_json::json!({}),
+        );
+        let ForwardOperationOutcome::Result {
+            result,
+            fd_indexes,
+            fd_kinds,
+        } = response.outcome
+        else {
+            panic!("the fd-leg service must answer, got a refusal");
+        };
+        assert_eq!(result, serde_json::json!({}));
+        assert_eq!(fd_indexes, vec![0], "the returned descriptor is declared in frame order");
+        assert_eq!(fd_kinds, vec![FdKind::Fifo], "the returned descriptor is declared with its kind");
+        assert_eq!(received.len(), 1, "one live descriptor crossed the carrier");
+        assert_eq!(
+            fd_kind_of(received[0]),
+            Some(FdKind::Fifo),
+            "the caller received a live FIFO descriptor"
+        );
+    }
+
+    /// U3 happy path through the envelope (AE3): a hosted service answers
+    /// an invocation carrying the real payload and reaches resource state
+    /// through the generic driver context the composition wired - the
+    /// response carries the observed state, and the service never named a
+    /// daemon state type.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_hosted_service_reaches_state_through_the_driver_context_on_the_forwarded_leg() {
+        let serving = ServingRendezvous::start_with_effect_service_factory(Arc::new(
+            OnceFactory(Arc::new(StateReadingService)),
+        ))
+        .await;
+        serving
+            .rendezvous
+            .set_resource_reader(
+                "test",
+                ServiceResourceContext::over(Arc::new(FixedViewManager)),
+            )
+            .await;
+        let response = forward(
+            &serving.socket_path,
+            "fixture-echo-ping",
+            "test",
+            serde_json::json!({ "echo": "ping" }),
+        );
+        let ForwardOperationOutcome::Result { result, .. } = response.outcome else {
+            panic!("the state-reading service must answer, got a refusal");
+        };
+        assert_eq!(
+            result,
+            serde_json::json!({ "generation": 42 }),
+            "the service read the row through the driver context"
         );
     }
 

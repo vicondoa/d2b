@@ -8,13 +8,15 @@
 //! revision so bindings made stale by the bump refuse instead of dispatching
 //! against a dead or superseded actor.
 //!
-//! This module ships the actor machinery around a small FIXTURE service trait
-//! ([`EffectService`]); no real provider integration lives here. Hosting is
-//! wired at the provider composition site: `ProviderSet::start`
+//! Hosting is wired at the provider composition site: `ProviderSet::start`
 //! (`provider_lifecycle.rs`) hosts one actor per DECLARED effect service -
 //! every `ServiceDecl` a started provider declares becomes an
 //! [`EffectServiceRow`] on the zone's supervisor, rebuilt from that durable
-//! row on every respawn.
+//! row on every respawn. The service contract itself - the envelope's real
+//! payload and the capability object built from a method's declared facets -
+//! lives in the provider toolkit (`d2b_provider_toolkit::service`), so a
+//! provider crate implements its services against the same contract the
+//! daemon hosts.
 //!
 //! The rendezvous binding consumes [`EffectServiceBinding`]: the forwarded
 //! operation resolves to its declaring service through the declared
@@ -34,64 +36,45 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use d2b_provider_toolkit::ServiceDecl;
+use d2b_contracts_resource::v3::CanonicalJsonObject;
+use d2b_provider_toolkit::{
+    EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceDecl,
+    ServiceInvocation,
+};
+use d2b_resource_runtime::context::ServiceResourceContext;
+use d2b_resource_types::{KernelCaller, ServiceMethod};
 use ractor::{Actor, ActorCell, ActorProcessingErr, ActorRef, SupervisionEvent};
-use thiserror::Error;
 use tokio::sync::oneshot;
 
-/// Fixture request payload. The rendezvous will swap this for the wire type
-/// at U8 integration.
-pub type EffectRequest = Vec<u8>;
-
-/// Fixture response payload. The rendezvous will swap this for the wire type
-/// at U8 integration.
-pub type EffectResponse = Vec<u8>;
-
-/// Fixture-level refusal set for effect-service calls (KTD7 shape: a
-/// machine-actionable closed code set, never a hang and never flattened to a
-/// generic `unregistered` outcome).
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum EffectServiceError {
-    #[error("no service `{service}` is published in zone `{zone}`")]
-    UnboundService { zone: String, service: String },
-    #[error("no hosted effect service declares an operation `{operation}`")]
-    OperationUnserved { operation: String },
-    #[error("row for `{service}` belongs to zone `{row_zone}`, not `{zone}`")]
-    WrongZone { zone: String, service: String, row_zone: String },
-    #[error("binding for `{service}` is stale: revision {current} != expected {expected} (KTD5)")]
-    StaleRevision { service: String, expected: u64, current: u64 },
-    #[error("service `{service}` is not running; its binding targets a dead actor (KTD5)")]
-    ServiceUnavailable { service: String },
-    #[error("service `{service}` died mid-call; the caller's revision is stale (KTD5)")]
-    InFlightStale { service: String },
-    #[error("`{service}` declined: {reason}")]
-    Declined { service: String, reason: String },
-}
-
-/// A fixture effect service: one handle-loop shape plus an optional
-/// timer-driven poll tick. Real provider services implement this over
-/// carrier-delivered invocations; the rendezvous wiring is out of scope
-/// here.
-#[async_trait]
-pub trait EffectService: Send + Sync + 'static {
-    /// Handle one request.
-    async fn handle(&self, request: EffectRequest) -> Result<EffectResponse, EffectServiceError>;
-
-    /// Timer-driven poll tick (default: nothing). The actor's requeue timer
-    /// drives this on the declared interval - never a thread.
-    async fn poll(&self) {}
-}
-
-/// Rebuilds a service from a durable row; a respawn calls `build` again,
-/// exactly like `ResourceManager` re-creates its drivers from the committed
-/// spec row.
-pub trait EffectServiceFactory: Send + Sync + 'static {
-    fn build(&self) -> Arc<dyn EffectService>;
+/// The owned carrier of one service invocation crossing the actor boundary:
+/// the real envelope contract (the canonical payload) plus the capability
+/// facets the method declared and the hosting side resolved.
+///
+/// The actor rebuilds the borrowed [`ServiceInvocation`] capability object
+/// from this data and hands it to the service; every facet the method
+/// declared travels with the call, so the service reaches resource state
+/// through the driver context and daemon-structural state only through its
+/// declared state cells (R7).
+pub(crate) struct ServiceCallData {
+    /// The zone the invocation runs in.
+    pub zone: String,
+    /// The invocation identifier the audit record carries.
+    pub invocation_id: String,
+    /// The canonical request payload the envelope validated.
+    pub payload: CanonicalJsonObject,
+    /// The generic driver context for resource-state reads.
+    pub resources: ServiceResourceContext,
+    /// The declared method being served, with its contract facets.
+    pub method: ServiceMethod,
+    /// The per-zone kernel seam, when the composition point wired one.
+    pub kernel: Option<KernelCaller>,
+    /// The descriptors the caller attached on the request leg.
+    pub request_fds: Vec<RawFd>,
 }
 
 /// The durable declaration row for one effect service (U8): the production
@@ -212,8 +195,8 @@ impl EffectServiceBinding {
     /// Call through the binding at its current revision; a mid-flight death
     /// of the actor surfaces as [`EffectServiceError::InFlightStale`] - the
     /// caller sees a refusal, never a hang.
-    pub async fn call(&self, request: EffectRequest) -> Result<EffectResponse, EffectServiceError> {
-        self.send(request).await
+    pub async fn call(&self, call: ServiceCallData) -> Result<EffectResponse, EffectServiceError> {
+        self.send(call).await
     }
 
     /// Call guarded by a captured revision (KTD5): if a respawn or republish
@@ -222,7 +205,7 @@ impl EffectServiceBinding {
     pub async fn call_expected(
         &self,
         expected: u64,
-        request: EffectRequest,
+        call: ServiceCallData,
     ) -> Result<EffectResponse, EffectServiceError> {
         let current = self.revision();
         if current != expected {
@@ -232,13 +215,13 @@ impl EffectServiceBinding {
                 current,
             });
         }
-        self.call(request).await
+        self.call(call).await
     }
 
-    async fn send(&self, request: EffectRequest) -> Result<EffectResponse, EffectServiceError> {
+    async fn send(&self, call: ServiceCallData) -> Result<EffectResponse, EffectServiceError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.actor
-            .send_message(EffectServiceMsg::Call { request, reply: reply_tx })
+            .send_message(EffectServiceMsg::Call { call: Box::new(call), reply: reply_tx })
             .map_err(|_| EffectServiceError::ServiceUnavailable { service: self.service.clone() })?;
         reply_rx
             .await
@@ -249,7 +232,7 @@ impl EffectServiceBinding {
 /// Messages an effect-service actor handles.
 pub(crate) enum EffectServiceMsg {
     Call {
-        request: EffectRequest,
+        call: Box<ServiceCallData>,
         reply: oneshot::Sender<Result<EffectResponse, EffectServiceError>>,
     },
     /// Requeue tick: the poll loop schedules the next one with
@@ -324,8 +307,24 @@ impl Actor for EffectServiceActor {
         state: &mut EffectServiceActorState,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            EffectServiceMsg::Call { request, reply } => {
-                let result = state.service.handle(request).await;
+            EffectServiceMsg::Call { call, reply } => {
+                // The capability object is built from the call's declared
+                // facets: the driver context for resource-state reads, the
+                // declared state cells, the per-zone kernel seam, and the
+                // declared descriptor legs (R6, R7).
+                let mut resources = call.resources;
+                let invocation = ServiceInvocation {
+                    zone: &call.zone,
+                    invocation_id: &call.invocation_id,
+                    payload: &call.payload,
+                    resources: &mut resources,
+                    state_cells: call.method.state_cells,
+                    kernel: call.kernel.as_ref(),
+                    request_fds: &call.request_fds,
+                    response_fds: call.method.response_fds,
+                    payload_schema: call.method.payload_schema,
+                };
+                let result = state.service.handle(invocation).await;
                 // If the actor dies before this sends, the caller's receiver
                 // closes and surfaces `InFlightStale` - never a hang.
                 let _ = reply.send(result);
@@ -611,16 +610,36 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicU64;
 
+    use async_trait::async_trait;
     use d2b_resource_types::ServiceMethod;
     use tokio::sync::Notify;
+
+    /// One call's data for the fixture services: the real envelope payload
+    /// and a fail-closed driver context (no manager seam at the harness).
+    fn call_data(payload: CanonicalJsonObject) -> ServiceCallData {
+        ServiceCallData {
+            zone: "z".to_owned(),
+            invocation_id: "invocation-test".to_owned(),
+            payload,
+            resources: ServiceResourceContext::fail_closed(),
+            method: PING_METHOD,
+            kernel: None,
+            request_fds: Vec::new(),
+        }
+    }
+
+    /// The canonical payload of one fixture call.
+    fn payload(value: serde_json::Value) -> CanonicalJsonObject {
+        serde_json::from_value(value).expect("canonical payload")
+    }
 
     /// Echo fixture: answers with the request payload.
     struct EchoService;
 
     #[async_trait]
     impl EffectService for EchoService {
-        async fn handle(&self, request: EffectRequest) -> Result<EffectResponse, EffectServiceError> {
-            Ok(request)
+        async fn handle(&self, invocation: ServiceInvocation<'_>) -> Result<EffectResponse, EffectServiceError> {
+            Ok(EffectResponse::new(invocation.payload.clone()))
         }
     }
 
@@ -652,7 +671,7 @@ mod tests {
 
     #[async_trait]
     impl EffectService for TickerService {
-        async fn handle(&self, _request: EffectRequest) -> Result<EffectResponse, EffectServiceError> {
+        async fn handle(&self, _invocation: ServiceInvocation<'_>) -> Result<EffectResponse, EffectServiceError> {
             Err(EffectServiceError::Declined {
                 service: "ticker".to_string(),
                 reason: "poll-only fixture".to_string(),
@@ -673,10 +692,10 @@ mod tests {
 
     #[async_trait]
     impl EffectService for GatedService {
-        async fn handle(&self, _request: EffectRequest) -> Result<EffectResponse, EffectServiceError> {
+        async fn handle(&self, _invocation: ServiceInvocation<'_>) -> Result<EffectResponse, EffectServiceError> {
             self.entered.notify_one();
             self.release.notified().await;
-            Ok(b"released".to_vec())
+            Ok(EffectResponse::new(CanonicalJsonObject::empty()))
         }
     }
 
@@ -762,8 +781,15 @@ mod tests {
             .expect("publish");
         assert_eq!(binding.revision(), 1);
 
-        let response = binding.call(b"ping".to_vec()).await.expect("call");
-        assert_eq!(response, b"ping".to_vec(), "service answered");
+        let response = binding
+            .call(call_data(payload(serde_json::json!({ "echo": "ping" }))))
+            .await
+            .expect("call");
+        assert_eq!(
+            response.payload,
+            payload(serde_json::json!({ "echo": "ping" })),
+            "service answered"
+        );
 
         // Republish: revision bumps, and the new generation answers.
         let rebound = publish(&supervisor, echo_row("z", "echo", builds.clone()))
@@ -771,8 +797,11 @@ mod tests {
             .expect("republish");
         assert_eq!(rebound.revision(), 2, "republish bumped the revision");
         assert_eq!(builds.load(Ordering::SeqCst), 2, "fresh instance from the new row");
-        let response = rebound.call(b"again".to_vec()).await.expect("call after republish");
-        assert_eq!(response, b"again".to_vec());
+        let response = rebound
+            .call(call_data(payload(serde_json::json!({ "echo": "again" }))))
+            .await
+            .expect("call after republish");
+        assert_eq!(response.payload, payload(serde_json::json!({ "echo": "again" })));
     }
 
     /// Error: killing an actor mid-supervision respawns the service from its
@@ -786,8 +815,11 @@ mod tests {
         let binding = publish(&supervisor, echo_row("z", "echo", builds.clone()))
             .await
             .expect("publish");
-        let response = binding.call(b"one".to_vec()).await.expect("call");
-        assert_eq!(response, b"one".to_vec());
+        let response = binding
+            .call(call_data(payload(serde_json::json!({ "echo": "one" }))))
+            .await
+            .expect("call");
+        assert_eq!(response.payload, payload(serde_json::json!({ "echo": "one" })));
         let revision_before = binding.revision();
         let id_before = binding.actor_id();
 
@@ -805,22 +837,31 @@ mod tests {
         // Stale bindings refuse (KTD5): the captured revision is stale, and
         // the pre-crash handle targets the dead actor.
         let stale = binding
-            .call_expected(revision_before, b"stale".to_vec())
+            .call_expected(
+                revision_before,
+                call_data(payload(serde_json::json!({ "echo": "stale" }))),
+            )
             .await
             .expect_err("stale revision must refuse");
         assert!(
             matches!(stale, EffectServiceError::StaleRevision { .. }),
             "got {stale:?}"
         );
-        let dead = binding.call(b"dead".to_vec()).await.expect_err("dead actor must refuse");
+        let dead = binding
+            .call(call_data(payload(serde_json::json!({ "echo": "dead" }))))
+            .await
+            .expect_err("dead actor must refuse");
         assert!(
             matches!(dead, EffectServiceError::ServiceUnavailable { .. }),
             "got {dead:?}"
         );
 
         // The next call succeeds against the respawned generation.
-        let response = respawned.call(b"two".to_vec()).await.expect("call after respawn");
-        assert_eq!(response, b"two".to_vec());
+        let response = respawned
+            .call(call_data(payload(serde_json::json!({ "echo": "two" }))))
+            .await
+            .expect("call after respawn");
+        assert_eq!(response.payload, payload(serde_json::json!({ "echo": "two" })));
     }
 
     /// Edge: an in-flight call when the actor dies sees a refusal, not a
@@ -844,7 +885,11 @@ mod tests {
 
         let caller = tokio::spawn({
             let binding = binding.clone();
-            async move { binding.call(b"in-flight".to_vec()).await }
+            async move {
+                binding
+                    .call(call_data(payload(serde_json::json!({ "echo": "in-flight" }))))
+                    .await
+            }
         });
         // Wait until the call is genuinely parked inside the service.
         entered.notified().await;
@@ -906,8 +951,11 @@ mod tests {
         let binding = resolve(&supervisor, "echo").await.expect("recovered service resolves");
         assert_eq!(binding.revision(), 1);
 
-        let response = binding.call(b"recovered".to_vec()).await.expect("call");
-        assert_eq!(response, b"recovered".to_vec());
+        let response = binding
+            .call(call_data(payload(serde_json::json!({ "echo": "recovered" }))))
+            .await
+            .expect("call");
+        assert_eq!(response.payload, payload(serde_json::json!({ "echo": "recovered" })));
         assert_eq!(builds.load(Ordering::SeqCst), 1, "built from the durable row");
     }
 }

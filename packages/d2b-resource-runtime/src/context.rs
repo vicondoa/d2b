@@ -730,6 +730,131 @@ impl ResourceContext {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Service driver context (U3, R7)
+// ---------------------------------------------------------------------------
+
+/// The manager endpoint behind a fail-closed [`ServiceResourceContext`]:
+/// every call refuses. The composition state of a zone that hosts services
+/// without a wired manager seam.
+struct FailClosedManager;
+
+#[async_trait]
+impl ManagerEndpoint for FailClosedManager {
+    async fn ensure_child(
+        &self,
+        _parent: &ResourceKey,
+        _child: ChildEnsure,
+    ) -> Result<EnsureOutcome, ResourceError> {
+        Err(ResourceError::ManagerRpc("no manager seam".into()))
+    }
+
+    async fn get(&self, _key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
+        Err(ResourceError::ManagerRpc("no manager seam".into()))
+    }
+
+    async fn view(&self, _key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+        Err(ResourceError::ManagerRpc("no manager seam".into()))
+    }
+
+    async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
+        Err(ResourceError::ManagerRpc("no manager seam".into()))
+    }
+
+    async fn list_owned(&self, _owner_uid: [u8; 16]) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        Err(ResourceError::ManagerRpc("no manager seam".into()))
+    }
+
+    async fn register_watch(
+        &self,
+        _subscriber: &ResourceKey,
+        _registration: WatchRegistration,
+    ) -> Result<WatchId, ResourceError> {
+        Err(ResourceError::ManagerRpc("no manager seam".into()))
+    }
+
+    async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
+        Err(ResourceError::ManagerRpc("no manager seam".into()))
+    }
+}
+
+/// The generic driver context a provider service reaches resource state
+/// through (R7): the manager-plane read surface of the zone, never the spec
+/// store directly.
+///
+/// A service is not a resource actor and holds no row of its own, so this
+/// is the [`ResourceContext`] read surface without the row-bound parts: the
+/// same injected [`ManagerEndpoint`] seam, exposed for service
+/// invocations. The daemon builds one per zone over the manager endpoint
+/// and hands it to a hosted service through the invocation's capability
+/// object; a service reads resource state here and daemon-structural state
+/// only through its declared state cells (R7).
+#[derive(Clone)]
+pub struct ServiceResourceContext {
+    manager: Arc<dyn ManagerEndpoint>,
+}
+
+impl ServiceResourceContext {
+    /// Wrap the zone's manager endpoint.
+    pub fn over(manager: Arc<dyn ManagerEndpoint>) -> Self {
+        Self { manager }
+    }
+
+    /// A fail-closed context: every read refuses. The unwired composition
+    /// state of a zone that hosts services - a service invocation then
+    /// reaches no resource state rather than guessing at a store.
+    pub fn fail_closed() -> Self {
+        Self {
+            manager: Arc::new(FailClosedManager),
+        }
+    }
+
+    /// The stored desired row for `key`.
+    pub async fn get(&self, key: &ResourceKey) -> Result<Option<StoredDesiredResource>, ResourceError> {
+        self.manager.get(key).await
+    }
+
+    /// The manager plane's live runtime view for `key`, its published
+    /// status included.
+    pub async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+        self.manager.view(key).await
+    }
+
+    /// The [`RowLookup`] form of [`Self::get`] (issue #511): classified so
+    /// absence (`Absent` - no row exists) stays distinct from a manager
+    /// that cannot answer (`Unavailable`).
+    pub async fn lookup(&self, key: &ResourceKey) -> RowLookup<StoredDesiredResource> {
+        match self.manager.get(key).await {
+            Ok(Some(row)) => RowLookup::Present {
+                row,
+                plane: LookupPlane::Manager,
+            },
+            Ok(None) => RowLookup::Absent {
+                plane: LookupPlane::Manager,
+            },
+            Err(_) => RowLookup::Unavailable {
+                plane: LookupPlane::Manager,
+            },
+        }
+    }
+
+    /// The [`RowLookup`] form of [`Self::view`] (issue #511).
+    pub async fn lookup_view(&self, key: &ResourceKey) -> RowLookup<ResourceView> {
+        match self.manager.view(key).await {
+            Ok(Some(view)) => RowLookup::Present {
+                row: view,
+                plane: LookupPlane::Manager,
+            },
+            Ok(None) => RowLookup::Absent {
+                plane: LookupPlane::Manager,
+            },
+            Err(_) => RowLookup::Unavailable {
+                plane: LookupPlane::Manager,
+            },
+        }
+    }
+}
+
 
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -1650,5 +1775,89 @@ mod tests {
         assert_eq!(satisfied.watch, WatchId(5));
         assert_eq!(satisfied.target, ResourceKey::new("z", "Process", "worker-0"));
         stub.await.unwrap();
+    }
+
+    // -- Service driver context (U3, R7) --------------------------------------
+
+    /// The service driver context routes reads through the injected manager
+    /// endpoint and classifies them ([`RowLookup`]): a present row, an
+    /// absent row, and an unanswered manager stay distinct, exactly as the
+    /// driver context's own reads do.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn service_resource_context_reads_through_the_manager_endpoint() {
+        let (tx, mut rx) = mpsc::channel::<StubCall>(4);
+        let stub = tokio::spawn(async move {
+            while let Some(call) = rx.recv().await {
+                match call {
+                    StubCall::Get { key, reply } => {
+                        if key.name == "present" {
+                            let _ = reply.send(Ok(Some(test_row(&key.zone, "Process", &key.name))));
+                        } else {
+                            let _ = reply.send(Ok(None));
+                        }
+                    }
+                    StubCall::GetView { key, reply } => {
+                        if key.name == "present" {
+                            let _ = reply.send(Ok(Some(ResourceView {
+                                key,
+                                uid: [1; 16],
+                                generation: 1,
+                                deleting: false,
+                                provenance: ResourceProvenance::Api,
+                                spec: Vec::new(),
+                                metadata: Vec::new(),
+                                owner_key: None,
+                                status: None,
+                                status_generation: None,
+                                status_projection: None,
+                            })));
+                        } else {
+                            let _ = reply.send(Ok(None));
+                        }
+                    }
+                    other => panic!("service context sent a non-read call: {other:?}"),
+                }
+            }
+        });
+        let context = super::ServiceResourceContext::over(Arc::new(ChannelEndpointStub::new(tx)));
+
+        let present_key = ResourceKey::new("z", "Process", "present");
+        let absent_key = ResourceKey::new("z", "Process", "absent");
+        let row = context.get(&present_key).await.expect("read").expect("row");
+        assert_eq!(row.key, present_key);
+        assert!(matches!(
+            context.lookup(&absent_key).await,
+            RowLookup::Absent { plane: LookupPlane::Manager }
+        ));
+        let view = context.view(&present_key).await.expect("read").expect("view");
+        assert_eq!(view.key, present_key);
+        assert!(matches!(
+            context.lookup_view(&absent_key).await,
+            RowLookup::Absent { plane: LookupPlane::Manager }
+        ));
+        // The context still holds the channel sender; drop it so the stub's
+        // receive loop sees the channel close and exits.
+        drop(context);
+        stub.await.unwrap();
+    }
+
+    /// The fail-closed service context refuses every read: an unwired
+    /// composition seam classifies as `Unavailable`, never as absence.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn the_fail_closed_service_context_refuses_every_read() {
+        let context = super::ServiceResourceContext::fail_closed();
+        let key = ResourceKey::new("z", "Process", "worker-0");
+        assert!(matches!(
+            context.lookup(&key).await,
+            RowLookup::Unavailable { plane: LookupPlane::Manager }
+        ));
+        assert!(matches!(
+            context.lookup_view(&key).await,
+            RowLookup::Unavailable { plane: LookupPlane::Manager }
+        ));
+        assert!(context.get(&key).await.is_err());
+        assert!(context.view(&key).await.is_err());
     }
 }

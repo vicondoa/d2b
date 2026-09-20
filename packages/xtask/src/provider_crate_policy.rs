@@ -1072,12 +1072,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/network_effect_port.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/tpm_effect_port.rs",
         token: "server_state",
         family: "d2bd-state",
@@ -1302,12 +1296,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/tpm_effect_port.rs",
         token: "tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "swtpm",
         family: "device-tpm",
         retires_with: "U12 tpm/device step",
     },
@@ -1733,12 +1721,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: the config-nixos provider references are another family's declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/network_effect_port.rs",
-        token: "sysctl",
-        family: "activation-nixos",
-        retires_with: "permanent: the network sysctl intents are the network family's declared vocabulary; the daemon's network effect adapter reads them through the generic resolver",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "sysctl",
         family: "activation-nixos",
@@ -2147,18 +2129,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "device_gpu",
-        family: "device-gpu",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "gpu",
-        family: "device-gpu",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/systemd.rs",
         token: "gpu",
         family: "device-gpu",
@@ -2439,18 +2409,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "swtpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "device_tpm",
         family: "device-tpm",
         retires_with: "U12 tpm/device step",
     },
@@ -2953,12 +2911,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (display-wayland)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "wayland",
         family: "display-wayland",
@@ -3021,12 +2973,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "nftables",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/network_effect_port.rs",
-        token: "network_local",
         family: "network-local",
         retires_with: "U12 network-fds step",
     },

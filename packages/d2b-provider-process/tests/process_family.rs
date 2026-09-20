@@ -9,73 +9,101 @@ use std::time::Duration;
 
 use d2b_contracts_resource::v3::process::{EphemeralProcessSpec, ProcessSpec};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
-use d2b_process_conformance::{AdoptionCandidate, ProcessIdentityDigest};
+use d2b_process_conformance::AdoptionCandidate;
 use d2b_provider_process::{
-    ExecutionMode, ProcessDriverArgs, ProcessDriverEffects, ProcessFamilySpec,
-    ProcessResourceIdentity, ProviderAdoption, ProviderLiveness, process_family_descriptors,
+    ExecutionMode, ProcessDriverArgs, ProcessEffectFacets, ProcessFamilySpec,
+    ProcessProviderRuntime, ProcessResourceContext, ProcessResourceIdentity, ProviderAdoption,
+    ProviderLaunch, ProviderLiveness, process_family_descriptors,
 };
 use d2b_resource_runtime::identity::ResourceKey;
 use d2b_resource_runtime::provider::{DriverRegistration, ProviderDirectory};
 
-/// A port that refuses every effect: this test proves the declaration and
-/// registration path, never a launch.
-struct RefusingEffects;
+/// A runtime facet that refuses every effect: this test proves the
+/// declaration and registration path, never a launch. The reconciliation
+/// surface is unreachable in these tests, so the bundle-facing reads
+/// refuse loudly rather than inventing trusted data.
+struct RefusingRuntime;
 
 #[async_trait::async_trait]
-impl ProcessDriverEffects for RefusingEffects {
-    async fn launch(
+impl ProcessProviderRuntime for RefusingRuntime {
+    fn bundle(&self) -> &d2b_core::bundle_resolver::BundleResolver {
+        unreachable!("the registration tests never reconcile a row")
+    }
+
+    fn socket_runtime_dir(&self) -> &std::path::Path {
+        unreachable!("the registration tests never reconcile a row")
+    }
+
+    fn guest_setup_descriptor_digest(
         &self,
+        _zone: &ZoneId,
+        _guest_ref: &ResourceRef,
+    ) -> Option<d2b_contracts_resource::v3::SchemaFingerprint> {
+        None
+    }
+
+    async fn resolve_device_worker_launch(
+        &self,
+        _ctx: &mut d2b_resource_runtime::context::ResourceContext,
         _identity: &ProcessResourceIdentity,
+        _spec: &ProcessFamilySpec,
+    ) -> Result<Option<d2b_provider_process::DeviceWorkerLaunch>, &'static str> {
+        Err("refused")
+    }
+
+    async fn launch_resource(
+        &self,
+        _context: ProcessResourceContext<'_>,
         _spec: &ProcessSpec,
         _timeout: Duration,
-    ) -> Result<ProcessIdentityDigest, String> {
+    ) -> Result<ProviderLaunch, String> {
         Err("refused".to_owned())
     }
 
-    async fn launch_ephemeral(
+    async fn launch_ephemeral_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &EphemeralProcessSpec,
         _timeout: Duration,
-    ) -> Result<ProcessIdentityDigest, String> {
+    ) -> Result<ProviderLaunch, String> {
         Err("refused".to_owned())
     }
 
-    async fn adopt(
+    async fn adopt_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &ProcessSpec,
     ) -> Result<ProviderAdoption, String> {
         Err("refused".to_owned())
     }
 
-    async fn probe(
+    async fn probe_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &ProcessSpec,
     ) -> Result<ProviderLiveness, String> {
         Err("refused".to_owned())
     }
 
-    async fn adopt_ephemeral(
+    async fn adopt_ephemeral_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &EphemeralProcessSpec,
     ) -> Result<ProviderAdoption, String> {
         Err("refused".to_owned())
     }
 
-    async fn probe_ephemeral(
+    async fn probe_ephemeral_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &EphemeralProcessSpec,
     ) -> Result<ProviderLiveness, String> {
         Err("refused".to_owned())
     }
 
-    async fn stop(
+    async fn stop_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &ProcessSpec,
         _term_timeout: Duration,
         _kill_timeout: Duration,
@@ -83,9 +111,9 @@ impl ProcessDriverEffects for RefusingEffects {
         Err("refused".to_owned())
     }
 
-    async fn stop_ephemeral(
+    async fn stop_ephemeral_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &EphemeralProcessSpec,
         _term_timeout: Duration,
         _kill_timeout: Duration,
@@ -93,7 +121,7 @@ impl ProcessDriverEffects for RefusingEffects {
         Err("refused".to_owned())
     }
 
-    async fn stop_stale(
+    async fn stop_stale_resource(
         &self,
         _provider_ref: &ResourceRef,
         _candidate: &AdoptionCandidate,
@@ -101,20 +129,14 @@ impl ProcessDriverEffects for RefusingEffects {
         Err("refused".to_owned())
     }
 
-    async fn device_worker_launch(
+    async fn finalize_resource(
         &self,
-        _ctx: &mut d2b_resource_runtime::context::ResourceContext,
-        _identity: &ProcessResourceIdentity,
-        _spec: &ProcessFamilySpec,
-    ) -> Result<Option<d2b_provider_process::DeviceWorkerLaunch>, &'static str> {
-        Ok(None)
-    }
-
-    async fn finalize(&self, _identity: &ProcessResourceIdentity) -> Result<(), String> {
+        _context: ProcessResourceContext<'_>,
+    ) -> Result<(), String> {
         Err("refused".to_owned())
     }
 
-    fn has_active(
+    fn has_active_resource_in_zone(
         &self,
         _zone: &ZoneId,
         _zone_uid: Option<&ResourceUid>,
@@ -127,7 +149,11 @@ impl ProcessDriverEffects for RefusingEffects {
 fn descriptors() -> [d2b_resource_types::DriverDescriptor; 2] {
     process_family_descriptors(ProcessDriverArgs {
         zone: ZoneId::parse("work").expect("zone"),
-        effects: Arc::new(RefusingEffects),
+        facets: ProcessEffectFacets {
+            runtime: Arc::new(RefusingRuntime),
+            committed: None,
+            guest_owners: None,
+        },
         zone_uid: None,
         policy_revision: None,
         provider_assignment_generation: None,

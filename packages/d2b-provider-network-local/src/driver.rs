@@ -47,6 +47,8 @@ use d2b_resource_types::{
 };
 use serde_json::{Value, json};
 
+use crate::effects_service::{NETWORK_EFFECTS_SERVICE, NetworkEffectsService};
+use crate::facets::NetworkEffectFacets;
 use crate::operations::network_family_operations;
 
 /// The Network ResourceType served by the network-local Provider.
@@ -144,14 +146,18 @@ pub trait NetworkDriverEffects: Send + Sync + 'static {
 }
 
 /// Everything the composition must construct to instantiate the Network
-/// driver factory for one zone.
+/// driver factory for one zone: the declared facet set the effects run over
+/// plus the zone-authority inputs every derived identity folds in (U14).
 pub struct NetworkDriverArgs {
     /// The zone the driver serves.
     pub zone: String,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
-    /// The daemon-realized effect port the driver drives.
-    pub effects: Arc<dyn NetworkDriverEffects>,
+    /// The daemon-supplied facet set the family's effects implementation is
+    /// built from. The composition supplies the objects; the driver never
+    /// holds a daemon state type and no externally built port appears here
+    /// (R2).
+    pub facets: NetworkEffectFacets,
 }
 
 /// The family's declarations and typed Provider effect.
@@ -256,6 +262,13 @@ const NETWORK_READS: &[WellKnownType] = &[
 /// privileged core in-broker, while the family operation itself stays
 /// forwarded to this declaring process. The children it derives are declared
 /// in [`NETWORK_CREATIONS`].
+///
+/// U14: the driver's effects are this crate's own implementation
+/// ([`NetworkEffectsService`]) built from the daemon-supplied facet set -
+/// the construction site holds no externally built port (R2) - and the
+/// family's declared effects service ([`NETWORK_EFFECTS_SERVICE`]) rides
+/// the declaration, so a zone that cannot host it refuses startup by name
+/// (R5).
 pub fn network_descriptor(args: NetworkDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::NETWORK,
@@ -267,14 +280,14 @@ pub fn network_descriptor(args: NetworkDriverArgs) -> DriverDescriptor {
         operations: network_family_operations(),
         creations: &NETWORK_CREATIONS,
         startup: &[],
-        services: &[],
+        services: &[NETWORK_EFFECTS_SERVICE],
         decoder: shared_provider_spec_decoder(),
         factory: Arc::new(SharedProviderDriverFactory::new(
             SharedProviderDriverArgs {
                 zone: args.zone,
                 controller_generation: args.controller_generation,
                 family: Arc::new(NetworkFamily {
-                    effects: args.effects,
+                    effects: Arc::new(NetworkEffectsService::new(args.facets)),
                 }),
             },
         )),
@@ -417,7 +430,7 @@ mod tests {
         NETWORK_PROVIDER_REF, NETWORK_TYPE_NAME, NetworkDriverArgs, declared_dependency_refs,
         network_descriptor, network_spec,
     };
-    use crate::test_support::RecordingEffects;
+    use crate::test_support::{RecordingRuntime, recording_facets};
 
     /// Ordered log the fixture writes, so ordering is one assertion.
     type Log = Arc<tokio::sync::Mutex<Vec<String>>>;
@@ -546,12 +559,12 @@ impl RequeueScheduler for RecordingRequeue {
         value
     }
 
-    fn descriptor(effects: Arc<RecordingEffects>) -> d2b_resource_types::DriverDescriptor {
+    fn descriptor(runtime: Arc<RecordingRuntime>) -> d2b_resource_types::DriverDescriptor {
         network_descriptor(NetworkDriverArgs {
             zone: "dev".to_owned(),
             controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
                 .expect("generation"),
-            effects,
+            facets: recording_facets(runtime),
         })
     }
 
@@ -580,7 +593,7 @@ impl RequeueScheduler for RecordingRequeue {
     /// effect port, and it declares the three children the family derives.
     #[test]
     fn descriptor_declares_the_network_type_and_its_children() {
-        let descriptor = descriptor(Arc::new(RecordingEffects::default()));
+        let descriptor = descriptor(Arc::new(RecordingRuntime::default()));
         assert_eq!(
             descriptor.resource_type.to_resource_type_name().as_str(),
             NETWORK_TYPE_NAME
@@ -609,7 +622,7 @@ impl RequeueScheduler for RecordingRequeue {
     #[tokio::test]
     async fn reconcile_commits_the_declared_children_before_the_effect() {
         let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let effects = Arc::new(RecordingEffects::default());
+        let effects = Arc::new(RecordingRuntime::default());
         let descriptor = descriptor(Arc::clone(&effects));
         let manager = RecordingManager::new(Arc::clone(&log));
         let mut ctx = context(
@@ -649,7 +662,7 @@ impl RequeueScheduler for RecordingRequeue {
     /// The family decoder yields the shared envelope the driver's verbs read.
     #[test]
     fn the_decoder_yields_the_shared_envelope() {
-        let descriptor = descriptor(Arc::new(RecordingEffects::default()));
+        let descriptor = descriptor(Arc::new(RecordingRuntime::default()));
         let bytes = serde_json::to_vec(&network_spec_value(NETWORK_PROVIDER_REF)).expect("spec");
         let decoded = descriptor.decoder.decode(&bytes).expect("decode");
         let envelope = decoded
@@ -692,7 +705,7 @@ impl RequeueScheduler for RecordingRequeue {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_rejects_a_foreign_provider() {
-        let descriptor = descriptor(Arc::new(RecordingEffects::default()));
+        let descriptor = descriptor(Arc::new(RecordingRuntime::default()));
         let manager = RecordingManager::new(Arc::new(tokio::sync::Mutex::new(Vec::new())));
         let mut ctx = context(
             &descriptor,
@@ -730,7 +743,7 @@ impl RequeueScheduler for RecordingRequeue {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recording_effects_records_ordered_calls() {
-        let effects = Arc::new(RecordingEffects::default());
+        let effects = Arc::new(RecordingRuntime::default());
         let descriptor = descriptor(Arc::clone(&effects));
         let manager = RecordingManager::new(Arc::new(tokio::sync::Mutex::new(Vec::new())));
         let mut ctx = context(

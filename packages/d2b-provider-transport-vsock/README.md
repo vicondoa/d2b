@@ -21,7 +21,7 @@ session generations remain owned by the child Zone core controller.
 
 `VsockTransportService` is one service component per installed Provider
 instance. It opens, bridges, observes, and closes named streams. The native
-guest relay controller owns only its effect-port lifecycle; it does not spawn
+guest relay controller owns only its stream-source lifecycle; it does not spawn
 an independent persistent service.
 
 Every open may carry the Core-owned reconnect generation. The service rejects
@@ -33,8 +33,9 @@ does not retain ZoneLink state or schedule reconnects.
 The Provider and ZoneLink are child-local. `childZoneName` self-matches, while
 compiler-only `parentZone` selects the allocator and leaves the parent with
 sealed route state only. The Provider receives opaque endpoint and binding
-identities through `VsockEffectPort`; it never calls AF_VSOCK directly and
-does not depend on `tokio-vsock`.
+identities through the service's stream-source contract
+(`VsockEffectPort`, declared in `src/service.rs`); it never calls AF_VSOCK
+directly and does not depend on `tokio-vsock`.
 
 The optional empty service state volume uses `User/d2b-transport-vsock` and
 broker-maintained identity. No `ComponentPrincipal` or parent-store

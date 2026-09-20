@@ -20,10 +20,13 @@ the inherited fd and does not self-bind, self-chown, or self-fchmod it.
 
 ## Committed operation rows
 
-Every broker operation is one committed row. The rows live in
+Every broker operation is one committed row. A row a provider crate serves
+is declared in that crate's `operations.json`; every other row stays
+committed in
 [`policy/broker-operations.json`](./policy/broker-operations.json), and the
-broker's profile catalogs, its authorization rows, its `W3BrokerOperation`
-inventory, and its typed audit fields are generated views of them. The
+committed rows document itself plus the broker's profile catalogs, its
+authorization rows, its `W3BrokerOperation` inventory, and its typed audit
+fields are generated views of the declarations plus the retained rows. The
 ownership triage of every row - a family driver, the broker itself, or a
 transport concern the envelope does not carry - is the generated
 [broker operation triage](./broker-operation-triage.md).

@@ -318,7 +318,7 @@ mutation beyond its declared authority by abusing the injected `EffectPort`.
   Provider crate imports no broker service/client/DTO (compile-time-audited
   per Provider dossier, e.g. `ADR-046-provider-system-minijail.md` lines
   1621-1628).
-- **Detection:** `MinijailProcessEffectPort`/`VolumeEffectPort`/
+- **Detection:** `ProcessLaunchEffectPort`/`VolumeEffectPort`/
   `NetworkEffectPort`/`AzureEffectPort` calls are all typed, opaque-ID,
   bounded operations; any operation outside the closed enum is a compile
   error, not a runtime check to bypass.
@@ -817,8 +817,8 @@ Network/Device Providers themselves.
 
 | Domain | EffectPort | Sole privileged executor | Enforcement |
 | --- | --- | --- | --- |
-| Process | `MinijailProcessEffectPort` | Core/ProviderSupervisor adapter + `d2b-priv-broker` `SpawnRunner` | Compile-time dependency audit: the Provider crate imports no `d2b.broker.v3` service/client/DTO (`ADR-046-provider-system-minijail.md` lines 1621-1628) |
-| Process (systemd) | `SystemdProcessEffectPort` | Core systemd effect adapter via D-Bus transient unit API | Provider controller never connects to the systemd D-Bus socket directly and never calls `systemctl` as a subprocess |
+| Process | `ProcessLaunchEffectPort` | Core/ProviderSupervisor adapter + `d2b-priv-broker` `SpawnRunner` | Compile-time dependency audit:the Provider crate imports no `d2b.broker.v3` service/client/DTO (`ADR-046-provider-system-minijail.md` lines 1621-1628) |
+| Process (systemd) | `ProcessLaunchEffectPort` | Core systemd effect adapter via D-Bus transient unit API | Provider controller never connects to the systemd D-Bus socket directlyand never calls `systemctl` as a subprocess |
 | Volume | `VolumeEffectPort` | Core Volume effect adapter + broker `ProvisionLayoutEntry`/`RepairLayoutEntry`/`CleanupLayoutEntry`/`RotateSealingKey`/`PrepareSwtpmDir`; key rotation is requested only through `VolumeEffectPort::rotate_sealing_key` | "The controller process holds no claim that grants access to raw host paths" (`ADR-046-provider-volume-local.md` lines 1739-1776) |
 | Network | `NetworkEffectPort` | Core Network effect adapter + broker `CreatePersistentTap`/`DeletePersistentTap`/`SetBridgePortFlags`/`ApplyNftablesProjection`/`ApplySysctl` | "The controller holds no broker role and no `network-admin` capability" (`ADR-046-provider-network-local.md` lines 1680-1682) |
 | Device (USBIP) | `UsbipEffectPort` | Core adapter + broker `ApplyNftablesProjection { action: Apply \| Remove }` (D-NETWORK-004) for both acquisition and release | Network-local never owns USBIP TCP/3240 exposure; release is net-new privileged surface, not a capability of the shipped whole-table `UsbipBindFirewallRule` op |

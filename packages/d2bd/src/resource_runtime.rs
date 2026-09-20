@@ -2576,7 +2576,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                         let owner_ref = envelope.metadata().owner_ref().cloned();
                         let descriptor_digest =
                             self.descriptor.descriptor().descriptor_digest().clone();
-                        let context = crate::process_provider_runtime::ProcessResourceContext::new(
+                        let context = d2b_provider_process::ProcessResourceContext::new(
                             self.zone.clone(),
                             (
                                 &resource.resource_ref,
@@ -5939,7 +5939,7 @@ impl ZoneResourceRuntime {
                     .ok()
                     .map(|descriptor| descriptor.descriptor_digest().clone())
             });
-        let context = crate::process_provider_runtime::ProcessResourceContext::new(
+        let context = d2b_provider_process::ProcessResourceContext::new(
             self.zone.clone(),
             (
                 &process.resource_ref,

@@ -95,6 +95,38 @@ impl ServiceMethod {
             deadline_tier: None,
         }
     }
+
+    /// An operation-serving method carrying its full contract facets (R6):
+    /// the payload schema reference, the request and response fd legs, the
+    /// declared state cells, the required privileges, and the deadline
+    /// tier.
+    ///
+    /// This is the declaration surface a family lane uses when its method
+    /// reaches daemon-structural state, carries descriptors, or serves
+    /// under a non-standard tier; the hosting side builds the service
+    /// invocation's capability object from these facets (U3).
+    #[allow(clippy::too_many_arguments, reason = "each argument is one declared facet (R6)")]
+    pub const fn serving_with(
+        operation: &'static str,
+        name: &'static str,
+        payload_schema: Option<&'static str>,
+        request_fds: MethodFdContract,
+        response_fds: MethodFdContract,
+        state_cells: &'static [&'static str],
+        privileges: &'static [&'static str],
+        deadline_tier: Option<&'static str>,
+    ) -> Self {
+        Self {
+            name,
+            operation: Some(operation),
+            payload_schema,
+            request_fds,
+            response_fds,
+            state_cells,
+            privileges,
+            deadline_tier,
+        }
+    }
 }
 
 /// One service a provider serves.

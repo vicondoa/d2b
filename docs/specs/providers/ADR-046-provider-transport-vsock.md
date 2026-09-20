@@ -237,9 +237,9 @@ mirror desired spec. The `Provider` resource itself keeps the D075
 packages/d2b-provider-transport-vsock/
   src/
     lib.rs          - crate root; Provider identity constant
-    service.rs      - VsockTransportService implementation; dispatches OpenTransport /
-                      CloseTransport / ObserveTransport to effect port and bridge tasks
-    effect_port.rs  - VsockEffectPort async trait + OpaqueEndpointId / OpaqueBindingId
+    service.rs      - VsockTransportService implementation + the stream-source contract
+                      (VsockEffectPort + OpaqueEndpointId / OpaqueBindingId); dispatches
+                      OpenTransport / CloseTransport / ObserveTransport to the stream source and bridge tasks
     bridge.rs       - named-stream ↔ opaque AsyncRead+AsyncWrite byte pump task
     framing.rs      - 2-byte big-endian length-prefix encode / decode (no raw sockets)
     limits.rs       - per-connection and per-session constants
@@ -537,12 +537,13 @@ dropped.
 
 ---
 
-## VsockEffectPort - injected interface
+## VsockEffectPort - service stream-source contract
 
-`VsockEffectPort` is a native async Rust trait injected as a concrete
-implementation into a controller generic over the port type at Provider
-startup; it uses no trait object or `async-trait` dependency. It
-abstracts all AF_VSOCK syscall access. The Provider never calls
+`VsockEffectPort` is a native async Rust trait the service's own
+stream-source contract:an implementation supplied by the child Zone core
+at the service boundary;it uses no trait object or `async-trait`
+dependency. It
+abstracts all AF_VSOCK syscall access.The Provider never calls
 `socket(AF_VSOCK, …)`, `connect`, or `bind` directly; it delegates every
 vsock operation to this port.
 
@@ -976,8 +977,8 @@ expression.
 | Dependency/owner | Title: Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes; Phase 1; Priority P0; Depends on ADR046-bus-001 (OwnedTransport in d2b-session); Owner crate `d2b-provider-transport-vsock`. |
 | Current source | Evidence class `test-only-or-preview`; baseline has no generic vsock transport Provider or opaque endpoint/binding ID trait. |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-transport-vsock/src/effect_port.rs`; test fake in `tests/effect_port_mock.rs`; redaction checks in `tests/redaction.rs`. |
-| Detailed design | Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes. Define `VsockEffectPort` async trait and opaque ID newtypes in `effect_port.rs`; implement `FakeVsockEffectPort` for tests; `redaction.rs` asserts no raw `u32` in any `Debug`/`Display` output of opaque types; no real vsock socket opened. Primary reuse disposition: `create`. Preserved source-plan detail: net-new trait/newtypes with redaction tests; no real vsock socket opened. |
+| Destination | `packages/d2b-provider-transport-vsock/src/service.rs` (the stream-source contract lives beside its only consumer); test fake in `tests/effect_port_mock.rs`; redaction checks in `tests/redaction.rs`. |
+| Detailed design | Implement `VsockEffectPort` trait and `OpaqueEndpointId`/`OpaqueBindingId` newtypes. Define `VsockEffectPort` async trait and opaque ID newtypesin `service.rs` (the service's own stream-source contract, relocated there when the standalone `effect_port.rs` module was deleted); implement `FakeVsockEffectPort` for tests; `redaction.rs` asserts no raw `u32` in any `Debug`/`Display` output of opaque types; no real vsock socket opened. Primary reuse disposition: `create`. Preserved source-plan detail: net-new trait/newtypeswith redaction tests; no real vsock socket opened. |
 | Integration | Child Zone's core ZoneLink/delegation controller calls its same-Zone Provider with opaque IDs; Provider calls injected `VsockEffectPort`; live AF_VSOCK child-endpoint resolution remains in child core runtime while the selected parent retains only sealed peer/route state. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: hermetic unit + redaction test; `tests/effect_port_mock.rs` and `tests/redaction.rs`. |
@@ -1179,7 +1180,7 @@ Old and new suites never run in parallel indefinitely.
 - `spec.transportSettings`: `guestRef` / `portClass` fields and forbidden raw
   endpoint values; `spec.transportCredentials` must be empty.
 - Port range `14420-14499` reservation; ports 14317/14318/14319 excluded.
-- `VsockEffectPort` injection: Provider never calls AF_VSOCK syscalls directly;
+- `VsockEffectPort` stream-source contract:Provider never calls AF_VSOCK syscalls directly;
   `tokio-vsock` is NOT a Provider crate dependency.
 - Components: `d2b-transport-vsock` binary; one service process per Zone.
 - Dependencies: `d2b-session`, `d2b-contracts`, `d2b-provider`, `tokio` (no `tokio-vsock`).

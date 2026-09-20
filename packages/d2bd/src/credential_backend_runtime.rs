@@ -34,8 +34,9 @@ use d2b_session_unix::PeerCredentials;
 
 use crate::process_provider_runtime::{
     GuestCredentialBackendLease, GuestCredentialBackendPreparation,
-    GuestCredentialBackendSupervisor, ProcessResourceContext,
+    GuestCredentialBackendSupervisor,
 };
+use d2b_provider_process::ProcessResourceContext;
 
 use d2b_provider_credential::{
     ENTRA_BACKEND_REF as ENTRA_PROVIDER,

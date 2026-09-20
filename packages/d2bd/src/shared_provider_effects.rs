@@ -21,6 +21,7 @@
 //! got from `/status/phase`. The driver never sees either.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -30,6 +31,7 @@ use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
     identity::ReconnectGeneration, network::NetworkProvenance, volume::VolumeSpec,
 };
+use d2b_core::bundle_resolver::BundleResolver;
 use d2b_core_controller::authority::AuthorityRequest;
 use d2b_provider_network_local::{
     artifact::{ArtifactCatalogEntry, ArtifactKind},
@@ -163,8 +165,6 @@ impl SharedProviderKind {
 /// family's effects keep sharing the daemon-side broker and runtime state.
 #[derive(Clone)]
 pub(crate) struct SharedProviderEffects {
-    /// The Network family's port.
-    pub(crate) network: Arc<dyn d2b_provider_network_local::NetworkDriverEffects>,
     /// The USB Service/Binding family's port.
     pub(crate) usbip: Arc<dyn d2b_provider_device_usbip::UsbipDriverEffects>,
     /// The security-key Service/Binding family's port.
@@ -174,10 +174,12 @@ pub(crate) struct SharedProviderEffects {
 }
 
 impl SharedProviderEffects {
-    /// The production bundle: one adapter serves every family port.
+    /// The production bundle: one adapter serves every remaining family
+    /// port. The Network family's effects no longer ride this bundle (U14):
+    /// the declaring crate serves them over its own facet set, so no
+    /// externally built port appears at the network construction site.
     pub(crate) fn production(effects: Arc<ProductionSharedProviderEffects>) -> Self {
         Self {
-            network: effects.clone(),
             usbip: effects.clone(),
             security_key: effects.clone(),
             device: effects,
@@ -194,6 +196,12 @@ pub(crate) struct ProductionSharedProviderEffects {
     state: Arc<ServerState>,
     zone: ZoneId,
     controller_generation: ControllerGeneration,
+    /// The trusted bundle this zone's effects resolve their intents from
+    /// (U14): the same resolver the plane was composed from, supplied by
+    /// the daemon host and never derived from caller input.
+    intents: Arc<d2b_provider_network_local::broker::ResolverNetworkIntentSource>,
+    /// The authenticated daemon-to-broker origination socket (U14).
+    broker_socket: PathBuf,
     /// Zone-wide USBIP authority ledger (old `usbip_ledger`), shared by every
     /// USBIP Service and Binding dispatcher in the zone.
     usbip_ledger: Arc<tokio::sync::Mutex<crate::usbip_production::AuthorityLedger>>,
@@ -206,11 +214,17 @@ impl ProductionSharedProviderEffects {
         state: Arc<ServerState>,
         zone: ZoneId,
         controller_generation: ControllerGeneration,
+        resolver: BundleResolver,
     ) -> Self {
+        let broker_socket = crate::broker_socket_path(&state);
         Self {
             state,
             zone,
             controller_generation,
+            intents: Arc::new(
+                d2b_provider_network_local::broker::ResolverNetworkIntentSource::new(resolver),
+            ),
+            broker_socket,
             usbip_ledger: crate::usbip_production::new_authority_ledger(),
             usbip_services: Arc::new(tokio::sync::Mutex::new(BTreeSet::new())),
         }
@@ -1788,12 +1802,10 @@ impl ProductionSharedProviderEffects {
             ));
         }
         let spec = self.network_spec(request)?;
-        let resolver = crate::load_bundle_resolver_on_worker(&self.state)
-            .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
+        let resolver = self.intents.resolver();
         let runtime = self.runtime()?;
         let admission = self
-            .network_admission(&runtime, request, &spec, &resolver)
+            .network_admission(&runtime, request, &spec, resolver)
             .await?;
         let fence = self
             .network_content_fence(SharedProviderKind::Network, &runtime, request, &admission)
@@ -1806,16 +1818,25 @@ impl ProductionSharedProviderEffects {
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let broker_context = crate::resolve_network_effect_context(
             &Self::envelope(request),
-            &resolver,
+            resolver,
             &admission,
         )
         .map_err(|_| SharedProviderEffectError::Unavailable)?
         .with_host_global_nic_admission();
-        let effects = crate::network_effect_port::production_port(
-            &self.state,
-            BrokerCallerRole::AdminUid {
-                uid: self.state.daemon_uid,
-            },
+        // U14: the kernel-invoking adapter is the declaring crate's own
+        // `KernelNetworkBroker`, built from the daemon-supplied facets (the
+        // origination socket, the AdminUid authority, and the resolved
+        // bundle intents).
+        let effects = d2b_provider_network_local::broker::BrokerNetworkEffectPort::new(
+            d2b_provider_network_local::broker::KernelNetworkBroker::new(
+                d2b_provider_network_local::broker::NetworkBrokerFacets::new(
+                    crate::broker_socket_path(&self.state),
+                    BrokerCallerRole::AdminUid {
+                        uid: self.state.daemon_uid,
+                    },
+                    Arc::clone(&self.intents) as Arc<dyn d2b_provider_network_local::broker::NetworkIntentSource>,
+                ),
+            ),
             broker_context,
         );
         let input = self.network_input(&spec, request, admission, readiness, Vec::new());
@@ -2613,12 +2634,10 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let spec = self.network_spec(request)?;
-        let resolver = crate::load_bundle_resolver_on_worker(&self.state)
-            .await
-            .map_err(|_| SharedProviderEffectError::Unavailable)?;
+        let resolver = self.intents.resolver();
         let runtime = self.runtime()?;
         let admission = self
-            .network_admission(&runtime, request, &spec, &resolver)
+            .network_admission(&runtime, request, &spec, resolver)
             .await?;
         let fence = self
             .network_content_fence(SharedProviderKind::Network, &runtime, request, &admission)
@@ -2665,16 +2684,23 @@ impl ProductionSharedProviderEffects {
         }
         let broker_context = crate::resolve_network_effect_context(
             &Self::envelope(request),
-            &resolver,
+            resolver,
             &admission,
         )
         .map_err(|_| SharedProviderEffectError::Unavailable)?
         .with_host_global_nic_admission();
-        let effects = crate::network_effect_port::production_port(
-            &self.state,
-            BrokerCallerRole::AdminUid {
-                uid: self.state.daemon_uid,
-            },
+        // U14: the kernel-invoking adapter is the declaring crate's own
+        // `KernelNetworkBroker`, built from the daemon-supplied facets.
+        let effects = d2b_provider_network_local::broker::BrokerNetworkEffectPort::new(
+            d2b_provider_network_local::broker::KernelNetworkBroker::new(
+                d2b_provider_network_local::broker::NetworkBrokerFacets::new(
+                    crate::broker_socket_path(&self.state),
+                    BrokerCallerRole::AdminUid {
+                        uid: self.state.daemon_uid,
+                    },
+                    Arc::clone(&self.intents) as Arc<dyn d2b_provider_network_local::broker::NetworkIntentSource>,
+                ),
+            ),
             broker_context,
         );
         let input = ReconcileInput {
@@ -2893,8 +2919,27 @@ impl ProductionSharedProviderEffects {
 // drivers live in the family crates.
 // ---------------------------------------------------------------------------
 
+// U14: the Network family's driver effects are no longer a daemon port. The
+// daemon supplies the declared facet implementation the family's own
+// effects service delegates to: the reconcile/finalize orchestration over
+// the daemon's admission, child rows, and readiness state, plus the
+// daemon-resolved bundle intents ([`NetworkIntentSource`]).
 #[async_trait]
-impl d2b_provider_network_local::NetworkDriverEffects for ProductionSharedProviderEffects {
+impl d2b_provider_network_local::NetworkRuntime for ProductionSharedProviderEffects {
+    fn bundle(&self) -> &d2b_core::bundle_resolver::BundleResolver {
+        self.intents.resolver()
+    }
+
+    fn broker_socket_path(&self) -> &std::path::Path {
+        &self.broker_socket
+    }
+
+    fn caller_role(&self) -> d2b_contracts_broker::broker_wire::BrokerCallerRole {
+        BrokerCallerRole::AdminUid {
+            uid: self.state.daemon_uid,
+        }
+    }
+
     async fn reconcile_network(
         &self,
         request: &SharedProviderEffectRequest<'_>,
@@ -2902,7 +2947,7 @@ impl d2b_provider_network_local::NetworkDriverEffects for ProductionSharedProvid
         ProductionSharedProviderEffects::reconcile_network(self, request).await
     }
 
-    async fn finalize(
+    async fn finalize_network(
         &self,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {

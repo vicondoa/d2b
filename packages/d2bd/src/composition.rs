@@ -397,7 +397,6 @@ mod audio_resource_runtime;
 mod credential_backend_runtime;
 mod credential_resource_runtime;
 pub mod interaction_composition;
-pub mod network_effect_port;
 pub mod process_provider_runtime;
 mod process_resource_runtime;
 pub mod provider_effects;
@@ -14610,6 +14609,19 @@ async fn open_resource_plane(
                 },
             )
             .await;
+        // The U3 service driver context: the plane's manager endpoint, the
+        // surface effect-service invocations read resource state through
+        // (R7). Wired once per Zone alongside the provider publication and
+        // the kernel seam; a Zone whose seam was never wired serves
+        // effect-service invocations with a fail-closed context.
+        rendezvous
+            .set_resource_reader(
+                _zone.as_str(),
+                d2b_resource_runtime::context::ServiceResourceContext::over(
+                    plane_v3.manager_endpoint(),
+                ),
+            )
+            .await;
         v3_planes.insert(_zone.as_str().to_owned(), plane_v3);
     }
     // U14: publish the complete table before any Zone activates; the
@@ -19936,8 +19948,19 @@ fn dispatch_broker_host_prepare_as(
                 detail: "installed generation invalid for Network effect context".to_owned(),
             })?,
     );
-    let port = network_effect_port::production_port(state, caller_role.clone(), context.clone());
-    let broker = port.into_broker();
+    // U14: the kernel-invoking adapter is the declaring crate's own
+    // `KernelNetworkBroker`, built from the daemon-supplied facets (the
+    // origination socket, the caller authority, and the resolved bundle
+    // intents over the daemon's trusted bundle).
+    let broker = d2b_provider_network_local::broker::KernelNetworkBroker::new(
+        d2b_provider_network_local::broker::NetworkBrokerFacets::new(
+            broker_socket_path(state),
+            caller_role,
+            Arc::new(
+                d2b_provider_network_local::broker::ResolverNetworkIntentSource::new(resolver),
+            ),
+        ),
+    );
     if let Err(error) =
         d2b_provider_network_local::broker::NetworkBroker::apply_nm_unmanaged(&broker, &context)
     {

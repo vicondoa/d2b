@@ -18,6 +18,13 @@ use d2b_core::bundle_resolver::BundleResolver;
 /// handler runs. A handler must not treat its own presence in a descriptor as
 /// authority for anything.
 ///
+/// The row facets the broker needs - operation name, family, declaring
+/// provider, payload schema reference, audit facets, fd and state-cell
+/// declarations, and the deadline tier - are declared in the crate's
+/// `operations.json` (KTD3/U2) and generated into the committed rows and
+/// their views; the descriptor's handler table and the declaration must
+/// agree, enforced by the operation-row authority parity gate.
+///
 /// The operation reference is an owned, validated value, so a declaring crate
 /// assembles its descriptor tables once rather than declaring them as
 /// `const`.

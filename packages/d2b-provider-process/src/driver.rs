@@ -25,9 +25,11 @@
 //! restart budget is runtime-only: no restart annotation is ever written to
 //! the durable envelope.
 //!
-//! The effects the driver needs run through the port declared in
-//! [`crate::effects`]; the daemon composes the production implementation
-//! behind it, so this module holds no host state.
+//! The effects the driver needs run through the typed seam declared in
+//! [`crate::effects`], implemented by the family itself
+//! ([`crate::effects_service`]) over the daemon-supplied facets
+//! ([`crate::facets`]); the composition supplies the facet objects, so this
+//! module holds no host state (U1).
 #![allow(dead_code)]
 use std::{
     sync::{
@@ -38,7 +40,9 @@ use std::{
 };
 
 use crate::effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
+use crate::effects_service::{PROCESS_EFFECTS_SERVICE, ProcessEffectsService};
 use crate::execution::{ExecutionMode, execution_target_allowed};
+use crate::facets::ProcessEffectFacets;
 use crate::identity::{ProcessFamilySpec, ProcessResourceIdentity};
 use crate::launch_identity::{LaunchRow, resolve_launch_identity};
 use crate::operations::process_family_operations;
@@ -60,7 +64,7 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, OperationDef, WellKnownType};
+use d2b_resource_types::{AllowedSources, DriverDescriptor, OperationDef, ServiceDecl, WellKnownType};
 
 /// The durable Process resource type this factory serves (KTD4 Phase A).
 pub(crate) const PROCESS_TYPE_NAME: &str = "Process";
@@ -508,14 +512,15 @@ fn restart_delay(spec: &ProcessSpec, restart_count: u32) -> Duration {
 // ---------------------------------------------------------------------------
 
 /// Everything the composition must construct to instantiate the Process
-/// driver factory for one zone: the effect port the driver runs through plus
-/// the zone-authority inputs every derived identity folds in.
+/// driver factory for one zone: the declared facet set the effects run over
+/// plus the zone-authority inputs every derived identity folds in (U1).
 pub struct ProcessDriverArgs {
     /// Zone the plane serves; the rows this driver reconciles live in it.
     pub zone: ZoneId,
-    /// The effect port. The composition supplies the daemon's production
-    /// implementation; tests supply the same seam.
-    pub effects: Arc<dyn ProcessDriverEffects>,
+    /// The daemon-supplied facet set the family's effects implementation is
+    /// built from. The composition supplies the objects; the driver never
+    /// holds a daemon state type (R2).
+    pub facets: ProcessEffectFacets,
     /// Zone authority uid (bundle resolver / ZoneAuthorityIdentity path).
     pub zone_uid: Option<ResourceUid>,
     /// Zone policy revision from the authority path.
@@ -562,7 +567,7 @@ impl ResourceDriverFactory for ProcessDriverFactory {
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
         let ProcessDriverArgs {
             zone,
-            effects,
+            facets,
             zone_uid,
             policy_revision,
             provider_assignment_generation,
@@ -572,7 +577,7 @@ impl ResourceDriverFactory for ProcessDriverFactory {
         } = &self.args;
         Box::new(ProcessDriver::new(ProcessDriverArgs {
             zone: zone.clone(),
-            effects: Arc::clone(effects),
+            facets: facets.clone(),
             zone_uid: zone_uid.clone(),
             policy_revision: *policy_revision,
             provider_assignment_generation: *provider_assignment_generation,
@@ -641,34 +646,42 @@ pub(crate) const PROCESS_FAMILY_READS: &[WellKnownType] = &[
 /// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
 /// process can never be an export subject.
 ///
-/// The family's declared operations ride on the `Process` descriptor alone:
-/// the registry gives one operation reference exactly one owning type (a
-/// second declaring driver is refused as foreign), and the declaration
-/// inspection is a family operation, not a per-member one. The family creates
-/// no children through this declaration today.
+/// The family's declared operations and services ride on the `Process`
+/// descriptor alone: the registry gives one operation reference exactly one
+/// owning type (a second declaring driver is refused as foreign), the
+/// declaration inspection is a family operation, not a per-member one, and
+/// the family's effects service (`process.d2bus.org/effects`, U1) is a
+/// family surface its member types share. The family creates no children
+/// through this declaration today.
 pub fn process_family_descriptors(args: ProcessDriverArgs) -> [DriverDescriptor; 2] {
     let factory: Arc<dyn ResourceDriverFactory> = Arc::new(ProcessDriverFactory::new(args));
     let decoder = process_spec_decoder();
-    let descriptor =
-        |resource_type: WellKnownType, operations: &'static [OperationDef]| -> DriverDescriptor {
-            DriverDescriptor {
-                resource_type,
-                allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-                verbs: PROCESS_FAMILY_VERBS,
-                execution: PROCESS_FAMILY_EXECUTION_DOMAINS,
-                exportable: false,
-                reads: PROCESS_FAMILY_READS,
-                operations,
-                creations: &[],
-                startup: &[],
-                services: &[],
-                decoder: Arc::clone(&decoder),
-                factory: Arc::clone(&factory),
-            }
-        };
+    let descriptor = |resource_type: WellKnownType,
+                      operations: &'static [OperationDef],
+                      services: &'static [ServiceDecl]|
+     -> DriverDescriptor {
+        DriverDescriptor {
+            resource_type,
+            allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
+            verbs: PROCESS_FAMILY_VERBS,
+            execution: PROCESS_FAMILY_EXECUTION_DOMAINS,
+            exportable: false,
+            reads: PROCESS_FAMILY_READS,
+            operations,
+            creations: &[],
+            startup: &[],
+            services,
+            decoder: Arc::clone(&decoder),
+            factory: Arc::clone(&factory),
+        }
+    };
     [
-        descriptor(WellKnownType::PROCESS, process_family_operations()),
-        descriptor(WellKnownType::EPHEMERAL_PROCESS, &[]),
+        descriptor(
+            WellKnownType::PROCESS,
+            process_family_operations(),
+            &[PROCESS_EFFECTS_SERVICE],
+        ),
+        descriptor(WellKnownType::EPHEMERAL_PROCESS, &[], &[]),
     ]
 }
 
@@ -676,9 +689,10 @@ pub fn process_family_descriptors(args: ProcessDriverArgs) -> [DriverDescriptor;
 // Driver
 // ---------------------------------------------------------------------------
 
-/// One Process resource's driver. Effects run through the injected
-/// [`ProcessDriverEffects`] port; the actor owns scheduling, retries, and
-/// status publication.
+/// One Process resource's driver. Effects run through the family's
+/// [`ProcessDriverEffects`] implementation, built from the composition-
+/// supplied facet set; the actor owns scheduling, retries, and status
+/// publication.
 #[derive(Clone)]
 pub(crate) struct ProcessDriver {
     zone: ZoneId,
@@ -813,7 +827,7 @@ impl ProcessDriver {
     pub(crate) fn new(args: ProcessDriverArgs) -> Self {
         let ProcessDriverArgs {
             zone,
-            effects,
+            facets,
             zone_uid,
             policy_revision,
             provider_assignment_generation,
@@ -831,7 +845,10 @@ impl ProcessDriver {
                 guest_execution,
                 mode,
             },
-            effects,
+            // The family's own implementation, built from the facet set the
+            // composition supplied (U1): the same value the hosted service
+            // factory builds.
+            effects: Arc::new(ProcessEffectsService::new(facets)),
             budget: Arc::new(RestartBudget::default()),
             ephemeral: Arc::new(EphemeralRuntime::default()),
             durable: Arc::new(DurableRuntime::default()),
@@ -2222,7 +2239,7 @@ mod tests {
         process_family_descriptors, process_spec_decoder,
     };
 
-    use crate::test_support::{FakeEffects, FakeEffectsConfig};
+    use crate::test_support::{FakeFacets, FakeFacetsConfig};
 
     // -- fixtures ------------------------------------------------------------
 
@@ -2592,16 +2609,16 @@ mod tests {
         }
     }
 
-    fn driver_args(effects: Arc<FakeEffects>) -> ProcessDriverArgs {
+    fn driver_args(effects: Arc<FakeFacets>) -> ProcessDriverArgs {
         ProcessDriverArgs {
             zone: ZoneId::parse("work").expect("zone"),
+            facets: effects.facet_set(),
             zone_uid: Some(ResourceUid::parse(ZONE_UID).expect("zone uid")),
             policy_revision: Some(7),
             provider_assignment_generation: None,
             controller_generation: ControllerGeneration::new(1).expect("controller generation"),
             guest_execution: None,
             mode: ExecutionMode::Host,
-            effects,
         }
     }
 
@@ -2658,7 +2675,7 @@ mod tests {
         }
     }
 
-    async fn driver(effects: Arc<FakeEffects>) -> DriverUnderTest {
+    async fn driver(effects: Arc<FakeFacets>) -> DriverUnderTest {
         let args = driver_args(effects);
         let typed = ProcessDriver::new(args);
         let erased: Box<dyn DynResourceDriver> = Box::new(typed.clone());
@@ -2700,7 +2717,7 @@ mod tests {
             br#"{"annotations":{},"labels":{},"ownerRef":"Provider/network-local"}"#.to_vec();
         let mut f = fixture(row);
         assert!(f.ctx.owner_key().is_none(), "fixture resolves no owner key");
-        let d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        let d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
         let identity = d
             .typed
             .identity(
@@ -2728,7 +2745,7 @@ mod tests {
     }
 
     async fn guest_vmm_identity(f: &mut Fixture) -> super::ProcessResourceIdentity {
-        let d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        let d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
         d.typed
             .identity(
                 &mut f.ctx,
@@ -2806,7 +2823,7 @@ mod tests {
         row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"virtiofsd-worker","drainTimeout":"250ms"}"#.to_vec();
         let manager = OwnershipManager::with_owned(row.clone()).with_row(binding_row);
         let mut f = fixture_owned_by(row, manager, Some(binding_key));
-        let d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        let d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
         let identity = d
             .typed
             .identity(
@@ -2945,7 +2962,7 @@ mod tests {
         row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"virtiofsd-worker"}"#.to_vec();
         let manager = OwnershipManager::with_owned(row.clone());
         let mut f = fixture_owned_by(row, manager, Some(binding_key));
-        let d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        let d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
         let error = d
             .typed
             .identity(
@@ -2972,7 +2989,7 @@ mod tests {
     }
 
     async fn controller_identity(f: &mut Fixture) -> super::ProcessResourceIdentity {
-        let d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        let d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
         d.typed
             .identity(
                 &mut f.ctx,
@@ -3100,7 +3117,7 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn factory_registers_both_process_family_resource_types() {
-        let args = driver_args(Arc::new(FakeEffects::new(FakeEffectsConfig::default())));
+        let args = driver_args(Arc::new(FakeFacets::new(FakeFacetsConfig::default())));
         let factory = ProcessDriverFactory::new(args);
         assert_eq!(factory.resource_types().len(), 2);
         assert_eq!(factory.resource_types()[0].as_str(), "Process");
@@ -3116,7 +3133,7 @@ mod tests {
     /// factory, which claims both types.
     #[test]
     fn family_descriptors_register_both_member_types() {
-        let args = driver_args(Arc::new(FakeEffects::new(FakeEffectsConfig::default())));
+        let args = driver_args(Arc::new(FakeFacets::new(FakeFacetsConfig::default())));
         let descriptors = process_family_descriptors(args);
         let mut registry = d2b_resource_runtime::provider::ProviderDirectory::new();
         for descriptor in &descriptors {
@@ -3146,9 +3163,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_launch_uses_the_one_shot_effect_and_start_deadline() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(ephemeral_row());
         let mut driver = driver(fake.clone()).await;
@@ -3210,9 +3227,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_exit_is_terminal_succeeded_and_the_ttl_retires_the_row() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let manager = OwnershipManager::empty();
         let mut f = fixture_with(ephemeral_row(), manager.clone());
@@ -3267,9 +3284,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_runtime_deadline_stops_and_reports_a_terminal_failure() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(ephemeral_row());
         let mut driver = driver(fake.clone()).await;
@@ -3323,9 +3340,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_incident_hold_keeps_a_failed_row() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let manager = OwnershipManager::empty();
         let mut row = ephemeral_row();
@@ -3374,10 +3391,10 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_launch_refusal_is_terminal_and_never_restarts() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
             launch: Err("provider-effect:launch-failed".to_owned()),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(ephemeral_row());
         let mut driver = driver(fake.clone()).await;
@@ -3404,9 +3421,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn ephemeral_recover_adopts_a_live_process_without_launching() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(ephemeral_row());
         let mut driver = driver(fake.clone()).await;
@@ -3439,9 +3456,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn ephemeral_quarantined_classification_never_launches() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Quarantined(quarantined_report())]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(ephemeral_row());
         let mut driver = driver(fake.clone()).await;
@@ -3461,9 +3478,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn ephemeral_delete_stops_the_exact_identity_and_finalizes() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(ephemeral_row());
         let mut driver = driver(fake.clone()).await;
@@ -3485,9 +3502,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn ephemeral_delete_converges_absent_and_stops_a_stale_candidate() {
-        let absent = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let absent = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(ephemeral_row());
         let mut absent_driver = driver(absent.clone()).await;
@@ -3495,11 +3512,11 @@ mod tests {
         assert!(absent.stop_calls().is_empty());
         assert_eq!(absent.finalize_calls(), 0);
 
-        let stale = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let stale = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Stale {
                 candidate: stale_candidate(),
             }]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(ephemeral_row());
         let mut stale_driver = driver(stale.clone()).await;
@@ -3511,9 +3528,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn ephemeral_delete_refuses_an_ambiguous_identity() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Quarantined(quarantined_report())]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(ephemeral_row());
         let mut driver = driver(fake.clone()).await;
@@ -3537,9 +3554,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn ephemeral_unmintable_ticket_converges_on_delete_and_is_terminal_on_reconcile() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adopt_error: Some("provider-ticket:guest-process-not-vmm".to_owned()),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(ephemeral_row());
         let mut driver = driver(fake.clone()).await;
@@ -3562,9 +3579,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn launch_reaches_ready_with_expected_ticket_inputs() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(test_row());
         let mut driver = driver(fake.clone()).await;
@@ -3618,10 +3635,10 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn never_adopt_row_observes_the_identity_it_launched_instead_of_stopping_it() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
             active: false,
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(never_adopt_row());
         let mut driver = driver(fake.clone()).await;
@@ -3661,9 +3678,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn recover_adopts_a_live_matching_process_without_launching() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(test_row());
         let mut driver = driver(fake.clone()).await;
@@ -3687,9 +3704,9 @@ mod tests {
             },
             ProviderAdoption::Quarantined(quarantined_report()),
         ] {
-            let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
                 adoption: VecDeque::from([adoption]),
-                ..FakeEffectsConfig::default()
+                ..FakeFacetsConfig::default()
             }));
             let mut f = fixture(test_row());
             let mut driver = driver(fake.clone()).await;
@@ -3712,7 +3729,7 @@ mod tests {
             ..test_row()
         });
         let mut f = fixture_with(test_row(), manager.clone());
-        let mut d = driver(Arc::new(FakeEffects::new(FakeEffectsConfig::default()))).await;
+        let mut d = driver(Arc::new(FakeFacets::new(FakeFacetsConfig::default()))).await;
 
         // A live owned child: the erased children-first boundary refuses with
         // the shared `children-draining` NotYet before the driver body runs.
@@ -3741,9 +3758,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn delete_stops_term_then_kill_and_finalizes() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(test_row());
         let mut driver = driver(fake.clone()).await;
@@ -3769,9 +3786,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn delete_without_a_live_process_is_a_noop() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(test_row());
         let mut driver = driver(fake.clone()).await;
@@ -3784,11 +3801,11 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn delete_stops_an_exact_stale_candidate_after_restart() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Stale {
                 candidate: stale_candidate(),
             }]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(test_row());
         let mut driver = driver(fake.clone()).await;
@@ -3800,9 +3817,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
     async fn delete_refuses_an_ambiguous_identity() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Quarantined(quarantined_report())]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(test_row());
         let mut driver = driver(fake.clone()).await;
@@ -3824,10 +3841,9 @@ mod tests {
         let mut row = test_row();
         row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"gpu-worker","drainTimeout":"250ms"}"#
             .to_vec();
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
-            device_worker_launch: Some("device-worker-state-dir-unresolved"),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture_owned_by(
             row,
@@ -3851,10 +3867,10 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn retryable_reconcile_failure_requeues_exactly_once_with_backoff() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
             launch: Err("provider-effect:launch-failed".to_owned()),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(test_row());
         let mut driver = driver(fake.clone()).await;
@@ -3907,10 +3923,10 @@ mod tests {
         let policy = r#"{"backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"maxRestarts":1,"resetAfter":"60s"}"#;
         let mut row = test_row();
         row.spec = spec_bytes(Some(policy));
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
             launch: Err("provider-effect:launch-failed".to_owned()),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(row);
         let mut driver = driver(fake.clone()).await;
@@ -3979,9 +3995,9 @@ mod tests {
         let policy = r#"{"class":"on-failure","backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"maxRestarts":2,"resetAfter":"300s"}"#;
         let mut row = test_row();
         row.spec = spec_bytes(Some(policy));
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(row);
         let mut driver = driver(fake.clone()).await;
@@ -4067,10 +4083,10 @@ mod tests {
         let policy = r#"{"class":"never","backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"resetAfter":"300s"}"#;
         let mut row = test_row();
         row.spec = spec_bytes(Some(policy));
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
             liveness: VecDeque::from([ProviderLiveness::Exited, ProviderLiveness::Exited]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(row);
         let mut driver = driver(fake.clone()).await;
@@ -4138,10 +4154,10 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn durable_liveness_ambiguity_refuses_terminally_and_never_reads_ready() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Adopted(adopted_report())]),
             liveness: VecDeque::from([ProviderLiveness::Unknown]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(test_row());
         let mut driver = driver(fake.clone()).await;
@@ -4204,9 +4220,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn stopped_lifecycle_row_stops_the_live_process_before_reading_succeeded() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             liveness: VecDeque::from([ProviderLiveness::Exited]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(stopped_row());
         let mut driver = driver(fake.clone()).await;
@@ -4250,9 +4266,9 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn stopped_lifecycle_row_still_live_defers_instead_of_claiming_satisfied() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             liveness: VecDeque::from([ProviderLiveness::Alive]),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(stopped_row());
         let mut driver = driver(fake.clone()).await;
@@ -4318,10 +4334,10 @@ mod tests {
                 FailureKinds::PROCESS_GUEST_PROCESS_NOT_VMM,
             ),
         ] {
-            let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
                 adoption: VecDeque::from([ProviderAdoption::Absent]),
                 launch: Err(error.to_owned()),
-                ..FakeEffectsConfig::default()
+                ..FakeFacetsConfig::default()
             }));
             let mut f = fixture(test_row());
             let mut driver = driver(fake.clone()).await;
@@ -4355,10 +4371,10 @@ mod tests {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn durable_provider_effect_launch_failure_still_retries_under_the_budget() {
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
             launch: Err("provider-controller-provider-identity-missing".to_owned()),
-            ..FakeEffectsConfig::default()
+            ..FakeFacetsConfig::default()
         }));
         let mut f = fixture(test_row());
         let mut driver = driver(fake.clone()).await;
@@ -4390,7 +4406,7 @@ mod tests {
         let mut row = test_row();
         row.spec = br#"{"providerRef":"Provider/other","executionRef":"Host/host-system","processClass":"worker","template":"reaction"}"#
             .to_vec();
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig::default()));
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
         let mut f = fixture(row);
         let mut driver = driver(fake).await;
 
@@ -4404,7 +4420,7 @@ mod tests {
     async fn validate_rejects_a_malformed_spec() {
         let mut row = test_row();
         row.spec = b"{not-json".to_vec();
-        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig::default()));
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
         let mut f = fixture(row);
         let mut driver = driver(fake).await;
 

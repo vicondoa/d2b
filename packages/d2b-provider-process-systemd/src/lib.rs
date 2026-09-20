@@ -22,7 +22,6 @@
 pub mod audit;
 pub mod controller;
 pub mod drain;
-pub mod effect_port;
 pub mod error;
 pub mod launch;
 pub mod lifecycle;

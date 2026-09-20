@@ -323,7 +323,7 @@ set by the operator). When `arbitration: shared`, `maxConcurrentClaims` may be
 
 Render-node-only mode:
 - Provider/system-minijail validates the LaunchTicket and requests
-  `OpenDevice(dri)` via its injected `MinijailProcessEffectPort`; the core
+  `OpenDevice(dri)` via its injected `ProcessLaunchEffectPort`; the core
   executor pre-opens the DRM render node fd. No full-card or auxiliary device
   tokens are included.
 - Does **not** include `nvidia-ctl`, `nvidia-device`, `nvidia-uvm`, or
@@ -674,7 +674,7 @@ state not expressed in the resource spec.
 
 The render-node-only mode uses the ADR 0021 broker-pre-NS model. Upon
 receiving a `SpawnRunner(gpu-render-node)` effect request (routed via
-`MinijailProcessEffectPort` → core EffectPort adapter → privileged broker),
+`ProcessLaunchEffectPort` → core EffectPort adapter → privileged broker),
 the **privileged broker** performs:
 
 1. `OpenDevice` for the render node fd in the parent process (before
@@ -706,7 +706,7 @@ fd-inheritance; no bind-mount action is executed for user-NS spawns.
 may each hold a `gpu-render-node` passthrough claim simultaneously. The device-gpu
 controller creates one `device-<uid-short>-render-node` Process per active claim.
 Provider/system-minijail sends a separate `SpawnRunner` effect request via
-`MinijailProcessEffectPort` for each Process; the privileged broker opens a
+`ProcessLaunchEffectPort` for each Process; the privileged broker opens a
 separate render-node fd for each. The render node DRM device supports concurrent
 unprivileged readers.
 
@@ -964,16 +964,16 @@ any kind. It never calls `SpawnRunner`, `OpenDevice`, or any fd-inheritance
 operation.
 
 Provider/system-minijail, when processing a Process with `template: gpu-worker`,
-`render-node-worker`, or `video-worker`, uses its injected **`MinijailProcessEffectPort`**
+`render-node-worker`, or `video-worker`, uses its injected **`ProcessLaunchEffectPort`**
 to request execution effects. The core EffectPort adapter maps opaque intents from
-`MinijailProcessEffectPort` to broker requests. The **privileged broker alone**
+`ProcessLaunchEffectPort` to broker requests. The **privileged broker alone**
 performs `OpenDevice`, `clone3`, `uid_map`/`gid_map` writes, and FD transfer;
 neither system-minijail nor the device-gpu controller has direct broker access.
 
-### Effect operations (requested via MinijailProcessEffectPort; executed by privileged broker)
+### Effect operations (requested via ProcessLaunchEffectPort; executed by privileged broker)
 
 Provider/system-minijail sends the following effect requests through its injected
-`MinijailProcessEffectPort`; the core EffectPort adapter routes them to the
+`ProcessLaunchEffectPort`; the core EffectPort adapter routes them to the
 privileged broker which executes them:
 
 | Effect op | Effect | Audit | Rate limit |
@@ -1526,7 +1526,7 @@ When a GPU Device resource is removed from the Nix config:
 | `worker_gpu.rs` | Full GPU and render-node Process resource builder; argv construction via `d2b-host::gpu_argv`; opaque deviceUsage requests |
 | `worker_video.rs` | Video-decoder Process resource builder; argv construction via `d2b-host::video_argv`; NVIDIA opt-in gating; wire-contract check at startup |
 | `argv.rs` | Re-export `GpuArgvInput`, `VideoArgvInput`, `GpuContextType` from `d2b-host`; no new argv logic |
-| `effect_claim.rs` | Device claim registration; tracks in-memory claim admission state per Device/Guest via `GpuEffectPort`; claim authority is `Device` resource `spec`/`status` (holderRefs, conditions) and the core Operation ledger managed via `ResourceClient` - no file-backed allocation table and no Volume writes; does **not** hold execution authority (Provider/system-minijail sends effect requests via `MinijailProcessEffectPort`; the core EffectPort adapter routes them to the privileged broker which executes them) |
+| `effect_claim.rs` | Device claim registration; tracks in-memory claim admission state per Device/Guest via `GpuEffectPort`; claim authority is `Device` resource `spec`/`status` (holderRefs, conditions) and the core Operation ledger managed via `ResourceClient` - no file-backed allocation table and no Volume writes; does **not** hold execution authority (Provider/system-minijail sends effect requests via `ProcessLaunchEffectPort`; the core EffectPort adapter routes them to the privileged broker which executes them) |
 | `status.rs` | `StatusWriter`; condition builder; phase state machine; bounded `providerDiagnostic` |
 | `audit.rs` | Path-free `GpuAuditRecord` builder; correlation ID threading |
 | `error.rs` | `DeviceGpuError` enum; closed-set slug strings |
@@ -1727,7 +1727,7 @@ disposition contract test passes.
 | Reuse source | `packages/d2b-host/src/gpu_argv.rs` (baseline `b5ddbed`): `GpuArgvInput`, `GpuParams`, `GpuContextType`, `GpuDisplayConfig`; `packages/d2b-core/src/bundle_resolver.rs` device token constant comment |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-gpu/src/worker_gpu.rs` |
-| Detailed design | Build and commit `Process` resource record with `template: gpu-worker` or `template: render-node-worker`; set `sandbox.seccompClass` (`w1-gpu` or `w1-gpu-render-node`), `sandbox.userNamespace: {mappingClass: process-principal-root}` (uid/gid resolved privately by core from signed worker template - controller does NOT write numeric values), `sandbox.namespaceClasses`, `sandbox.capabilityClasses=[]`, `sandbox.startRoot=false`; set `deviceUsage[{deviceRef,access,purpose}]`, `networkUsage: null`, `endpoints[{name,transport,purpose}]`, `budget` (including `pids` and `fds` bounded limits), `readiness` (with `class`, `initialDelay`, `timeout`, `failureThreshold`, `successThreshold`), and `restartPolicy` (with `class`, `backoffBase`, `backoffMax`, `backoffMultiplierMilli`, `maxRestarts`, `resetAfter`). Provider/system-minijail validates and resolves the LaunchTicket and sends effect requests via `MinijailProcessEffectPort`; the core EffectPort adapter routes them to the **privileged broker** which performs `SpawnRunner`, `OpenDevice`, `clone3`, `uid_map`/`gid_map` writes, and fd transfer - the device-gpu controller does not have execution authority or fd access. `crossDomainTrusted` gating: the signed descriptor is static; `crossDomainTrusted` is projected from the Device setting into the LaunchTicket by Provider/system-minijail, which omits `GpuContextType::CrossDomain` from runtime argv when false. Primary reuse disposition: `adapt`. Preserved source-plan detail: `extract` argv builder logic into `argv.rs` as re-export from `d2b-host` (used by Provider/system-minijail at LaunchTicket resolution time; the signed component descriptor is static and is not rewritten per Device); `adapt` device allowlist token set from `bundle_resolver.rs` into `worker_gpu.rs` `GPU_DEVICE_ALLOWLIST` constant for `deviceUsage` population. |
+| Detailed design | Build and commit `Process` resource record with `template: gpu-worker` or `template: render-node-worker`; set `sandbox.seccompClass` (`w1-gpu` or `w1-gpu-render-node`), `sandbox.userNamespace: {mappingClass: process-principal-root}` (uid/gid resolved privately by core from signed worker template - controller does NOT write numeric values), `sandbox.namespaceClasses`, `sandbox.capabilityClasses=[]`, `sandbox.startRoot=false`; set `deviceUsage[{deviceRef,access,purpose}]`, `networkUsage: null`, `endpoints[{name,transport,purpose}]`, `budget` (including `pids` and `fds` bounded limits), `readiness` (with `class`, `initialDelay`, `timeout`, `failureThreshold`, `successThreshold`), and `restartPolicy` (with `class`, `backoffBase`, `backoffMax`, `backoffMultiplierMilli`, `maxRestarts`, `resetAfter`). Provider/system-minijail validates and resolves the LaunchTicket and sends effect requests via `ProcessLaunchEffectPort`; the core EffectPort adapter routes them to the **privileged broker** which performs `SpawnRunner`, `OpenDevice`, `clone3`, `uid_map`/`gid_map` writes, and fd transfer - the device-gpu controller does not have execution authority or fd access. `crossDomainTrusted` gating: the signed descriptor is static; `crossDomainTrusted` is projected from the Device setting into the LaunchTicket by Provider/system-minijail, which omits `GpuContextType::CrossDomain` from runtime argv when false. Primary reuse disposition: `adapt`. Preserved source-plan detail: `extract` argv builder logic into `argv.rs` as re-export from `d2b-host` (used by Provider/system-minijail at LaunchTicket resolution time; the signed component descriptor is static and is not rewritten per Device); `adapt` device allowlist token set from `bundle_resolver.rs` into `worker_gpu.rs` `GPU_DEVICE_ALLOWLIST` constant for `deviceUsage` population. |
 | Integration | `integration/gpu_worker_start/`; `integration/render_node_shared/`; `packages/d2b-contract-tests/tests/minijail_gpu.rs` (reused existing test) |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo test -p d2b-provider-device-gpu`; `cargo test -p d2b-contract-tests --test minijail_gpu` continues to pass |

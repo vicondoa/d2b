@@ -32,7 +32,8 @@ use d2b_provider::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::process_provider_runtime::{ProductionProcessProviders, ProviderLaunch};
+use crate::process_provider_runtime::ProductionProcessProviders;
+use d2b_provider_process::ProviderLaunch;
 use crate::provider_effects::{
     EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, LifecycleAuthorization,
     ProviderEffectError, ProviderLifecycleDispatch, ProviderLifecycleEffectPort,

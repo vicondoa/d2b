@@ -60,10 +60,17 @@ d2b_rust_binary(
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
+# The generator merges the per-crate operation declarations with the retained
+# committed rows, so the sandboxed drift target reads the declaration files
+# beside the artifacts it compares.
 generated_artifact_check(
     name = "gen_broker_operations_drift",
     command = "gen-broker-operations",
-    data = ["//:generated_broker_operations"],
+    data = [
+        "//:generated_broker_operations",
+        "//packages/d2b-provider-network-local:operations.json",
+        "//packages/d2b-provider-process:operations.json",
+    ],
 )
 
 generated_artifact_check(

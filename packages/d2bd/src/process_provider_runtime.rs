@@ -1,9 +1,11 @@
 //! Daemon-owned composition of the fixed process Providers.
 //!
-//! The Provider crates remain pure controllers: they receive only the
-//! core-owned effect ports. This module is the one production seam that
-//! constructs those ports from the authenticated broker transport and the
-//! trusted bundle. No Provider receives a broker socket or a bundle resolver.
+//! The Provider crates remain pure controllers: this module constructs the
+//! composed runtime from the authenticated broker transport and the trusted
+//! bundle, and that runtime crosses the provider boundary as the family's
+//! declared [`ProcessProviderRuntime`] facet (U1) - the family's effects
+//! implementation consumes it, and the daemon never hands a Provider a
+//! broker socket or a bundle resolver directly.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,24 +20,31 @@ use tokio::sync::Mutex;
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
-    ZoneRevision,
+    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceSpec, ResourceUid,
+    SchemaFingerprint, ZoneId,
     process::ReadinessClass,
     process::{EphemeralProcessSpec, ProcessClass, ProcessSpec},
     volume::{AttachmentAccess, AttachmentCache},
 };
 use d2b_core::{
     bundle_resolver::BundleResolver,
-    processes::{ProcessNode, ProcessRole},
+    processes::{ProcessExecutionDomain, ProcessNode, ProcessRole},
+    site::SiteJson,
 };
 use d2b_provider_credential::{
     ENTRA_BACKEND_REF, MANAGED_IDENTITY_BACKEND_REF, MANAGED_IDENTITY_PROVIDER_REF,
     SECRET_SERVICE_BACKEND_REF,
 };
 use d2b_provider_process::{
-    DeviceWorkerLaunch, ExecutionMode, LaunchRow, ProviderAdoption, ProviderLiveness,
-    ServingWorkerLaunch, ServingWorkerRoot, execution_target_allowed, resolve_launch_identity,
+    CommittedProviderIdentitySource, DeviceWorkerFamily, DeviceWorkerLaunch, ExecutionMode,
+    GpuWorkerParams, LaunchRow, ProcessFamilySpec, ProcessProviderRuntime,
+    ProcessResourceContext, ProcessResourceIdentity, ProviderAdoption, ProviderLaunch,
+    ProviderLiveness, ServingWorkerLaunch, ServingWorkerRoot, SwtpmFlushParams, SwtpmWorkerParams,
+    VideoWorkerParams, device_worker_family, device_worker_vm, execution_target_allowed,
+    resolve_launch_identity, resource_uid_from_bytes,
 };
+use d2b_resource_runtime::context::ResourceContext;
+use d2b_resource_runtime::identity::ResourceKey;
 use d2b_process_conformance::{
     AdoptionCandidate, AdoptionOutcome, CompiledDigests, ConfigurationDigest,
     GuestExecutionBinding, IdentityBinding, LaunchIdentity, LaunchTicket, OperationBinding,
@@ -410,191 +419,6 @@ fn identity_changed_error(mismatches: Vec<String>) -> String {
         "Process provider identity mismatch",
     );
     format!("provider-process-identities-changed:{}", mismatches.join(","))
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ProcessResourceContext<'a> {
-    pub(crate) zone: ZoneId,
-    pub(crate) resource_ref: &'a ResourceRef,
-    pub(crate) resource_uid: &'a ResourceUid,
-    pub(crate) resource_generation: ResourceGeneration,
-    pub(crate) resource_revision: ZoneRevision,
-    pub(crate) provider_ref: &'a ResourceRef,
-    pub(crate) provider_uid: Option<ResourceUid>,
-    pub(crate) provider_generation: Option<ResourceGeneration>,
-    pub(crate) controller_generation: ControllerGeneration,
-    pub(crate) guest_execution: Option<GuestExecutionBinding>,
-    pub(crate) zone_uid: Option<ResourceUid>,
-    pub(crate) policy_revision: Option<u64>,
-    pub(crate) provider_assignment_generation: Option<ResourceGeneration>,
-    /// Semantic owner used to bind static Provider controller templates.
-    pub(crate) owner_ref: Option<ResourceRef>,
-    /// Immutable identity of the semantic owner.
-    pub(crate) owner_uid: Option<ResourceUid>,
-    /// Provider that owns the supervised controller route.
-    pub(crate) controller_provider_ref: Option<ResourceRef>,
-    /// Optional Guest selector for a shared Host execution reference.
-    pub(crate) target_ref: Option<ResourceRef>,
-    /// Exact execution reference from the Process spec.
-    pub(crate) execution_ref: Option<ResourceRef>,
-    /// Exact User scope from the Process execution spec.
-    pub(crate) user_ref: Option<ResourceRef>,
-    /// Catalog-bound private Guest setup descriptor digest.
-    pub(crate) guest_descriptor_digest: Option<SchemaFingerprint>,
-    /// Binding-declared serving-worker launch inputs, when this Process is a
-    /// VolumeBinding-owned serving worker.
-    pub(crate) worker_launch: Option<ServingWorkerLaunch>,
-    /// Device-declared worker launch parameters, when this Process is one of
-    /// the declared Device-owned worker rows (`Process/swtpm-<device>`,
-    /// `EphemeralProcess/swtpm-flush-<device>`, `Process/gpu-<device>`,
-    /// `Process/video-<device>`). Derived by the Process controller from the
-    /// owning Device row, the trusted declared template, and the daemon's own
-    /// runtime paths.
-    pub(crate) device_worker_launch: Option<DeviceWorkerLaunch>,
-    /// The canonical launch identity the owning row resolved (KTD7). The
-    /// ticket builder consumes this value instead of re-deriving the owner,
-    /// target, VM, or legacy role from the fields above.
-    pub(crate) launch: Option<LaunchIdentity>,
-}
-
-impl<'a> ProcessResourceContext<'a> {
-    pub(crate) const fn new(
-        zone: ZoneId,
-        identity: (
-            &'a ResourceRef,
-            &'a ResourceUid,
-            ResourceGeneration,
-            ZoneRevision,
-        ),
-        provider_ref: &'a ResourceRef,
-        controller_generation: ControllerGeneration,
-        target_ref: Option<ResourceRef>,
-    ) -> Self {
-        let (resource_ref, resource_uid, resource_generation, resource_revision) = identity;
-        Self {
-            zone,
-            resource_ref,
-            resource_uid,
-            resource_generation,
-            resource_revision,
-            provider_ref,
-            provider_uid: None,
-            provider_generation: None,
-            controller_generation,
-            guest_execution: None,
-            zone_uid: None,
-            policy_revision: None,
-            provider_assignment_generation: None,
-            owner_ref: None,
-            owner_uid: None,
-            controller_provider_ref: None,
-            target_ref,
-            execution_ref: None,
-            user_ref: None,
-            guest_descriptor_digest: None,
-            worker_launch: None,
-            device_worker_launch: None,
-            launch: None,
-        }
-    }
-
-    /// Attach the row-resolved canonical launch identity (KTD7).
-    pub(crate) fn with_launch_identity(mut self, launch: LaunchIdentity) -> Self {
-        self.launch = Some(launch);
-        self
-    }
-
-    /// Attach the binding-declared serving-worker launch inputs.
-    pub(crate) fn with_worker_launch(mut self, launch: Option<ServingWorkerLaunch>) -> Self {
-        self.worker_launch = launch;
-        self
-    }
-
-    /// Attach the Device-declared worker launch parameters.
-    pub(crate) fn with_device_worker_launch(
-        mut self,
-        launch: Option<DeviceWorkerLaunch>,
-    ) -> Self {
-        self.device_worker_launch = launch;
-        self
-    }
-
-    pub(crate) fn with_guest_execution(mut self, binding: Option<&GuestExecutionBinding>) -> Self {
-        self.guest_execution = binding.cloned();
-        self
-    }
-
-    pub(crate) fn with_lifecycle_identity(
-        mut self,
-        zone_uid: Option<ResourceUid>,
-        policy_revision: Option<u64>,
-        provider_assignment_generation: Option<ResourceGeneration>,
-    ) -> Self {
-        self.zone_uid = zone_uid;
-        self.policy_revision = policy_revision;
-        self.provider_assignment_generation = provider_assignment_generation;
-        self
-    }
-
-    pub(crate) fn with_owner_ref(mut self, owner_ref: Option<ResourceRef>) -> Self {
-        self.owner_ref = owner_ref;
-        self
-    }
-
-    pub(crate) fn with_owner_uid(mut self, owner_uid: Option<ResourceUid>) -> Self {
-        self.owner_uid = owner_uid;
-        self
-    }
-
-    /// Retained seam: the controller-provider reference a Guest-local launch
-    /// binds into its controller bootstrap context. The U12 conversion
-    /// retired the only production writer (the Guest-local Process runtime),
-    /// so this stays available for the Guest-side realization follow-on and
-    /// its tests; the bootstrap context falls back to the Provider owner ref
-    /// meanwhile.
-    #[cfg(test)]
-    pub(crate) fn with_controller_provider_ref(
-        mut self,
-        provider_ref: Option<ResourceRef>,
-    ) -> Self {
-        self.controller_provider_ref = provider_ref;
-        self
-    }
-
-    pub(crate) fn with_provider_identity(
-        mut self,
-        provider_uid: Option<&ResourceUid>,
-        provider_generation: Option<ResourceGeneration>,
-    ) -> Self {
-        self.provider_uid = provider_uid.cloned();
-        self.provider_generation = provider_generation;
-        self
-    }
-
-    pub(crate) fn with_guest_descriptor_digest(
-        mut self,
-        descriptor_digest: Option<&SchemaFingerprint>,
-    ) -> Self {
-        self.guest_descriptor_digest = descriptor_digest.cloned();
-        self
-    }
-
-    pub(crate) fn with_execution_ref(mut self, execution_ref: &ResourceRef) -> Self {
-        self.execution_ref = Some(execution_ref.clone());
-        self
-    }
-
-    pub(crate) fn with_user_ref(mut self, user_ref: Option<&ResourceRef>) -> Self {
-        self.user_ref = user_ref.cloned();
-        self
-    }
-}
-
-/// Result of a Provider-backed launch, carrying only opaque process identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProviderLaunch {
-    /// Opaque identity established by the effect adapter.
-    pub identity: ProcessIdentityDigest,
 }
 
 const MAX_CONTROLLER_BOOTSTRAP_ENDPOINTS: usize = 256;
@@ -3328,6 +3152,221 @@ impl ProductionProcessProviders {
         build_ticket(&self.bundle, vm, node, self.provider_for(node), timeout)
             .map_err(|error| format!("provider-ticket:{}", error.code()))
     }
+/// Resolve the typed launch parameters of one declared Device-owned worker
+/// row (`U17` gap closure).
+///
+/// The Device Providers declare their worker rows path-free and the
+/// Process spec is argv-free by contract, so the inputs the device argv
+/// generators need come from the three sources this seat owns:
+///
+/// - the owned `Device` row: its uid keys the controller-created state
+///   Volume, and its declared Provider settings carry the GPU context
+///   classes, displays, and EGL/Vulkan flags;
+/// - the trusted declared template: the bundle's Device-worker intent for
+///   this exact declared row pins the worker binary and the principal the
+///   sockets belong to, and `device_worker_posture` pins the template's
+///   closed role posture;
+/// - the daemon's runtime paths: the swtpm state directory backing the
+///   controller-created state Volume, and the per-VM socket roots under
+///   the daemon runtime root (the same conventions the guest VMM's
+///   `--tpm socket=` / `--gpu socket=` / `--vhost-user-media socket=`
+///   arguments name) - plus the bundle's `site.json`, which projects the
+///   host Wayland socket the GPU worker renders into.
+///
+/// Returns `None` for every row that is not one of the declared Device
+/// worker templates. A declared template whose trusted inputs cannot be
+/// resolved refuses the launch (the named code is the diagnosis) instead
+/// of launching bare.
+pub(crate) async fn resolve_device_worker_launch(
+    &self,
+    ctx: &mut ResourceContext,
+    identity: &ProcessResourceIdentity,
+    spec: &ProcessFamilySpec,
+) -> Result<Option<DeviceWorkerLaunch>, &'static str> {
+    let execution = spec.execution();
+    let template = execution.template().as_str();
+    let family = device_worker_family(template);
+    let Some(family) = family else {
+        return Ok(None);
+    };
+    let launch = &identity.launch;
+    // Owner fence: these rows are Device-declared children of the Device
+    // that owns the physical function, and every path below is derived
+    // from that Device.
+    let owner_key = ctx
+        .owner_key()
+        .cloned()
+        .ok_or("device-worker-owner-unresolved")?;
+    if owner_key.type_name != "Device" {
+        return Err("device-worker-owner-not-device");
+    }
+    let device_ref = launch
+        .owner_ref()
+        .filter(|owner| owner.resource_type().as_str() == "Device")
+        .cloned()
+        .ok_or("device-worker-owner-not-device")?;
+    let device_uid = ctx
+        .owner()
+        .and_then(resource_uid_from_bytes)
+        .ok_or("device-worker-owner-uid-unresolved")?;
+    // A Device-owned worker row declares `executionRef Host/host-system`
+    // and no Guest target, so the row's own launch identity names no VM
+    // by construction. The coherent VM scope is the owning Device's
+    // Guest owner - the same derivation `tpm_device_targets_vm` requires
+    // (`Device.metadata.ownerRef == Guest/<vm>`) and the TPM
+    // shared-provider effects mint their `VmId` from. A Device with no
+    // Guest owner is the genuinely unresolvable case.
+    let vm_name = match launch.vm() {
+        Some(vm) => vm.to_owned(),
+        None => device_worker_vm(ctx, &owner_key).await?,
+    };
+    // Template fence: the trusted intent must exist for this exact
+    // declared row name + template, and the template must belong to a
+    // Device Provider's closed posture table.
+    let execution_ref = execution.execution_ref().to_canonical_string();
+    let user_ref = execution.user_ref().map(ResourceRef::to_canonical_string);
+    let domain = match execution
+        .domain()
+        .unwrap_or(ExecutionDomain::System)
+    {
+        ExecutionDomain::System => ProcessExecutionDomain::System,
+        ExecutionDomain::User => ProcessExecutionDomain::User,
+    };
+    let intent = self
+        .bundle()
+        .find_device_worker_intent(
+            &identity.resource_ref,
+            &execution_ref,
+            domain,
+            user_ref.as_deref(),
+            template,
+        )
+        .ok_or("device-worker-intent-unresolved")?;
+    let Some(posture) = d2b_core::bundle_resolver::device_worker_posture(
+        intent.owner_ref.as_deref().unwrap_or_default(),
+        template,
+    ) else {
+        return Err("device-worker-template-refused");
+    };
+    if !intent.accepts_launch_args {
+        return Err("device-worker-template-refused");
+    }
+    // The socket owner ids the worker asks swtpm for, in the namespace
+    // the launch actually runs in: a posture with the ADR 0021
+    // single-entry user namespace names the in-namespace identity (`0`,
+    // the only id the mapping declares), a posture without one keeps the
+    // host principal. Naming the host principal inside its own namespace
+    // made swtpm's socket chown fail with EINVAL and the worker exit 1
+    // before it bound anything.
+    let (socket_uid, socket_gid) = posture.launch_ids(intent.uid, intent.gid);
+    let socket_runtime_dir = self.socket_runtime_dir().to_path_buf();
+    let params = match family {
+        DeviceWorkerFamily::Swtpm => {
+            let state_dir = device_state_dir(
+                self.bundle(),
+                &identity.zone,
+                &device_uid,
+                &device_ref,
+                &execution_ref,
+                &vm_name,
+            )?;
+            DeviceWorkerLaunch::Swtpm(Box::new(SwtpmWorkerParams {
+                binary_path: intent.binary_path.clone(),
+                vm_name: vm_name.clone(),
+                ctrl_socket_path: state_dir.join("ctrl.sock"),
+                server_socket_path: device_runtime_socket(
+                    &socket_runtime_dir,
+                    &vm_name,
+                    "tpm.sock",
+                ),
+                state_dir,
+                uid: socket_uid,
+                gid: socket_gid,
+                log_level: d2b_provider_device_tpm::SwtpmSettings::default().log_level,
+            }))
+        }
+        DeviceWorkerFamily::SwtpmFlush => {
+            let state_dir = device_state_dir(
+                self.bundle(),
+                &identity.zone,
+                &device_uid,
+                &device_ref,
+                &execution_ref,
+                &vm_name,
+            )?;
+            DeviceWorkerLaunch::SwtpmFlush(Box::new(SwtpmFlushParams {
+                ioctl_binary_path: intent.binary_path.clone(),
+                vm_name: vm_name.clone(),
+                ctrl_socket_path: state_dir.join("ctrl.sock"),
+            }))
+        }
+        DeviceWorkerFamily::Gpu => {
+            let settings = device_gpu_settings(ctx, &owner_key).await?;
+            // The Wayland socket the sidecar renders into is projected by
+            // the trusted bundle from the site's own Wayland session
+            // (`d2b.site.waylandUser` / `waylandDisplay`, see
+            // `nixos-modules/site-json.nix`). A bundle without the
+            // artifact, or a headless site, leaves the slot unbound and
+            // the launch refuses with its own code instead of naming a
+            // path no trusted artifact names.
+            let wayland_sock = gpu_worker_wayland_sock(self.bundle().site.as_ref())?;
+            // The typed parameters travel as the canonical JSON of the
+            // Provider's own `GpuParams`; the argv seat decodes them back.
+            let params = serde_json::to_value(d2b_provider_device_gpu::GpuParams {
+                context_types: settings
+                    .context_types
+                    .iter()
+                    .map(|context| match context {
+                        d2b_provider_device_gpu::ContextType::Virgl => {
+                            d2b_provider_device_gpu::GpuContextType::Virgl
+                        }
+                        d2b_provider_device_gpu::ContextType::Virgl2 => {
+                            d2b_provider_device_gpu::GpuContextType::Virgl2
+                        }
+                        d2b_provider_device_gpu::ContextType::CrossDomain => {
+                            d2b_provider_device_gpu::GpuContextType::CrossDomain
+                        }
+                    })
+                    .collect(),
+                displays: settings
+                    .displays
+                    .iter()
+                    .map(|display| d2b_provider_device_gpu::GpuDisplayConfig {
+                        hidden: display.hidden,
+                    })
+                    .collect(),
+                egl: settings.egl,
+                vulkan: settings.vulkan,
+            })
+            .map_err(|_| "device-worker-gpu-settings-invalid")?;
+            DeviceWorkerLaunch::Gpu(Box::new(GpuWorkerParams {
+                binary_path: intent.binary_path.clone(),
+                vm_name: vm_name.clone(),
+                socket_path: device_runtime_socket(&socket_runtime_dir, &vm_name, "gpu.sock"),
+                wayland_sock,
+                params,
+            }))
+        }
+        DeviceWorkerFamily::Video => {
+            // The declared row's template and the owning Device's
+            // `videoNvidiaDecode` setting are one decision (the posture
+            // binds the NVIDIA nodes only through the
+            // `video-worker-nvidia` template), so a disagreement is a
+            // refusal rather than a launch where the setting is silently
+            // ignored.
+            let settings = device_gpu_settings(ctx, &owner_key).await?;
+            video_nvidia_posture(template, &settings)?;
+            DeviceWorkerLaunch::Video(Box::new(VideoWorkerParams {
+                binary_path: intent.binary_path.clone(),
+                vm_name: vm_name.clone(),
+                socket_path: video_runtime_socket(&socket_runtime_dir, &vm_name)
+                    .ok_or("device-worker-video-socket-unresolved")?,
+            }))
+        }
+    };
+    Ok(Some(params))
+}
+
 }
 
 fn provider_error(error: ProcessConformanceError) -> String {
@@ -3679,6 +3718,142 @@ fn device_worker_path(
     Ok(())
 }
 
+/// The state directory backing the Device's controller-created TPM state
+/// Volume: the controller-created Volume's name under the trusted per-VM
+/// `path:swtpm-state:<vm>` storage row
+/// (`packages/d2b-provider-volume-local/nix/storage-json.nix`). Both the
+/// name and the root come from trusted artifacts - the Volume body is the
+/// TPM Provider's own builder, and the root is the bundle's storage row -
+/// so a worker can never be pointed at a path no trusted artifact names.
+fn device_state_dir(
+    bundle: &BundleResolver,
+    zone: &ZoneId,
+    device_uid: &ResourceUid,
+    device_ref: &ResourceRef,
+    execution_ref: &str,
+    vm_name: &str,
+) -> Result<PathBuf, &'static str> {
+    let execution_ref =
+        ResourceRef::parse(execution_ref).map_err(|_| "device-worker-execution-ref-invalid")?;
+    let document = d2b_provider_device_tpm::build_tpm_state_volume_resource(
+        device_uid,
+        device_ref,
+        zone.as_str(),
+        &execution_ref,
+    )
+    .map_err(|_| "device-worker-state-volume-unresolved")?;
+    let volume_name = document
+        .pointer("/metadata/name")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("device-worker-state-volume-unresolved")?;
+    let storage_path_id = format!(
+        "{}{vm_name}",
+        d2b_provider_device_tpm::vocabulary::TPM_STATE_STORAGE_ROW_PREFIX
+    );
+    bundle
+        .resolve_volume_view_root(&storage_path_id, volume_name, "")
+        .ok_or("device-worker-state-dir-unresolved")
+}
+
+/// Decode the GPU settings declared by one Device row's stored spec.
+///
+/// Only an absent Provider extension decodes to the Provider's bounded
+/// default. A present settings payload that does not decode as the closed
+/// `device-gpu.d2bus.org` extension refuses with its own code instead: folding
+/// it into the default made an undecodable declaration indistinguishable from
+/// a Device that declares nothing, and the default's context classes
+/// (including `CrossDomain`) are wider than anything the Device declared.
+fn decode_device_gpu_settings(
+    stored_spec: &[u8],
+) -> Result<d2b_provider_device_gpu::GpuSettings, &'static str> {
+    let envelope = serde_json::from_slice::<ResourceSpec>(stored_spec)
+        .map_err(|_| "device-worker-device-row-unreadable")?;
+    let Some(provider) = envelope.provider() else {
+        return Ok(d2b_provider_device_gpu::GpuSettings::default());
+    };
+    let settings = provider.settings().to_canonical_bytes();
+    serde_json::from_slice::<d2b_provider_device_gpu::GpuSettings>(&settings)
+        .map_err(|_| "device-worker-gpu-settings-invalid")
+}
+
+/// The owning Device's declared GPU settings (the closed
+/// `device-gpu.d2bus.org` Device extension); a Device that declares none
+/// keeps the Provider's own bounded default.
+async fn device_gpu_settings(
+    ctx: &mut ResourceContext,
+    owner_key: &ResourceKey,
+) -> Result<d2b_provider_device_gpu::GpuSettings, &'static str> {
+    let Some(row) = ctx
+        .get(owner_key)
+        .await
+        .map_err(|_| "device-worker-device-row-unreadable")?
+    else {
+        return Err("device-worker-device-row-missing");
+    };
+    decode_device_gpu_settings(&row.spec)
+}
+
+/// The video sidecar posture fence: the declared row's template and the
+/// owning Device's `videoNvidiaDecode` setting are one decision, so they must
+/// agree. The NVIDIA template with the setting off (a stale or hand-authored
+/// row) and the plain template with the setting on (the setting silently
+/// dropped - the regression this fence exists for) both refuse by name. The
+/// posture itself - the bound device nodes - comes from the row's template
+/// through the broker's posture table, never from the setting.
+fn video_nvidia_posture(
+    template: &str,
+    settings: &d2b_provider_device_gpu::GpuSettings,
+) -> Result<(), &'static str> {
+    if settings.video_nvidia_decode != (template == "video-worker-nvidia") {
+        return Err("device-worker-nvidia-posture-mismatch");
+    }
+    Ok(())
+}
+
+/// The host Wayland socket the GPU sidecar renders into.
+///
+/// The trusted bundle projects it (`site.json`, emitted from the site's own
+/// `d2b.site.waylandUser` / `waylandDisplay`), so the daemon never derives
+/// `/run/user/<uid>/...` itself: the daemon's own `/run/user` is its runtime
+/// directory, not the session user's. `None` - a bundle that predates the
+/// artifact, or a site without a Wayland session - keeps the slot unbound so
+/// the GPU launch refuses with its own closed code instead of running
+/// against a path no trusted artifact names.
+fn device_worker_wayland_sock(site: Option<&SiteJson>) -> Option<PathBuf> {
+    site.and_then(|site| site.wayland_socket()).map(PathBuf::from)
+}
+
+/// The GPU worker's Wayland input, refused by name when the bundle does not
+/// project one.
+fn gpu_worker_wayland_sock(site: Option<&SiteJson>) -> Result<PathBuf, &'static str> {
+    device_worker_wayland_sock(site).ok_or("device-worker-wayland-sock-unbound")
+}
+
+/// One per-VM device socket under the daemon runtime root
+/// (`/run/d2b/vms/<vm>/<name>`), the convention the guest VMM's
+/// `--tpm socket=` / `--gpu socket=` / `--vhost-user-media socket=`
+/// arguments name (see `nixos-modules/vm-options.nix` and
+/// `packages/d2b-provider-device-tpm/nix/guest.nix`).
+fn device_runtime_socket(
+    socket_runtime_dir: &std::path::Path,
+    vm_name: &str,
+    file_name: &str,
+) -> PathBuf {
+    socket_runtime_dir.join("vms").join(vm_name).join(file_name)
+}
+
+/// The per-VM video-decoder socket (`/run/d2b-video/<vm>/video.sock`): the
+/// video module's own `RuntimeDirectory` and the guest's
+/// `--vhost-user-media socket=` argument name it, so the video runtime root is
+/// a sibling of the daemon's runtime root.
+fn video_runtime_socket(
+    socket_runtime_dir: &std::path::Path,
+    vm_name: &str,
+) -> Option<PathBuf> {
+    let root = socket_runtime_dir.parent()?.join("d2b-video");
+    Some(root.join(vm_name).join("video.sock"))
+}
+
 /// Compose one Device-owned worker row's launch arguments.
 ///
 /// This is the seat where the daemon's runtime paths (state directory, socket
@@ -3693,11 +3868,11 @@ fn device_worker_path(
 /// anchored under the root this call receives. The remaining paths are fenced
 /// at derivation instead of here: the swtpm state directory and its ctrl
 /// socket resolve through the bundle's trusted storage row
-/// (`ProductionProcessDriverEffects::device_state_dir`), the one-shot flush's
-/// ctrl socket is that same state directory, and the video and Wayland
-/// sockets come from the daemon's own runtime roots and the bundle's projected
-/// site artifacts - so a declared row launches with exactly the paths those
-/// trusted sources named.
+/// ([`device_state_dir`], the daemon-side derivation this module owns), the
+/// one-shot flush's ctrl socket is that same state directory, and the video
+/// and Wayland sockets come from the daemon's own runtime roots and the
+/// bundle's projected site artifacts - so a declared row launches with
+/// exactly the paths those trusted sources named.
 fn device_worker_launch_args(
     socket_runtime_dir: &std::path::Path,
     launch: &DeviceWorkerLaunch,
@@ -4418,6 +4593,151 @@ fn stable_token(value: &str) -> String {
         );
     }
     value.to_owned()
+}
+
+/// The composed fixed runtime as the family's declared facet (U1): every
+/// method delegates to the same inherent surface the daemon's own callers
+/// use, so the family's effects observe exactly the daemon's runtime. The
+/// trait object is what crosses the provider boundary - never a daemon
+/// state type.
+#[async_trait::async_trait]
+impl ProcessProviderRuntime for ProductionProcessProviders {
+    fn bundle(&self) -> &BundleResolver {
+        self.bundle()
+    }
+
+    fn socket_runtime_dir(&self) -> &std::path::Path {
+        self.socket_runtime_dir()
+    }
+
+    fn guest_setup_descriptor_digest(
+        &self,
+        zone: &ZoneId,
+        guest_ref: &ResourceRef,
+    ) -> Option<SchemaFingerprint> {
+        self.guest_setup_descriptor_digest(zone, guest_ref)
+    }
+
+    async fn resolve_device_worker_launch(
+        &self,
+        ctx: &mut ResourceContext,
+        identity: &ProcessResourceIdentity,
+        spec: &ProcessFamilySpec,
+    ) -> Result<Option<DeviceWorkerLaunch>, &'static str> {
+        self.resolve_device_worker_launch(ctx, identity, spec).await
+    }
+
+    async fn launch_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
+        spec: &ProcessSpec,
+        timeout: Duration,
+    ) -> Result<ProviderLaunch, String> {
+        self.launch_resource(context, spec, timeout).await
+    }
+
+    async fn launch_ephemeral_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
+        spec: &EphemeralProcessSpec,
+        timeout: Duration,
+    ) -> Result<ProviderLaunch, String> {
+        self.launch_ephemeral_resource(context, spec, timeout).await
+    }
+
+    async fn adopt_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
+        spec: &ProcessSpec,
+    ) -> Result<ProviderAdoption, String> {
+        self.adopt_resource(context, spec).await
+    }
+
+    async fn probe_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
+        spec: &ProcessSpec,
+    ) -> Result<ProviderLiveness, String> {
+        self.probe_resource(context, spec).await
+    }
+
+    async fn adopt_ephemeral_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<ProviderAdoption, String> {
+        self.adopt_ephemeral_resource(context, spec).await
+    }
+
+    async fn probe_ephemeral_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
+        spec: &EphemeralProcessSpec,
+    ) -> Result<ProviderLiveness, String> {
+        self.probe_ephemeral_resource(context, spec).await
+    }
+
+    async fn stop_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
+        spec: &ProcessSpec,
+        term_timeout: Duration,
+        kill_timeout: Duration,
+    ) -> Result<bool, String> {
+        self.stop_resource(context, spec, term_timeout, kill_timeout).await
+    }
+
+    async fn stop_ephemeral_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
+        spec: &EphemeralProcessSpec,
+        term_timeout: Duration,
+        kill_timeout: Duration,
+    ) -> Result<bool, String> {
+        self.stop_ephemeral_resource(context, spec, term_timeout, kill_timeout)
+            .await
+    }
+
+    async fn stop_stale_resource(
+        &self,
+        provider_ref: &ResourceRef,
+        candidate: &AdoptionCandidate,
+    ) -> Result<(), String> {
+        self.stop_stale_resource(provider_ref, candidate).await
+    }
+
+    async fn finalize_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
+    ) -> Result<(), String> {
+        self.finalize_resource(context).await
+    }
+
+    fn has_active_resource_in_zone(
+        &self,
+        zone: &ZoneId,
+        zone_uid: Option<&ResourceUid>,
+        resource_ref: &ResourceRef,
+    ) -> bool {
+        self.has_active_resource_in_zone(zone, zone_uid, resource_ref)
+    }
+}
+
+/// The daemon's committed-`Provider` identity view exposed through the
+/// provider-declared KTD7 facet (U1): the plane's registry publishes the
+/// committed rows, and the composition root wires this view as the family's
+/// committed identity source.
+pub(crate) struct PlaneCommittedProviderIdentitySource {
+    pub(crate) registry: Arc<crate::resource_plane_v3::PlaneResourceRegistry>,
+}
+
+impl CommittedProviderIdentitySource for PlaneCommittedProviderIdentitySource {
+    fn committed_provider_identity(
+        &self,
+        provider: &ResourceRef,
+    ) -> Option<(ResourceUid, d2b_contracts_resource::v3::ResourceGeneration)> {
+        self.registry.committed_provider_identity(provider)
+    }
 }
 
 #[cfg(test)]
@@ -5922,5 +6242,106 @@ mod tests {
         .expect("ephemeral ticket without a typed launch");
         assert!(bare_ticket.launch_args().is_empty());
         assert_eq!(bare_ticket.template(), &template);
+    }
+
+    // -- Device-family resolution (U17 gap closure) --------------------------
+    //
+    // The Device-family-specific resolution (the owning Device's declared
+    // settings, the controller-created state Volume, the projected Wayland
+    // socket) is owned by this daemon seat and may name the device families;
+    // the family crate receives the already-resolved typed parameters.
+
+    /// A Device that declares GPU settings keeps them, a Device that declares
+    /// none keeps the Provider's bounded default, and a present payload that
+    /// does not decode refuses with its own code instead of silently becoming
+    /// the default - whose `CrossDomain` context class the Device never
+    /// declared.
+    #[test]
+    fn device_gpu_settings_refuse_an_undecodable_declaration() {
+        let declared = br#"{"providerRef":"Provider/device-gpu","provider":{"schemaId":"device-gpu.d2bus.org/Device/spec","schemaVersion":"1.0","settings":{"contextTypes":["virgl"],"displays":[{"hidden":false}],"egl":false,"vulkan":false}}}"#;
+        let settings =
+            decode_device_gpu_settings(declared).expect("declared settings decode");
+        assert_eq!(
+            settings.context_types,
+            vec![d2b_provider_device_gpu::ContextType::Virgl]
+        );
+        assert!(!settings.egl, "the declared setting wins over the default");
+        assert!(
+            decode_device_gpu_settings(br#"{"providerRef":"Provider/device-gpu"}"#)
+                .expect("absent settings keep the default")
+                == d2b_provider_device_gpu::GpuSettings::default(),
+            "a Device that declares nothing keeps the Provider default"
+        );
+        let undecodable = br#"{"providerRef":"Provider/device-gpu","provider":{"schemaId":"device-gpu.d2bus.org/Device/spec","schemaVersion":"1.0","settings":{"contextTypes":["bogus"]}}}"#;
+        assert_eq!(
+            decode_device_gpu_settings(undecodable),
+            Err("device-worker-gpu-settings-invalid"),
+            "an undecodable declaration is never read as absent"
+        );
+        assert_eq!(
+            decode_device_gpu_settings(b"{not-json"),
+            Err("device-worker-device-row-unreadable")
+        );
+    }
+
+    /// The owning Device's `videoNvidiaDecode` setting and the declared
+    /// video row's template are one decision: the NVIDIA posture binds its
+    /// device nodes only through the `video-worker-nvidia` template, so each
+    /// disagreement refuses by name instead of launching a sidecar where the
+    /// setting (on the plain template) or the template (on a Device that
+    /// turned the setting off) is silently ignored.
+    #[test]
+    fn video_nvidia_posture_refuses_a_setting_template_mismatch() {
+        let mut settings = d2b_provider_device_gpu::GpuSettings::default();
+        assert!(!settings.video_nvidia_decode, "the default posture is plain");
+        assert_eq!(video_nvidia_posture("video-worker", &settings), Ok(()));
+        assert_eq!(
+            video_nvidia_posture("video-worker-nvidia", &settings),
+            Err("device-worker-nvidia-posture-mismatch"),
+            "the NVIDIA template without its setting is a refusal"
+        );
+
+        settings.video_nvidia_decode = true;
+        assert_eq!(
+            video_nvidia_posture("video-worker-nvidia", &settings),
+            Ok(())
+        );
+        assert_eq!(
+            video_nvidia_posture("video-worker", &settings),
+            Err("device-worker-nvidia-posture-mismatch"),
+            "the setting on the plain template is never a silent no-op"
+        );
+    }
+
+    /// The host Wayland socket is trusted bundle data (`site.json`), never a
+    /// daemon-derived path: the reader resolves the projected value and refuses
+    /// by name when the bundle carries none, so a bundle that predates the
+    /// artifact - or a site without a Wayland session - cannot launch the GPU
+    /// worker against an invented socket.
+    #[test]
+    fn gpu_worker_wayland_sock_reads_the_projected_site_and_refuses_without_it() {
+        let site = SiteJson {
+            schema_version: "v1".to_owned(),
+            wayland_socket: Some("/run/user/1001/wayland-7".to_owned()),
+        };
+        assert_eq!(
+            gpu_worker_wayland_sock(Some(&site)),
+            Ok(std::path::PathBuf::from("/run/user/1001/wayland-7")),
+            "the socket is exactly the bundle-projected value"
+        );
+
+        let headless = SiteJson {
+            schema_version: "v1".to_owned(),
+            wayland_socket: None,
+        };
+        assert_eq!(
+            gpu_worker_wayland_sock(Some(&headless)),
+            Err("device-worker-wayland-sock-unbound")
+        );
+        assert_eq!(
+            gpu_worker_wayland_sock(None),
+            Err("device-worker-wayland-sock-unbound"),
+            "a bundle that predates site.json keeps the GPU launch refused by name"
+        );
     }
 }

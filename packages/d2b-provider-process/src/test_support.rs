@@ -1,25 +1,34 @@
-//! Test-support recording double for the [`ProcessDriverEffects`] port.
+//! Test-support recording double for the [`ProcessProviderRuntime`] facet
+//! (U1).
 //!
-//! The canonical scripted fake effect port for the Process family: records
+//! The canonical scripted runtime facet for the Process family: records
 //! every call with the exact ticket inputs the driver derived (KTD7) and
-//! replays a scripted adoption/liveness/launch sequence. Gated behind the
-//! `test-support` Cargo feature (available automatically under `cargo test`),
-//! so production consumers never pull it in. The plane tests in `d2bd` reach
-//! it through the same public surface.
+//! replays a scripted adoption/liveness/launch sequence. The family's
+//! effects implementation runs over it exactly as over the composed
+//! production runtime, so driver and plane tests observe the real seam.
+//! Gated behind the `test-support` Cargo feature (available automatically
+//! under `cargo test`), so production consumers never pull it in. The plane
+//! tests in `d2bd` reach it through the same public surface.
 
 use std::collections::VecDeque;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
+use std::collections::BTreeMap;
+
 use d2b_contracts_resource::v3::process::{EphemeralProcessSpec, ExecutionSpec, ProcessSpec};
-use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, SchemaFingerprint, ZoneId};
+use d2b_core::bundle::{Bundle, BundleGeneration};
+use d2b_core::bundle_resolver::BundleResolver;
+use d2b_core::processes::ProcessesJson;
 use d2b_process_conformance::{AdoptionCandidate, ProcessIdentityDigest};
-use d2b_resource_runtime::context::ResourceContext;
 use parking_lot::Mutex;
 
-use crate::driver::device_worker_family;
-use crate::effects::{ProcessDriverEffects, ProviderAdoption, ProviderLiveness};
-use crate::identity::{ProcessFamilySpec, ProcessResourceIdentity};
-use crate::worker_launch::DeviceWorkerLaunch;
+use crate::effects::{ProviderAdoption, ProviderLiveness};
+use crate::facets::{
+    ProcessEffectFacets, ProcessProviderRuntime, ProcessResourceContext, ProviderLaunch,
+};
 
 /// One recorded launch with the ticket inputs the driver derived.
 #[derive(Clone, Debug)]
@@ -59,10 +68,10 @@ pub struct RecordedStop {
     pub kill_timeout: Duration,
 }
 
-/// Configuration for [`FakeEffects`]: the scripted adoption/liveness/launch
+/// Configuration for [`FakeFacets`]: the scripted adoption/liveness/launch
 /// outcomes the double replays in order.
 #[derive(Clone)]
-pub struct FakeEffectsConfig {
+pub struct FakeFacetsConfig {
     /// Scripted adoption results; the last one repeats once exhausted.
     pub adoption: VecDeque<ProviderAdoption>,
     /// When set, one-shot adoption refuses with this provider error.
@@ -74,12 +83,9 @@ pub struct FakeEffectsConfig {
     pub launch: Result<ProcessIdentityDigest, String>,
     /// Whether the fake reports a live retained identity.
     pub active: bool,
-    /// When set, the declared Device-worker parameter derivation refuses
-    /// with this named code (the launch-only refusal shape).
-    pub device_worker_launch: Option<&'static str>,
 }
 
-impl Default for FakeEffectsConfig {
+impl Default for FakeFacetsConfig {
     fn default() -> Self {
         Self {
             adoption: VecDeque::from([ProviderAdoption::Absent]),
@@ -87,31 +93,43 @@ impl Default for FakeEffectsConfig {
             liveness: VecDeque::new(),
             launch: Ok(ProcessIdentityDigest::from_bytes([0x51; 32])),
             active: true,
-            device_worker_launch: None,
         }
     }
 }
 
-/// Scripted [`ProcessDriverEffects`] double: records every call with the
-/// exact ticket inputs the driver derived (KTD7) and replays a scripted
+/// Scripted [`ProcessProviderRuntime`] facet double: records every call with
+/// the exact ticket inputs the driver derived (KTD7) and replays a scripted
 /// adoption sequence.
-pub struct FakeEffects {
-    config: Mutex<FakeEffectsConfig>,
+pub struct FakeFacets {
+    config: Mutex<FakeFacetsConfig>,
     calls: Mutex<Vec<&'static str>>,
     launches: Mutex<Vec<RecordedLaunch>>,
     stops: Mutex<Vec<RecordedStop>>,
     finalizes: Mutex<usize>,
+    bundle: BundleResolver,
+    socket_runtime_dir: std::path::PathBuf,
 }
 
-impl FakeEffects {
+impl FakeFacets {
     /// Build a double from the given scripted configuration.
-    pub fn new(config: FakeEffectsConfig) -> Self {
+    pub fn new(config: FakeFacetsConfig) -> Self {
         Self {
             config: Mutex::new(config),
             calls: Mutex::new(Vec::new()),
             launches: Mutex::new(Vec::new()),
             stops: Mutex::new(Vec::new()),
             finalizes: Mutex::new(0),
+            bundle: fixture_bundle(),
+            socket_runtime_dir: std::path::PathBuf::from("/run/d2b"),
+        }
+    }
+
+    /// The facet set the driver and the service factory are built from.
+    pub fn facet_set(self: &Arc<Self>) -> ProcessEffectFacets {
+        ProcessEffectFacets {
+            runtime: Arc::clone(self) as Arc<dyn ProcessProviderRuntime>,
+            committed: None,
+            guest_owners: None,
         }
     }
 
@@ -159,22 +177,23 @@ impl FakeEffects {
 }
 
 /// Build a [`RecordedLaunch`] for one recorded launch of the given family
-/// arm, from the identity and execution spec the driver derived.
+/// arm, from the provider-layer context and execution spec the driver
+/// derived.
 pub fn recorded_launch(
     kind: &'static str,
-    identity: &ProcessResourceIdentity,
+    context: &ProcessResourceContext<'_>,
     execution: &ExecutionSpec,
     start_deadline_ms: Option<u64>,
 ) -> RecordedLaunch {
     RecordedLaunch {
         kind,
-        resource_ref: identity.resource_ref.to_canonical_string(),
-        resource_uid: identity.resource_uid.as_str().to_owned(),
-        generation: identity.resource_generation.get(),
-        zone: identity.zone.clone(),
-        zone_uid: identity.zone_uid.clone(),
-        policy_revision: identity.policy_revision,
-        provider_ref: identity.provider_ref.to_canonical_string(),
+        resource_ref: context.resource_ref.to_canonical_string(),
+        resource_uid: context.resource_uid.as_str().to_owned(),
+        generation: context.resource_generation.get(),
+        zone: context.zone.clone(),
+        zone_uid: context.zone_uid.clone(),
+        policy_revision: context.policy_revision,
+        provider_ref: context.provider_ref.to_canonical_string(),
         template: execution.template().as_str().to_owned(),
         execution_ref: execution.execution_ref().to_canonical_string(),
         start_deadline_ms,
@@ -182,26 +201,42 @@ pub fn recorded_launch(
 }
 
 #[async_trait::async_trait]
-impl ProcessDriverEffects for FakeEffects {
-    async fn launch(
+impl ProcessProviderRuntime for FakeFacets {
+    fn bundle(&self) -> &BundleResolver {
+        &self.bundle
+    }
+
+    fn socket_runtime_dir(&self) -> &Path {
+        &self.socket_runtime_dir
+    }
+
+    fn guest_setup_descriptor_digest(
         &self,
-        identity: &ProcessResourceIdentity,
+        _zone: &ZoneId,
+        _guest_ref: &ResourceRef,
+    ) -> Option<SchemaFingerprint> {
+        None
+    }
+
+    async fn launch_resource(
+        &self,
+        context: ProcessResourceContext<'_>,
         spec: &ProcessSpec,
         _timeout: Duration,
-    ) -> Result<ProcessIdentityDigest, String> {
+    ) -> Result<ProviderLaunch, String> {
         self.calls.lock().push("launch");
         self.launches
             .lock()
-            .push(recorded_launch("Process", identity, spec.execution(), None));
-        self.config.lock().launch.clone()
+            .push(recorded_launch("Process", &context, spec.execution(), None));
+        self.config.lock().launch.clone().map(launch_identity)
     }
 
-    async fn launch_ephemeral(
+    async fn launch_ephemeral_resource(
         &self,
-        identity: &ProcessResourceIdentity,
+        context: ProcessResourceContext<'_>,
         spec: &EphemeralProcessSpec,
         timeout: Duration,
-    ) -> Result<ProcessIdentityDigest, String> {
+    ) -> Result<ProviderLaunch, String> {
         self.calls.lock().push("launch-ephemeral");
         assert_eq!(
             timeout,
@@ -210,16 +245,16 @@ impl ProcessDriverEffects for FakeEffects {
         );
         self.launches.lock().push(recorded_launch(
             "EphemeralProcess",
-            identity,
+            &context,
             spec.execution(),
             Some(spec.start_deadline().as_millis()),
         ));
-        self.config.lock().launch.clone()
+        self.config.lock().launch.clone().map(launch_identity)
     }
 
-    async fn adopt(
+    async fn adopt_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &ProcessSpec,
     ) -> Result<ProviderAdoption, String> {
         self.calls.lock().push("adopt");
@@ -230,9 +265,9 @@ impl ProcessDriverEffects for FakeEffects {
             .unwrap_or(ProviderAdoption::Absent))
     }
 
-    async fn probe(
+    async fn probe_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &ProcessSpec,
     ) -> Result<ProviderLiveness, String> {
         self.calls.lock().push("probe");
@@ -243,9 +278,9 @@ impl ProcessDriverEffects for FakeEffects {
             .unwrap_or(ProviderLiveness::Alive))
     }
 
-    async fn adopt_ephemeral(
+    async fn adopt_ephemeral_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &EphemeralProcessSpec,
     ) -> Result<ProviderAdoption, String> {
         self.calls.lock().push("adopt-ephemeral");
@@ -259,9 +294,9 @@ impl ProcessDriverEffects for FakeEffects {
             .unwrap_or(ProviderAdoption::Absent))
     }
 
-    async fn probe_ephemeral(
+    async fn probe_ephemeral_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &EphemeralProcessSpec,
     ) -> Result<ProviderLiveness, String> {
         self.calls.lock().push("probe-ephemeral");
@@ -272,9 +307,9 @@ impl ProcessDriverEffects for FakeEffects {
             .unwrap_or(ProviderLiveness::Alive))
     }
 
-    async fn stop(
+    async fn stop_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &ProcessSpec,
         term_timeout: Duration,
         kill_timeout: Duration,
@@ -288,9 +323,9 @@ impl ProcessDriverEffects for FakeEffects {
         Ok(true)
     }
 
-    async fn stop_ephemeral(
+    async fn stop_ephemeral_resource(
         &self,
-        _identity: &ProcessResourceIdentity,
+        _context: ProcessResourceContext<'_>,
         _spec: &EphemeralProcessSpec,
         term_timeout: Duration,
         kill_timeout: Duration,
@@ -304,7 +339,7 @@ impl ProcessDriverEffects for FakeEffects {
         Ok(true)
     }
 
-    async fn stop_stale(
+    async fn stop_stale_resource(
         &self,
         _provider_ref: &ResourceRef,
         _candidate: &AdoptionCandidate,
@@ -313,30 +348,16 @@ impl ProcessDriverEffects for FakeEffects {
         Ok(())
     }
 
-    async fn device_worker_launch(
+    async fn finalize_resource(
         &self,
-        _ctx: &mut ResourceContext,
-        _identity: &ProcessResourceIdentity,
-        spec: &ProcessFamilySpec,
-    ) -> Result<Option<DeviceWorkerLaunch>, &'static str> {
-        let template = spec.execution().template().as_str();
-        if device_worker_family(template).is_none() {
-            return Ok(None);
-        }
-        self.calls.lock().push("device-worker-launch");
-        match self.config.lock().device_worker_launch {
-            Some(code) => Err(code),
-            None => Ok(None),
-        }
-    }
-
-    async fn finalize(&self, _identity: &ProcessResourceIdentity) -> Result<(), String> {
+        _context: ProcessResourceContext<'_>,
+    ) -> Result<(), String> {
         self.calls.lock().push("finalize");
         *self.finalizes.lock() += 1;
         Ok(())
     }
 
-    fn has_active(
+    fn has_active_resource_in_zone(
         &self,
         _zone: &ZoneId,
         _zone_uid: Option<&ResourceUid>,
@@ -344,4 +365,61 @@ impl ProcessDriverEffects for FakeEffects {
     ) -> bool {
         self.config.lock().active
     }
+
+    async fn resolve_device_worker_launch(
+        &self,
+        _ctx: &mut d2b_resource_runtime::context::ResourceContext,
+        _identity: &crate::identity::ProcessResourceIdentity,
+        _spec: &crate::identity::ProcessFamilySpec,
+    ) -> Result<Option<crate::worker_launch::DeviceWorkerLaunch>, &'static str> {
+        // The double never models a Device-owned worker row: the driver
+        // tests exercise the seam's family gate (which returns `None` for
+        // every non-device template before the facet is consulted), and the
+        // Device-family-specific resolution is owned by the daemon host.
+        Ok(None)
+    }
+}
+
+/// Map the scripted launch digest onto the adapter's opaque launch result.
+fn launch_identity(identity: ProcessIdentityDigest) -> ProviderLaunch {
+    ProviderLaunch { identity }
+}
+
+/// The trusted-bundle fixture the double reports: the same artifact shapes
+/// the daemon's own tests load (host fixture + golden v04 manifest), with no
+/// zone resource bundles. The family's effects only read the bundle's
+/// projected site and storage/intent tables for Device-worker rows, which
+/// the driver tests never reach.
+fn fixture_bundle() -> BundleResolver {
+    let host = serde_json::from_str::<d2b_core::host::HostJson>(include_str!(
+        "../../../tests/fixtures/deny-unknown/host-valid.json"
+    ))
+    .expect("host fixture");
+    let manifest = d2b_core::manifest_v04::ManifestV04::from_slice(
+        include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+    )
+    .expect("manifest fixture");
+    BundleResolver::from_artifacts_with_zone_resource_bundles(
+        Bundle {
+            bundle_version: 1,
+            schema_version: "v3".to_owned(),
+            privileges_path: "privileges.json".to_owned(),
+            storage_path: None,
+            realm_workloads_launcher_v2_path: None,
+            generation: BundleGeneration {
+                generator: "test".to_owned(),
+                source_revision: None,
+                generated_at: None,
+            },
+            bundle_hash: Some("sha256:bundle".to_owned()),
+            artifact_hashes: None,
+        },
+        host,
+        ProcessesJson {
+            schema_version: "v2".to_owned(),
+            vms: Vec::new(),
+        },
+        manifest,
+        BTreeMap::new(),
+    )
 }

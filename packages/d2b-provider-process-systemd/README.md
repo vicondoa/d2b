@@ -26,8 +26,8 @@ parent.
 ## Controllers / services / workers / binaries
 
 One controller, shipped as a library type: `SystemdProcessProvider` and its
-`SystemdProcessController`, generic over the injected
-`SystemdProcessEffectPort`. Lifecycle, drain, audit, and metric helpers remain
+`SystemdProcessController`, generic over the injected conformance
+`ProcessLaunchEffectPort`. Lifecycle, drain, audit, and metric helpers remain
 typed and path-free.
 
 ## Placement and dependencies
@@ -53,8 +53,9 @@ a locally verified pidfd.
 
 Neither this controller nor the process it launches calls systemd's D-Bus or
 socket API, and neither calls `pidfd_open`. The controller validates the
-ticket and calls the injected effect port, which the fixed core effect adapter
-implements and which is the sole caller of the systemd effect owner.
+ticket and calls the injected conformance `ProcessLaunchEffectPort`, which the
+fixed core effect adapter implements and which is the sole caller of the
+systemd effect owner.
 
 Adoption revalidates every required identity binding before a pidfd is
 opened. Ambiguity quarantines; it never signals, kills, or reuses.

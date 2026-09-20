@@ -1,0 +1,995 @@
+{
+  "crate": "d2b-provider-network-local",
+  "operations": [
+    {
+      "operation": "ApplyNftables",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "apply-nftables",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network-host",
+        "scope": "global/per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplyNftables"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleNftIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "desiredHash": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleNftIntentRef",
+            "scopeId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "ApplyNftablesProjection",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "apply-nftables-projection",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network-host",
+        "scope": "global/per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplyNftablesProjection"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleNftProjectionIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "apply",
+                "remove"
+              ]
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "expectedGenerationId": {
+              "type": "string"
+            },
+            "desiredHash": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleNftProjectionIntentRef",
+            "scopeId",
+            "action",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "expectedGenerationId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "ApplyNmUnmanaged",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "apply-nm-unmanaged",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network-host",
+        "scope": "global/per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplyNmUnmanaged"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleNmIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleNmIntentRef",
+            "scopeId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "ApplyRoute",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "apply-route",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network-host",
+        "scope": "global/per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplyRoute"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleRouteIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleRouteIntentRef",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "ApplySysctl",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "apply-sysctl",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network-host",
+        "scope": "global/per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ApplySysctl"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleSysctlIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleSysctlIntentRef",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "CreateBridge",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "create-bridge",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "CreateBridge"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleBridgeIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleBridgeIntentRef",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "DeleteBridge",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "delete-bridge",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "DeleteBridge"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleBridgeIntentRef": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleBridgeIntentRef",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "CreatePersistentTap",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "create-persistent-tap",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env/VM/TAP",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "CreatePersistentTap"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "roleId": {
+              "type": "string"
+            },
+            "vmId": {
+              "type": "string"
+            },
+            "bundleTapIntentRef": {
+              "type": "string"
+            },
+            "attachmentId": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "admittedInterfaceNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "roleId",
+            "vmId",
+            "bundleTapIntentRef",
+            "attachmentId",
+            "networkGeneration",
+            "attachmentGeneration",
+            "zoneUid",
+            "networkUid",
+            "bundleGeneration",
+            "admittedInterfaceNames"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "DeletePersistentTap",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "delete-persistent-tap",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env/VM/TAP",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "DeletePersistentTap"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "attachmentId": {
+              "type": "string"
+            },
+            "expectedZoneUid": {
+              "type": "string"
+            },
+            "expectedNetworkUid": {
+              "type": "string"
+            },
+            "expectedNetworkGeneration": {
+              "type": "integer"
+            },
+            "expectedAttachmentGeneration": {
+              "type": "integer"
+            },
+            "expectedBundleGeneration": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "attachmentId",
+            "expectedZoneUid",
+            "expectedNetworkUid",
+            "expectedNetworkGeneration",
+            "expectedAttachmentGeneration",
+            "expectedBundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "CreateTapFd",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "create-tap-fd",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env/VM/TAP",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "CreateTapFd"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "roleId": {
+              "type": "string"
+            },
+            "vmId": {
+              "type": "string"
+            },
+            "bundleTapIntentRef": {
+              "type": "string"
+            },
+            "attachmentId": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "admittedInterfaceNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "roleId",
+            "vmId",
+            "bundleTapIntentRef",
+            "attachmentId",
+            "networkGeneration",
+            "attachmentGeneration",
+            "zoneUid",
+            "networkUid",
+            "bundleGeneration",
+            "admittedInterfaceNames"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "SetBridgePortFlags",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "set-bridge-port-flags",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-env/VM/TAP",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SetBridgePortFlags"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "networkTapContext": {
+              "type": "object"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "UpdateHostsFile",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "update-hosts-file",
+      "profiles": [
+        "host"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "name-resolution",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "UpdateHostsFile"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "bundleHostsIntentRef": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "destroy": {
+              "type": "boolean"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "bundleHostsIntentRef"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "SeedDnsmasqLease",
+      "family": "network",
+      "declaringProvider": "d2b-provider-network-local",
+      "service": "d2b.network",
+      "method": "seed-dnsmasq-lease",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "network",
+        "scope": "per-VM/env",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SeedDnsmasqLease"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "scopeId": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "networkUid": {
+              "type": "string"
+            },
+            "networkGeneration": {
+              "type": "integer"
+            },
+            "attachmentGeneration": {
+              "type": "integer"
+            },
+            "bundleGeneration": {
+              "type": "string"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "scopeId",
+            "zoneUid",
+            "networkUid",
+            "networkGeneration",
+            "attachmentGeneration",
+            "bundleGeneration"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    }
+  ]
+}
