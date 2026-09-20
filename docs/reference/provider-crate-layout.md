@@ -82,8 +82,11 @@ about the resource model:
   from `docs/reference/policy/principal-allocation.json` and the declarations' principals.
 - the generated views of the broker operation catalog (`broker_operation_*`
   generated modules, `docs/reference/broker-operation-triage.md`), read
-  `docs/reference/policy/broker-operations.json`, the committed operation rows,
-  and never restate a facet: a row cannot move without moving every view.
+  `docs/reference/policy/broker-operations.json` and the per-crate
+  `operations.json` declarations, and never restate a facet: a row cannot
+  move without moving every view. The committed rows document is itself a
+  generated view of the declarations plus the retained non-declared rows
+  (U2/KTD3).
 
 `gen-nix-inventories` and the other `gen-*` commands regenerate these files;
 `tests/tools/generate-artifacts.sh` runs the whole set in one pass. The
@@ -166,10 +169,13 @@ synchronous-path reads); everything else is a per-site row with reason.
 
 The policy documents themselves
 (`docs/reference/policy/broker-operations.json`,
-`docs/reference/policy/principal-allocation.json`) are committed inputs, not
-generated output: the aggregate reads them but never rewrites them. Their
-drift surfaces are the generated views that must match them byte-for-byte and
-(the host-contract golden digest case), which pins the contract digest the host
-module derives from the allocation, the zone model, and the bundle framing. A
-lane that moves a row in one of those documents regenerates the consumers and
-re-pins its digest in the same change.
+`docs/reference/policy/principal-allocation.json`) are committed: the
+broker-operations document is generated output (the broker-operation
+generator rewrites it from the per-crate `operations.json` declarations plus
+the retained rows, and its drift target pins it byte-for-byte), while
+principal-allocation.json is a committed input the aggregate reads but never
+rewrites. Their drift surfaces are the generated views that must match them
+byte-for-byte and (the host-contract golden digest case), which pins the
+contract digest the host module derives from the allocation, the zone model,
+and the bundle framing. A lane that moves a row in one of those documents
+regenerates the consumers and re-pins its digest in the same change.

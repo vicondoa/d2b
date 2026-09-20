@@ -468,7 +468,7 @@ fn collect_rs_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
 /// descriptor-builder call. Both are the shapes the existing driver crates
 /// use to register their descriptors, so a drift there fails closed
 /// rather than silently narrowing the registered set.
-fn descriptor_type_idents(text: &str) -> BTreeSet<String> {
+pub(crate) fn descriptor_type_idents(text: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     scan_descriptor_pattern(text, "resource_type:", &mut out);
     scan_descriptor_pattern(text, "descriptor(", &mut out);

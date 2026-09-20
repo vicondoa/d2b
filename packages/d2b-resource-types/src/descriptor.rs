@@ -57,6 +57,11 @@ pub struct DriverDescriptor {
     /// The resource types the driver reads while reconciling.
     pub reads: &'static [WellKnownType],
     /// The broker operations the driver serves, with their handlers.
+    ///
+    /// The committed facets of each operation are declared in the crate's
+    /// `operations.json` (KTD3/U2) and generated into the committed rows and
+    /// their views; the operation-row authority parity gate fails when this
+    /// table and the declaration disagree.
     pub operations: &'static [OperationDef],
     /// The children the driver may create.
     pub creations: &'static [ChildCreation],

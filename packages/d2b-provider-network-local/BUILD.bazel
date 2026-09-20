@@ -22,6 +22,9 @@ exports_files(
         "nix/network.nix",
         "nix/resources-network.nix",
         "nix/tests/default.nix",
+        # The operation-row declaration the broker-operation generator and
+        # its drift target read (U2/KTD3).
+        "operations.json",
     ],
     visibility = ["//visibility:public"],
 )

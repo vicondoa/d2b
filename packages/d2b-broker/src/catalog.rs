@@ -8,12 +8,15 @@
 //!
 //! The rows are the source. The generated table in
 //! `generated/broker_operation_catalog.rs` is written by
-//! `xtask gen-broker-operations` from
-//! `docs/reference/policy/broker-operations.json`, and every other catalog -
-//! the wire enum, the fixed profile catalogs, the `W3BrokerOperation`
-//! inventory, the authorization rows, and the typed audit fields - is
-//! compared against the same rows by [`audit`], so a row cannot move without
-//! the views moving with it.
+//! `xtask gen-broker-operations`, which merges the retained committed rows in
+//! `docs/reference/policy/broker-operations.json` with the per-crate
+//! operation declarations (`operations.json` in each declaring
+//! `d2b-provider-*` crate, KTD3/U2) and rewrites the committed rows document
+//! and every other catalog - the wire enum, the fixed profile catalogs, the
+//! `W3BrokerOperation` inventory, the authorization rows, and the typed
+//! audit fields - from the merged catalog. Every view is compared against
+//! the same rows by [`audit`], so a row cannot move without the views moving
+//! with it.
 //!
 //! Two bindings are structural rather than checked. The `wire_variants!`
 //! name match is exhaustive over the wire enum, so a variant a name list does

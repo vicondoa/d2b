@@ -1,0 +1,834 @@
+{
+  "crate": "d2b-provider-process",
+  "operations": [
+    {
+      "operation": "OpenPidfd",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "open-pidfd",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "pidfd",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "OpenPidfd"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "bundleRunnerIntentRef": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer"
+            },
+            "expectedStartTimeTicks": {
+              "type": "integer"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "ownerRef": {
+              "type": "string"
+            },
+            "providerRef": {
+              "type": "string"
+            },
+            "providerIdentity": {
+              "type": "string"
+            },
+            "templateIdentity": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "runtimeScope": {
+              "type": "array"
+            },
+            "guestExecution": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "pid",
+            "expectedStartTimeTicks"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "stateCell": {
+        "cell": "runner-pidfd-registry",
+        "durability": "ephemeral"
+      }
+    },
+    {
+      "operation": "OpenPeerPidfdFromAcceptedSocket",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "open-peer-pidfd-from-accepted-socket",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "callable-read-only",
+      "dispositionTarget": "live read-only callable",
+      "authz": {
+        "subject": "pidfd",
+        "scope": "accepted Unix socket",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "OpenPeerPidfdFromAcceptedSocket"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {},
+          "required": []
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "ObserveRunner",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "observe-runner",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "ObserveRunner"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "bundleRunnerIntentRef": {
+              "type": "string"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "ownerRef": {
+              "type": "string"
+            },
+            "providerRef": {
+              "type": "string"
+            },
+            "providerIdentity": {
+              "type": "string"
+            },
+            "templateIdentity": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "runtimeScope": {
+              "type": "array"
+            },
+            "guestExecution": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "role",
+            "bundleRunnerIntentRef"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "PollChildReaped",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "poll-child-reaped",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "global",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {},
+          "required": []
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "PrepareRuntimeDir",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "prepare-runtime-dir",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "fs",
+        "scope": "global/per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "PrepareRuntimeDir"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "pathClass": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "pathClass"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "PrepareStateDir",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "prepare-state-dir",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": true,
+      "capabilities": true,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "fs",
+        "scope": "global/per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "PrepareStateDir",
+          "PrepareSwtpmDir"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "pathClass": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "pathClass"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "CgroupKill",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "cgroup-kill",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "cgroup",
+        "scope": "per-VM/role leaf",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "CgroupKill"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "SignalRunner",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "signal-runner",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SignalRunner"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "signal": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer"
+            },
+            "expectedStartTimeTicks": {
+              "type": "integer"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "ownerRef": {
+              "type": "string"
+            },
+            "providerRef": {
+              "type": "string"
+            },
+            "providerIdentity": {
+              "type": "string"
+            },
+            "templateIdentity": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "runtimeScope": {
+              "type": "array"
+            },
+            "guestExecution": {
+              "type": "object"
+            },
+            "bundleRunnerIntentRef": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "signal"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "DeregisterRunnerPidfd",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "deregister-runner-pidfd",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "runner",
+        "scope": "per-VM",
+        "allowedGroups": [
+          "d2b-launcher",
+          "d2b-admin"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "DeregisterRunnerPidfd"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "pid": {
+              "type": "integer"
+            },
+            "expectedStartTimeTicks": {
+              "type": "integer"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "ownerRef": {
+              "type": "string"
+            },
+            "providerRef": {
+              "type": "string"
+            },
+            "providerIdentity": {
+              "type": "string"
+            },
+            "templateIdentity": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "runtimeScope": {
+              "type": "array"
+            },
+            "guestExecution": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "stateCell": {
+        "cell": "runner-pidfd-registry",
+        "durability": "ephemeral"
+      }
+    },
+    {
+      "operation": "SpawnRunner",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "spawn-runner",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "vm-runner",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SpawnRunner",
+          "PrepareSwtpmDir"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": {
+              "type": "string"
+            },
+            "roleId": {
+              "type": "string"
+            },
+            "resourceRef": {
+              "type": "string"
+            },
+            "resourceUid": {
+              "type": "string"
+            },
+            "zoneUid": {
+              "type": "string"
+            },
+            "ownerRef": {
+              "type": "string"
+            },
+            "ownerUid": {
+              "type": "string"
+            },
+            "providerRef": {
+              "type": "string"
+            },
+            "bundleContentIdentity": {
+              "type": "string"
+            },
+            "providerIdentity": {
+              "type": "string"
+            },
+            "templateIdentity": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "runtimeScope": {
+              "type": "array"
+            },
+            "activationInput": {
+              "type": "object"
+            },
+            "launchArgs": {
+              "type": "array"
+            },
+            "sandboxPlan": {
+              "type": "object"
+            },
+            "role": {
+              "type": "string"
+            },
+            "bundleRunnerIntentRef": {
+              "type": "string"
+            },
+            "executionRef": {
+              "type": "string"
+            },
+            "executionDomain": {
+              "type": "string"
+            },
+            "userRef": {
+              "type": "string"
+            },
+            "guestExecution": {
+              "type": "object"
+            },
+            "runtimeAllocations": {
+              "type": "array"
+            },
+            "tracingSpanId": {
+              "type": "string"
+            },
+            "workloadIdentity": {
+              "type": "string"
+            },
+            "inheritedFdCount": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "role",
+            "bundleRunnerIntentRef",
+            "runtimeAllocations",
+            "inheritedFdCount"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      },
+      "fds": {
+        "maxFds": 3,
+        "fdKind": "Any"
+      }
+    },
+    {
+      "operation": "inspect-process-family",
+      "family": "process",
+      "declaringProvider": "d2b-provider-process",
+      "service": "d2b.process",
+      "method": "inspect-process-family",
+      "profiles": [
+        "host"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "callable-read-only",
+      "dispositionTarget": "live read-only callable",
+      "authz": {
+        "subject": "process",
+        "scope": "per-type",
+        "allowedGroups": [
+          "d2bd",
+          "d2b-admin"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [],
+        "required": true,
+        "mode": "yes",
+        "join": [
+          "resourceType"
+        ]
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "resourceType": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "resourceType"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    }
+  ]
+}

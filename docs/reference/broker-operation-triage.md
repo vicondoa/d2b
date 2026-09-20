@@ -25,33 +25,13 @@ Counts: 65 family-owned, 33 broker-generic, 0 transport-excluded (46 rows carry 
 | Hello | broker-generic | - | - | - | - | host, guest | callable-read-only | live read-only callable | transport handshake: the first frame on the private socket, answered from the broker's own capability table, with no host effect and no resource family behind it |
 | PublishTrustedContext | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | broker-held attestation cache: the daemon publishes the Zone's daemon-owned provider-set revision and controller/guest generations over the origination leg, and the broker caches them as durable, monotonically increasing state from which it mints; no resource family holds the store |
 | ExportBrokerAudit | broker-generic | - | - | - | - | host, guest | callable-read-only | live read-only callable | broker self-audit: the broker reads its own append-only audit log, so the effect is the broker's record keeping rather than a family effect |
-| OpenPidfd | family | process | d2b-provider-process | d2b.process | open-pidfd | host, guest | promoted-live | live in production broker | - |
-| OpenPeerPidfdFromAcceptedSocket | family | process | d2b-provider-process | d2b.process | open-peer-pidfd-from-accepted-socket | host, guest | callable-read-only | live read-only callable | - |
-| ObserveRunner | family | process | d2b-provider-process | d2b.process | observe-runner | host, guest | promoted-live | live in production broker | - |
 | StartSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | start-systemd-unit | host, guest | promoted-live | live in production broker | - |
 | CheckSystemdUserManager | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | check-systemd-user-manager | host, guest | promoted-live | live in production broker | - |
 | ObserveSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | observe-systemd-unit | host, guest | promoted-live | live in production broker | - |
 | OpenSystemdUnitPidfd | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | open-systemd-unit-pidfd | host, guest | promoted-live | live in production broker | - |
 | StopSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | stop-systemd-unit | host, guest | promoted-live | live in production broker | - |
-| PollChildReaped | family | process | d2b-provider-process | d2b.process | poll-child-reaped | host, guest | promoted-live | live in production broker | - |
-| PrepareRuntimeDir | family | process | d2b-provider-process | d2b.process | prepare-runtime-dir | host, guest | promoted-live | live in production broker | - |
-| PrepareStateDir | family | process | d2b-provider-process | d2b.process | prepare-state-dir | host, guest | promoted-live | live in production broker | - |
-| CgroupKill | family | process | d2b-provider-process | d2b.process | cgroup-kill | host, guest | promoted-live | live in production broker | - |
-| SignalRunner | family | process | d2b-provider-process | d2b.process | signal-runner | host, guest | promoted-live | live in production broker | - |
-| DeregisterRunnerPidfd | family | process | d2b-provider-process | d2b.process | deregister-runner-pidfd | host, guest | promoted-live | live in production broker | - |
-| SpawnRunner | family | process | d2b-provider-process | d2b.process | spawn-runner | host, guest | promoted-live | live in production broker | - |
 | ApplyHostGenerationHandoff | broker-generic | - | - | - | - | host | promoted-live | live in production broker | broker-owned host effect: the handoff runs in the broker against the broker's own helper path and state dir, the activation family requests it through its effect port, so no declaring crate holds the handler |
-| ApplyNftables | family | network | d2b-provider-network-local | d2b.network | apply-nftables | host | promoted-live | live in production broker | - |
-| ApplyNftablesProjection | family | network | d2b-provider-network-local | d2b.network | apply-nftables-projection | host | promoted-live | live in production broker | - |
-| ApplyNmUnmanaged | family | network | d2b-provider-network-local | d2b.network | apply-nm-unmanaged | host | promoted-live | live in production broker | - |
-| ApplyRoute | family | network | d2b-provider-network-local | d2b.network | apply-route | host | promoted-live | live in production broker | - |
-| ApplySysctl | family | network | d2b-provider-network-local | d2b.network | apply-sysctl | host | promoted-live | live in production broker | - |
 | CreateOrReconcileUsersGroups | family | user | d2b-provider-user | d2b.user | create-or-reconcile-users-groups | host | stubbed-unimplemented | bootstrap-only | - |
-| CreateBridge | family | network | d2b-provider-network-local | d2b.network | create-bridge | host | promoted-live | live in production broker | - |
-| DeleteBridge | family | network | d2b-provider-network-local | d2b.network | delete-bridge | host | promoted-live | live in production broker | - |
-| CreatePersistentTap | family | network | d2b-provider-network-local | d2b.network | create-persistent-tap | host | promoted-live | live in production broker | - |
-| DeletePersistentTap | family | network | d2b-provider-network-local | d2b.network | delete-persistent-tap | host | promoted-live | live in production broker | - |
-| CreateTapFd | family | network | d2b-provider-network-local | d2b.network | create-tap-fd | host | promoted-live | live in production broker | - |
 | DelegateCgroupV2 | family | process | d2b-provider-process | d2b.process | delegate-cgroup-v2 | host | promoted-live | live in production broker | - |
 | InjectSecretById | family | credential | d2b-provider-credential | d2b.credential | inject-secret-by-id | host | stubbed-unimplemented | future work | - |
 | LaunchMinijailChild | family | process | d2b-provider-process | d2b.process | launch-minijail-child | host | stubbed-unimplemented | future work | - |
@@ -69,7 +49,6 @@ Counts: 65 family-owned, 33 broker-generic, 0 transport-excluded (46 rows carry 
 | QemuMediaQuit | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-quit | host | promoted-live | live in production broker | - |
 | QemuMediaAttach | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-attach | host | promoted-live | live in production broker | - |
 | QemuMediaDetach | family | guest | d2b-provider-guest-qemu-media | d2b.guest | qemu-media-detach | host | promoted-live | live in production broker | - |
-| inspect-process-family | family | process | d2b-provider-process | d2b.process | inspect-process-family | host | callable-read-only | live read-only callable | - |
 | PipeWireAudio | family | audio | d2b-provider-audio-service | d2b.audio | pipe-wire-audio | host | promoted-live | live in production broker | - |
 | OpenVhostNet | family | device | d2b-provider-device | d2b.device | open-vhost-net | host | promoted-live | live in production broker | - |
 | ReconcileStorageScope | family | volume-binding | d2b-provider-volume-binding | d2b.volume-binding | reconcile-storage-scope | host | promoted-live | live in production broker | - |
@@ -77,15 +56,12 @@ Counts: 65 family-owned, 33 broker-generic, 0 transport-excluded (46 rows carry 
 | StoreSync | family | volume | d2b-provider-volume-local | d2b.volume | store-sync | host | promoted-live | live in production broker | - |
 | ReadSecretById | family | credential | d2b-provider-credential | d2b.credential | read-secret-by-id | host | stubbed-unimplemented | future work | - |
 | RotateSecretById | family | credential | d2b-provider-credential | d2b.credential | rotate-secret-by-id | host | stubbed-unimplemented | future work | - |
-| SetBridgePortFlags | family | network | d2b-provider-network-local | d2b.network | set-bridge-port-flags | host | promoted-live | live in production broker | - |
-| UpdateHostsFile | family | network | d2b-provider-network-local | d2b.network | update-hosts-file | host | promoted-live | live in production broker | - |
 | UsbipBind | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-bind | host | promoted-live | live in production broker | - |
 | UsbipBindFirewallRule | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-bind-firewall-rule | host | promoted-live | live in production broker | - |
 | UsbipProxyReconcile | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-proxy-reconcile | host | promoted-live | live in production broker | - |
 | UsbipUnbind | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-unbind | host | promoted-live | live in production broker | - |
 | UsbipExplicitBind | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-explicit-bind | host | promoted-live | live in production broker | - |
 | UsbipExplicitFirewallRule | family | device-usbip | d2b-provider-device-usbip | d2b.device-usbip | usbip-explicit-firewall-rule | host | promoted-live | live in production broker | - |
-| SeedDnsmasqLease | family | network | d2b-provider-network-local | d2b.network | seed-dnsmasq-lease | host | promoted-live | live in production broker | - |
 | OwnershipMatrixCheck | family | volume | d2b-provider-volume-local | d2b.volume | ownership-matrix-check | host | promoted-live | live in production broker | - |
 | SshHostKeyPreflight | family | device-security-key | d2b-provider-device-security-key | d2b.device-security-key | ssh-host-key-preflight | host | stubbed-unimplemented | future work | - |
 | DiskInit | family | volume | d2b-provider-volume-local | d2b.volume | disk-init | host | promoted-live | live in production broker | - |
@@ -120,3 +96,27 @@ Counts: 65 family-owned, 33 broker-generic, 0 transport-excluded (46 rows carry 
 | set-bridge-port-flags | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired SetBridgePortFlags family operation, served in-broker: apply the trusted per-role bridge port flag set under the installed-generation fence. |
 | update-hosts-file | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired UpdateHostsFile family operation, served in-broker: write or remove the managed /etc/hosts marker block from the resolved intent. |
 | seed-dnsmasq-lease | broker-generic | - | - | - | - | host | promoted-live | live in production broker | U12 network-fds census kernel: the privileged, resource-agnostic core of the retired SeedDnsmasqLease family operation, served in-broker: the retired arm's live core was its admission check - the expected child VM name is re-derived from the admitted Network identity and a mismatch refuses; the lease file write remains a committed follow-up. |
+| ApplyNftables | family | network | d2b-provider-network-local | d2b.network | apply-nftables | host | promoted-live | live in production broker | - |
+| ApplyNftablesProjection | family | network | d2b-provider-network-local | d2b.network | apply-nftables-projection | host | promoted-live | live in production broker | - |
+| ApplyNmUnmanaged | family | network | d2b-provider-network-local | d2b.network | apply-nm-unmanaged | host | promoted-live | live in production broker | - |
+| ApplyRoute | family | network | d2b-provider-network-local | d2b.network | apply-route | host | promoted-live | live in production broker | - |
+| ApplySysctl | family | network | d2b-provider-network-local | d2b.network | apply-sysctl | host | promoted-live | live in production broker | - |
+| CreateBridge | family | network | d2b-provider-network-local | d2b.network | create-bridge | host | promoted-live | live in production broker | - |
+| DeleteBridge | family | network | d2b-provider-network-local | d2b.network | delete-bridge | host | promoted-live | live in production broker | - |
+| CreatePersistentTap | family | network | d2b-provider-network-local | d2b.network | create-persistent-tap | host | promoted-live | live in production broker | - |
+| DeletePersistentTap | family | network | d2b-provider-network-local | d2b.network | delete-persistent-tap | host | promoted-live | live in production broker | - |
+| CreateTapFd | family | network | d2b-provider-network-local | d2b.network | create-tap-fd | host | promoted-live | live in production broker | - |
+| SetBridgePortFlags | family | network | d2b-provider-network-local | d2b.network | set-bridge-port-flags | host | promoted-live | live in production broker | - |
+| UpdateHostsFile | family | network | d2b-provider-network-local | d2b.network | update-hosts-file | host | promoted-live | live in production broker | - |
+| SeedDnsmasqLease | family | network | d2b-provider-network-local | d2b.network | seed-dnsmasq-lease | host | promoted-live | live in production broker | - |
+| OpenPidfd | family | process | d2b-provider-process | d2b.process | open-pidfd | host, guest | promoted-live | live in production broker | - |
+| OpenPeerPidfdFromAcceptedSocket | family | process | d2b-provider-process | d2b.process | open-peer-pidfd-from-accepted-socket | host, guest | callable-read-only | live read-only callable | - |
+| ObserveRunner | family | process | d2b-provider-process | d2b.process | observe-runner | host, guest | promoted-live | live in production broker | - |
+| PollChildReaped | family | process | d2b-provider-process | d2b.process | poll-child-reaped | host, guest | promoted-live | live in production broker | - |
+| PrepareRuntimeDir | family | process | d2b-provider-process | d2b.process | prepare-runtime-dir | host, guest | promoted-live | live in production broker | - |
+| PrepareStateDir | family | process | d2b-provider-process | d2b.process | prepare-state-dir | host, guest | promoted-live | live in production broker | - |
+| CgroupKill | family | process | d2b-provider-process | d2b.process | cgroup-kill | host, guest | promoted-live | live in production broker | - |
+| SignalRunner | family | process | d2b-provider-process | d2b.process | signal-runner | host, guest | promoted-live | live in production broker | - |
+| DeregisterRunnerPidfd | family | process | d2b-provider-process | d2b.process | deregister-runner-pidfd | host, guest | promoted-live | live in production broker | - |
+| SpawnRunner | family | process | d2b-provider-process | d2b.process | spawn-runner | host, guest | promoted-live | live in production broker | - |
+| inspect-process-family | family | process | d2b-provider-process | d2b.process | inspect-process-family | host | callable-read-only | live read-only callable | - |
