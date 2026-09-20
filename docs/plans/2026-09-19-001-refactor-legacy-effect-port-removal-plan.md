@@ -7,6 +7,7 @@ artifact_contract: ce-unified-plan/v1
 artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
 execution: code
+revised: 2026-09-20
 ---
 
 # Legacy effect ports removal - Plan
@@ -81,10 +82,10 @@ The cost is a boundary that cannot be defended mechanically. The exemption inven
 
 **Delivery and proof**
 
-- R15. Lanes land one family at a time, and a lane retires its own ports, declared surfaces, broker modules, and measured rows in the same change with no shim. The two landed families carry finishing lanes that remove the daemon's composition-site conversion into injected ports and delete their remaining declared surfaces.
+- R15. Lanes land one family at a time. A lane's implementation move and the retirement of the paths that move obsoletes land in the same change with no shim; a declared-but-unbuilt surface may retire ahead of its family's move as its own reviewed change inside the same unit, which stays open until that family's move lands. The two landed families carry one finishing unit each: the process family first, the network family after it.
 - R16. `make check` and `make test-host-integration` pass on every lane's head, not only at the program end. A skipped lane is not a pass.
 - R17. No operator-visible behavior change: the same resources, rows, launcher vocabulary, audit records, refusals, and bundle generation identity keep working, including restart adoption of an already-provisioned zone. The critical-subsystem invariants for the surfaces a lane touches - fail-closed identity binding, no caller-supplied device paths or per-guest units, the single repair owner rule, and no raw handles crossing the public API - are preserved behavior and are asserted by that lane's live check.
-- R18. Every host surface a lane touches is asserted by the lane's own live check, which is that surface's owning check when no owning integration check exists. Each migrated operation is proven end to end across the broker and daemon with descriptor carriage and audit continuity by extending the cross-binary proof shape to that operation.
+- R18. Every host surface a lane touches is asserted by the lane's own live check, which is that surface's owning check when no owning integration check exists. A migrated operation whose effect stays inside the hermetic lane is proven end to end across the broker and daemon with descriptor carriage and audit continuity by extending the cross-binary proof shape to that operation; a migrated operation whose effect mutates host state the hermetic lane cannot host is proven by its owning host-integration check instead, and the lane names the operations it exercised live and the surface it could not.
 - R19. The routing rule that keeps effectful and privileged work off the in-broker handler leg stays enforced. Provider service code executes with daemon privilege, so the declared capability object is a functional boundary rather than a confinement boundary; the routing rule, the provider-crate review posture, and the retained per-family process-isolation escape hatch are the controls that hold that posture.
 - R20. A lane that cannot meet R18 does not close: it reverts, the gap is recorded, and the plan is revised before another lane proceeds, rather than the gate set or the completion bar being narrowed mid-program.
 
@@ -123,7 +124,7 @@ flowchart TB
 - AE5. Deletion is complete - Covers R3, R13, R18
   - **Given:** a capability surface this program deletes.
   - **When:** the tree is checked.
-  - **Then:** no shared crate, daemon module, dossier citation, or owning task row still names it, the layout check passes with the affected rows retired, and the lane's own live check asserts each touched host surface while the migrated operation answers end to end with descriptor carriage and audit continuity.
+  - **Then:** no shared crate, daemon module, dossier citation, or owning task row still names it, the layout check passes with the affected rows retired, the lane's own live check asserts each touched host surface, the hermetic migrated operations answer end to end with descriptor carriage and audit continuity, and the operations proven through their owning host check are named.
 
 ### Scope Boundaries
 
@@ -164,6 +165,7 @@ flowchart TB
 - `tests/tools/provider-crate-layout-check.sh` and `tests/unit/gates/broker-seam-pilot.sh` - the measurement check and the cross-binary proof shape each lane extends.
 - `docs/explanation/over-engineering-audit-record.md` - the refusal that kept the process providers' declared spawn ports, and the recorded precedent that a deletion lagging its pinning citations produced a follow-up correction commit.
 - `docs/contributing/critical-subsystems.md` - the invariants a lane touching storage, devices, networking, or lifecycle must preserve, carried as requirements by R17.
+- Recorded implementation evidence, 2026-09-20: the first pass of the finishing unit landed the retirement half (the two process providers' declared spawn ports and the transport crate's effect-port module, with their pins) and stopped at the implementation move, because the per-operation live proof is out of reach for the host-mutating network operations and the daemon state the adapters hold - the composed process providers, the bundle resolver, and the installed generation identity - has no declared facet yet. The revision above records the response.
 
 <!-- ce-section: work-relationships -->
 
@@ -183,6 +185,8 @@ This plan owns the effect-port end state: the removal of externally injected cap
 
 **Product Contract preservation:** changed R11 - the declaration surface for a cross-boundary operation moves from the hand-maintained committed operations file to the declaring provider crate, and that file with its derived views becomes a generated consumer. Reason: the user directed the literal zero-outside-edit bar for operation additions (decision recorded 2026-09-19), which the previously deferred question left open. All other requirements, acceptance examples, scope boundaries, and Key Decisions are unchanged. The review's open-questions entry on this boundary is resolved by that decision and is removed.
 
+**Product Contract revision (2026-09-20):** changed R15 and R18, and split the finishing unit. R15 now separates a lane's implementation move from a declared-but-unbuilt surface's retirement, which may land ahead of that move as its own reviewed change inside the same unit; R18 now proves a hermetic operation per operation and a host-mutating operation through its owning host-integration check. Reason: the first implementation pass of the finishing unit (recorded 2026-09-20) showed that proving all twenty-four migrated operations live is out of reach for the host-mutating network operations within the cross-binary proof's shape, and that one unit covering both landed families contradicts the one-family-per-lane decision. The user directed this revision on 2026-09-20. U1 keeps the process family; U14, the next unused number, carries the network family.
+
 ### Key Technical Decisions
 
 - KTD1. **Lanes are one serial chain on shared chokepoint files.** The broker dispatch, catalog, and operation modules, the policy inventory tables, and the daemon composition wiring each carry rows for several lanes, so a lane is the single writer on those files for its duration. Cited precedent: the isolation plan's delivery model. Governs R15.
@@ -194,6 +198,8 @@ This plan owns the effect-port end state: the removal of externally injected cap
 - KTD7. **The volume family keeps its anchored-fd interface.** The provider crate hosts the anchored filesystem implementation; the anchored root arrives through a declared descriptor leg or the driver context rather than a daemon-built resolver. This keeps the single-entry, marker-checked, lock-held, fd-relative discipline that the current daemon-side implementation enforces. Governs R1, R7.
 - KTD8. **Every lane asserts restart adoption for the surfaces it moves.** Where the owning check has no restart stage, the lane adds one, because the live proof shape this plan extends starts fresh binaries and cannot observe adoption by itself. Governs R17, R18.
 - KTD9. **Session and stream-plane families land last and their frozen wire vocabulary stays a documented carve-out** unless that lane proves the vocabulary movable within its own change. Governs R13.
+- KTD10. **The two landed families finish as one unit each, process first.** The process unit converts the daemon's process driver effects onto the provider-supplied service path and retires the module and injection it obsoletes; the network unit then does the same for the network driver effects. The two units share the composition site and the vocabulary tables, so they are one serial chain and never parallel. (session-settled: user-directed - chosen over one unit covering both families: the one-family-per-lane decision governs the finishing units too.) Governs R15.
+- KTD11. **Proof follows hermeticity.** An operation whose effect stays inside the hermetic lane is proven per operation by the cross-binary proof; an operation whose effect mutates host state the hermetic lane cannot host is proven by the owning host-integration check, and the lane names both sets. (session-settled: user-directed - chosen over live per-operation proof for every migrated operation: the network fabric kernels mutate host state the hermetic lane does not carry.) Governs R18.
 
 ### High-Level Technical Design
 
@@ -229,14 +235,16 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 ### Assumptions
 
-- The landed hosting mechanism, trusted context, state cells, descriptor carriage, and the generic kernel table are sufficient to host every remaining family without new envelope capability; the row-declaration generator (U2) and the real service payload (U3) are the only enabling gaps the lanes depend on.
+- The landed hosting mechanism, trusted context, state cells, descriptor carriage, and the generic kernel table are sufficient to host every remaining family without new envelope capability; the row-declaration generator (U2) and the real service payload (U3) are the only enabling gaps the lanes depend on. The two finishing units test this assumption first.
+- The two finishing units are moves of existing kernel-invoking adapters, not reimplementations of host effects: the daemon's network port already resolves a provider context into the broker-generic network kernels and invokes them over the origination socket, and the daemon's process effects already delegate to the composed process providers. What such a unit must decide is how the daemon state those adapters hold - the composed process providers, the bundle resolver, and the installed generation identity - crosses the provider boundary as declared facets.
+- An operation whose privileged effect is a broker-generic kernel can be proven inside the hermetic lane; an operation that mutates host fabric state cannot, and is proven by its owning host-integration check.
 - The broker's in-broker handler leg stays closed, so every family row lands on the forwarded leg.
 - Provider services share the daemon's privilege domain; the functional boundary is the pair of declared facets and the routing rule.
 - Host integration runs on a KVM-capable host; where it cannot run, the lane records the surface it could not exercise rather than claiming it.
 
 ### Sequencing
 
-- **Phase A - enabling.** U1 (landed-family finishing lane), U2 (operation-row declarations become the source), U3 (real service payload and capability object). No family lane starts before all three land, because every later lane depends on the declaration surface and the payload contract.
+- **Phase A - enabling units and the two finishing units.** U2 (operation-row declarations become the source) and U3 (real service payload and capability object) are landed; U1 converts the process family, then U14 converts the network family. No other family lane starts before the enabling units and both finishing units land, because every later lane depends on the declaration surface, the payload contract, and the conversion pattern the two finishing units establish.
 - **Phase B - vocabulary and generation.** U4 declares provider-owned facts and generates their consumers, including the authority bound and the drift gates.
 - **Phase C - family lanes.** U5 through U12, in readiness-then-risk order, one lane per pass.
 - **Phase D - close.** U13 retires the inventory to its closed carve-out list, amends the normative ADR sentence, and records the completion proof.
@@ -250,6 +258,8 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 | The generated-consumer flip touches byte-pinned artifacts | Every derived view is re-pinned, and a mistake fails the drift gates before any family converts | U2 lands before any family lane; the drift suite is the check |
 | The serial chain defers all value to the end | A failed lane stalls the program, and no operator-visible value lands before the final lane | Lanes are revertible and independently reviewed; the ratchet is the in-flight safety net |
 | Provider services share the daemon's privilege domain | A defect in a moved privileged implementation is host compromise | R19's routing rule and review posture; the per-family isolation escape hatch stays available |
+| A finishing unit stalls on how the daemon state crosses the provider boundary | The composed process providers, the bundle resolver, and the installed generation identity have no declared facet today, so a unit that stops there leaves its family half converted | The unit opens by deciding that seam; R20 applies, so a unit that cannot close reverts rather than the completion bar narrowing |
+| The landed retirement reads as a partial lane | A reviewer sees a retirement whose family move never landed | R15 keeps the unit open until its family's move lands, and the retirement change is independently gate-green and named as that unit's first half |
 
 ---
 
@@ -257,34 +267,62 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 | U-ID | Title | Files touched (key) | Depends on |
 |---|---|---|---|
-| U1 | Finish the landed families | `packages/d2bd/src/resource_plane_v3.rs`, `packages/d2b-provider-process/`, `packages/d2b-provider-network-local/`, process provider effect ports and dossiers | - |
+| U1 | Finish the process family | `packages/d2bd/src/resource_plane_v3.rs`, `packages/d2bd/src/process_effects.rs`, `packages/d2bd/src/process_provider_runtime.rs`, `packages/d2b-provider-process/` | U2, U3 |
+| U14 | Finish the network family | `packages/d2bd/src/resource_plane_v3.rs`, `packages/d2bd/src/network_effect_port.rs`, `packages/d2bd/src/shared_provider_effects.rs`, `packages/d2b-provider-network-local/` | U1 |
 | U2 | Operation rows declared in the crate | `packages/d2b-resource-types/src/operation.rs`, provider operation modules, `packages/xtask/src/gen_broker_operations.rs`, `docs/reference/policy/broker-operations.json`, `packages/d2b-broker/src/catalog.rs` | - |
 | U3 | Real service payload and capability object | `packages/d2bd/src/effect_service_actors.rs`, `packages/d2bd/src/provider_lifecycle.rs`, `packages/d2bd/src/forward_rendezvous.rs`, `packages/d2b-resource-types/src/service.rs` | U2 |
 | U4 | Provider facts declared and generated | provider declarations, `packages/xtask/src/`, `packages/d2b-contracts/src/`, `nixos-modules/generated/` | U2, U3 |
-| U5 | Host and user families | `packages/d2bd/src/system_core_effects.rs`, `packages/d2b-provider-host/`, `packages/d2b-provider-user/` | U3, U4 |
-| U6 | Endpoint and binding families | `packages/d2bd/src/endpoint_effects.rs`, `packages/d2bd/src/binding_effects.rs`, `packages/d2b-provider-endpoint/`, `packages/d2b-provider-volume-binding/` | U3, U4 |
+| U5 | Host and user families | `packages/d2bd/src/system_core_effects.rs`, `packages/d2b-provider-host/`, `packages/d2b-provider-user/` | U3, U4, U14 |
+| U6 | Endpoint and binding families | `packages/d2bd/src/endpoint_effects.rs`, `packages/d2bd/src/binding_effects.rs`, `packages/d2b-provider-endpoint/`, `packages/d2b-provider-volume-binding/` | U3, U4, U14 |
 | U7 | Volume family and the neutral contract | `packages/d2bd/src/volume_effects.rs`, `packages/d2bd/src/resource_runtime/volume_effect_adapter.rs`, `packages/d2b-provider-volume-local/`, `packages/d2b-contracts/src/v3/effect_port.rs`, `packages/d2b-host/src/volume_effect_adapter.rs` | U6 |
-| U8 | Credential family | `packages/d2bd/src/credential_effects.rs`, `packages/d2bd/src/credential_resource_runtime.rs`, `packages/d2bd/src/credential_backend_runtime.rs`, `packages/d2b-provider-credential/` | U3, U4 |
-| U9 | Device family | `packages/d2bd/src/tpm_effect_port.rs`, `packages/d2bd/src/shared_provider_effects.rs`, `packages/d2bd/src/usbip_production.rs`, `packages/d2b-provider-device*/` | U3, U4 |
+| U8 | Credential family | `packages/d2bd/src/credential_effects.rs`, `packages/d2bd/src/credential_resource_runtime.rs`, `packages/d2bd/src/credential_backend_runtime.rs`, `packages/d2b-provider-credential/` | U3, U4, U14 |
+| U9 | Device family | `packages/d2bd/src/tpm_effect_port.rs`, `packages/d2bd/src/shared_provider_effects.rs`, `packages/d2bd/src/usbip_production.rs`, `packages/d2b-provider-device*/` | U3, U4, U14 |
 | U10 | Guest-runtime family | `packages/d2bd/src/guest_effects.rs`, `packages/d2b-provider-guest*/` | U9 |
-| U11 | Interaction and desktop family | `packages/d2bd/src/resource_runtime/interaction_effects.rs`, `packages/d2bd/src/interaction_composition.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2bd/src/audio_resource_runtime.rs` | U3, U4 |
-| U12 | Activation family | `packages/d2bd/src/activation_effects.rs`, `packages/d2b-provider-activation-nixos/` | U3, U4 |
-| U13 | Close the inventory and the normative surface | `packages/xtask/src/provider_crate_policy.rs`, `docs/adr/0046-d2b-3-provider-control-plane.md`, dossiers, `docs/contributing/critical-subsystems.md`, `changelog.d/` | U1-U12 |
+| U11 | Interaction and desktop family | `packages/d2bd/src/resource_runtime/interaction_effects.rs`, `packages/d2bd/src/interaction_composition.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2bd/src/audio_resource_runtime.rs` | U3, U4, U14 |
+| U12 | Activation family | `packages/d2bd/src/activation_effects.rs`, `packages/d2b-provider-activation-nixos/` | U3, U4, U14 |
+| U13 | Close the inventory and the normative surface | `packages/xtask/src/provider_crate_policy.rs`, `docs/adr/0046-d2b-3-provider-control-plane.md`, dossiers, `docs/contributing/critical-subsystems.md`, `changelog.d/` | U1, U2, U3, U4-U12, U14 |
 
-### U1. Finish the landed families
+### U1. Finish the process family
 
-- **Goal:** The two families whose envelope path already works stop receiving injected ports, and the daemon's composition-site conversion disappears.
-- **Requirements:** R2, R3, R9, R15, R16, R18
-- **Dependencies:** none.
-- **Files:** `packages/d2bd/src/resource_plane_v3.rs`, `packages/d2bd/src/shared_provider_effects.rs`, `packages/d2bd/src/network_effect_port.rs`, `packages/d2bd/src/process_effects.rs`, `packages/d2bd/src/process_provider_runtime.rs`, `packages/d2b-provider-process/`, `packages/d2b-provider-network-local/`, `packages/d2b-provider-process-systemd/src/effect_port.rs`, `packages/d2b-provider-process-minijail/src/effect_port.rs`, `packages/d2b-provider-transport-vsock/src/effect_port.rs`, their dossiers under `docs/specs/providers/`, `tests/unit/gates/broker-seam-pilot.sh`
-- **Approach:** Open with the caller audit for both families. Convert the composition-site construction of each family's effects into the provider-supplied service path so the descriptor's factory owns the implementation. Delete the two process providers' declared spawn ports and the never-called transport port, with their dossier destination lines and re-export arms in the same change. Extend the cross-binary proof so each already-migrated operation is exercised under the injection-free path.
-- **Patterns to follow:** `packages/d2b-provider-network-local/src/operations.rs` (handler table declared on the descriptor, nested kernel call through the kernel client), `packages/d2b-provider-process/src/operations.rs`, and the seam pilot's byte-for-byte operation-name assertions.
+- **Goal:** The process family's driver effects stop arriving as a daemon-built port: the provider crate serves them through its declared service, and the daemon's implementation module and composition-site injection disappear.
+- **Requirements:** R2, R5, R7, R9, R15, R16, R17, R18
+- **Dependencies:** U2, U3.
+- **Files:** `packages/d2bd/src/resource_plane_v3.rs`, `packages/d2bd/src/process_effects.rs`, `packages/d2bd/src/process_provider_runtime.rs`, `packages/d2b-provider-process/`, `tests/unit/gates/broker-seam-pilot.sh`
+- **Approach:**
+  1. Open with the caller audit for the family: every construction and injection site of the driver-effect port, and every method the driver invokes.
+  2. Decide and record how the state the daemon implementation holds crosses the boundary - the composed process providers, the bundle resolver, and the installed generation identity - as declared facets rather than a daemon handle.
+  3. Move the implementation into the declaring crate behind the declared service, so the descriptor's factory owns it and the construction site builds no port.
+  4. Delete the daemon module and its injection in the same change. The family's declared-but-unbuilt spawn ports are already retired, as this unit's first half.
+  5. Extend the cross-binary proof to the family's hermetic operations, and name the operations it cannot carry.
+- **Patterns to follow:** `packages/d2b-provider-process/src/operations.rs` (handler table declared on the descriptor, nested kernel call through the kernel client), `packages/d2b-provider-network-local/src/operations.rs`, the seam pilot's byte-for-byte operation-name assertions, and `packages/d2bd/src/network_effect_port.rs` as the shape a daemon-side adapter over broker-generic kernels already takes.
 - **Test scenarios:**
-  - Covers AE3. Happy path: a driver obtains its capability by invoking its declared service; no externally built port appears at the construction site.
-  - Happy path: the pilot gate still proves the migrated operation end to end with descriptor carriage and audit continuity on the injection-free path.
+  - Covers AE3. Happy path: the driver obtains its capability by invoking its declared service, and no externally built port appears at the construction site.
+  - Happy path: each hermetic operation of the family answers end to end over the cross-binary proof with descriptor carriage and one audit record.
   - Error: a declared service with no provider implementation refuses at startup by name.
-  - Edge: a provisioned zone restarts and adopts its rows unchanged after the conversion.
-- **Verification:** `make check` and `make test-host-integration` green on the lane head; the pilot gate passes; the deleted ports leave no dossier, policy, or re-export citation.
+  - Edge: a provisioned zone restarts and adopts its rows and process identities unchanged after the conversion (KTD8).
+  - Edge: an operation the hermetic lane cannot carry is named in the unit's proof record instead of being claimed.
+- **Verification:** `make check` and `make test-host-integration` green on the unit head; the daemon module and injection leave no dossier, policy, or re-export citation; the hermetic operations are proven live and any operation proven elsewhere is named.
+
+### U14. Finish the network family
+
+- **Goal:** The network family's driver effects stop arriving as a daemon-built port: the declaring crate serves them through its declared service over the broker-generic network kernels, and the daemon's adapter and injection disappear.
+- **Requirements:** R2, R5, R7, R9, R15, R16, R17, R18
+- **Dependencies:** U1.
+- **Files:** `packages/d2bd/src/resource_plane_v3.rs`, `packages/d2bd/src/network_effect_port.rs`, `packages/d2bd/src/shared_provider_effects.rs`, `packages/d2b-provider-network-local/`, the owning host-integration check for the network fabric
+- **Approach:**
+  1. Open with the caller audit: the adapter's kernel invocations, the bundle intents it resolves, and the authority it presents.
+  2. Move the kernel-invoking adapter into the declaring crate behind the declared service, keeping the same kernel rows and the same authority path.
+  3. Decide how the resolved bundle intents and the installed generation identity reach the crate as declared facets.
+  4. Delete the daemon adapter, the network field of the shared effects, and the composition-site injection in the same change.
+  5. Prove the fabric-mutating operations through the owning host-integration check, and name the operations it exercises.
+- **Patterns to follow:** `packages/d2bd/src/network_effect_port.rs` (resolve the intent, then invoke the matching kernel over the origination socket), `packages/d2b-provider-network-local/src/operations.rs` (handler table plus nested kernel leg), and the network kernels `apply-nftables`, `apply-route`, `apply-sysctl`, `create-bridge`, `create-tap-fd`, `set-bridge-port-flags`, `delete-bridge`, `seed-dnsmasq-lease`, `update-hosts-file`.
+- **Test scenarios:**
+  - Covers AE3. Happy path: the driver obtains its capability through its declared service, and the construction site holds no externally built port.
+  - Happy path: each invocation writes exactly one audit record and reaches the same kernel rows with the same authority as before the move.
+  - Error: a declared service with no provider implementation refuses at startup by name.
+  - Edge: an already-provisioned zone restarts and its network rows adopt unchanged (KTD8).
+  - Integration: the owning host-integration check asserts the host fabric state the moved operations produce, and the unit names the operations exercised there.
+- **Verification:** `make check` and `make test-host-integration` green on the unit head; the daemon adapter and injection leave no citation; the host-owned check asserts the fabric surface and the exercised operations are named.
 
 ### U2. Operation rows declared in the crate
 
@@ -336,7 +374,7 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 - **Goal:** The host and user probes run inside their provider crates and the daemon-side effect module disappears.
 - **Requirements:** R1, R2, R7, R15, R16
-- **Dependencies:** U3, U4.
+- **Dependencies:** U3, U4, U14.
 - **Files:** `packages/d2bd/src/system_core_effects.rs` (delete), `packages/d2b-provider-host/src/`, `packages/d2b-provider-user/src/`, `packages/d2b-provider-system-core/src/`, the two families' tests and test support
 - **Approach:** These two families reach only host state - the bounded platform and capability probe, the local account discovery - so their implementations move wholesale into the owning crates behind the declared service. Retire the daemon-side module, the injected descriptor arguments, and the family-knowledge rows the layout check reports for it.
 - **Patterns to follow:** the retirement template (KTD4) and the shared test-double pattern the provider crates already use for driver-effect ports.
@@ -351,7 +389,7 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 - **Goal:** Socket presence, ensure, removal, and guest-mount observation move into their crates, and the purpose vocabulary is derived there.
 - **Requirements:** R1, R2, R7, R15
-- **Dependencies:** U3, U4.
+- **Dependencies:** U3, U4, U14.
 - **Files:** `packages/d2bd/src/endpoint_effects.rs` (delete), `packages/d2bd/src/binding_effects.rs` (delete), `packages/d2b-provider-endpoint/`, `packages/d2b-provider-volume-binding/`, `packages/d2b-provider-volume-virtiofs/`
 - **Approach:** Move the socket effects and the guest-mount observation behind the declared services, and move the purpose derivations that read the declaring providers' child-role vocabulary into those providers. The guest-mount observation keeps reading the zone target directory through the driver context rather than a second channel.
 - **Patterns to follow:** the endpoint purpose-derivation shape in `packages/d2bd/src/endpoint_effects.rs` before deletion, and the anchored-directory walk helpers already used for the volume family.
@@ -381,7 +419,7 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 - **Goal:** Credential reads, the session registry, and the stored lease path live in the credential provider crate.
 - **Requirements:** R1, R2, R7, R17
-- **Dependencies:** U3, U4.
+- **Dependencies:** U3, U4, U14.
 - **Files:** `packages/d2bd/src/credential_effects.rs` (delete), `packages/d2bd/src/credential_resource_runtime.rs`, `packages/d2bd/src/credential_backend_runtime.rs` (delete), `packages/d2b-provider-credential/`, the credential backend crates
 - **Approach:** Move the store-backed provider and target reads and the session plumbing behind the declared service, keep the same-zone session gate, and delete the dead backend supervisor surface with its module-level allowance. Credential material never crosses the new boundary in a payload.
 - **Patterns to follow:** the credential crate's existing session and lease types, and the `critical-subsystems.md` no-raw-handles rule carried by R17.
@@ -396,7 +434,7 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 - **Goal:** The device families' capability ports, their manager-child paths, and their broker rows move into the owning crates.
 - **Requirements:** R1, R9, R10, R15, R17, R18
-- **Dependencies:** U3, U4.
+- **Dependencies:** U3, U4, U14.
 - **Files:** `packages/d2bd/src/tpm_effect_port.rs` (delete), `packages/d2bd/src/shared_provider_effects.rs`, `packages/d2bd/src/usbip_production.rs` (delete), `packages/d2b-provider-device/`, `packages/d2b-provider-device-tpm/`, `packages/d2b-provider-device-usbip/`, `packages/d2b-provider-device-security-key/`, `packages/d2b-provider-device-gpu/`
 - **Approach:** Split the shared daemon-side effects by owning family, move each family's implementation and its privileged operation rows into its crate over the generic kernels, and delete the TPM boundary adapter and the USBIP dispatcher. Preserve the fail-closed identity bindings, the exact-admission checks, and the single repair owner for device state.
 - **Patterns to follow:** `packages/d2b-provider-device-usbip/`'s existing port and state machine, the network family's nested-kernel handler shape, and the TPM resource controller's phase gates.
@@ -426,7 +464,7 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 - **Goal:** Display, audio, shell, clipboard, and notification interaction effects move to their crates.
 - **Requirements:** R1, R2, R13, R15
-- **Dependencies:** U3, U4.
+- **Dependencies:** U3, U4, U14.
 - **Files:** `packages/d2bd/src/resource_runtime/interaction_effects.rs` (delete), `packages/d2bd/src/interaction_composition.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2bd/src/audio_resource_runtime.rs`, `packages/d2b-provider-wayland-session/`, `packages/d2b-provider-wayland-policy/`, `packages/d2b-provider-audio-*/`, `packages/d2b-provider-shell-*/`, `packages/d2b-provider-clipboard-wayland/`, `packages/d2b-provider-notification-desktop/`
 - **Approach:** Move each interaction family's effects behind its declared service, keeping the authenticated session gates and the notification idempotency rules. Decide in this lane whether the frozen stream-plane wire vocabulary is movable; if it is not, record it as a documented permanent carve-out with its reason instead of forcing the move.
 - **Patterns to follow:** the interaction families' own session and lifecycle modules, the display provider's session admission, and the notification lifecycle backend.
@@ -441,7 +479,7 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 - **Goal:** The host generation handoff runs as a declared service over the generic kernel.
 - **Requirements:** R1, R9, R10, R15, R17
-- **Dependencies:** U3, U4.
+- **Dependencies:** U3, U4, U14.
 - **Files:** `packages/d2bd/src/activation_effects.rs` (delete), `packages/d2b-provider-activation-nixos/`
 - **Approach:** Declare the handoff as the activation crate's operation, forward it, and invoke the generic kernel for the privileged core, deleting the daemon-side adapter and the last sysctl and module-loading rows it needed.
 - **Patterns to follow:** the network family's nested-kernel handler shape and the activation provder's existing driver.
@@ -456,7 +494,7 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 - **Goal:** The measurement is retired to its closed carve-out list, the normative effect-port sentence matches the built end state, and the completion proof is recorded.
 - **Requirements:** R13, R14, R17, R18, R20
-- **Dependencies:** U1-U12.
+- **Dependencies:** U1, U2, U3, U4-U12, U14.
 - **Files:** `packages/xtask/src/provider_crate_policy.rs`, `docs/adr/0046-d2b-3-provider-control-plane.md`, dossiers under `docs/specs/providers/`, `specs/001-adr046-d2b3-completion/`, `docs/contributing/critical-subsystems.md`, `changelog.d/`
 - **Approach:** Retire every remaining non-permanent row, close the carve-out list and state each entry's permanent reason, amend the ADR's typed-effect-port sentence to the declared-service call path, and sweep every dossier, task row, and reference that names a deleted surface. Record the final proof run in the plan's completion note.
 - **Patterns to follow:** the layout check's stale-row branch as the tripwire, and the deletion sweep discipline in KTD5.
@@ -479,7 +517,8 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 | Layout and inventory policy | `tests/tools/provider-crate-layout-check.sh` | every lane head | passes; the lane's rows retired, no stale row, no unexcused new signal |
 | Fixture contracts | `make test-fixture-contracts` | every lane head | green; no fixture weakened to reach it |
 | Generated-artifact drift | the repository's drift checks over committed generated artifacts | U2, U4, and every lane that declares a fact | generated views match their declarations byte for byte |
-| Cross-binary operation proof | `tests/unit/gates/broker-seam-pilot.sh` | U1 and every family lane | each migrated operation answers end to end with descriptor carriage and one audit record |
+| Cross-binary operation proof | `tests/unit/gates/broker-seam-pilot.sh` | U1, U14, and every family lane | each migrated hermetic operation answers end to end with descriptor carriage and one audit record |
+| Host-state operation proof | the owning host-integration check for the lane's surface | every lane that moves an operation whose effect mutates host state | the owning check asserts that host state, and the lane names the operations it exercised there and those it could not |
 | Restart adoption | the owning host-integration check for the lane's surface | every lane that moves persistent state | the provisioned zone adopts its rows and identity unchanged after a restart |
 | Changelog policy | the repository's changelog check | every lane | a fragment exists for the lane's user-visible effect |
 
@@ -497,7 +536,7 @@ Gate evidence notes: a lane whose host check cannot run on the build host record
 | Provider facts generated | program | adding, renaming, or removing a provider fact needs no edit outside the owning crate except the workspace member line |
 | Inventory retired | program | the family-knowledge inventory holds only the closed, bounded carve-out list, each entry naming its permanent reason, and the completion proof reports the residual surface |
 | Normative surface consistent | program | the effect-port ADR sentence and every dossier describe the built path, and no document names a deleted surface |
-| Per-lane proof | every lane | `make check` and `make test-host-integration` are green on that lane's head with the exercised surfaces named, and the lane's host surfaces are asserted by its own live check |
+| Per-lane proof | every lane | `make check` and `make test-host-integration` are green on that lane's head with the exercised surfaces named, the lane's host surfaces are asserted by its own live check, and any operation proven through its owning host check is named |
 | Operator-visible behavior preserved | every lane | the same resources, rows, launcher vocabulary, audit records, refusals, and bundle generation identity keep working, including restart adoption of an already-provisioned zone |
 | No shims or dual paths | every lane | no deprecated alias, re-export, compatibility arm, or second live path survives the lane that retired its predecessor |
 | Cleanup | program | every throwaway script, probe, and experimental artifact used while converting a family is removed before the final head, and no unused module, allowance, or superseded comment remains in the diff |
