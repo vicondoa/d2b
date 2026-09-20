@@ -1,9 +1,13 @@
 //! Host-network policy and observation primitives for `Provider/network-local`.
 //!
-//! Kernel effects remain behind the injected network effect boundary. This
-//! crate computes desired bridge-port policy, validates observations, and
-//! produces ownership-scoped firewall projections. It does not open a broker
-//! socket or mutate host state directly.
+//! Kernel effects run through this crate's own broker adapter
+//! ([`broker::KernelNetworkBroker`], U14) over the broker-generic network
+//! kernels, and the family's driver effects are served by this crate itself
+//! ([`effects_service`]) over the daemon-supplied declared facets
+//! ([`facets`]) and hosted per zone as a declared service. This crate
+//! computes desired bridge-port policy, validates observations, and
+//! produces ownership-scoped firewall projections; it does not mutate host
+//! state directly.
 
 #![deny(missing_docs)]
 
@@ -13,6 +17,8 @@ pub mod broker;
 pub mod controller;
 pub mod diagnostics;
 pub mod driver;
+pub mod effects_service;
+pub mod facets;
 pub mod ifname;
 pub mod netlink;
 pub mod nftables;
@@ -34,6 +40,10 @@ pub use driver::{
     NETWORK_RESYNC, NETWORK_TYPE_NAME, NetworkComponent, NetworkDriverArgs, NetworkDriverEffects,
     declared_dependency_refs, network_descriptor,
 };
+pub use effects_service::{
+    NETWORK_EFFECTS_SERVICE, NetworkEffectsService, NetworkEffectsServiceFactory,
+};
+pub use facets::{NetworkEffectFacets, NetworkRuntime};
 pub use operations::{
     APPLY_NFTABLES, APPLY_NFTABLES_PROJECTION, APPLY_NM_UNMANAGED, APPLY_ROUTE, APPLY_SYSCTL,
     CREATE_BRIDGE, CREATE_PERSISTENT_TAP, CREATE_TAP_FD, DELETE_BRIDGE, DELETE_PERSISTENT_TAP,

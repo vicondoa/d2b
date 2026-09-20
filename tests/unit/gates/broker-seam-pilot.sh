@@ -23,6 +23,14 @@
 #                             byte-for-byte, plus zone wiring.
 #   - "PollChildReaped":      no fd leg; the committed spelling and the
 #                             empty notifications record are asserted.
+#   - "SeedDnsmasqLease":     the network family's hermetic migrated
+#                             operation: the derived per-VM dnsmasq lease
+#                             admission check and its acknowledgement
+#                             through the nested in-broker
+#                             "seed-dnsmasq-lease" kernel leg (audited
+#                             broker-side, KTD6) - the committed spelling,
+#                             the ack, and audit continuity are asserted,
+#                             with no fd leg.
 #
 # The committed op names are asserted byte-for-byte. Spellings verified
 # against docs/reference/policy/broker-operations.json and the
@@ -38,16 +46,27 @@
 #                             audits them daemon-side only (KTD6), so the
 #                             broker audit log is deliberately NOT grepped
 #                             for them.
+#   - "SeedDnsmasqLease"      family row (owner=family, declaringProvider
+#                             d2b-provider-network-local; forwarded, never
+#                             in-broker)
+#   - "seed-dnsmasq-lease"    broker-generic kernel row (the nested
+#                             in-broker leg the family handler invokes;
+#                             audited broker-side, KTD6)
 #
-# NOT proven here, by design, and why: the remaining eight family rows
-# mutate host state or touch live processes (OpenPeerPidfdFromAcceptedSocket,
-# ObserveRunner, PrepareRuntimeDir, PrepareStateDir, CgroupKill,
-# SignalRunner, DeregisterRunnerPidfd, SpawnRunner) and belong to the
-# host-integration lane that stage-runs real workers; and restart adoption
-# (KTD8) needs a daemon restart between two live planes, which the fresh
-# binaries of this gate cannot stage - see the daemon-smoke host-integration
-# check's restart stage. The orchestrator runs this gate after the unit
-# lands; the operation-to-scenario mapping lives in the U1 plan section.
+# NOT proven here, by design, and why: the remaining eight process-family
+# rows mutate host state or touch live processes
+# (OpenPeerPidfdFromAcceptedSocket, ObserveRunner, PrepareRuntimeDir,
+# PrepareStateDir, CgroupKill, SignalRunner, DeregisterRunnerPidfd,
+# SpawnRunner), and the remaining twelve network-family rows mutate the
+# host fabric (ApplyNftablesProjection, ApplyNmUnmanaged, ApplyRoute,
+# ApplySysctl, CreateBridge, CreatePersistentTap, CreateTapFd,
+# DeleteBridge, DeletePersistentTap, SetBridgePortFlags, UpdateHostsFile,
+# ApplyNftables); both sets belong to the host-integration lane that
+# stage-runs real workers. Restart adoption (KTD8) needs a daemon restart
+# between two live planes, which the fresh binaries of this gate cannot
+# stage - see the daemon-smoke host-integration check's restart stage. The
+# orchestrator runs this gate after the unit lands; the
+# operation-to-scenario mapping lives in the U1/U14 plan sections.
 #
 # The gate FAILS (non-zero + diagnostic) when the live broker audit record
 # does not carry the committed kernel op name for the invocation, and when
@@ -114,6 +133,8 @@ FAMILY_OP="OpenPidfd"
 KERNEL_OP="open-pidfd"
 INSPECT_OP="inspect-process-family"
 POLL_OP="PollChildReaped"
+SEED_OP="SeedDnsmasqLease"
+SEED_KERNEL_OP="seed-dnsmasq-lease"
 DRIVER_DEADLINE_S=${D2B_SEAM_PILOT_DRIVER_DEADLINE_S:-180}
 
 scratch=$(d2b_mktemp .broker-seam-pilot.XXXXXX)
@@ -211,12 +232,98 @@ processes = {
 }
 (root / "processes.json").write_text(json.dumps(processes))
 
+def framed_digest(domain, payload):
+    frame = {"domain": domain, "framing": "d2b-digest/v1", "payload": payload}
+    canonical = json.dumps(frame, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+
+def sha256_bytes(data):
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+# The daemon's resource plane opens only over a committed Zone set: the
+# bundle must carry one zone's resource bundle, its storage row, and the
+# sealed topology index, each pinned in artifactHashes (the v3 loader
+# verifies ownership, mode, and hash for every private artifact). The zone
+# bundle carries zero resources - the plane opens and publishes the fixed
+# provider set, which is all the hermetic operations need.
+zone_dir = root / "zones" / "work"
+zone_dir.mkdir(parents=True)
+zone_uid = "123e4567-e89b-42d3-a456-426614174000"
+store_uid = "223e4567-e89b-42d3-a456-426614174001"
+content_hash = framed_digest("d2b:v3:resource-bundle", "[]")
+resource_bundle = {
+    "schemaVersion": 3, "bundleVersion": 1, "zone": "work",
+    "zoneUid": zone_uid,
+    "contentHash": content_hash,
+    "artifactCatalogDigest": "sha256:" + "0" * 64,
+    "schemaFingerprints": {}, "providerSchemaDigests": {},
+    "resources": [],
+    "generatedAt": "1970-01-01T00:00:00.000Z",
+}
+(zone_dir / "resource-bundle.json").write_text(
+    json.dumps(resource_bundle, sort_keys=True, separators=(",", ":"))
+)
+storage_row = {
+    "identity": {"zoneUid": zone_uid, "storeUid": store_uid, "storeEpoch": 1},
+    "zoneStoreId": "zone-store-work",
+    "storageOwnerPrincipal": "d2b-zonert",
+    "parentDirectoryId": "zone-store-parent-work",
+    "ownership": {
+        "owner": "d2b-zonert", "group": "d2b-zonert", "mode": "0640", "linkCount": 1,
+    },
+    "auxiliaryDirectories": {
+        "audit": {
+            "directoryId": "zone-store-audit-work", "owner": "d2bd", "group": "d2bd",
+            "mode": "0700", "repairOwner": "privileged-broker",
+        },
+        "telemetry": {
+            "directoryId": "zone-store-telemetry-work", "owner": "d2bd", "group": "d2bd",
+            "mode": "0700", "repairOwner": "privileged-broker",
+        },
+    },
+    "filesystem": "regular-file-anchored-fd-relative-no-follow",
+    "locking": "ofd-close-on-exec",
+    "marker": {"identityMarkerId": "zone-store-marker-work"},
+    "replacementDetection": "fail-closed-on-missing-replaced-or-identity-mismatch",
+    "fsync": "database-and-parent-directory",
+    "publication": {
+        "descriptor": "owned-descriptor-close-on-exec-verified-before-concurrency",
+        "replacement": "atomic-rename-retain-prior-quarantine-ambiguity",
+    },
+}
+(zone_dir / "storage.json").write_text(
+    json.dumps(storage_row, sort_keys=True, separators=(",", ":"))
+)
+parent_map = {"work": None}
+index_document = {
+    "zones": {"work": {"zoneUid": zone_uid}},
+    "topology": {
+        "sealed": True,
+        "parentMap": parent_map,
+        "parentMapDigest": framed_digest(
+            "d2b:v3:parent-topology",
+            json.dumps(parent_map, sort_keys=True, separators=(",", ":")),
+        ),
+        "generationByZone": {"work": content_hash},
+    },
+}
+(root / "index.json").write_text(
+    json.dumps(index_document, sort_keys=True, separators=(",", ":"))
+)
+
 # v3 native bundle with the hash-over-nullified-preimage contract
 # (mirrors write_v3_native_bundle in packages/d2bd/src/composition.rs).
 bundle = {
     "bundleVersion": 1, "schemaVersion": "v3",
     "privilegesPath": str(root / "privileges.json"),
-    "zones": [], "artifactHashes": {},
+    "zones": [{"zone": "work", "path": "zones/work/resource-bundle.json"}],
+    "artifactHashes": {
+        "zones/work/resource-bundle.json": sha256_bytes(
+            (zone_dir / "resource-bundle.json").read_bytes()
+        ),
+        "zones/work/storage.json": sha256_bytes((zone_dir / "storage.json").read_bytes()),
+        "index.json": sha256_bytes((root / "index.json").read_bytes()),
+    },
     "generation": {"generator": "broker-seam-pilot", "sourceRevision": None, "generatedAt": None},
 }
 preimage = dict(bundle)
@@ -234,10 +341,10 @@ log "zone=$zone bundle_root=$bundle_root (self-generated v3 fixture)"
 
 # The production bundle posture: every artifact the plane verifies is
 # root-owned with mode 0640 (files) / 0755 (dirs).
-"${SUDO[@]}" chown -R root:root "$bundle_root" "$scratch/broker" "$scratch/audit" \
-  "$scratch/state" "$scratch/forward" "$scratch/daemon" "$scratch/locks"
-"${SUDO[@]}" chmod 0640 "$bundle_root"/*.json
-"${SUDO[@]}" chmod 0755 "$scratch/daemon" "$scratch/locks" "$bundle_root" "$bundle_root/closures"
+"${SUDO[@]}" chown -R root:root "$bundle_root" "$scratch/broker" "$broker_audit_dir" \
+  "$broker_state_dir" "$scratch/forward" "$scratch/daemon" "$daemon_locks_dir"
+"${SUDO[@]}" chmod 0640 "$bundle_root"/*.json "$bundle_root"/zones/work/*.json
+"${SUDO[@]}" chmod 0755 "$scratch/daemon" "$daemon_locks_dir" "$bundle_root" "$bundle_root/zones" "$bundle_root/zones/work" "$bundle_root/closures"
 
 wait_for_socket() {
   local path="$1"
@@ -330,15 +437,18 @@ kill -0 "$daemon_pid" 2>/dev/null || {
 
 # Drive the hermetic migrated operations end to end: one EnvelopeInvoke root
 # call per committed family op over the broker's origination socket. The
-# broker forwards each to the daemon's rendezvous; the process-family
-# handlers answer in-process in d2bd. "OpenPidfd" nests the "open-pidfd"
-# kernel invocation in-broker and returns the minted pidfd over the forward
-# carrier; the two pure operations return plain result objects with no fd
-# leg. The driver retries the refusals that mean "not ready yet" (daemon
-# plane still opening) and hard-fails on any other refusal, then proves the
-# OpenPidfd fd is a live pidfd and the pure results carry the committed
-# spellings and shapes.
-driver_output=$(python3 - "$broker_socket" "$zone" "$(id -u)" "$DRIVER_DEADLINE_S" "$INSPECT_OP" "$POLL_OP" <<'PY'
+# broker forwards each to the daemon's rendezvous; the process- and
+# network-family handlers answer in-process in d2bd. "OpenPidfd" nests the
+# "open-pidfd" kernel invocation in-broker and returns the minted pidfd over
+# the forward carrier; the two pure process operations return plain result
+# objects with no fd leg; "SeedDnsmasqLease" nests the "seed-dnsmasq-lease"
+# kernel invocation in-broker and returns its acknowledgement (the derived
+# per-VM lease admission check, no host mutation, no fd leg). The driver
+# retries the refusals that mean "not ready yet" (daemon plane still
+# opening) and hard-fails on any other refusal, then proves the OpenPidfd fd
+# is a live pidfd and the pure results carry the committed spellings and
+# shapes.
+driver_output=$(python3 - "$broker_socket" "$zone" "$(id -u)" "$DRIVER_DEADLINE_S" "$INSPECT_OP" "$POLL_OP" "$SEED_OP" <<'PY'
 import ctypes
 import json
 import os
@@ -354,6 +464,7 @@ CALLER_UID = int(sys.argv[3])
 DEADLINE_S = float(sys.argv[4])
 INSPECT_OP = sys.argv[5]
 POLL_OP = sys.argv[6]
+SEED_OP = sys.argv[7]
 VM_ID = "gate-vm"
 ROLE_ID = "runner"
 
@@ -446,9 +557,9 @@ try:
     operation = response.get("operation")
     if operation != FAMILY_OP:
         raise SystemExit(f"response operation {operation!r} != committed family op name {FAMILY_OP!r}")
-    invocation_id = response.get("invocation_id")
+    invocation_id = response.get("invocation_id") or response.get("invocationId")
     if not invocation_id:
-        raise SystemExit("response carries no invocation id")
+        raise SystemExit(f"response carries no invocation id; raw={json.dumps(response)[:600]}")
     result = response.get("result") or {}
     if result.get("pid") != pid:
         raise SystemExit(f"result pid {result.get('pid')!r} != child pid {pid}")
@@ -456,9 +567,9 @@ try:
         raise SystemExit(
             f"result verifiedStartTimeTicks {result.get('verifiedStartTimeTicks')!r} != {starttime}"
         )
-    if response.get("fd_indexes") != [0]:
+    if response.get("fdIndexes") != [0]:
         raise SystemExit(f"unexpected fd_indexes: {response.get('fd_indexes')!r}")
-    if response.get("fd_kinds") != ["any"]:
+    if response.get("fdKinds") != ["any"]:
         raise SystemExit(f"unexpected fd_kinds: {response.get('fd_kinds')!r}")
 
     received = []
@@ -466,7 +577,15 @@ try:
         if level == socket.SOL_SOCKET and ctype_ == socket.SCM_RIGHTS:
             received.extend(data_)
     if len(received) != 1:
-        raise SystemExit(f"expected exactly one pidfd over SCM_RIGHTS, got {len(received)}")
+        targets = []
+        for fd in received:
+            try:
+                targets.append(os.readlink(f"/proc/self/fd/{fd}"))
+            except OSError as exc:
+                targets.append(f"<unreadable: {exc}>")
+        raise SystemExit(
+            f"expected exactly one pidfd over SCM_RIGHTS, got {len(received)}: {targets}"
+        )
     pidfd = received[0]
 
     # fd liveness: the descriptor must be a live pidfd, not just a JSON
@@ -490,10 +609,10 @@ try:
         raise SystemExit(f"child did not die from the pidfd SIGTERM: status {status}")
 
     def no_fd_leg(operation, response, ancdata):
-        if response.get("fd_indexes") != [] or response.get("fd_kinds") != []:
+        if response.get("fdIndexes") != [] or response.get("fdKinds") != []:
             raise SystemExit(
-                f"{operation}: unexpected fd leg: fd_indexes={response.get('fd_indexes')!r} "
-                f"fd_kinds={response.get('fd_kinds')!r}"
+                f"{operation}: unexpected fd leg: fdIndexes={response.get('fdIndexes')!r} "
+                f"fdKinds={response.get('fdKinds')!r}"
             )
         for level, ctype_, _data_ in ancdata:
             if level == socket.SOL_SOCKET and ctype_ == socket.SCM_RIGHTS:
@@ -552,6 +671,63 @@ try:
         raise SystemExit(f"PollChildReaped notifications not empty: {poll_result.get('notifications')!r}")
     no_fd_leg(POLL_OP, response, ancdata)
     print(f"POLL_OK={POLL_OP}")
+
+    # SeedDnsmasqLease is the network family's hermetic migrated operation
+    # (U14): the per-VM dnsmasq lease row is derived, never caller-supplied,
+    # so the handler runs the kernel's pure admission check - the child VM
+    # name re-derived from the admitted Network identity, the scope, and the
+    # nonzero generations - and returns the acknowledgement, with no fd leg
+    # and no host mutation. The committed family spelling is echoed
+    # byte-for-byte, and the nested in-broker "seed-dnsmasq-lease" kernel
+    # leg is audited broker-side keyed on this invocation's root id (KTD6).
+    # The derivation mirrors d2b_contracts::v3::derive_network_child_name
+    # (FNV-1a 64 over "d2b-network-child/v1\\0<uid>\\0vm", Crockford base32,
+    # eight characters, lowercased).
+    network_uid = "323e4567-e89b-42d3-a456-426614174002"
+    zone_uid = "223e4567-e89b-42d3-a456-426614174001"
+
+    def fnv1a(data):
+        h = 0xCBF29CE484222325
+        for byte in data:
+            h ^= byte
+            h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        return h
+
+    def base32_crockford(value, characters):
+        alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+        out = []
+        for _ in range(characters):
+            out.append(alphabet[value & 0x1F])
+            value >>= 5
+        return "".join(reversed(out))
+
+    def derive_network_child_name(network_uid, kind):
+        data = b"d2b-network-child/v1" + b"\x00" + network_uid.encode() + b"\x00" + kind.encode()
+        return f"net-{kind}-{base32_crockford(fnv1a(data), 8).lower()}"
+
+    expected_vm = derive_network_child_name(network_uid, "vm")
+    response, ancdata = run_op(SEED_OP, {
+        "vmId": expected_vm,
+        "scopeId": f"network:{zone_uid}:{network_uid}",
+        "zoneUid": zone_uid,
+        "networkUid": network_uid,
+        "networkGeneration": 7,
+        "attachmentGeneration": 11,
+        "bundleGeneration": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    }, min(DEADLINE_S, 60.0))
+    if response.get("operation") != SEED_OP:
+        raise SystemExit(
+            f"response operation {response.get('operation')!r} != committed family op name {SEED_OP!r}"
+        )
+    seed_invocation_id = response.get("invocation_id") or response.get("invocationId")
+    if not seed_invocation_id:
+        raise SystemExit("seed response carries no invocation id")
+    seed_result = response.get("result") or {}
+    if seed_result.get("seeded") is not True:
+        raise SystemExit(f"SeedDnsmasqLease result not acknowledged: {seed_result!r}")
+    no_fd_leg(SEED_OP, response, ancdata)
+    print(f"SEED_OK={SEED_OP}")
+    print(f"SEED_INVOCATION_ID={seed_invocation_id}")
     print(f"INVOCATION_ID={invocation_id}")
 finally:
     if child.poll() is None:
@@ -578,6 +754,16 @@ printf '%s\n' "$driver_output" | grep -Fxq "POLL_OK=$POLL_OP" || {
   exit 1
 }
 ok "hermetic operation $POLL_OP answered end to end (empty notifications, no fd leg)"
+printf '%s\n' "$driver_output" | grep -Fxq "SEED_OK=$SEED_OP" || {
+  fail "driver did not prove the hermetic operation $SEED_OP"
+  exit 1
+}
+ok "hermetic operation $SEED_OP answered end to end (derived lease admission + ack, no fd leg)"
+seed_invocation_id=$(printf '%s\n' "$driver_output" | sed -n 's/^SEED_INVOCATION_ID=//p')
+[ -n "$seed_invocation_id" ] || {
+  fail "driver did not report a seed invocation id"
+  exit 1
+}
 
 # Audit continuity: the SAME committed op name must appear byte-for-byte in
 # the broker's live audit record. The nested in-broker kernel leg
@@ -604,5 +790,31 @@ if [ "$audit_seen" != 1 ]; then
   exit 1
 fi
 ok "audit continuity: committed op name '$KERNEL_OP' + invocation id $invocation_id in broker audit log"
+
+# The seed op's nested in-broker kernel leg ("seed-dnsmasq-lease") is the
+# broker-side record of the SeedDnsmasqLease invocation (KTD6), keyed on
+# its root invocation id - the same continuity the open-pidfd leg proves
+# for OpenPidfd.
+seed_audit_seen=0
+attempts=0
+while [ "$attempts" -lt 200 ]; do
+  audit_file=""
+  for candidate in "$broker_audit_dir"/broker-*.jsonl; do
+    [ -f "$candidate" ] && audit_file="$candidate" && break
+  done
+  if [ -n "$audit_file" ] \
+    && grep -Fq "\"operation\":\"$SEED_KERNEL_OP\"" "$audit_file" \
+    && grep -Fq "\"invocation_id\":\"$seed_invocation_id\"" "$audit_file"; then
+    seed_audit_seen=1
+    break
+  fi
+  attempts=$((attempts + 1))
+  sleep 0.2
+done
+if [ "$seed_audit_seen" != 1 ]; then
+  fail "broker audit log missing committed op name '$SEED_KERNEL_OP' for invocation $seed_invocation_id under $broker_audit_dir (expected the U14 chain record of the nested in-broker kernel leg)"
+  exit 1
+fi
+ok "audit continuity: committed op name '$SEED_KERNEL_OP' + invocation id $seed_invocation_id in broker audit log"
 
 log "==> broker-seam-pilot.sh PASS"

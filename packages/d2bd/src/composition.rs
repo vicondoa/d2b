@@ -397,7 +397,6 @@ mod audio_resource_runtime;
 mod credential_backend_runtime;
 mod credential_resource_runtime;
 pub mod interaction_composition;
-pub mod network_effect_port;
 pub mod process_provider_runtime;
 mod process_resource_runtime;
 pub mod provider_effects;
@@ -19949,8 +19948,19 @@ fn dispatch_broker_host_prepare_as(
                 detail: "installed generation invalid for Network effect context".to_owned(),
             })?,
     );
-    let port = network_effect_port::production_port(state, caller_role.clone(), context.clone());
-    let broker = port.into_broker();
+    // U14: the kernel-invoking adapter is the declaring crate's own
+    // `KernelNetworkBroker`, built from the daemon-supplied facets (the
+    // origination socket, the caller authority, and the resolved bundle
+    // intents over the daemon's trusted bundle).
+    let broker = d2b_provider_network_local::broker::KernelNetworkBroker::new(
+        d2b_provider_network_local::broker::NetworkBrokerFacets::new(
+            broker_socket_path(state),
+            caller_role,
+            Arc::new(
+                d2b_provider_network_local::broker::ResolverNetworkIntentSource::new(resolver),
+            ),
+        ),
+    );
     if let Err(error) =
         d2b_provider_network_local::broker::NetworkBroker::apply_nm_unmanaged(&broker, &context)
     {

@@ -21,3 +21,14 @@
   driver construction site are deleted in the same change; the moved
   implementation binds daemon-structural state only through the declared
   facets and reaches resource state through the generic driver context.
+- The network family's driver effects ended their daemon-built arm too: the
+  family now serves them from its own crate through its declared
+  `network.d2bus.org/effects` service, hosted per zone by the daemon from the
+  family's registered factory over the composition root's facet set, and the
+  kernel-invoking adapter moved into the crate as the `KernelNetworkBroker`
+  over the same broker-generic network kernels and the same `AdminUid`
+  authority. The resolved bundle intents and the installed generation
+  identity cross the boundary as daemon-supplied facets, never derived from
+  caller input. The daemon's `network_effect_port.rs` module, the network
+  field of the shared provider effects, and the port-shaped injection at the
+  driver construction site are deleted in the same change.

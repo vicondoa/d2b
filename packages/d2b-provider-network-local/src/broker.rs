@@ -3,20 +3,45 @@
 //! The Provider only sees this typed boundary. The concrete Core composition
 //! supplies a broker implementation that resolves every opaque intent against
 //! its trusted bundle before dispatching a wire operation.
+//!
+//! The production broker implementation is this crate's own
+//! [`KernelNetworkBroker`] (U14): the kernel-invoking adapter the daemon's
+//! retired `network_effect_port` module served. It resolves the trusted
+//! bundle intents through the daemon-supplied [`NetworkIntentSource`] facet
+//! (never from caller input) and invokes the matching broker-generic
+//! network kernel as a direct envelope call over the authenticated
+//! origination socket, presenting the same `AdminUid` authority the retired
+//! adapter presented.
 
 use std::fmt;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
 use tracing::warn;
 
 use d2b_contracts::types::{BundleOpId, ScopeId, VmId};
-use d2b_contracts_broker::broker_wire::NetworkTapContext;
+use d2b_contracts_broker::broker_wire::{BrokerCallerRole, NetworkTapContext};
+use d2b_contracts_broker::kernel_client::{
+    KernelInvocation, KernelInvokeError, envelope_invoke_kernel,
+};
 use d2b_contracts_resource::v3::{
     IfName, NetworkIfRole, NetworkProvenance, ResourceBundleGenerationId, ResourceUid,
     network::{AttachmentGenerationFence, AttachmentHandle, NetworkSpec},
+};
+use d2b_core::bundle_resolver::{
+    BundleResolver, ResolvedBridgeIntent, ResolvedHostsIntent, ResolvedNmUnmanagedIntent,
+    ResolvedNftablesProjectionIntent, ResolvedOwnershipMarkerIntent, ResolvedRouteIntent,
+    ResolvedSysctlIntent,
 };
 
 use crate::controller::{
     FirewallDigest, FirewallIntent, NetworkAdmissionProof, NetworkEffectError, NetworkEffectPort,
 };
+use crate::operations::{KERNEL_APPLY_NFTABLES_PROJECTION, KERNEL_SEED_DNSMASQ_LEASE};
+
+/// The broker kernel IO budget one direct invocation may take.
+const KERNEL_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Closed failures returned by the Core-to-broker adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -803,6 +828,591 @@ impl<B: NetworkBroker> NetworkEffectPort for BrokerNetworkEffectPort<B> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The kernel-invoking broker (U14)
+// ---------------------------------------------------------------------------
+
+/// The daemon-supplied source of the trusted bundle's resolved Network
+/// intents (U14).
+///
+/// The daemon host implements this facet over its own trusted bundle and
+/// supplies it through the composition root; the crate's kernel broker
+/// resolves every intent it invokes a kernel with through this source and
+/// never derives an intent from caller input. The installed generation
+/// identity rides the same source, so the projection kernel's generation
+/// fence is daemon-supplied too.
+pub trait NetworkIntentSource: Send + Sync + 'static {
+    /// Resolve one trusted Network bridge intent.
+    fn resolve_bridge_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedBridgeIntent>;
+
+    /// Resolve one trusted Network firewall projection intent.
+    fn resolve_projection_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedNftablesProjectionIntent>;
+
+    /// Resolve one trusted Network ownership marker intent.
+    fn resolve_marker_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedOwnershipMarkerIntent>;
+
+    /// Find one trusted NetworkManager unmanaged intent.
+    fn find_nm_unmanaged_intent(&self, intent_ref: &str) -> Option<ResolvedNmUnmanagedIntent>;
+
+    /// Resolve one trusted Network route intent.
+    fn resolve_route_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedRouteIntent>;
+
+    /// Resolve one trusted Network sysctl intent.
+    fn resolve_sysctl_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedSysctlIntent>;
+
+    /// Resolve one trusted hosts-file intent: a Network-hosts intent when
+    /// `provenance` is supplied, a plain hosts intent otherwise.
+    fn resolve_hosts_intent(
+        &self,
+        intent_ref: &str,
+        provenance: Option<&NetworkProvenance>,
+    ) -> Option<ResolvedHostsIntent>;
+
+    /// The installed bundle generation identity (KTD8).
+    fn installed_generation_identity(&self) -> Option<ResourceBundleGenerationId>;
+}
+
+/// The daemon-supplied [`NetworkIntentSource`] over its trusted bundle
+/// (U14): every intent the crate's kernel broker resolves comes from the
+/// daemon's own resolver, never from caller input. The daemon constructs
+/// this facet with its resolver through the composition root; the crate
+/// holds no daemon state type.
+pub struct ResolverNetworkIntentSource {
+    resolver: BundleResolver,
+}
+
+impl ResolverNetworkIntentSource {
+    /// Build the intent source over one trusted bundle resolver.
+    pub fn new(resolver: BundleResolver) -> Self {
+        Self { resolver }
+    }
+
+    /// The trusted bundle resolver the intents resolve from.
+    pub fn resolver(&self) -> &BundleResolver {
+        &self.resolver
+    }
+}
+
+impl NetworkIntentSource for ResolverNetworkIntentSource {
+    fn resolve_bridge_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedBridgeIntent> {
+        self.resolver
+            .resolve_network_bridge_intent(intent_ref, provenance)
+    }
+
+    fn resolve_projection_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedNftablesProjectionIntent> {
+        self.resolver
+            .resolve_network_projection_intent(intent_ref, provenance)
+    }
+
+    fn resolve_marker_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedOwnershipMarkerIntent> {
+        self.resolver
+            .resolve_network_marker_intent(intent_ref, provenance)
+    }
+
+    fn find_nm_unmanaged_intent(&self, intent_ref: &str) -> Option<ResolvedNmUnmanagedIntent> {
+        self.resolver
+            .find_nm_unmanaged_intent(intent_ref)
+            .cloned()
+    }
+
+    fn resolve_route_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedRouteIntent> {
+        self.resolver
+            .resolve_network_route_intent(intent_ref, provenance)
+    }
+
+    fn resolve_sysctl_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedSysctlIntent> {
+        self.resolver
+            .resolve_network_sysctl_intent(intent_ref, provenance)
+    }
+
+    fn resolve_hosts_intent(
+        &self,
+        intent_ref: &str,
+        provenance: Option<&NetworkProvenance>,
+    ) -> Option<ResolvedHostsIntent> {
+        match provenance {
+            Some(provenance) => self
+                .resolver
+                .resolve_network_hosts_intent(intent_ref, provenance),
+            None => self.resolver.find_hosts_intent(intent_ref).cloned(),
+        }
+    }
+
+    fn installed_generation_identity(&self) -> Option<ResourceBundleGenerationId> {
+        self.resolver
+            .installed_generation_identity()
+            .and_then(|identity| {
+                ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok()
+            })
+    }
+}
+
+/// The daemon-supplied broker facets one kernel-invoking broker is built
+/// from (U14): the authenticated origination socket, the caller authority,
+/// and the intent source.
+pub struct NetworkBrokerFacets {
+    /// The authenticated daemon-to-broker origination socket.
+    pub socket_path: PathBuf,
+    /// The caller authority one kernel invocation presents.
+    pub caller_role: BrokerCallerRole,
+    /// The trusted bundle's resolved Network intents.
+    pub intents: Arc<dyn NetworkIntentSource>,
+}
+
+impl NetworkBrokerFacets {
+    /// Build the facets from the daemon-supplied parts.
+    pub fn new(
+        socket_path: PathBuf,
+        caller_role: BrokerCallerRole,
+        intents: Arc<dyn NetworkIntentSource>,
+    ) -> Self {
+        Self {
+            socket_path,
+            caller_role,
+            intents,
+        }
+    }
+}
+
+/// The production kernel-invoking broker (U14): the adapter the daemon's
+/// retired `network_effect_port` module served, moved into the declaring
+/// crate behind the declared service.
+///
+/// Each method resolves the trusted bundle intents the context's refs name
+/// through the daemon-supplied [`NetworkIntentSource`] facet and invokes the
+/// matching broker-generic network kernel as a direct envelope call over
+/// the origination socket - the same kernel rows and the same authority
+/// path the retired adapter used.
+pub struct KernelNetworkBroker {
+    facets: NetworkBrokerFacets,
+}
+
+impl KernelNetworkBroker {
+    /// Bind the kernel broker to one daemon-supplied facet set.
+    pub fn new(facets: NetworkBrokerFacets) -> Self {
+        Self { facets }
+    }
+
+    /// Invoke one broker-generic network kernel over the origination
+    /// socket. The payload is the resolved values the retired typed arm
+    /// derived broker-side; the kernel runs the same ops-module core.
+    fn invoke_kernel(
+        &self,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), NetworkBrokerError> {
+        match envelope_invoke_kernel(
+            &self.facets.socket_path,
+            KERNEL_IO_TIMEOUT,
+            self.facets.caller_role.clone(),
+            KernelInvocation {
+                operation,
+                zone,
+                payload,
+                fds: &[],
+                chain_root_invocation_id: None,
+                chain_identities: None,
+            },
+        ) {
+            Ok(_) => Ok(()),
+            Err(KernelInvokeError::Refused { code, detail }) => {
+                let message = detail.unwrap_or_default();
+                tracing::warn!(
+                    broker_kind = %code,
+                    broker_operation = operation,
+                    "Network broker refused a kernel effect request"
+                );
+                Err(map_kernel_error(&code, &message))
+            }
+            Err(error) => {
+                tracing::warn!(
+                    broker_operation = operation,
+                    error = %error,
+                    "Network broker kernel invocation failed"
+                );
+                Err(NetworkBrokerError::Transport)
+            }
+        }
+    }
+
+    /// The Zone one network effect runs in: the admitted Network identity's
+    /// Zone uid, the same scope the retired arms' audit join keyed on.
+    fn zone_for(&self, context: &NetworkEffectContext) -> Result<String, NetworkBrokerError> {
+        Ok(context.provenance()?.zone_uid().as_str().to_owned())
+    }
+}
+
+impl NetworkBroker for KernelNetworkBroker {
+    fn create_bridge(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        for intent_ref in context.bridge_intent_refs() {
+            let intent = self
+                .facets
+                .intents
+                .resolve_bridge_intent(intent_ref.as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            self.invoke_kernel("create-bridge", &zone, resolved_bridge_payload(&intent))?;
+        }
+        Ok(())
+    }
+
+    fn delete_bridge(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        for intent_ref in context.bridge_intent_refs() {
+            let intent = self
+                .facets
+                .intents
+                .resolve_bridge_intent(intent_ref.as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            self.invoke_kernel("delete-bridge", &zone, resolved_bridge_payload(&intent))?;
+        }
+        Ok(())
+    }
+
+    fn apply_projection(
+        &self,
+        context: &NetworkEffectContext,
+        action: FirewallProjectionAction,
+    ) -> Result<FirewallDigest, NetworkBrokerError> {
+        let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        let intent = self
+            .facets
+            .intents
+            .resolve_projection_intent(context.projection_intent_ref().as_str(), &provenance)
+            .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+        let marker = self
+            .facets
+            .intents
+            .resolve_marker_intent(&intent.ownership_marker_intent_ref, &provenance)
+            .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+        let installed = self
+            .facets
+            .intents
+            .installed_generation_identity()
+            .ok_or(NetworkBrokerError::StaleGeneration)?;
+        self.invoke_kernel(
+            KERNEL_APPLY_NFTABLES_PROJECTION,
+            &zone,
+            serde_json::json!({
+                "scriptBody": intent.script_body,
+                "marker": marker.marker,
+                "trustedHash": intent.desired_hash,
+                "callerHash": serde_json::Value::Null,
+                "expectedGenerationId": context.expected_generation_id().as_str(),
+                "installedGenerationId": installed.as_str(),
+                "action": match action {
+                    FirewallProjectionAction::Apply => "apply",
+                    FirewallProjectionAction::Remove => "remove",
+                },
+            }),
+        )?;
+        Ok(FirewallDigest::new(context.projection_digest()))
+    }
+
+    fn apply_nm_unmanaged(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let zone = context.scope_id().as_str().to_owned();
+        let intent = self
+            .facets
+            .intents
+            .find_nm_unmanaged_intent(context.nm_intent_ref().as_str())
+            .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+        self.invoke_kernel(
+            "apply-nm-unmanaged",
+            &zone,
+            serde_json::json!({
+                "intentId": intent.intent_id,
+                "filePath": intent.file_path.display().to_string(),
+                "contents": intent.contents,
+                "mode": intent.mode,
+                "owner": intent.owner,
+                "group": intent.group,
+                "reloadBehavior": intent.reload_behavior,
+                "destroy": false,
+            }),
+        )
+    }
+
+    fn apply_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        for intent_ref in context.route_intent_refs() {
+            let intent = self
+                .facets
+                .intents
+                .resolve_route_intent(intent_ref.as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            self.invoke_kernel(
+                "apply-route",
+                &zone,
+                resolved_route_payload(&intent, &provenance, false),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn remove_routes(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        for intent_ref in context.route_intent_refs() {
+            let intent = self
+                .facets
+                .intents
+                .resolve_route_intent(intent_ref.as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            self.invoke_kernel(
+                "apply-route",
+                &zone,
+                resolved_route_payload(&intent, &provenance, true),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn apply_sysctls(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        for intent_ref in context.sysctl_intent_refs() {
+            let intent = self
+                .facets
+                .intents
+                .resolve_sysctl_intent(intent_ref.as_str(), &provenance)
+                .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+            self.invoke_kernel(
+                "apply-sysctl",
+                &zone,
+                serde_json::json!({
+                    "key": intent.key,
+                    "value": intent.value,
+                    "destroy": false,
+                }),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn update_hosts(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
+        let zone = context.scope_id().as_str().to_owned();
+        let intent = self
+            .facets
+            .intents
+            .resolve_hosts_intent(
+                context.hosts_intent_ref().as_str(),
+                context
+                    .hosts_intent_ref()
+                    .as_str()
+                    .starts_with("network-hosts:")
+                    .then_some(&provenance),
+            )
+            .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
+        self.invoke_kernel(
+            "update-hosts-file",
+            &zone,
+            serde_json::json!({
+                "intentId": intent.intent_id,
+                "path": intent.path.display().to_string(),
+                "managedBlock": intent.managed_block,
+                "startMarker": intent.start_marker,
+                "endMarker": intent.end_marker,
+                "mode": intent.mode,
+                "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().map_err(|_| NetworkBrokerError::Rejected)?,
+                "ownershipMarker": intent.ownership_marker,
+                "destroy": false,
+            }),
+        )
+    }
+
+    fn seed_dhcp(&self, context: &NetworkEffectContext) -> Result<(), NetworkBrokerError> {
+        let provenance = context.provenance()?;
+        let zone = self.zone_for(context)?;
+        self.invoke_kernel(
+            KERNEL_SEED_DNSMASQ_LEASE,
+            &zone,
+            serde_json::json!({
+                "vmId": context.dhcp_vm_id().as_str(),
+                "scopeId": context.scope_id().as_str(),
+                "zoneUid": provenance.zone_uid().as_str(),
+                "networkUid": provenance.network_uid().as_str(),
+                "networkGeneration": provenance.network_generation().get(),
+                "attachmentGeneration": provenance.attachment_generation().get(),
+                "bundleGeneration": provenance.bundle_generation().as_str(),
+            }),
+        )
+    }
+
+    fn delete_persistent_tap(
+        &self,
+        context: &NetworkEffectContext,
+        handle: &AttachmentHandle,
+        fence: &AttachmentGenerationFence,
+    ) -> Result<(), NetworkBrokerError> {
+        let proof = context
+            .network_admission()
+            .ok_or(NetworkBrokerError::NetworkAdmissionRequired)?;
+        if handle.opaque_id() != fence.attachment_uid() {
+            return Err(NetworkBrokerError::NetworkAdmissionMismatch);
+        }
+        let zone = self.zone_for(context)?;
+        self.invoke_kernel(
+            "delete-persistent-tap",
+            &zone,
+            serde_json::json!({
+                "attachmentId": handle.opaque_id().as_str(),
+                "expectedZoneUid": proof.key().zone_uid().as_str(),
+                "expectedNetworkUid": proof.key().network_uid().as_str(),
+                "expectedNetworkGeneration": fence.network_generation().get(),
+                "expectedAttachmentGeneration": fence.attachment_generation().get(),
+                "expectedBundleGeneration": proof.key().bundle_generation().as_str(),
+            }),
+        )
+    }
+}
+
+/// The resolved bridge intent payload one bridge kernel invocation carries.
+fn resolved_bridge_payload(intent: &ResolvedBridgeIntent) -> serde_json::Value {
+    serde_json::json!({
+        "intentId": intent.intent_id,
+        "scopeLabel": intent.scope_label,
+        "bridgeIfname": intent.bridge_ifname.as_str(),
+        "mtu": intent.mtu,
+        "stpDisabled": intent.stp_disabled,
+        "multicastSnoopingDisabled": intent.multicast_snooping_disabled,
+        "ipv6Suppressed": intent.ipv6_suppressed,
+        "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().ok().flatten(),
+        "ownershipMarker": intent.ownership_marker,
+    })
+}
+
+/// The resolved route intent payload one apply-route kernel invocation
+/// carries.
+fn resolved_route_payload(
+    intent: &ResolvedRouteIntent,
+    provenance: &NetworkProvenance,
+    destroy: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "intentId": intent.intent_id,
+        "routeSpec": intent.route_spec,
+        "destination": intent.destination,
+        "via": intent.via,
+        "device": intent.device,
+        "table": intent.table,
+        "owned": intent.owned,
+        "routeName": intent.route_name,
+        "provenance": serde_json::to_value(provenance).ok(),
+        "ownershipMarker": intent.ownership_marker,
+        "destroy": destroy,
+    })
+}
+
+/// Map one kernel refusal onto the provider's closed retry/block states,
+/// preserving the classification the retired typed arms produced.
+fn map_kernel_error(kind: &str, message: &str) -> NetworkBrokerError {
+    if message.contains("nm-managed-foreign-conflict")
+        || message.contains("foreign route")
+        || message.contains("foreign-bridge-ownership-marker")
+        || message.contains("foreign-tap-ownership-marker")
+        || message.contains("foreign-nft-ownership")
+        || message.contains("foreign ownership marker")
+    {
+        return NetworkBrokerError::ForeignOwnership;
+    }
+    let reason = message
+        .split_once("failed: ")
+        .map_or(message, |(_, reason)| reason);
+    if reason.contains("stale-bundle-generation") {
+        return NetworkBrokerError::StaleGeneration;
+    }
+    if reason.contains("network-zone-unknown") {
+        return NetworkBrokerError::NetworkAdmissionMismatch;
+    }
+    match (kind, reason) {
+        ("Broker.NftablesDriftDetected", _)
+        | ("Broker.StaleProjectionGeneration", _)
+        | ("Broker.RequestValidation", "stale-projection-generation")
+        | ("Broker.RequestValidation", "stale-network-generation") => {
+            NetworkBrokerError::StaleGeneration
+        }
+        ("Broker.ForeignOwnership", _)
+        | ("Broker.RequestValidation", "foreign-nft-rule-preserved")
+        | ("Broker.RequestValidation", "nm-managed-foreign-conflict")
+        | ("Broker.RequestValidation", "attachment-ownership-conflict") => {
+            NetworkBrokerError::ForeignOwnership
+        }
+        ("Broker.RequestValidation", "stale-attachment-generation") => {
+            NetworkBrokerError::StaleAttachmentGeneration
+        }
+        ("Broker.RequestValidation", "network-admission-required") => {
+            NetworkBrokerError::NetworkAdmissionRequired
+        }
+        ("Broker.RequestValidation", "network-admission-mismatch")
+        | ("Broker.RequestValidation", "network-scope-invalid")
+        | ("Broker.RequestValidation", "network-scope-required")
+        | ("Broker.RequestValidation", "network-scope-mismatch") => {
+            NetworkBrokerError::NetworkAdmissionMismatch
+        }
+        ("Broker.RequestValidation", "network-interface-collision") => {
+            NetworkBrokerError::NetworkInterfaceCollision
+        }
+        ("Broker.RequestValidation", "network-route-collision") => {
+            NetworkBrokerError::NetworkRouteCollision
+        }
+        ("Broker.RequestValidation", "network-admission-conflict")
+        | ("Broker.RequestValidation", "legacy-network-authority") => {
+            NetworkBrokerError::NetworkAdmissionConflict
+        }
+        ("Broker.RequestValidation", "attachment-delete-failed")
+        | ("Broker.RequestValidation", "network-broker-transient") => NetworkBrokerError::Transient,
+        ("Broker.Transient", _) | (_, "network-effect-transient") => NetworkBrokerError::Transient,
+        (_, "east-west-host-opt-in-required") => NetworkBrokerError::EastWestHostOptInRequired,
+        _ => NetworkBrokerError::Rejected,
+    }
+}
+
 fn map_broker_error(error: NetworkBrokerError) -> NetworkEffectError {
     match error {
         NetworkBrokerError::StaleGeneration => NetworkEffectError::StaleConfigurationGeneration,
@@ -1428,6 +2038,47 @@ mod tests {
                 "routes-remove",
                 "delete-bridge",
             ]
+        );
+    }
+
+    /// The kernel refusal mapping keeps the provider's retry and block
+    /// states, exactly as the retired daemon adapter classified them.
+    #[test]
+    fn kernel_refusal_reasons_keep_provider_retry_and_block_states() {
+        assert_eq!(
+            map_kernel_error(
+                "Broker.RequestValidation",
+                "broker request validation failed: stale-projection-generation",
+            ),
+            NetworkBrokerError::StaleGeneration
+        );
+        assert_eq!(
+            map_kernel_error(
+                "Broker.RequestValidation",
+                "broker request validation failed: stale-attachment-generation",
+            ),
+            NetworkBrokerError::StaleAttachmentGeneration
+        );
+        assert_eq!(
+            map_kernel_error(
+                "Broker.RequestValidation",
+                "broker request validation failed: attachment-ownership-conflict",
+            ),
+            NetworkBrokerError::ForeignOwnership
+        );
+        assert_eq!(
+            map_kernel_error(
+                "Broker.LiveHandler",
+                "broker live handler failed: nm-managed-foreign-conflict",
+            ),
+            NetworkBrokerError::ForeignOwnership
+        );
+        assert_eq!(
+            map_kernel_error(
+                "Broker.RequestValidation",
+                "broker request validation failed: east-west-host-opt-in-required",
+            ),
+            NetworkBrokerError::EastWestHostOptInRequired
         );
     }
 }

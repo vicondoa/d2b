@@ -32,7 +32,12 @@ exports_files(
 d2b_rust_library(
     name = "d2b_provider_network_local",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "Cargo.toml",
+        # The include_str! fixtures this crate's test-support code loads.
+        "//tests/fixtures:deny-unknown/host-valid.json",
+        "//:tests/golden/manifest_v04/baseline-vms.json",
+    ],
     deps = [
         "//packages/d2b-provider-guest:d2b_provider_guest",
         "//packages/d2b-core:d2b_core",
@@ -51,7 +56,12 @@ d2b_rust_library(
 d2b_rust_library(
     name = "d2b_provider_network_local_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "Cargo.toml",
+        # The include_str! fixtures this crate's test-support code loads.
+        "//tests/fixtures:deny-unknown/host-valid.json",
+        "//:tests/golden/manifest_v04/baseline-vms.json",
+    ],
     crate_features = ["test-support"],
     crate_name = "d2b_provider_network_local",
     deps = [

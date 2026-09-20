@@ -1072,12 +1072,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/network_effect_port.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/tpm_effect_port.rs",
         token: "server_state",
         family: "d2bd-state",
@@ -1725,12 +1719,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "nixos",
         family: "activation-nixos",
         retires_with: "permanent: the config-nixos provider references are another family's declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/network_effect_port.rs",
-        token: "sysctl",
-        family: "activation-nixos",
-        retires_with: "permanent: the network sysctl intents are the network family's declared vocabulary; the daemon's network effect adapter reads them through the generic resolver",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
@@ -2985,12 +2973,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "nftables",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/network_effect_port.rs",
-        token: "network_local",
         family: "network-local",
         retires_with: "U12 network-fds step",
     },

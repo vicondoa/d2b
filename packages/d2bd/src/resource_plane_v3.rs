@@ -112,7 +112,10 @@ use d2b_provider_toolkit::EffectServiceFactory;
 use d2b_provider_device::{DeviceDriverArgs, device_descriptor};
 use d2b_provider_device_security_key::{SecurityKeyDriverArgs, security_key_descriptors};
 use d2b_provider_device_usbip::{UsbipDriverArgs, usbip_descriptors};
-use d2b_provider_network_local::{NetworkDriverArgs, network_descriptor};
+use d2b_provider_network_local::{
+    NETWORK_EFFECTS_SERVICE, NetworkDriverArgs, NetworkEffectFacets, NetworkEffectsServiceFactory,
+    network_descriptor,
+};
 use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
 use crate::system_core_effects::{ProductionHostDriverEffects, ProductionUserDriverEffects};
@@ -1784,6 +1787,11 @@ pub struct ConstructionInputs {
     /// composition root. The family never receives a daemon-built effect
     /// port (R2).
     pub process_facets: ProcessEffectFacets,
+    /// The daemon-supplied facet set the Network family's effects
+    /// implementation is built from (U14): the daemon's Network runtime and
+    /// the resolved bundle intents, supplied through the composition root.
+    /// The family never receives a daemon-built effect port (R2).
+    pub network_facets: NetworkEffectFacets,
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
     pub binding_effects: Arc<dyn BindingDriverEffects>,
     pub endpoint_effects: Arc<dyn EndpointDriverEffects>,
@@ -1894,6 +1902,21 @@ impl ConstructionInputs {
                 state: Arc::clone(state),
             })),
         };
+        // U14: the Network family's effects ride the declared facets, and
+        // the composition root hosts the family's declared effects service
+        // from the same facet set the driver factories are built from. The
+        // shared-provider adapter serves as the daemon's Network runtime
+        // over the plane's trusted bundle.
+        let shared_provider_effects = Arc::new(ProductionSharedProviderEffects::new(
+            Arc::clone(state),
+            zone.clone(),
+            controller_generation,
+            resolver.clone(),
+        ));
+        let network_facets = NetworkEffectFacets {
+            runtime: Arc::clone(&shared_provider_effects)
+                as Arc<dyn d2b_provider_network_local::NetworkRuntime>,
+        };
         Ok(Self {
             zone: zone.clone(),
             zone_token,
@@ -1911,6 +1934,7 @@ impl ConstructionInputs {
             registry: Arc::clone(&registry),
             provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
             process_facets: process_facets.clone(),
+            network_facets: network_facets.clone(),
             volume_effects: Arc::new(production_volume_effects(state, zone.clone(), resolver, Arc::clone(&registry))),
             binding_effects: Arc::new(ProductionBindingDriverEffects::new(
                 Arc::new({
@@ -2003,11 +2027,7 @@ Box::pin(async move {
             activation_effects: Arc::new(ProductionActivationDriverEffects::new(Arc::clone(state))),
             credential_effects,
             shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects::production(
-                Arc::new(ProductionSharedProviderEffects::new(
-                    Arc::clone(state),
-                    zone.clone(),
-                    controller_generation,
-                )),
+                shared_provider_effects,
             ),
             guest_effects: Arc::new(ProductionGuestDriverEffects::new(
                 Arc::clone(state),
@@ -2026,14 +2046,21 @@ Box::pin(async move {
                     controller_generation.get(),
                 ),
             ),
-            // U1: the Process family declares its effects service; the
-            // composition root hosts it per zone from the family's own
-            // implementation over this zone's facet set.
-            effect_service_factories: BTreeMap::from([(
-                PROCESS_EFFECTS_SERVICE.id,
-                Arc::new(ProcessEffectsServiceFactory::new(process_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>,
-            )]),
+            // U1/U14: the Process and Network families declare their effects
+            // services; the composition root hosts each per zone from the
+            // family's own implementation over this zone's facet set.
+            effect_service_factories: BTreeMap::from([
+                (
+                    PROCESS_EFFECTS_SERVICE.id,
+                    Arc::new(ProcessEffectsServiceFactory::new(process_facets.clone()))
+                        as Arc<dyn EffectServiceFactory>,
+                ),
+                (
+                    NETWORK_EFFECTS_SERVICE.id,
+                    Arc::new(NetworkEffectsServiceFactory::new(network_facets))
+                        as Arc<dyn EffectServiceFactory>,
+                ),
+            ]),
             foundation: None,
         })
     }
@@ -2346,7 +2373,9 @@ impl ResourcePlaneV3 {
             vec![network_descriptor(NetworkDriverArgs {
                 zone: inputs.zone.as_str().to_owned(),
                 controller_generation: inputs.authority.controller_generation,
-                effects: Arc::clone(&inputs.shared_provider_effects.network),
+                // U14: the driver builds its effects from the declared
+                // facets; no externally built port appears here (R2).
+                facets: inputs.network_facets.clone(),
             })],
         );
         set = set.with(
@@ -3237,6 +3266,9 @@ mod tests {
             effects.set_active(false);
             effects.facet_set()
         };
+        let network_facets = d2b_provider_network_local::test_support::recording_facets(
+            Arc::new(d2b_provider_network_local::test_support::RecordingRuntime::default()),
+        );
         (
             dir,
             ConstructionInputs {
@@ -3287,9 +3319,6 @@ mod tests {
                     effects
                 },
                 shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects {
-                    network: Arc::new(
-                        d2b_provider_network_local::test_support::RecordingEffects::default(),
-                    ),
                     usbip: Arc::new(
                         d2b_provider_device_usbip::test_support::RecordingEffects::default(),
                     ),
@@ -3300,6 +3329,10 @@ mod tests {
                         d2b_provider_device::test_support::RecordingEffects::default(),
                     ),
                 },
+                // U14: the plane tests build the Network family's facet set
+                // from the recording runtime, exactly as the production
+                // composition root builds it from the daemon's runtime.
+                network_facets: network_facets.clone(),
                 guest_effects: {
                     let effects = d2b_provider_guest::test_support::ScriptedEffects::new();
                     // The old plane fake reported Pending (the plane tests
@@ -3311,15 +3344,23 @@ mod tests {
                 },
                 interaction_effects: d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
                 trusted_context_publication: None,
-                // U1: the plane hosts the Process family's declared effects
-                // service from the same facet set its driver factories are
-                // built from, exactly as the production composition root
-                // does.
-                effect_service_factories: BTreeMap::from([(
-                    PROCESS_EFFECTS_SERVICE.id,
-                    Arc::new(ProcessEffectsServiceFactory::new(process_facets))
-                        as Arc<dyn EffectServiceFactory>,
-                )]),
+                // U1/U14: the plane hosts the Process and Network families'
+                // declared effects services from the same facet sets their
+                // driver factories are built from, exactly as the production
+                // composition root does.
+                effect_service_factories: BTreeMap::from([
+                    (
+                        PROCESS_EFFECTS_SERVICE.id,
+                        Arc::new(ProcessEffectsServiceFactory::new(process_facets))
+                            as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        NETWORK_EFFECTS_SERVICE.id,
+                        Arc::new(NetworkEffectsServiceFactory::new(
+                            network_facets.clone(),
+                        )) as Arc<dyn EffectServiceFactory>,
+                    ),
+                ]),
                 foundation: None,
             },
             readiness,
@@ -3523,6 +3564,57 @@ mod tests {
             serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({ "active": false }))
                 .expect("canonical payload"),
             "the hosted service answers the runtime facet's report"
+        );
+    }
+
+    /// U14: the composition root hosts the Network family's declared effects
+    /// service from the family's own factory over the plane's facet set, and
+    /// the hosted service answers `inspect-network` through the real
+    /// invocation capability object carrying the real envelope payload -
+    /// the same implementation value the driver factory is built from. The
+    /// report is served from the daemon-supplied bundle facet, so the trusted
+    /// bundle and the installed generation identity cross the provider
+    /// boundary as declared facets.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_network_effects_service_answers_inspect_network_through_the_binding() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let runtime = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts the declared network service");
+        let binding = runtime
+            .resolve_effect_service(NETWORK_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-u14-inspect-network".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({})).expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: NETWORK_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let response = binding.call(call).await.expect("call");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({
+                "family": "network-local",
+                "resourceType": "Network",
+                "installedGenerationId":
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "hostNftables": { "family": "inet", "table": "d2b" },
+                "eastWestOptIn": false,
+                "operations": [
+                    "ApplyNftables", "ApplyNftablesProjection", "ApplyNmUnmanaged",
+                    "ApplyRoute", "ApplySysctl", "CreateBridge", "DeleteBridge",
+                    "CreatePersistentTap", "DeletePersistentTap", "CreateTapFd",
+                    "SetBridgePortFlags", "UpdateHostsFile", "SeedDnsmasqLease",
+                ],
+            }))
+            .expect("canonical payload"),
+            "the hosted service answers the trusted-bundle report from the bundle facet"
         );
     }
 
