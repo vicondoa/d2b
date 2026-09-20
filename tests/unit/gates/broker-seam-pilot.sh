@@ -157,9 +157,11 @@ chmod 0755 "$scratch/daemon"
 # the committed test writer `write_minimal_vm_start_bundle_artifacts` in
 # packages/d2bd/src/composition.rs (the nix smoke tree helper is stale
 # against the current d2b.zones module surface and is not required by
-# this gate). The broker resolves its manifest from vms.json and the
-# daemon opens its resource plane from bundle.json, publishing the
-# process-family providers to the forward rendezvous.
+# this gate). The broker and the daemon both resolve the same
+# zone-native bundle.json (the resolver refuses any non-v3 artifact at
+# --bundle-path), and the daemon opens its resource plane from it,
+# publishing the process- and network-family providers to the forward
+# rendezvous.
 bundle_root="$scratch/artifacts"
 mkdir -p "$bundle_root/closures"
 cp "$ROOT/tests/fixtures/deny-unknown/host-valid.json" "$bundle_root/host.json"
@@ -340,8 +342,37 @@ zone="work"
 log "zone=$zone bundle_root=$bundle_root (self-generated v3 fixture)"
 
 # The production bundle posture: every artifact the plane verifies is
-# root-owned with mode 0640 (files) / 0755 (dirs).
-"${SUDO[@]}" chown -R root:root "$bundle_root" "$scratch/broker" "$broker_audit_dir" \
+# root:d2bd-owned with mode 0640 (files) / 0755 (dirs) - the exact
+# owner/group/mode the BundleVerifyPolicy::production() tamper check
+# enforces (owner uid 0, group d2bd when the group exists, mode 0640).
+# The pilot may run inside a user namespace whose gid map cannot express
+# the host d2bd group (unshare -rm on a host that has one): chown to that
+# group fails with EINVAL there. The resolver skips the GID check when
+# the group is absent from /etc/group, so on such hosts the gate stages
+# root:root and installs a namespace-local /etc/group view without the
+# d2bd line (bind mount over the private mount namespace unshare -rm
+# creates; the host view is untouched, and on a shared mount namespace
+# the mount fails closed before anything is staged). On hosts where the
+# group is chown-able the gate stages the real root:d2bd posture.
+bundle_group=root
+if getent group d2bd >/dev/null 2>&1; then
+  probe="$scratch/.ownership-probe"
+  : >"$probe"
+  if "${SUDO[@]}" chown root:d2bd "$probe" 2>/dev/null; then
+    bundle_group=d2bd
+  else
+    etc_group="$scratch/etc-group"
+    sed '/^d2bd:/d' /etc/group >"$etc_group"
+    if ! "${SUDO[@]}" mount --bind "$etc_group" /etc/group 2>/dev/null; then
+      rm -f "$probe"
+      fail "cannot stage the production bundle posture: the d2bd group is not chown-able in this namespace and /etc/group is not bind-mountable"
+      exit 1
+    fi
+    add_cleanup "${SUDO[*]:+${SUDO[*]} }umount /etc/group >/dev/null 2>&1 || true"
+  fi
+  rm -f "$probe"
+fi
+"${SUDO[@]}" chown -R root:"$bundle_group" "$bundle_root" "$scratch/broker" "$broker_audit_dir" \
   "$broker_state_dir" "$scratch/forward" "$scratch/daemon" "$daemon_locks_dir"
 "${SUDO[@]}" chmod 0640 "$bundle_root"/*.json "$bundle_root"/zones/work/*.json
 "${SUDO[@]}" chmod 0755 "$scratch/daemon" "$daemon_locks_dir" "$bundle_root" "$bundle_root/zones" "$bundle_root/zones/work" "$bundle_root/closures"
@@ -390,7 +421,7 @@ EOF
     --socket-path "$broker_socket" \
     --audit-dir "$broker_audit_dir" \
     --audit-retention-days 0 \
-    --bundle-path "$bundle_root/vms.json" \
+    --bundle-path "$bundle_root/bundle.json" \
     --state-dir "$broker_state_dir" \
     --forward-socket "$forward_socket" \
     --d2bd-uid "$(id -u)" \
@@ -576,22 +607,33 @@ try:
     for level, ctype_, data_ in ancdata:
         if level == socket.SOL_SOCKET and ctype_ == socket.SCM_RIGHTS:
             received.extend(data_)
-    if len(received) != 1:
-        targets = []
-        for fd in received:
-            try:
-                targets.append(os.readlink(f"/proc/self/fd/{fd}"))
-            except OSError as exc:
-                targets.append(f"<unreadable: {exc}>")
+    # The carrier appends its own relay descriptors to the carried ones, so the
+    # reply holds more than the declared leg. Select the pidfd by kind: exactly
+    # one received descriptor must resolve to a pidfd, and it must be the one
+    # the declared leg names.
+    targets = {}
+    for fd in received:
+        try:
+            targets[fd] = os.readlink(f"/proc/self/fd/{fd}")
+        except OSError as exc:
+            targets[fd] = f"<unreadable: {exc}>"
+    pidfds = [fd for fd, target in targets.items() if "pidfd" in target]
+    if len(pidfds) != 1:
         raise SystemExit(
-            f"expected exactly one pidfd over SCM_RIGHTS, got {len(received)}: {targets}"
+            f"expected exactly one pidfd over SCM_RIGHTS, got {len(pidfds)} of "
+            f"{len(received)}: {targets}"
         )
-    pidfd = received[0]
+    pidfd = pidfds[0]
+    if received.index(pidfd) != response["fdIndexes"][0]:
+        raise SystemExit(
+            f"the pidfd is not at the declared leg index {response['fdIndexes']!r}: "
+            f"received {targets}"
+        )
 
     # fd liveness: the descriptor must be a live pidfd, not just a JSON
     # field. fstat via /proc/self/fd, then a signal delivered through the
     # fd path (signal 0 probe, then SIGTERM) must reach the child.
-    target = os.readlink(f"/proc/self/fd/{pidfd}")
+    target = targets[pidfd]
     if "pidfd" not in target:
         raise SystemExit(f"received fd {pidfd} is not a pidfd: {target!r}")
     libc = ctypes.CDLL(None, use_errno=True)
