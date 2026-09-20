@@ -48,12 +48,17 @@ use crate::{GuestOwnerIdentitySource, device_worker_family, resolve_guest_owner_
 /// The Process family's declared effects service.
 ///
 /// One zone-plane method, `has-active`: it answers whether this zone retains
-/// a verified identity for one resource (`resourceRef`), optionally scoped
-/// by the zone-authority uid (`zoneUid`). Payload:
+/// a verified identity for one resource (`resourceRef`). Payload:
 ///
 /// ```json
-/// { "zone": "<zone>", "zoneUid": "<uid>|null", "resourceRef": "<ref>" }
+/// { "zone": "<zone>", "zoneUid": null, "resourceRef": "<ref>" }
 /// ```
+///
+/// The invocation's zone is the authoritative one the host addressed: a
+/// payload naming another zone refuses with its own closed code. The
+/// zone-authority uid is host-supplied scope, not a caller assertion - the
+/// capability object carries none today, so a payload that asserts one
+/// refuses instead of being trusted.
 ///
 /// Response: `{ "active": true|false }`.
 ///
@@ -244,9 +249,8 @@ fn has_active_response(active: bool) -> Result<EffectResponse, EffectServiceErro
     Ok(EffectResponse::new(payload))
 }
 
-/// The declared `has-active` payload contract: `zone` names the zone,
-/// `zoneUid` the optional zone-authority uid, and `resourceRef` the resource
-/// the caller asks about.
+/// The declared `has-active` payload contract: `zone` names the zone and
+/// `resourceRef` the resource the caller asks about.
 fn payload_string<'a>(
     payload: &'a CanonicalJsonObject,
     key: &str,
@@ -258,12 +262,15 @@ fn payload_string<'a>(
     }
 }
 
-/// Serve the `has-active` method: parse the zone, optional zone-authority
-/// uid, and resource reference from the canonical payload, then answer from
-/// the runtime facet. A payload that does not match the contract refuses with
-/// its own closed code instead of answering a half-built report.
+/// Serve the `has-active` method: parse the zone and resource reference from
+/// the canonical payload, bind the query to the invocation's authoritative
+/// zone (a payload naming another zone refuses with its own closed code),
+/// and answer from the runtime facet with the host-supplied zone-authority
+/// scope. A payload that does not match the contract refuses with its own
+/// closed code instead of answering a half-built report.
 async fn serve_has_active(
     runtime: &dyn ProcessProviderRuntime,
+    invocation_zone: &str,
     payload: &CanonicalJsonObject,
 ) -> Result<EffectResponse, EffectServiceError> {
     let declined = |reason: &'static str| EffectServiceError::Declined {
@@ -273,19 +280,23 @@ async fn serve_has_active(
     let zone = payload_string(payload, "zone", "has-active-zone-missing")
         .map_err(declined)?;
     let zone = ZoneId::parse(zone).map_err(|_| declined("has-active-zone-invalid"))?;
-    let zone_uid = match payload.get("zoneUid") {
-        None | Some(CanonicalJsonValue::Null) => None,
-        Some(CanonicalJsonValue::String(uid)) if !uid.is_empty() => Some(
-            ResourceUid::parse(uid.as_str())
-                .map_err(|_| declined("has-active-zone-uid-invalid"))?,
-        ),
-        _ => return Err(declined("has-active-zone-uid-invalid")),
-    };
+    // The invocation's zone is the authoritative one the host addressed; a
+    // payload naming a different zone is refused instead of answered.
+    if zone.as_str() != invocation_zone {
+        return Err(declined("has-active-zone-mismatch"));
+    }
+    // The zone-authority uid is host-supplied scope, never a caller
+    // assertion: the capability object carries none today, so a payload
+    // that asserts one is refused rather than trusted.
+    match payload.get("zoneUid") {
+        None | Some(CanonicalJsonValue::Null) => {}
+        _ => return Err(declined("has-active-zone-uid-unsupplied")),
+    }
     let resource_ref = payload_string(payload, "resourceRef", "has-active-resource-ref-missing")
         .map_err(declined)?;
     let resource_ref =
         ResourceRef::parse(resource_ref).map_err(|_| declined("has-active-resource-ref-invalid"))?;
-    let active = runtime.has_active_resource_in_zone(&zone, zone_uid.as_ref(), &resource_ref);
+    let active = runtime.has_active_resource_in_zone(&zone, None, &resource_ref);
     has_active_response(active)
 }
 
@@ -457,9 +468,10 @@ impl EffectService for ProcessEffectsService {
         invocation: ServiceInvocation<'_>,
     ) -> Result<EffectResponse, EffectServiceError> {
         // The declaration's method gates admission at the hosting side; the
-        // service serves its one declared zone-plane method and refuses a
-        // payload that does not match the method's contract.
-        serve_has_active(&*self.runtime, invocation.payload).await
+        // service serves its one declared zone-plane method bound to the
+        // invocation's authoritative zone and refuses a payload that does
+        // not match the method's contract.
+        serve_has_active(&*self.runtime, invocation.zone, invocation.payload).await
     }
 }
 
@@ -747,8 +759,8 @@ mod tests {
         ) -> bool {
             assert_eq!(zone.as_str(), "work");
             assert_eq!(
-                zone_uid.map(ResourceUid::as_str),
-                Some("523e4567-e89b-42d3-a456-426614174011")
+                zone_uid, None,
+                "the host supplies no zone-authority uid on the capability"
             );
             assert_eq!(resource_ref.to_canonical_string(), "Process/acceptance-guest-vmm");
             self.active
@@ -778,15 +790,16 @@ mod tests {
     }
 
     /// The hosted `has-active` method answers from the runtime facet for the
-    /// exact zone, zone-authority uid, and resource reference the payload
-    /// names - the same report the driver's admission fence reads.
+    /// invocation's authoritative zone and the resource reference the
+    /// payload names, with the host-supplied (un-scoped) zone-authority
+    /// uid - the same report the driver's admission fence reads.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn has_active_answers_from_the_runtime_facet() {
         let service = ProcessEffectsService::new(facets(ScriptedRuntime::shared(true)));
         let payload = canonical(serde_json::json!({
             "zone": "work",
-            "zoneUid": "523e4567-e89b-42d3-a456-426614174011",
+            "zoneUid": serde_json::Value::Null,
             "resourceRef": "Process/acceptance-guest-vmm",
         }));
         let mut resources = ServiceResourceContext::fail_closed();
@@ -818,11 +831,11 @@ mod tests {
             ),
             (
                 serde_json::json!({ "zone": "work", "zoneUid": "bogus" }),
-                "has-active-zone-uid-invalid",
+                "has-active-zone-uid-unsupplied",
             ),
             (
                 serde_json::json!({ "zone": "work", "zoneUid": 7 }),
-                "has-active-zone-uid-invalid",
+                "has-active-zone-uid-unsupplied",
             ),
             (
                 serde_json::json!({ "zone": "work" }),
@@ -848,6 +861,32 @@ mod tests {
                 "payload {payload:?}"
             );
         }
+    }
+
+    /// A payload naming another zone than the invocation is addressed to is
+    /// refused by name: the invocation's zone is the authoritative one the
+    /// host addressed, never a caller-chosen zone.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn has_active_refuses_a_payload_naming_another_zone() {
+        let service = ProcessEffectsService::new(facets(ScriptedRuntime::shared(true)));
+        let payload = canonical(serde_json::json!({
+            "zone": "other",
+            "zoneUid": serde_json::Value::Null,
+            "resourceRef": "Process/acceptance-guest-vmm",
+        }));
+        let mut resources = ServiceResourceContext::fail_closed();
+        let error = service
+            .handle(has_active_invocation(&payload, &mut resources, "invocation-11"))
+            .await
+            .expect_err("refused");
+        assert_eq!(
+            error,
+            EffectServiceError::Declined {
+                service: PROCESS_EFFECTS_SERVICE.id.to_owned(),
+                reason: "has-active-zone-mismatch".to_owned(),
+            }
+        );
     }
 
     // -- committed controller-provider identity -------------------------------

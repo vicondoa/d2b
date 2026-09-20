@@ -24,7 +24,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::CanonicalJsonObject;
 use d2b_provider_toolkit::{
     EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceInvocation,
     SharedProviderEffectError, SharedProviderEffectOutcome, SharedProviderEffectRequest,
@@ -58,29 +57,35 @@ pub const NETWORK_EFFECTS_SERVICE: ServiceDecl = ServiceDecl {
 };
 
 /// The one `inspect-network` response payload: the family's trusted-bundle
-/// report. The literals are canonical by construction; the parse refusal is
-/// unreachable and names its own code.
+/// report. The payload is built through the canonical JSON object path, so
+/// a structural character in a trusted value yields a correctly escaped
+/// report rather than an unparseable one; the refusal is unreachable and
+/// names its own code.
 fn inspect_network_response(
     installed_generation_id: &str,
     nftables_family: &str,
     nftables_table: &str,
     east_west_opt_in: bool,
 ) -> Result<EffectResponse, EffectServiceError> {
-    let payload = format!(
-        "{{\"family\":\"network-local\",\"resourceType\":\"Network\",\
-\"installedGenerationId\":\"{}\",\"hostNftables\":{{\"family\":\"{}\",\"table\":\"{}\"}},\
-\"eastWestOptIn\":{},\"operations\":[\
-\"ApplyNftables\",\"ApplyNftablesProjection\",\"ApplyNmUnmanaged\",\"ApplyRoute\",\
-\"ApplySysctl\",\"CreateBridge\",\"DeleteBridge\",\"CreatePersistentTap\",\
-\"DeletePersistentTap\",\"CreateTapFd\",\"SetBridgePortFlags\",\"UpdateHostsFile\",\
-\"SeedDnsmasqLease\"]}}",
-        installed_generation_id, nftables_family, nftables_table, east_west_opt_in
-    );
-    let payload = CanonicalJsonObject::parse(payload.as_bytes()).map_err(|_| {
-        EffectServiceError::Declined {
-            service: NETWORK_EFFECTS_SERVICE.id.to_owned(),
-            reason: "inspect-network-response-invalid".to_owned(),
-        }
+    let payload = serde_json::from_value(serde_json::json!({
+        "family": "network-local",
+        "resourceType": "Network",
+        "installedGenerationId": installed_generation_id,
+        "hostNftables": {
+            "family": nftables_family,
+            "table": nftables_table,
+        },
+        "eastWestOptIn": east_west_opt_in,
+        "operations": [
+            "ApplyNftables", "ApplyNftablesProjection", "ApplyNmUnmanaged",
+            "ApplyRoute", "ApplySysctl", "CreateBridge", "DeleteBridge",
+            "CreatePersistentTap", "DeletePersistentTap", "CreateTapFd",
+            "SetBridgePortFlags", "UpdateHostsFile", "SeedDnsmasqLease",
+        ],
+    }))
+    .map_err(|_| EffectServiceError::Declined {
+        service: NETWORK_EFFECTS_SERVICE.id.to_owned(),
+        reason: "inspect-network-response-invalid".to_owned(),
     })?;
     Ok(EffectResponse::new(payload))
 }
@@ -183,7 +188,7 @@ impl EffectServiceFactory for NetworkEffectsServiceFactory {
 mod tests {
     use super::*;
 
-    use d2b_contracts_resource::v3::canonical_json_bytes;
+    use d2b_contracts_resource::v3::{canonical_json_bytes, CanonicalJsonObject, CanonicalJsonValue};
     use d2b_provider_toolkit::ServiceInvocation;
     use d2b_resource_runtime::context::ServiceResourceContext;
 
@@ -354,6 +359,25 @@ mod tests {
         ] {
             assert!(text.contains(wire_name), "missing {wire_name} in {text}");
         }
+    }
+
+    /// A structural character inside a trusted value yields a correctly
+    /// escaped report instead of an unparseable one: the payload is built
+    /// through the canonical JSON object path, never string interpolation.
+    #[test]
+    fn inspect_network_escapes_a_structural_character_in_a_trusted_value() {
+        let report = inspect_network_response("sha256:abc\"def", "inet", "d2b", false)
+            .expect("report")
+            .payload;
+        assert_eq!(
+            report.get("installedGenerationId"),
+            Some(&CanonicalJsonValue::String("sha256:abc\"def".to_owned())),
+        );
+        let bytes = canonical_json_bytes(&report).expect("canonical");
+        assert!(
+            String::from_utf8(bytes).expect("utf8").contains(r#"sha256:abc\"def"#),
+            "the escaped value survives the canonical round-trip"
+        );
     }
 
     /// The installed generation identity the fixture bundle carries.

@@ -111,6 +111,15 @@ pub(crate) enum ProviderStartupError {
         provider_ref: &'static str,
         service: &'static str,
     },
+    /// A declared effect-service method names a contract facet the hosting
+    /// side does not enforce (privileges, payload schema, deadline tier);
+    /// the zone must not host a method that would silently run unenforced.
+    EffectServiceFacetUnenforced {
+        provider_ref: &'static str,
+        service: &'static str,
+        method: &'static str,
+        facet: &'static str,
+    },
     /// The zone's effect-service supervisor could not start (ractor
     /// runtime failure).
     EffectServiceSupervisorRefused { reason: String },
@@ -129,6 +138,7 @@ impl ProviderStartupError {
             Self::OperationSurface { .. } => "operation-surface-refused",
             Self::EffectServiceDuplicate { .. } => "effect-service-duplicate",
             Self::EffectServiceFactoryMissing { .. } => "effect-service-factory-missing",
+            Self::EffectServiceFacetUnenforced { .. } => "effect-service-facet-unenforced",
             Self::EffectServiceSupervisorRefused { .. } => {
                 "effect-service-supervisor-refused"
             }
@@ -144,7 +154,8 @@ impl ProviderStartupError {
             | Self::Attach { provider_ref }
             | Self::Drain { provider_ref, .. }
             | Self::OperationSurface { provider_ref, .. }
-            | Self::EffectServiceFactoryMissing { provider_ref, .. } => provider_ref,
+            | Self::EffectServiceFactoryMissing { provider_ref, .. }
+            | Self::EffectServiceFacetUnenforced { provider_ref, .. } => provider_ref,
             Self::EffectServiceDuplicate { .. } | Self::EffectServiceSupervisorRefused { .. } => "",
             Self::Plane(refusal) => refusal.provider_ref,
         }
@@ -183,6 +194,19 @@ impl ProviderStartupError {
                 provider_ref,
                 service,
             } => format!("{}:{}:{}", self.code(), provider_ref, service),
+            Self::EffectServiceFacetUnenforced {
+                provider_ref,
+                service,
+                method,
+                facet,
+            } => format!(
+                "{}:{}:{}:{}:{}",
+                self.code(),
+                provider_ref,
+                service,
+                method,
+                facet
+            ),
             Self::EffectServiceSupervisorRefused { reason } => {
                 format!("{}:{reason}", self.code())
             }
@@ -580,6 +604,32 @@ impl ProviderSet {
                                 first,
                                 second: declaration.provider_ref,
                             });
+                        }
+                        // The hosting side enforces the method-operation
+                        // lookup, the fd-leg contracts, and the canonical
+                        // payload parse - nothing else. A method that
+                        // declares a facet the host does not enforce
+                        // (privileges, a payload schema, a deadline tier)
+                        // would run silently unenforced, so it refuses
+                        // startup by name instead of half-hosting.
+                        for method in service.methods {
+                            let facet = if !method.privileges.is_empty() {
+                                Some("privileges")
+                            } else if method.payload_schema.is_some() {
+                                Some("payload-schema")
+                            } else if method.deadline_tier.is_some() {
+                                Some("deadline-tier")
+                            } else {
+                                None
+                            };
+                            if let Some(facet) = facet {
+                                return Err(ProviderStartupError::EffectServiceFacetUnenforced {
+                                    provider_ref: declaration.provider_ref,
+                                    service: service.id,
+                                    method: method.name,
+                                    facet,
+                                });
+                            }
                         }
                         let Some(factory) = effect_service_factories.get(&service.id) else {
                             return Err(ProviderStartupError::EffectServiceFactoryMissing {
@@ -1039,7 +1089,7 @@ mod tests {
     use d2b_resource_runtime::context::{ManagerEndpoint, ServiceResourceContext, SpecDecoder};
     use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
-    use d2b_resource_types::{AllowedSources, ServiceMethod, WellKnownType};
+    use d2b_resource_types::{AllowedSources, MethodFdContract, ServiceMethod, WellKnownType};
 
     /// The declared service the hosting tests host.
     const ECHO_SERVICE: ServiceDecl = ServiceDecl {
@@ -1357,6 +1407,91 @@ mod tests {
             error.message(),
             "effect-service-factory-missing:fixture:fixture.echo"
         );
+    }
+
+    /// A declared method naming a facet the host does not enforce
+    /// (privileges, a payload schema, a deadline tier) refuses startup by
+    /// name: it would otherwise run silently unenforced between envelope
+    /// admission and the handler.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_method_declaring_unenforced_facets_refuses_startup_named() {
+        const PRIVILEGED_SERVICE: ServiceDecl = ServiceDecl {
+            id: "fixture.privileged",
+            methods: &[ServiceMethod {
+                name: "admin",
+                operation: None,
+                payload_schema: None,
+                request_fds: MethodFdContract::NONE,
+                response_fds: MethodFdContract::NONE,
+                state_cells: &[],
+                privileges: &["zone-admin"],
+                deadline_tier: None,
+            }],
+            attach_kinds: &[],
+            streams: &[],
+            endpoint_policy: None,
+        };
+        const SCHEMA_SERVICE: ServiceDecl = ServiceDecl {
+            id: "fixture.schema",
+            methods: &[ServiceMethod {
+                name: "admin",
+                operation: None,
+                payload_schema: Some("fixture.admin.schema"),
+                request_fds: MethodFdContract::NONE,
+                response_fds: MethodFdContract::NONE,
+                state_cells: &[],
+                privileges: &[],
+                deadline_tier: None,
+            }],
+            attach_kinds: &[],
+            streams: &[],
+            endpoint_policy: None,
+        };
+        const TIERED_SERVICE: ServiceDecl = ServiceDecl {
+            id: "fixture.tiered",
+            methods: &[ServiceMethod {
+                name: "admin",
+                operation: None,
+                payload_schema: None,
+                request_fds: MethodFdContract::NONE,
+                response_fds: MethodFdContract::NONE,
+                state_cells: &[],
+                privileges: &[],
+                deadline_tier: Some("fast"),
+            }],
+            attach_kinds: &[],
+            streams: &[],
+            endpoint_policy: None,
+        };
+        for (service, facet) in [
+            (&PRIVILEGED_SERVICE, "privileges"),
+            (&SCHEMA_SERVICE, "payload-schema"),
+            (&TIERED_SERVICE, "deadline-tier"),
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let error = ProviderSet::new(zone(), dir.path().to_path_buf())
+                .with(
+                    declared("fixture"),
+                    vec![serving_descriptor(std::slice::from_ref(service))],
+                )
+                .with_effect_service_factory(
+                    service.id,
+                    Arc::new(EchoFactory { builds: Arc::new(AtomicU64::new(0)) }),
+                )
+                .start()
+                .await
+                .expect_err("a declared facet cannot run unenforced");
+            assert_eq!(error.code(), "effect-service-facet-unenforced");
+            assert_eq!(
+                error.message(),
+                format!(
+                    "effect-service-facet-unenforced:fixture:{}:admin:{facet}",
+                    service.id
+                ),
+                "declared {facet}"
+            );
+        }
     }
 
     // ---- U3 real payload and capability object (R6, R7, R8) ----
