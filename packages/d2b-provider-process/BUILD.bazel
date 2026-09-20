@@ -25,7 +25,12 @@ exports_files(
 d2b_rust_library(
     name = "d2b_provider_process",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "Cargo.toml",
+        # The include_str! fixtures this crate's test-support code loads.
+        "//tests/fixtures:deny-unknown/host-valid.json",
+        "//:tests/golden/manifest_v04/baseline-vms.json",
+    ],
     deps = [
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
@@ -34,6 +39,7 @@ d2b_rust_library(
         "//packages/d2b-process-conformance:d2b_process_conformance",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail",
         "//packages/d2b-provider-process-systemd:d2b_provider_process_systemd",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
@@ -43,7 +49,12 @@ d2b_rust_library(
 d2b_rust_library(
     name = "d2b_provider_process_test_support",
     srcs = glob(["src/**/*.rs"], allow_empty = True),
-    compile_data = ["Cargo.toml"],
+    compile_data = [
+        "Cargo.toml",
+        # The include_str! fixtures this crate's test-support code loads.
+        "//tests/fixtures:deny-unknown/host-valid.json",
+        "//:tests/golden/manifest_v04/baseline-vms.json",
+    ],
     crate_features = ["test-support"],
     crate_name = "d2b_provider_process",
     deps = [
@@ -54,6 +65,7 @@ d2b_rust_library(
         "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
         "//packages/d2b-provider-process-systemd:d2b_provider_process_systemd_test_support",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
@@ -74,13 +86,13 @@ d2b_rust_test(
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
         ":d2b_provider_process",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-core:d2b_core",
         "//packages/d2b-process-conformance:d2b_process_conformance",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
-# keep
 filegroup(
     name = "cargo_workspace_sources",
     srcs = glob(

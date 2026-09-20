@@ -23,6 +23,7 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 d2b-provider-guest-cloud-hypervisor = { path = "../d2b-provider-guest-cloud-hypervisor", version = "0.0.0-bootstrap" }
 d2b-provider-process-minijail = { path = "../d2b-provider-process-minijail", version = "0.0.0-bootstrap" }
 d2b-provider-process-systemd = { path = "../d2b-provider-process-systemd", version = "0.0.0-bootstrap" }
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 d2b-provider-volume-virtiofs = { path = "../d2b-provider-volume-virtiofs", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 parking_lot = "0.12"

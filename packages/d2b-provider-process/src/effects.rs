@@ -1,8 +1,9 @@
-//! The provider-facing effect port the Process driver needs.
+//! The provider-facing typed effects seam the Process driver needs (U1).
 //!
-//! The production implementation stays in the daemon and delegates to the
-//! already-composed `ProductionProcessProviders`; test doubles implement the
-//! same seam (R4: the conversion is mechanical, the provider effects are
+//! The family's own implementation ([`crate::effects_service`]) serves the
+//! seam over the daemon-supplied declared facets
+//! ([`crate::facets::ProcessEffectFacets`]); test doubles implement the same
+//! seam (R4: the conversion is mechanical, the provider effects are
 //! preserved). The classification types below are the closed results that
 //! seam reports.
 
@@ -16,12 +17,13 @@ use d2b_resource_runtime::context::ResourceContext;
 use crate::identity::{ProcessFamilySpec, ProcessResourceIdentity};
 use crate::worker_launch::DeviceWorkerLaunch;
 
-/// The provider-facing effect surface the Process driver needs. The production
-/// implementation delegates to the already-composed
-/// `ProductionProcessProviders`; test doubles implement the same seam
-/// (R4: the conversion is mechanical, the provider effects are preserved).
+/// The provider-facing effect surface the Process driver needs. The
+/// family's implementation ([`crate::effects_service::ProcessEffectsService`])
+/// runs over the daemon-supplied facets; test doubles implement the same
+/// seam (R4: the conversion is mechanical, the provider effects are
+/// preserved).
 ///
-/// Object-erased on purpose: the driver holds the port as
+/// Object-erased on purpose: the driver holds the surface as
 /// `Arc<dyn ProcessDriverEffects>` so one factory serves every Process row.
 #[async_trait::async_trait]
 pub trait ProcessDriverEffects: Send + Sync + 'static {
@@ -91,9 +93,10 @@ pub trait ProcessDriverEffects: Send + Sync + 'static {
     ) -> Result<bool, String>;
 
     /// Derive the typed launch parameters of one declared Device-owned worker
-    /// row (`U17` gap closure). The production effects hold the trusted bundle
-    /// and the daemon runtime paths the derivation needs, so the derivation
-    /// lives behind this seam; a row no Device worker template declares yields
+    /// row (`U17` gap closure). The daemon host resolves the
+    /// Device-family-specific inputs behind the runtime facet (it may name
+    /// the device families), and this crate receives the already-resolved
+    /// typed parameters; a row no Device worker template declares yields
     /// `Ok(None)`, and a declared template whose trusted inputs cannot be
     /// resolved yields the named refusal code.
     async fn device_worker_launch(

@@ -1,24 +1,53 @@
 #!/usr/bin/env bash
 #
-# broker-seam-pilot.sh - U10 broker-seam cross-binary E2E gate.
+# broker-seam-pilot.sh - U10/U1 broker-seam cross-binary E2E gate.
 #
-# Proves one migrated process-family operation answers END TO END across the
-# real broker + daemon binaries with fd carriage and audit continuity:
+# Proves the migrated process-family operations that are HERMETIC answer
+# END TO END across the real broker + daemon binaries:
 #
 #   driver (python3, envelope wire)  ->  d2b-broker (host, --forward-socket)
 #     ->  d2bd forward rendezvous (D2B_BROKER_FORWARD_SOCKET)
-#     ->  d2b-provider-process OpenPidfd handler (in-process in d2bd)
-#     ->  nested in-broker "open-pidfd" kernel invocation (EnvelopeInvoke
-#         over the origination socket, kernel_client.envelope_invoke_kernel)
-#     ->  pidfd back over the forward carrier (SCM_RIGHTS)
+#     ->  d2b-provider-process operation handlers (in-process in d2bd)
+#
+# Proven per operation:
+#   - "OpenPidfd":            pidfd back over the forward carrier
+#                             (SCM_RIGHTS) plus a nested in-broker
+#                             "open-pidfd" kernel leg (EnvelopeInvoke over
+#                             the origination socket) audited broker-side -
+#                             fd liveness (fstat via /proc/self/fd + a
+#                             signal through the fd path) and audit
+#                             continuity are asserted.
+#   - "inspect-process-family": no fd leg; the committed family spelling,
+#                             the member roster, and the full 11-row
+#                             operations inventory are asserted
+#                             byte-for-byte, plus zone wiring.
+#   - "PollChildReaped":      no fd leg; the committed spelling and the
+#                             empty notifications record are asserted.
 #
 # The committed op names are asserted byte-for-byte. Spellings verified
 # against docs/reference/policy/broker-operations.json and the
 # KernelInvocation usages in packages/d2bd/src/composition.rs:
-#   - "OpenPidfd"   family row (owner=family, declaringProvider
-#                   d2b-provider-process; forwarded, never in-broker)
-#   - "open-pidfd"  broker-generic kernel row (the nested in-broker leg the
-#                   family handler invokes; audited broker-side, KTD6)
+#   - "OpenPidfd"             family row (owner=family, declaringProvider
+#                             d2b-provider-process; forwarded, never
+#                             in-broker)
+#   - "open-pidfd"            broker-generic kernel row (the nested
+#                             in-broker leg the family handler invokes;
+#                             audited broker-side, KTD6)
+#   - "inspect-process-family" / "PollChildReaped" are forwarded family
+#                             rows with no nested kernel leg; the daemon
+#                             audits them daemon-side only (KTD6), so the
+#                             broker audit log is deliberately NOT grepped
+#                             for them.
+#
+# NOT proven here, by design, and why: the remaining eight family rows
+# mutate host state or touch live processes (OpenPeerPidfdFromAcceptedSocket,
+# ObserveRunner, PrepareRuntimeDir, PrepareStateDir, CgroupKill,
+# SignalRunner, DeregisterRunnerPidfd, SpawnRunner) and belong to the
+# host-integration lane that stage-runs real workers; and restart adoption
+# (KTD8) needs a daemon restart between two live planes, which the fresh
+# binaries of this gate cannot stage - see the daemon-smoke host-integration
+# check's restart stage. The orchestrator runs this gate after the unit
+# lands; the operation-to-scenario mapping lives in the U1 plan section.
 #
 # The gate FAILS (non-zero + diagnostic) when the live broker audit record
 # does not carry the committed kernel op name for the invocation, and when
@@ -83,6 +112,8 @@ daemon_bin=$(d2b_daemon_native_bin)
 # KernelInvocation spellings in packages/d2bd/src/composition.rs).
 FAMILY_OP="OpenPidfd"
 KERNEL_OP="open-pidfd"
+INSPECT_OP="inspect-process-family"
+POLL_OP="PollChildReaped"
 DRIVER_DEADLINE_S=${D2B_SEAM_PILOT_DRIVER_DEADLINE_S:-180}
 
 scratch=$(d2b_mktemp .broker-seam-pilot.XXXXXX)
@@ -297,14 +328,17 @@ kill -0 "$daemon_pid" 2>/dev/null || {
   exit 1
 }
 
-# Drive the migrated operation end to end: one EnvelopeInvoke root call for
-# the committed family op "OpenPidfd" over the broker's origination socket.
-# The broker forwards it to the daemon's rendezvous; the process-family
-# handler nests the "open-pidfd" kernel invocation in-broker and returns the
-# minted pidfd over the forward carrier. The driver retries the refusals
-# that mean "not ready yet" (daemon plane still opening) and hard-fails on
-# any other refusal, then proves the returned fd is a live pidfd.
-driver_output=$(python3 - "$broker_socket" "$zone" "$(id -u)" "$DRIVER_DEADLINE_S" <<'PY'
+# Drive the hermetic migrated operations end to end: one EnvelopeInvoke root
+# call per committed family op over the broker's origination socket. The
+# broker forwards each to the daemon's rendezvous; the process-family
+# handlers answer in-process in d2bd. "OpenPidfd" nests the "open-pidfd"
+# kernel invocation in-broker and returns the minted pidfd over the forward
+# carrier; the two pure operations return plain result objects with no fd
+# leg. The driver retries the refusals that mean "not ready yet" (daemon
+# plane still opening) and hard-fails on any other refusal, then proves the
+# OpenPidfd fd is a live pidfd and the pure results carry the committed
+# spellings and shapes.
+driver_output=$(python3 - "$broker_socket" "$zone" "$(id -u)" "$DRIVER_DEADLINE_S" "$INSPECT_OP" "$POLL_OP" <<'PY'
 import ctypes
 import json
 import os
@@ -318,6 +352,8 @@ BROKER_SOCKET = sys.argv[1]
 ZONE = sys.argv[2]
 CALLER_UID = int(sys.argv[3])
 DEADLINE_S = float(sys.argv[4])
+INSPECT_OP = sys.argv[5]
+POLL_OP = sys.argv[6]
 VM_ID = "gate-vm"
 ROLE_ID = "runner"
 
@@ -337,18 +373,13 @@ try:
     fields = stat_text[comm_end + 2:].split()
     starttime = int(fields[19])  # /proc/<pid>/stat field 22 (1-indexed)
 
-    def envelope_frame():
+    def envelope_frame(operation, payload):
         request = {
             "kind": "EnvelopeInvoke",
             "payload": {
-                "operation": FAMILY_OP,
+                "operation": operation,
                 "zone": ZONE,
-                "payload": {
-                    "vmId": VM_ID,
-                    "roleId": ROLE_ID,
-                    "pid": pid,
-                    "expectedStartTimeTicks": starttime,
-                },
+                "payload": payload,
                 "chainRootInvocationId": None,
                 "chainIdentities": None,
                 "fdIndexes": [],
@@ -364,46 +395,52 @@ try:
         body = json.dumps(envelope, separators=(",", ":")).encode()
         return struct.pack("<I", len(body)) + body
 
-    def attempt():
+    def attempt(operation, payload):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         sock.settimeout(30.0)
         try:
             sock.connect(BROKER_SOCKET)
-            sock.sendall(envelope_frame())
+            sock.sendall(envelope_frame(operation, payload))
             data, ancdata, _flags, _addr = sock.recvmsg(1024 * 1024, socket.CMSG_SPACE(256))
         finally:
             sock.close()
         if len(data) < 4:
-            raise SystemExit("broker response shorter than length prefix")
+            raise SystemExit(f"{operation}: broker response shorter than length prefix")
         declared = struct.unpack("<I", data[:4])[0]
         body = data[4:]
         if declared != len(body):
-            raise SystemExit("broker response length prefix mismatch")
+            raise SystemExit(f"{operation}: broker response length prefix mismatch")
         parsed = json.loads(body.decode())
         if parsed.get("kind") != "EnvelopeInvoke":
-            raise SystemExit(f"unexpected broker response kind: {parsed.get('kind')!r}")
+            raise SystemExit(f"{operation}: unexpected broker response kind: {parsed.get('kind')!r}")
         return parsed["payload"], ancdata
 
-    deadline = time.monotonic() + DEADLINE_S
-    last_error = "no attempt completed"
-    response = None
-    ancdata = []
-    while True:
-        try:
-            response, ancdata = attempt()
-        except (ConnectionRefusedError, FileNotFoundError, ConnectionResetError,
-                TimeoutError, OSError) as exc:
-            last_error = f"transport: {exc}"
-        else:
-            refusal = response.get("refusal")
-            if refusal is None:
-                break
-            last_error = f"refused: {refusal} (detail: {response.get('detail')})"
-            if refusal not in RETRYABLE_REFUSALS:
-                raise SystemExit(f"{FAMILY_OP} refused: {refusal} detail={response.get('detail')}")
-        if time.monotonic() >= deadline:
-            raise SystemExit(f"{FAMILY_OP} did not succeed within {DEADLINE_S:g}s; last: {last_error}")
-        time.sleep(1.0)
+    def run_op(operation, payload, deadline_s):
+        deadline = time.monotonic() + deadline_s
+        last_error = "no attempt completed"
+        while True:
+            try:
+                response, ancdata = attempt(operation, payload)
+            except (ConnectionRefusedError, FileNotFoundError, ConnectionResetError,
+                    TimeoutError, OSError) as exc:
+                last_error = f"transport: {exc}"
+            else:
+                refusal = response.get("refusal")
+                if refusal is None:
+                    return response, ancdata
+                last_error = f"refused: {refusal} (detail: {response.get('detail')})"
+                if refusal not in RETRYABLE_REFUSALS:
+                    raise SystemExit(f"{operation} refused: {refusal} detail={response.get('detail')}")
+            if time.monotonic() >= deadline:
+                raise SystemExit(f"{operation} did not succeed within {deadline_s:g}s; last: {last_error}")
+            time.sleep(1.0)
+
+    response, ancdata = run_op(FAMILY_OP, {
+        "vmId": VM_ID,
+        "roleId": ROLE_ID,
+        "pid": pid,
+        "expectedStartTimeTicks": starttime,
+    }, DEADLINE_S)
 
     # Wire-continuity: the committed family op name echoed byte-for-byte.
     operation = response.get("operation")
@@ -451,6 +488,70 @@ try:
     _waited, status = os.waitpid(pid, 0)
     if not os.WIFSIGNALED(status) or os.WTERMSIG(status) != 15:
         raise SystemExit(f"child did not die from the pidfd SIGTERM: status {status}")
+
+    def no_fd_leg(operation, response, ancdata):
+        if response.get("fd_indexes") != [] or response.get("fd_kinds") != []:
+            raise SystemExit(
+                f"{operation}: unexpected fd leg: fd_indexes={response.get('fd_indexes')!r} "
+                f"fd_kinds={response.get('fd_kinds')!r}"
+            )
+        for level, ctype_, _data_ in ancdata:
+            if level == socket.SOL_SOCKET and ctype_ == socket.SCM_RIGHTS:
+                raise SystemExit(f"{operation}: returned SCM_RIGHTS descriptors")
+
+    # The family inventory op is hermetic: no fd leg, the committed spelling
+    # echoed byte-for-byte, the member roster, the full 11-row operations
+    # inventory, and zone wiring all asserted. Spellings match
+    # packages/d2b-provider-process/src/operations.rs (INSPECT_PROCESS_FAMILY
+    # handler) byte for byte.
+    response, ancdata = run_op(INSPECT_OP, {"resourceType": "Process"}, min(DEADLINE_S, 60.0))
+    if response.get("operation") != INSPECT_OP:
+        raise SystemExit(
+            f"response operation {response.get('operation')!r} != committed family op name {INSPECT_OP!r}"
+        )
+    inspection = response.get("result") or {}
+    if inspection.get("family") != "process":
+        raise SystemExit(f"inspect family {inspection.get('family')!r} != 'process'")
+    if inspection.get("resourceType") != "Process":
+        raise SystemExit(f"inspect resourceType {inspection.get('resourceType')!r} != 'Process'")
+    if inspection.get("zone") != ZONE:
+        raise SystemExit(f"inspect zone {inspection.get('zone')!r} != driver zone {ZONE!r}")
+    member_types = inspection.get("memberTypes") or []
+    if set(member_types) != {"Process", "EphemeralProcess"}:
+        raise SystemExit(f"unexpected memberTypes: {member_types!r}")
+    expected_operations = [
+        "inspect-process-family",
+        "OpenPidfd",
+        "OpenPeerPidfdFromAcceptedSocket",
+        "ObserveRunner",
+        "PollChildReaped",
+        "PrepareRuntimeDir",
+        "PrepareStateDir",
+        "CgroupKill",
+        "SignalRunner",
+        "DeregisterRunnerPidfd",
+        "SpawnRunner",
+    ]
+    if inspection.get("operations") != expected_operations:
+        raise SystemExit(
+            f"operations inventory mismatch: {inspection.get('operations')!r} != {expected_operations!r}"
+        )
+    no_fd_leg(INSPECT_OP, response, ancdata)
+    print(f"INSPECT_OK={INSPECT_OP}")
+
+    # PollChildReaped is hermetic in this lane: the committed spelling and
+    # an empty notification record, with no fd leg (a live child would need
+    # the host-integration lane to observe a reaping window).
+    response, ancdata = run_op(POLL_OP, {}, min(DEADLINE_S, 60.0))
+    if response.get("operation") != POLL_OP:
+        raise SystemExit(
+            f"response operation {response.get('operation')!r} != committed family op name {POLL_OP!r}"
+        )
+    poll_result = response.get("result") or {}
+    if poll_result.get("notifications") != []:
+        raise SystemExit(f"PollChildReaped notifications not empty: {poll_result.get('notifications')!r}")
+    no_fd_leg(POLL_OP, response, ancdata)
+    print(f"POLL_OK={POLL_OP}")
     print(f"INVOCATION_ID={invocation_id}")
 finally:
     if child.poll() is None:
@@ -467,6 +568,16 @@ invocation_id=$(printf '%s\n' "$driver_output" | sed -n 's/^INVOCATION_ID=//p')
   exit 1
 }
 ok "migrated operation $FAMILY_OP answered end to end (invocation $invocation_id, pidfd live)"
+printf '%s\n' "$driver_output" | grep -Fxq "INSPECT_OK=$INSPECT_OP" || {
+  fail "driver did not prove the hermetic operation $INSPECT_OP"
+  exit 1
+}
+ok "hermetic operation $INSPECT_OP answered end to end (family, roster, 11-row inventory)"
+printf '%s\n' "$driver_output" | grep -Fxq "POLL_OK=$POLL_OP" || {
+  fail "driver did not prove the hermetic operation $POLL_OP"
+  exit 1
+}
+ok "hermetic operation $POLL_OP answered end to end (empty notifications, no fd leg)"
 
 # Audit continuity: the SAME committed op name must appear byte-for-byte in
 # the broker's live audit record. The nested in-broker kernel leg

@@ -1569,6 +1569,7 @@ dependencies = [
  "d2b-provider-guest-cloud-hypervisor",
  "d2b-provider-process-minijail",
  "d2b-provider-process-systemd",
+ "d2b-provider-toolkit",
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
  "d2b-resource-types",

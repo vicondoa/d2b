@@ -548,7 +548,7 @@ Gate evidence notes: a lane whose host check cannot run on the build host record
 
 ### From 2026-09-20 review
 
-- **Three committed process-family wire rows have no lane** — Implementation Units (U1, U2) (P1, feasibility, confidence 75)
+- **Three committed process-family wire rows have no lane** - Implementation Units (U1, U2) (P1, feasibility, confidence 75)
 
   The completion bar requires every committed family operation row to be declared
   and handled by its provider crate. Three committed process rows - the cgroup
@@ -559,7 +559,7 @@ Gate evidence notes: a lane whose host check cannot run on the build host record
   meant to carry. Decide whether these rows are declared in the process crate or
   recorded as a permanent carve-out with its reason.
 
-- **The process-systemd family has no lane** — Problem Frame / Implementation Units (P1, scope-guardian, confidence 75)
+- **The process-systemd family has no lane** - Problem Frame / Implementation Units (P1, scope-guardian, confidence 75)
 
   Five committed operation rows carry the process-systemd family and are served by a
   broker module, but the plan's family inventory never names that family and no unit

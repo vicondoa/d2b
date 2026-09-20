@@ -1306,12 +1306,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 tpm/device step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "swtpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
         token: "device_tpm",
         family: "device-tpm",
@@ -2147,18 +2141,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "device_gpu",
-        family: "device-gpu",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "gpu",
-        family: "device-gpu",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/systemd.rs",
         token: "gpu",
         family: "device-gpu",
@@ -2439,18 +2421,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "swtpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
-        token: "device_tpm",
         family: "device-tpm",
         retires_with: "U12 tpm/device step",
     },
@@ -2948,12 +2918,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/workload.rs",
-        token: "wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/process_effects.rs",
         token: "wayland",
         family: "display-wayland",
         retires_with: "U10-U12 family rollout (display-wayland)",

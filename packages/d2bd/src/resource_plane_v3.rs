@@ -57,8 +57,9 @@ use d2b_provider_guest::{GuestDriverArgs, GuestDriverEffects, guest_descriptor};
 use d2b_provider_host::host_descriptor;
 use d2b_provider_user::user_descriptor;
 use d2b_provider_process::{
-    GuestOwnerIdentitySource, ProcessDriverArgs, ProcessDriverEffects, decode_metadata_owner_ref,
-    process_family_descriptors,
+    CommittedProviderIdentitySource, GuestOwnerIdentitySource, PROCESS_EFFECTS_SERVICE,
+    ProcessDriverArgs, ProcessEffectFacets, ProcessEffectsServiceFactory, ProcessProviderRuntime,
+    decode_metadata_owner_ref, process_family_descriptors,
 };
 use d2b_provider_telemetry_binding::telemetry_binding_descriptor;
 use d2b_provider_telemetry_service::telemetry_service_descriptor;
@@ -101,7 +102,7 @@ use crate::endpoint_effects::{
     AsyncSocketEffect, ProductionEndpointDriverEffects, device_worker_purpose,
     guest_control_producer, guest_control_purpose,
 };
-use crate::process_effects::ProductionProcessDriverEffects;
+use crate::process_provider_runtime::PlaneCommittedProviderIdentitySource;
 use crate::volume_effects::ProductionVolumeDriverEffects;
 use crate::provider_lifecycle::{
     ProviderRuntime, ProviderSet, ProviderStartupError, TrustedContextPublication,
@@ -1777,7 +1778,12 @@ pub struct ConstructionInputs {
     /// uses); the default fails closed, exactly as the old handler did for a
     /// controller row without session evidence.
     pub provider_effects: Arc<dyn ProviderDriverEffects>,
-    pub process_effects: Arc<dyn ProcessDriverEffects>,
+    /// The daemon-supplied facet set the Process family's effects
+    /// implementation is built from (U1): the composed fixed providers and
+    /// the committed/Guest-owner identity sources, supplied through the
+    /// composition root. The family never receives a daemon-built effect
+    /// port (R2).
+    pub process_facets: ProcessEffectFacets,
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
     pub binding_effects: Arc<dyn BindingDriverEffects>,
     pub endpoint_effects: Arc<dyn EndpointDriverEffects>,
@@ -1874,6 +1880,20 @@ impl ConstructionInputs {
             zone_token: zone_token.clone(),
         };
         let registry_source = Arc::clone(&registry);
+        // U1: the Process family's effects ride the declared facets, and the
+        // composition root hosts the family's declared effects service from
+        // the same facet set the driver factories are built from.
+        let process_facets = ProcessEffectFacets {
+            runtime: Arc::clone(&process_providers) as Arc<dyn ProcessProviderRuntime>,
+            committed: Some(
+                Arc::new(PlaneCommittedProviderIdentitySource {
+                    registry: registry_source,
+                }) as Arc<dyn CommittedProviderIdentitySource>,
+            ),
+            guest_owners: Some(Arc::new(PlaneGuestOwnerIdentities {
+                state: Arc::clone(state),
+            })),
+        };
         Ok(Self {
             zone: zone.clone(),
             zone_token,
@@ -1890,13 +1910,7 @@ impl ConstructionInputs {
             committed_provider_identities,
             registry: Arc::clone(&registry),
             provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
-            process_effects: Arc::new(
-                ProductionProcessDriverEffects::new(Arc::clone(&process_providers))
-                   .with_committed_provider_identities(registry_source)
-                   .with_guest_owner_identities(Arc::new(PlaneGuestOwnerIdentities {
-                        state: Arc::clone(state),
-                    })),
-            ),
+            process_facets: process_facets.clone(),
             volume_effects: Arc::new(production_volume_effects(state, zone.clone(), resolver, Arc::clone(&registry))),
             binding_effects: Arc::new(ProductionBindingDriverEffects::new(
                 Arc::new({
@@ -2012,9 +2026,14 @@ Box::pin(async move {
                     controller_generation.get(),
                 ),
             ),
-            // No provider declares a service at this head; a family lane
-            // registers its service factories here when it declares one.
-            effect_service_factories: BTreeMap::new(),
+            // U1: the Process family declares its effects service; the
+            // composition root hosts it per zone from the family's own
+            // implementation over this zone's facet set.
+            effect_service_factories: BTreeMap::from([(
+                PROCESS_EFFECTS_SERVICE.id,
+                Arc::new(ProcessEffectsServiceFactory::new(process_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>,
+            )]),
             foundation: None,
         })
     }
@@ -2232,7 +2251,7 @@ impl ResourcePlaneV3 {
             family_declaration("process"),
             Vec::from(process_family_descriptors(ProcessDriverArgs {
                 zone: inputs.zone.clone(),
-                effects: Arc::clone(&inputs.process_effects),
+                facets: inputs.process_facets.clone(),
                 zone_uid: inputs.authority.zone_uid.clone(),
                 policy_revision: inputs.authority.policy_revision,
                 provider_assignment_generation: inputs.authority.provider_assignment_generation,
@@ -3207,6 +3226,17 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let spec_store_dir = dir.path().join("daemon-state/zones/test");
         let readiness = Arc::new(NewPlaneReadinessState::new());
+        let process_facets = {
+            let effects = Arc::new(
+                d2b_provider_process::test_support::FakeFacets::new(Default::default()),
+            );
+            // The old plane fake reported no retained identity
+            // (has_active false); the shared double's default reports
+            // one (active true), so script it back so the launch path
+            // (and only it) is what the plane tests observe.
+            effects.set_active(false);
+            effects.facet_set()
+        };
         (
             dir,
             ConstructionInputs {
@@ -3225,17 +3255,7 @@ mod tests {
                 committed_provider_identities: BTreeMap::new(),
                 registry: Arc::new(PlaneResourceRegistry::new()),
                 provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
-                process_effects: {
-                    let effects = Arc::new(
-                        d2b_provider_process::test_support::FakeEffects::new(Default::default()),
-                    );
-                    // The old plane fake reported no retained identity
-                    // (has_active false); the shared double's default reports
-                    // one (active true), so script it back so the launch path
-                    // (and only it) is what the plane tests observe.
-                    effects.set_active(false);
-                    effects as Arc<dyn ProcessDriverEffects>
-                },
+                process_facets: process_facets.clone(),
                 volume_effects: d2b_provider_volume::test_support::FakeLayoutEffects::new(),
                 binding_effects: {
                     let effects =
@@ -3291,7 +3311,15 @@ mod tests {
                 },
                 interaction_effects: d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
                 trusted_context_publication: None,
-                effect_service_factories: BTreeMap::new(),
+                // U1: the plane hosts the Process family's declared effects
+                // service from the same facet set its driver factories are
+                // built from, exactly as the production composition root
+                // does.
+                effect_service_factories: BTreeMap::from([(
+                    PROCESS_EFFECTS_SERVICE.id,
+                    Arc::new(ProcessEffectsServiceFactory::new(process_facets))
+                        as Arc<dyn EffectServiceFactory>,
+                )]),
                 foundation: None,
             },
             readiness,
@@ -3457,6 +3485,46 @@ mod tests {
         );
     }
 
+
+    /// U1: the composition root hosts the Process family's declared effects
+    /// service from the family's own factory over the plane's facet set, and
+    /// the hosted service answers `has-active` through the real invocation
+    /// capability object carrying the real envelope payload - the same
+    /// implementation value the driver factory is built from.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_process_effects_service_answers_has_active_through_the_binding() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let runtime = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts the declared process service");
+        let binding = runtime
+            .resolve_effect_service(PROCESS_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-u1-has-active".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({
+                "zone": "test",
+                "zoneUid": serde_json::Value::Null,
+                "resourceRef": "Process/worker",
+            }))
+            .expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: PROCESS_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let response = binding.call(call).await.expect("call");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({ "active": false }))
+                .expect("canonical payload"),
+            "the hosted service answers the runtime facet's report"
+        );
+    }
 
     /// The providers the plane starts register exactly the converted-type
     /// authority list: no listed type is missing a driver, no driver serves a
@@ -3863,12 +3931,11 @@ mod tests {
         // fake, kept with a successful one-shot launch (the old plane fake's
         // launch always succeeded), so the committed row is observed at the
         // driver's launch effect.
-        let effects = Arc::new(d2b_provider_process::test_support::FakeEffects::new(
+        let effects = Arc::new(d2b_provider_process::test_support::FakeFacets::new(
             Default::default(),
         ));
         effects.set_active(false);
-        let process_effects: Arc<dyn ProcessDriverEffects> = effects.clone();
-        inputs.process_effects = process_effects;
+        inputs.process_facets = effects.facet_set();
         let plane = Arc::new(ResourcePlaneV3::open(inputs).await.expect("plane"));
         // The owner row the child commit is linked under: the production
         // manager holds the Guest (bundle ingest) before any provider
@@ -4064,15 +4131,14 @@ mod tests {
         // default queue, then the scripted `Adopted` report): the driver's
         // `Ready` - and only `Ready` - publishes the evidence row, exactly
         // as the production provider's retained identity does.
-        let effects = Arc::new(d2b_provider_process::test_support::FakeEffects::new(
+        let effects = Arc::new(d2b_provider_process::test_support::FakeFacets::new(
             Default::default(),
         ));
         effects.set_active(false);
         effects.push_adoption(d2b_provider_process::ProviderAdoption::Adopted(
             adopted_report(),
         ));
-        let process_effects: Arc<dyn ProcessDriverEffects> = effects.clone();
-        inputs.process_effects = process_effects;
+        inputs.process_facets = effects.facet_set();
         let zone = ZoneId::parse("test").expect("zone");
         let planes: Arc<tokio::sync::Mutex<HashMap<String, Arc<ResourcePlaneV3>>>> =
             Arc::new(tokio::sync::Mutex::new(HashMap::new()));

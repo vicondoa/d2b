@@ -1551,11 +1551,11 @@ mod tests {
     use d2b_contracts_resource::v3::canonical_json_bytes;
     use d2b_contracts_resource::v3::process::{EphemeralProcessSpec, ProcessSpec};
     use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
-    use d2b_process_conformance::{AdoptionCandidate, ProcessIdentityDigest};
+    use d2b_process_conformance::AdoptionCandidate;
     use d2b_provider_process::{
-        ExecutionMode, INVALID_PROCESS_TYPE, ProcessDriverArgs, ProcessDriverEffects,
-        ProcessFamilySpec, ProcessResourceIdentity, ProviderAdoption, ProviderLiveness,
-        process_family_descriptors,
+        ExecutionMode, INVALID_PROCESS_TYPE, ProcessDriverArgs, ProcessEffectFacets,
+        ProcessProviderRuntime, ProcessResourceContext, ProviderAdoption, ProviderLaunch,
+        ProviderLiveness, process_family_descriptors,
     };
     use d2b_resource_runtime::context::{ManagerEndpoint, ServiceResourceContext, SpecDecoder};
     use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
@@ -1579,66 +1579,92 @@ mod tests {
         MethodFdContract, ServiceInvocation,
     };
 
-    /// A port that refuses every effect: the pilot operation answers from the
-    /// family's declaration alone, so an effect call would fail this test
-    /// loudly instead of passing unnoticed.
+    /// A runtime facet that refuses every effect: the pilot operation answers
+    /// from the family's declaration alone, so an effect call would fail
+    /// this test loudly instead of passing unnoticed. The reconciliation
+    /// surface is unreachable in these tests.
     struct RefusingEffects;
 
     #[async_trait::async_trait]
-    impl ProcessDriverEffects for RefusingEffects {
-        async fn launch(
+    impl ProcessProviderRuntime for RefusingEffects {
+        fn bundle(&self) -> &d2b_core::bundle_resolver::BundleResolver {
+            unreachable!("the rendezvous tests never reconcile a row")
+        }
+
+        fn socket_runtime_dir(&self) -> &std::path::Path {
+            unreachable!("the rendezvous tests never reconcile a row")
+        }
+
+        fn guest_setup_descriptor_digest(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _zone: &ZoneId,
+            _guest_ref: &ResourceRef,
+        ) -> Option<d2b_contracts_resource::v3::SchemaFingerprint> {
+            None
+        }
+
+        async fn resolve_device_worker_launch(
+            &self,
+            _ctx: &mut d2b_resource_runtime::context::ResourceContext,
+            _identity: &d2b_provider_process::ProcessResourceIdentity,
+            _spec: &d2b_provider_process::ProcessFamilySpec,
+        ) -> Result<Option<d2b_provider_process::DeviceWorkerLaunch>, &'static str> {
+            Err("refused")
+        }
+
+        async fn launch_resource(
+            &self,
+            _context: ProcessResourceContext<'_>,
             _spec: &ProcessSpec,
             _timeout: Duration,
-        ) -> Result<ProcessIdentityDigest, String> {
+        ) -> Result<ProviderLaunch, String> {
             Err("refused".to_owned())
         }
 
-        async fn launch_ephemeral(
+        async fn launch_ephemeral_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &EphemeralProcessSpec,
             _timeout: Duration,
-        ) -> Result<ProcessIdentityDigest, String> {
+        ) -> Result<ProviderLaunch, String> {
             Err("refused".to_owned())
         }
 
-        async fn adopt(
+        async fn adopt_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &ProcessSpec,
         ) -> Result<ProviderAdoption, String> {
             Err("refused".to_owned())
         }
 
-        async fn probe(
+        async fn probe_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &ProcessSpec,
         ) -> Result<ProviderLiveness, String> {
             Err("refused".to_owned())
         }
 
-        async fn adopt_ephemeral(
+        async fn adopt_ephemeral_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &EphemeralProcessSpec,
         ) -> Result<ProviderAdoption, String> {
             Err("refused".to_owned())
         }
 
-        async fn probe_ephemeral(
+        async fn probe_ephemeral_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &EphemeralProcessSpec,
         ) -> Result<ProviderLiveness, String> {
             Err("refused".to_owned())
         }
 
-        async fn stop(
+        async fn stop_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &ProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -1646,9 +1672,9 @@ mod tests {
             Err("refused".to_owned())
         }
 
-        async fn stop_ephemeral(
+        async fn stop_ephemeral_resource(
             &self,
-            _identity: &ProcessResourceIdentity,
+            _context: ProcessResourceContext<'_>,
             _spec: &EphemeralProcessSpec,
             _term_timeout: Duration,
             _kill_timeout: Duration,
@@ -1656,7 +1682,7 @@ mod tests {
             Err("refused".to_owned())
         }
 
-        async fn stop_stale(
+        async fn stop_stale_resource(
             &self,
             _provider_ref: &ResourceRef,
             _candidate: &AdoptionCandidate,
@@ -1664,26 +1690,29 @@ mod tests {
             Err("refused".to_owned())
         }
 
-        async fn device_worker_launch(
+        async fn finalize_resource(
             &self,
-            _ctx: &mut d2b_resource_runtime::context::ResourceContext,
-            _identity: &ProcessResourceIdentity,
-            _spec: &ProcessFamilySpec,
-        ) -> Result<Option<d2b_provider_process::DeviceWorkerLaunch>, &'static str> {
-            Ok(None)
-        }
-
-        async fn finalize(&self, _identity: &ProcessResourceIdentity) -> Result<(), String> {
+            _context: ProcessResourceContext<'_>,
+        ) -> Result<(), String> {
             Err("refused".to_owned())
         }
 
-        fn has_active(
+        fn has_active_resource_in_zone(
             &self,
             _zone: &ZoneId,
             _zone_uid: Option<&ResourceUid>,
             _resource_ref: &ResourceRef,
         ) -> bool {
             false
+        }
+    }
+
+    /// The facet set the rendezvous tests build the family's driver from.
+    fn refusing_facets() -> ProcessEffectFacets {
+        ProcessEffectFacets {
+            runtime: Arc::new(RefusingEffects),
+            committed: None,
+            guest_owners: None,
         }
     }
 
@@ -2075,7 +2104,7 @@ mod tests {
             let scratch = tempfile::tempdir().expect("test scratch");
             let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
                 zone: zone.clone(),
-                effects: Arc::new(RefusingEffects),
+                facets: refusing_facets(),
                 zone_uid: None,
                 policy_revision: None,
                 provider_assignment_generation: None,
@@ -3670,7 +3699,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
         let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
             zone: zone.clone(),
-            effects: Arc::new(RefusingEffects),
+            facets: refusing_facets(),
             zone_uid: None,
             policy_revision: None,
             provider_assignment_generation: None,
@@ -3802,7 +3831,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
 
         let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
             zone: zone.clone(),
-            effects: Arc::new(RefusingEffects),
+            facets: refusing_facets(),
             zone_uid: None,
             policy_revision: None,
             provider_assignment_generation: None,
@@ -3875,7 +3904,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         let rendezvous_socket = scratch.path().join("d2bd-forward.sock");
         let [process, ephemeral] = process_family_descriptors(ProcessDriverArgs {
             zone: zone.clone(),
-            effects: Arc::new(RefusingEffects),
+            facets: refusing_facets(),
             zone_uid: None,
             policy_revision: None,
             provider_assignment_generation: None,

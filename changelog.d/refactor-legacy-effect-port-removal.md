@@ -13,3 +13,11 @@
   state cells. The composition root hosts a declared service through its
   registered factory and still refuses a declared service with no
   implementation.
+- The process family's driver effects ended their daemon-built arm: the
+  family now serves them from its own crate through its declared
+  `process.d2bus.org/effects` service, hosted per zone by the daemon from the
+  family's registered factory over the composition root's facet set. The
+  daemon's `process_effects.rs` module and its port-shaped injection at the
+  driver construction site are deleted in the same change; the moved
+  implementation binds daemon-structural state only through the declared
+  facets and reaches resource state through the generic driver context.
