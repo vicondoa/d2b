@@ -14610,6 +14610,19 @@ async fn open_resource_plane(
                 },
             )
             .await;
+        // The U3 service driver context: the plane's manager endpoint, the
+        // surface effect-service invocations read resource state through
+        // (R7). Wired once per Zone alongside the provider publication and
+        // the kernel seam; a Zone whose seam was never wired serves
+        // effect-service invocations with a fail-closed context.
+        rendezvous
+            .set_resource_reader(
+                _zone.as_str(),
+                d2b_resource_runtime::context::ServiceResourceContext::over(
+                    plane_v3.manager_endpoint(),
+                ),
+            )
+            .await;
         v3_planes.insert(_zone.as_str().to_owned(), plane_v3);
     }
     // U14: publish the complete table before any Zone activates; the

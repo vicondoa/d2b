@@ -71,13 +71,13 @@ use d2b_provider_volume_binding::{
 use d2b_provider_volume_local::{VolumeLocalController, VolumeLocalProfile};
 use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
 use d2b_resource_api::manager_backend::nix_bundle_subject;
-use d2b_resource_runtime::context::SpecDecoder;
+use d2b_resource_runtime::context::{ManagerEndpoint, SpecDecoder};
 use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::manager::{
-    DesiredResource, ResourceManager, ResourceManagerArgs, ResourceManagerClient,
-    ResourceManagerMsg, ResourceSelector,
+    DesiredResource, ManagerActorEndpoint, ResourceManager, ResourceManagerArgs,
+    ResourceManagerClient, ResourceManagerMsg, ResourceSelector,
 };
 use d2b_resource_runtime::revision::RuntimeRevision;
 use d2b_resource_runtime::spec_store::{SpecSelector, SpecStore, StoredDesiredResource};
@@ -107,6 +107,7 @@ use crate::provider_lifecycle::{
     ProviderRuntime, ProviderSet, ProviderStartupError, TrustedContextPublication,
     family_declaration,
 };
+use d2b_provider_toolkit::EffectServiceFactory;
 use d2b_provider_device::{DeviceDriverArgs, device_descriptor};
 use d2b_provider_device_security_key::{SecurityKeyDriverArgs, security_key_descriptors};
 use d2b_provider_device_usbip::{UsbipDriverArgs, usbip_descriptors};
@@ -1791,6 +1792,12 @@ pub struct ConstructionInputs {
     /// binds the set; a test or context-free deployment leaves it unbound
     /// and nothing is published.
     pub trusted_context_publication: Option<TrustedContextPublication>,
+    /// The hosting factories the composition root registered for the
+    /// services the plane's providers declare (U3, R5), keyed by service
+    /// identity. The composition point applies every entry to the provider
+    /// set, so a provider that declares a service is hosted; a declared
+    /// service with no entry still refuses startup by name.
+    pub effect_service_factories: BTreeMap<&'static str, Arc<dyn EffectServiceFactory>>,
     /// The committed policy rows this plane seeds before its manager spawns.
     ///
     /// The composition sets this for the foundation plane - the durable
@@ -2005,6 +2012,9 @@ Box::pin(async move {
                     controller_generation.get(),
                 ),
             ),
+            // No provider declares a service at this head; a family lane
+            // registers its service factories here when it declares one.
+            effect_service_factories: BTreeMap::new(),
             foundation: None,
         })
     }
@@ -2278,6 +2288,11 @@ impl ResourcePlaneV3 {
         // bound one, the rendezvous publishes this Zone's attestation
         // values over the origination leg the moment the set is published.
         set = set.with_trusted_context_publication(inputs.trusted_context_publication.clone());
+        // The composition root's registered service factories ride the set
+        // too (U3, R5): a provider that declares a service is hosted behind
+        // its factory, and a declared service with no registered factory
+        // still refuses startup by name.
+        set = set.with_effect_service_factories(&inputs.effect_service_factories);
         // The NixosGeneration type starts through its driver declaration: the
         // registry serves the type's decoder and factory from it, and the
         // declaration carries the family's verbs, execution domains,
@@ -2755,6 +2770,13 @@ impl ResourcePlaneV3 {
     /// through `ManagerBackend::new`).
     pub fn client(&self) -> &ResourceManagerClient {
         &self.client
+    }
+
+    /// The zone's manager endpoint: the surface the service driver context
+    /// reads resource state through (U3, R7). The composition point wires
+    /// it into the rendezvous alongside the kernel seam.
+    pub(crate) fn manager_endpoint(&self) -> Arc<dyn ManagerEndpoint> {
+        Arc::new(ManagerActorEndpoint::new(self.client.actor().clone()))
     }
 
     /// The in-memory watch hub (U8 pairs it with the client in
@@ -3269,10 +3291,170 @@ mod tests {
                 },
                 interaction_effects: d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
                 trusted_context_publication: None,
+                effect_service_factories: BTreeMap::new(),
                 foundation: None,
             },
             readiness,
         )
+    }
+
+    // ---- U3 composition-root service hosting (R5) ----
+
+    use crate::effect_service_actors::ServiceCallData;
+    use d2b_contracts_resource::v3::CanonicalJsonObject;
+    use d2b_provider_toolkit::{
+        EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceDecl,
+        ServiceInvocation,
+    };
+    use d2b_resource_runtime::context::ServiceResourceContext;
+    use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
+    use d2b_resource_types::{AllowedSources, DriverDescriptor, ServiceMethod, WellKnownType};
+
+    /// The declared service the composition tests host.
+    const COMPOSITION_SERVICE: ServiceDecl = ServiceDecl {
+        id: "fixture.echo",
+        methods: &[ServiceMethod::serving("fixture-echo-ping", "ping")],
+        attach_kinds: &[],
+        streams: &[],
+        endpoint_policy: None,
+    };
+
+    /// Echo fixture served by the composition-hosted actor.
+    struct EchoService;
+
+    #[async_trait::async_trait]
+    impl EffectService for EchoService {
+        async fn handle(
+            &self,
+            invocation: ServiceInvocation<'_>,
+        ) -> Result<EffectResponse, EffectServiceError> {
+            Ok(EffectResponse::new(invocation.payload.clone()))
+        }
+    }
+
+    /// Builds one echo service per respawn.
+    struct EchoFactory;
+
+    impl EffectServiceFactory for EchoFactory {
+        fn build(&self) -> Arc<dyn EffectService> {
+            Arc::new(EchoService)
+        }
+    }
+
+    /// A driver that registers cleanly beside its service declaration; its
+    /// spec/driver methods are unreachable at the composition site.
+    fn serving_descriptor(services: &'static [ServiceDecl]) -> DriverDescriptor {
+        DriverDescriptor {
+            resource_type: WellKnownType::PROCESS,
+            allowed_sources: AllowedSources::STARTUP,
+            verbs: &[],
+            execution: &[],
+            exportable: false,
+            reads: &[],
+            operations: &[],
+            creations: &[],
+            startup: &[],
+            services,
+            decoder: Arc::new(NoSpecs),
+            factory: Arc::new(NoDrivers),
+        }
+    }
+
+    struct NoSpecs;
+
+    impl SpecDecoder for NoSpecs {
+        fn decode(
+            &self,
+            _envelope: &[u8],
+        ) -> Result<Box<dyn std::any::Any + Send>, Box<dyn std::error::Error + Send + Sync>> {
+            unreachable!("the composition site decodes no specs")
+        }
+    }
+
+    struct NoDrivers;
+
+    #[async_trait::async_trait]
+    impl ResourceDriverFactory for NoDrivers {
+        fn resource_types(&self) -> &[ResourceTypeName] {
+            &[]
+        }
+
+        async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
+            unreachable!("the composition site creates no resource drivers")
+        }
+    }
+
+    /// U3 composition root (R5): a provider that declares a service is
+    /// hosted when the composition inputs registered its factory - the
+    /// composition root's factory application (`provider_set`'s
+    /// `with_effect_service_factories` call over the inputs table) hosts
+    /// the declared service and it answers an invocation carrying the real
+    /// envelope payload.
+    ///
+    /// The set is built with the fixture provider alone: the plane's own
+    /// providers register every well-known type, so a fixture driver cannot
+    /// attach beside them; the composition application call is the same one
+    /// `provider_set` makes over the inputs table.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_composition_root_hosts_a_declared_service_with_its_registered_factory() {
+        let (_dir, mut inputs, _readiness) = test_inputs();
+        inputs
+            .effect_service_factories
+            .insert(COMPOSITION_SERVICE.id, Arc::new(EchoFactory));
+        let runtime = ProviderSet::new(inputs.zone.clone(), inputs.spec_store_dir.clone())
+            .with(
+                family_declaration("fixture"),
+                vec![serving_descriptor(&[COMPOSITION_SERVICE])],
+            )
+            .with_effect_service_factories(&inputs.effect_service_factories)
+            .start()
+            .await
+            .expect("the composition root hosts the declared service");
+        let binding = runtime
+            .resolve_effect_service(COMPOSITION_SERVICE.id)
+            .await
+            .expect("the declared service resolves");
+        assert_eq!(binding.revision(), 1, "first generation");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({ "echo": "ping" }))
+                .expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: COMPOSITION_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let response = binding.call(call).await.expect("call");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({ "echo": "ping" }))
+                .expect("canonical payload"),
+            "the composition-hosted service answered the real payload"
+        );
+    }
+
+    /// U3 composition root (AE4): a declared service with no factory in the
+    /// composition inputs refuses startup by name - the composition path
+    /// keeps the fail-closed refusal.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_composition_root_refuses_a_declared_service_without_a_factory() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let error = ResourcePlaneV3::provider_set(&inputs)
+            .with(
+                family_declaration("fixture"),
+                vec![serving_descriptor(&[COMPOSITION_SERVICE])],
+            )
+            .start()
+            .await
+            .expect_err("a declared service needs a registered factory");
+        assert_eq!(error.code(), "effect-service-factory-missing");
+        assert_eq!(
+            error.message(),
+            "effect-service-factory-missing:fixture:fixture.echo"
+        );
     }
 
 

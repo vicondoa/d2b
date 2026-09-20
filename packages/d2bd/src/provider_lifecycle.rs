@@ -42,9 +42,10 @@ use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use ractor::{Actor, ActorRef};
 
 use crate::effect_service_actors::{
-    EffectServiceBinding, EffectServiceError, EffectServiceFactory, EffectServiceRow,
-    EffectServiceSupervisor, EffectServiceSupervisorArgs, EffectServiceSupervisorMsg,
+    EffectServiceBinding, EffectServiceRow, EffectServiceSupervisor, EffectServiceSupervisorArgs,
+    EffectServiceSupervisorMsg,
 };
+use d2b_provider_toolkit::{EffectServiceError, EffectServiceFactory};
 use crate::forward_rendezvous::ForwardRendezvous;
 use crate::plane_port::{PlaneRefusal, ProductionPlanePort};
 
@@ -513,16 +514,27 @@ impl ProviderSet {
     /// respawn calls `build` again, exactly like `ResourceManager`
     /// re-creates its drivers from the committed spec row. A provider that
     /// declares a service without a factory refuses startup.
-    ///
-    /// Composition feeds this seam when a family declares services; until
-    /// then the hosting-site tests are its only consumers.
-    #[allow(dead_code)]
     pub(crate) fn with_effect_service_factory(
         mut self,
         service: &'static str,
         factory: Arc<dyn EffectServiceFactory>,
     ) -> Self {
         self.effect_service_factories.insert(service, factory);
+        self
+    }
+
+    /// Supply the hosting factories the composition root registered for the
+    /// plane's declared services (U3, R5): one entry per service identity.
+    ///
+    /// The composition root feeds this seam from its inputs; a declared
+    /// service with no entry still refuses startup by name.
+    pub(crate) fn with_effect_service_factories(
+        mut self,
+        factories: &BTreeMap<&'static str, Arc<dyn EffectServiceFactory>>,
+    ) -> Self {
+        for (service, factory) in factories {
+            self = self.with_effect_service_factory(service, Arc::clone(factory));
+        }
         self
     }
 
@@ -1019,10 +1031,12 @@ mod tests {
 
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use crate::effect_service_actors::{
-        EffectRequest, EffectResponse, EffectService,
+    use crate::effect_service_actors::ServiceCallData;
+    use d2b_contracts_resource::v3::CanonicalJsonObject;
+    use d2b_provider_toolkit::{
+        EffectResponse, EffectService, EffectServiceError, ServiceInvocation,
     };
-    use d2b_resource_runtime::context::SpecDecoder;
+    use d2b_resource_runtime::context::{ManagerEndpoint, ServiceResourceContext, SpecDecoder};
     use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
     use d2b_resource_types::{AllowedSources, ServiceMethod, WellKnownType};
@@ -1086,10 +1100,30 @@ mod tests {
     impl EffectService for EchoService {
         async fn handle(
             &self,
-            request: EffectRequest,
+            invocation: ServiceInvocation<'_>,
         ) -> Result<EffectResponse, EffectServiceError> {
-            Ok(request)
+            Ok(EffectResponse::new(invocation.payload.clone()))
         }
+    }
+
+    /// One call's data for the hosted fixture services: the real envelope
+    /// payload and a fail-closed driver context (no manager seam at the
+    /// hosting site).
+    fn call_data(payload: CanonicalJsonObject) -> ServiceCallData {
+        ServiceCallData {
+            zone: zone().as_str().to_owned(),
+            invocation_id: "invocation-test".to_owned(),
+            payload,
+            resources: ServiceResourceContext::fail_closed(),
+            method: ECHO_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        }
+    }
+
+    /// The canonical payload of one fixture call.
+    fn payload(value: serde_json::Value) -> CanonicalJsonObject {
+        serde_json::from_value(value).expect("canonical payload")
     }
 
     /// Counts rebuilds from the durable row, so a respawn is observable.
@@ -1101,6 +1135,15 @@ mod tests {
         fn build(&self) -> Arc<dyn EffectService> {
             self.builds.fetch_add(1, Ordering::SeqCst);
             Arc::new(EchoService)
+        }
+    }
+
+    /// Returns one pre-built service (state-reading fixtures).
+    struct OnceFactory(Arc<dyn EffectService>);
+
+    impl EffectServiceFactory for OnceFactory {
+        fn build(&self) -> Arc<dyn EffectService> {
+            self.0.clone()
         }
     }
 
@@ -1142,8 +1185,15 @@ mod tests {
             .await
             .expect("the declared service resolves");
         assert_eq!(binding.revision(), 1, "first generation");
-        let response = binding.call(b"ping".to_vec()).await.expect("call");
-        assert_eq!(response, b"ping".to_vec(), "the hosted actor answered");
+        let response = binding
+            .call(call_data(payload(serde_json::json!({ "echo": "ping" }))))
+            .await
+            .expect("call");
+        assert_eq!(
+            response.payload,
+            payload(serde_json::json!({ "echo": "ping" })),
+            "the hosted actor answered"
+        );
         assert_eq!(builds.load(Ordering::SeqCst), 1, "built once from the durable row");
     }
 
@@ -1170,8 +1220,11 @@ mod tests {
             .resolve_effect_service(ECHO_SERVICE.id)
             .await
             .expect("the declared service resolves");
-        let response = binding.call(b"one".to_vec()).await.expect("call");
-        assert_eq!(response, b"one".to_vec());
+        let response = binding
+            .call(call_data(payload(serde_json::json!({ "echo": "one" }))))
+            .await
+            .expect("call");
+        assert_eq!(response.payload, payload(serde_json::json!({ "echo": "one" })));
         let revision_before = binding.revision();
         let id_before = binding.actor_id();
 
@@ -1196,19 +1249,28 @@ mod tests {
         // Stale bindings refuse (KTD5): the captured revision is stale, and
         // the pre-crash handle targets the dead actor.
         let stale = binding
-            .call_expected(revision_before, b"stale".to_vec())
+            .call_expected(
+                revision_before,
+                call_data(payload(serde_json::json!({ "echo": "stale" }))),
+            )
             .await
             .expect_err("stale revision must refuse");
         assert!(matches!(stale, EffectServiceError::StaleRevision { .. }), "got {stale:?}");
-        let dead = binding.call(b"dead".to_vec()).await.expect_err("dead actor must refuse");
+        let dead = binding
+            .call(call_data(payload(serde_json::json!({ "echo": "dead" }))))
+            .await
+            .expect_err("dead actor must refuse");
         assert!(
             matches!(dead, EffectServiceError::ServiceUnavailable { .. }),
             "got {dead:?}"
         );
 
         // The next call succeeds against the respawned generation.
-        let response = respawned.call(b"two".to_vec()).await.expect("call after respawn");
-        assert_eq!(response, b"two".to_vec());
+        let response = respawned
+            .call(call_data(payload(serde_json::json!({ "echo": "two" }))))
+            .await
+            .expect("call after respawn");
+        assert_eq!(response.payload, payload(serde_json::json!({ "echo": "two" })));
     }
 
     /// U8 edge: a republish through the hosting API bumps the generational
@@ -1246,8 +1308,11 @@ mod tests {
         assert_eq!(rebound.revision(), 2, "republish bumped the revision");
         assert_eq!(builds.load(Ordering::SeqCst), 2, "fresh instance from the new row");
 
-        let response = rebound.call(b"again".to_vec()).await.expect("call after republish");
-        assert_eq!(response, b"again".to_vec());
+        let response = rebound
+            .call(call_data(payload(serde_json::json!({ "echo": "again" }))))
+            .await
+            .expect("call after republish");
+        assert_eq!(response.payload, payload(serde_json::json!({ "echo": "again" })));
     }
 
     /// A declared service identity repeated across providers refuses
@@ -1292,5 +1357,200 @@ mod tests {
             error.message(),
             "effect-service-factory-missing:fixture:fixture.echo"
         );
+    }
+
+    // ---- U3 real payload and capability object (R6, R7, R8) ----
+
+    /// Answers one fixed view for the row the state-reading service asks
+    /// for; every other manager call is unreachable at the hosting site.
+    struct FixedViewManager;
+
+    #[async_trait]
+    impl ManagerEndpoint for FixedViewManager {
+        async fn ensure_child(
+            &self,
+            _parent: &ResourceKey,
+            _child: d2b_resource_runtime::context::ChildEnsure,
+        ) -> Result<d2b_resource_runtime::spec_store::EnsureOutcome, d2b_resource_runtime::error::ResourceError>
+        {
+            unreachable!("the hosting site ensures no children")
+        }
+
+        async fn get(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::identity::StoredDesiredResource>, d2b_resource_runtime::error::ResourceError>
+        {
+            unreachable!("the hosting site reads no stored rows")
+        }
+
+        async fn view(
+            &self,
+            key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, d2b_resource_runtime::error::ResourceError>
+        {
+            Ok(Some(d2b_resource_runtime::manager::ResourceView {
+                key: key.clone(),
+                uid: [7; 16],
+                generation: 42,
+                deleting: false,
+                provenance: d2b_resource_runtime::identity::ResourceProvenance::Api,
+                spec: Vec::new(),
+                metadata: Vec::new(),
+                owner_key: None,
+                status: None,
+                status_generation: None,
+                status_projection: None,
+            }))
+        }
+
+        async fn delete(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<(), d2b_resource_runtime::error::ResourceError> {
+            unreachable!("the hosting site deletes no rows")
+        }
+
+        async fn list_owned(
+            &self,
+            _owner_uid: [u8; 16],
+        ) -> Result<Vec<d2b_resource_runtime::identity::StoredDesiredResource>, d2b_resource_runtime::error::ResourceError>
+        {
+            unreachable!("the hosting site lists no owned rows")
+        }
+
+        async fn register_watch(
+            &self,
+            _subscriber: &ResourceKey,
+            _registration: d2b_resource_runtime::context::WatchRegistration,
+        ) -> Result<d2b_resource_runtime::context::WatchId, d2b_resource_runtime::error::ResourceError>
+        {
+            unreachable!("the hosting site registers no watches")
+        }
+
+        async fn cancel_watch(
+            &self,
+            _watch: d2b_resource_runtime::context::WatchId,
+        ) -> Result<(), d2b_resource_runtime::error::ResourceError> {
+            unreachable!("the hosting site cancels no watches")
+        }
+    }
+
+    /// Reads one row through the driver context and answers with the
+    /// observed generation: the service reaches resource state only through
+    /// the generic driver context (R7), never a daemon state type.
+    struct StateReadingService;
+
+    #[async_trait]
+    impl EffectService for StateReadingService {
+        async fn handle(
+            &self,
+            invocation: ServiceInvocation<'_>,
+        ) -> Result<EffectResponse, EffectServiceError> {
+            let key = ResourceKey::new(invocation.zone, "Process", "worker-0");
+            match invocation.resources.view(&key).await {
+                Ok(Some(view)) => Ok(EffectResponse::new(payload(serde_json::json!({
+                    "generation": view.generation,
+                })))),
+                Ok(None) => Err(EffectServiceError::Declined {
+                    service: "fixture.state".to_owned(),
+                    reason: "row absent".to_owned(),
+                }),
+                Err(_) => Err(EffectServiceError::Declined {
+                    service: "fixture.state".to_owned(),
+                    reason: "read refused".to_owned(),
+                }),
+            }
+        }
+    }
+
+    /// U3 happy path (AE3): a hosted service answers an invocation carrying
+    /// the real envelope payload and reaches resource state through the
+    /// generic driver context - the capability object's driver-context
+    /// facet, not a daemon state type.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hosted_service_reaches_state_through_the_driver_context() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = ProviderSet::new(zone(), dir.path().to_path_buf())
+            .with(declared("fixture"), vec![serving_descriptor(&[ECHO_SERVICE])])
+            .with_effect_service_factory(
+                ECHO_SERVICE.id,
+                Arc::new(OnceFactory(Arc::new(StateReadingService))),
+            )
+            .start()
+            .await
+            .expect("the provider starts through the base");
+
+        let binding = runtime
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("the declared service resolves");
+        let call = ServiceCallData {
+            zone: zone().as_str().to_owned(),
+            invocation_id: "invocation-7".to_owned(),
+            payload: payload(serde_json::json!({ "echo": "ping" })),
+            resources: ServiceResourceContext::over(Arc::new(FixedViewManager)),
+            method: ECHO_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let response = binding.call(call).await.expect("call");
+        assert_eq!(
+            response.payload,
+            payload(serde_json::json!({ "generation": 42 })),
+            "the service read the row through the driver context"
+        );
+    }
+
+    /// KTD8 restart adoption: a restarted provider set re-hosts its
+    /// declared service from the durable declaration and the fresh
+    /// generation answers - the surface this unit moves adopts on restart.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_restarted_provider_set_rehosts_its_declared_services() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let builds = Arc::new(AtomicU64::new(0));
+        let started = ProviderSet::new(zone(), dir.path().to_path_buf())
+            .with(declared("fixture"), vec![serving_descriptor(&[ECHO_SERVICE])])
+            .with_effect_service_factory(
+                ECHO_SERVICE.id,
+                Arc::new(EchoFactory { builds: Arc::clone(&builds) }),
+            )
+            .start()
+            .await
+            .expect("the first generation starts");
+        let binding = started
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("the declared service resolves");
+        let response = binding
+            .call(call_data(payload(serde_json::json!({ "echo": "before" }))))
+            .await
+            .expect("call");
+        assert_eq!(response.payload, payload(serde_json::json!({ "echo": "before" })));
+        drop(started);
+
+        // The daemon restarts: the provider set is rebuilt from the same
+        // declaration and factory, and the service is hosted again.
+        let restarted = ProviderSet::new(zone(), dir.path().to_path_buf())
+            .with(declared("fixture"), vec![serving_descriptor(&[ECHO_SERVICE])])
+            .with_effect_service_factory(
+                ECHO_SERVICE.id,
+                Arc::new(EchoFactory { builds: Arc::clone(&builds) }),
+            )
+            .start()
+            .await
+            .expect("the restarted generation starts");
+        let adopted = restarted
+            .resolve_effect_service(ECHO_SERVICE.id)
+            .await
+            .expect("the restarted set re-hosts the declared service");
+        assert_eq!(adopted.revision(), 1, "the adopted generation starts fresh");
+        let response = adopted
+            .call(call_data(payload(serde_json::json!({ "echo": "after" }))))
+            .await
+            .expect("call after restart");
+        assert_eq!(response.payload, payload(serde_json::json!({ "echo": "after" })));
     }
 }

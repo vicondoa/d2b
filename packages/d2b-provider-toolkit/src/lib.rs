@@ -18,6 +18,9 @@
 //!   driver behind them.
 //! - [`server`] - the authenticated service loop: frame codec, bounded
 //!   dispatch adapter, readiness handshake, drain.
+//! - [`service`] - the provider service contract: the envelope's real
+//!   payload and the capability object built from a method's declared
+//!   facets, which the daemon hosts and providers implement.
 //! - [`shared_provider`] - the shared host-provider driver machinery: the
 //!   declaration row shape, the effect request and outcome vocabulary, the
 //!   manager-routed child surface, and the driver every shared family's
@@ -71,6 +74,7 @@ pub mod declaration;
 pub mod operations;
 pub mod plane;
 pub mod server;
+pub mod service;
 pub mod shared_provider;
 pub mod testing;
 
@@ -131,6 +135,10 @@ pub use server::{
     run_authenticated_credential_provider, run_authenticated_provider,
     serve_authenticated_component_session, serve_authenticated_route, validate_attachment_indexes,
     validate_provider_route,
+};
+pub use service::{
+    EffectRequest, EffectResponse, EffectService, EffectServiceError, EffectServiceFactory,
+    ServiceInvocation,
 };
 pub use shared_provider::{
     ContextChildSurface, HOST_REF, ProviderRow, SharedProviderChildSurface,
