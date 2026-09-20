@@ -24,7 +24,6 @@
 #![deny(missing_docs)]
 
 pub mod adoption;
-pub mod effect_port;
 pub mod launch;
 
 use std::collections::BTreeSet;

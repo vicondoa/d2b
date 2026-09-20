@@ -1,4 +1,12 @@
 //! Authenticated vsock transport service lifecycle.
+//!
+//! The vsock stream-source contract (the opaque allocator-issued endpoint
+//! and binding identities, the initiator/responder role, and the
+//! [`VsockEffectPort`] stream-opening boundary) lives here beside its only
+//! consumer:ther service the child Zone core injects an implementation into.
+//! The contract is not a standalone effect-port module:it is the service
+//! surface's own stream source, and the raw AF_VSOCK syscall paths stay
+//! outside this crate (INV-VSOCK-004).
 
 use crate::{
     ReadySession,
@@ -6,13 +14,14 @@ use crate::{
         BridgeControl, BridgeExit, BridgeStats, NamedStreamError, NamedStreamId, NamedStreamPort,
         TransportHandle, run_bridge,
     },
-    effect_port::{OpaqueBindingId, OpaqueEndpointId, TransportRole, VsockEffectPort},
     errors::{ServiceError, VsockEffectError},
     framing::VsockTransportDescriptor,
     limits::{CLOSE_GRACE_MS, MAX_ACTIVE_TRANSPORTS, MAX_OPEN_DEADLINE_MS, MIN_OPEN_DEADLINE_MS},
 };
+use async_trait::async_trait;
 use std::{
     collections::HashMap,
+    fmt,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -20,9 +29,128 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
+    io::{AsyncRead, AsyncWrite},
     sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc},
     time::timeout,
 };
+
+/// Opaque endpoint resolution identity supplied by the child Zone core.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct OpaqueEndpointId(String);
+
+impl OpaqueEndpointId {
+    /// Parse one allocator-issued endpoint identity.
+    pub fn parse(value: impl Into<String>) -> Result<Self, VsockEffectError> {
+        let value = value.into();
+        if valid_opaque_id(&value) {
+            Ok(Self(value))
+        } else {
+            Err(VsockEffectError::EffectRejected)
+        }
+    }
+
+    /// Construct an opaque identity at a trusted Core adapter boundary.
+    pub fn from_core(value: impl Into<String>) -> Result<Self, VsockEffectError> {
+        Self::parse(value)
+    }
+
+    /// Borrow the opaque value for the service stream-source boundary. The
+    /// child Zone core's implementation of [`VsockEffectPort`] supplies it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for OpaqueEndpointId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("OpaqueEndpointId(<redacted>)")
+    }
+}
+
+impl fmt::Display for OpaqueEndpointId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("opaque-endpoint")
+    }
+}
+
+/// Opaque port-binding identity supplied by the child Zone core.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct OpaqueBindingId(String);
+
+impl OpaqueBindingId {
+    /// Parse one allocator-issued binding identity.
+    pub fn parse(value: impl Into<String>) -> Result<Self, VsockEffectError> {
+        let value = value.into();
+        if valid_opaque_id(&value) {
+            Ok(Self(value))
+        } else {
+            Err(VsockEffectError::EffectRejected)
+        }
+    }
+
+    /// Construct an opaque identity at a trusted Core adapter boundary.
+    pub fn from_core(value: impl Into<String>) -> Result<Self, VsockEffectError> {
+        Self::parse(value)
+    }
+
+    /// Borrow the opaque value for the service stream-source boundary. The
+    /// child Zone core's implementation of [`VsockEffectPort`] supplies it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for OpaqueBindingId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("OpaqueBindingId(<redacted>)")
+    }
+}
+
+impl fmt::Display for OpaqueBindingId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("opaque-binding")
+    }
+}
+
+/// The side of a ZoneLink transport that is being opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportRole {
+    /// Connect to the selected parent route endpoint.
+    Initiator,
+    /// Accept from the selected parent route endpoint.
+    Responder,
+}
+
+/// The vsock stream-source boundary:an implementation supplied by the child
+/// Zone core opens one allocator-selected native AF_VSOCK stream for the
+/// service's open/close lifecycle. The contract is the service's own stream
+    /// source, not a daemon-injected family capability port.
+#[async_trait]
+pub trait VsockEffectPort: Send + Sync + 'static {
+    /// The opaque byte stream returned by the Core implementation.
+    type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
+
+    /// Open or accept one allocator-selected endpoint.
+    async fn open(
+        &self,
+        endpoint_id: &OpaqueEndpointId,
+        binding_id: &OpaqueBindingId,
+        role: TransportRole,
+        deadline: Instant,
+    ) -> Result<Self::Stream, VsockEffectError>;
+
+    /// Close one stream after the bridge has stopped.
+    async fn close(&self, stream: Self::Stream) -> Result<(), VsockEffectError>;
+}
+
+fn valid_opaque_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
 
 const PROVIDER_REF: &str = "Provider/transport-vsock";
 const CLOSE_COMPLETION_BUDGET_MS: u64 = CLOSE_GRACE_MS * 2;

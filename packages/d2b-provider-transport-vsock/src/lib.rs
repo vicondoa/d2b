@@ -6,7 +6,6 @@
 mod audit;
 mod auth;
 mod bridge;
-mod effect_port;
 mod errors;
 mod framing;
 mod limits;
@@ -27,7 +26,6 @@ pub use bridge::{
     BridgeControl, BridgeExit, BridgeStats, NamedStreamError, NamedStreamId, NamedStreamPort,
     TransportHandle,
 };
-pub use effect_port::{OpaqueBindingId, OpaqueEndpointId, TransportRole, VsockEffectPort};
 pub use errors::{ServiceError, TransportError, VsockEffectError};
 pub use framing::{FramedVsockTransport, VsockTransportDescriptor};
 pub use limits::{
@@ -42,8 +40,9 @@ pub use relay_argv::{
     SocatEndpoint, VsockRelayArgvError, VsockRelayArgvInput, exec_arg0, generate_vsock_relay_argv,
 };
 pub use service::{
-    CloseTransportRequest, ObserveTransportRequest, OpenTransportRequest, OpenTransportResponse,
-    ServicePhase, TransportEvent, TransportObservation, TransportPhase, VsockTransportService,
+    CloseTransportRequest, ObserveTransportRequest, OpaqueBindingId, OpaqueEndpointId,
+    OpenTransportRequest, OpenTransportResponse, ServicePhase, TransportEvent, TransportObservation,
+    TransportPhase, TransportRole, VsockEffectPort, VsockTransportService,
 };
 pub use settings::{PortClass, SettingsError, VsockTransportSettings};
 pub use state_volume::{EMPTY_STATE_SCHEMA, STATE_LAYOUT_USER, StateVolumeSpec};

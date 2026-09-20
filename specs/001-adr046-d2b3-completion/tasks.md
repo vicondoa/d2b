@@ -815,7 +815,7 @@ predicates without taking ownership of Network implementation.
 
 ### Group `wi:ADR-046-provider-transport-vsock` (7 items)
 
-- [ ] T451 [US2] `ADR046-vsock-001` - `packages/d2b-provider-transport-vsock/src/effect_port.rs` (create)
+- [x] T451 [US2] `ADR046-vsock-001` - `packages/d2b-provider-transport-vsock/src/service.rs` (create;trait + opaque IDs landed here when the standalone `effect_port.rs` module was deleted)
 - [ ] T452 [US2] `ADR046-vsock-002` - `packages/d2b-provider-transport-vsock/src/framing.rs` and `src/bridge.rs` (adapt)
 - [ ] T453 [US2] `ADR046-vsock-003` - `packages/d2b-provider-transport-vsock/src/service.rs` (adapt)
 - [ ] T454 [US2] `ADR046-vsock-004` - `d2b-core-controller` child Zone runtime `LiveVsockEffectPort` (adapt)
