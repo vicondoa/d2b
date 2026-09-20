@@ -1167,21 +1167,14 @@ fn empty_zone_native_host() -> HostJson {
             ownership_id: String::new(),
         },
         network_manager: NetworkManagerUnmanaged {
-            // The zone-native bundle carries no host.json, so this host
-            // model is the sole source of the framework's own
-            // NetworkManager unmanaged contract the `apply-nm-unmanaged`
-            // kernel resolves (`nm-unmanaged:host`). The legacy host.json
-            // carried the same contract; keeping it empty here made the
-            // moved kernel fail closed on an empty file path before any
-            // host effect.
-            file_path: "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf".to_owned(),
-            match_criteria: vec!["interface-name:d2b-*".to_owned()],
-            reload_behavior: "nmcli general reload".to_owned(),
+            file_path: String::new(),
+            match_criteria: Vec::new(),
+            reload_behavior: String::new(),
             ownership: OwnershipRule {
-                owner: "root".to_owned(),
-                group: "root".to_owned(),
-                mode: "0644".to_owned(),
-                drift_policy: "replace".to_owned(),
+                owner: String::new(),
+                group: String::new(),
+                mode: String::new(),
+                drift_policy: String::new(),
             },
         },
         hosts_file: HostsFileOwnership {
