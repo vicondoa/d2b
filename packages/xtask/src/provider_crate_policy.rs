@@ -6332,18 +6332,6 @@ const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption]
         retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
     },
     SharedStructuralKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/plane_controller_bridge.rs",
-        class: "type-name-match-arm",
-        symbol: "Volume",
-        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/plane_controller_bridge.rs",
-        class: "type-name-match-arm",
-        symbol: "VolumeBinding",
-        retires_with: "U13 structural residue (the resource-type vocabulary becomes the generated authority)",
-    },
-    SharedStructuralKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
         class: "type-name-match-arm",
         symbol: "Guest",

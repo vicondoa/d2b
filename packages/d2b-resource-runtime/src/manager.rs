@@ -1649,9 +1649,9 @@ mod tests {
     use crate::error::ResourceError;
     use crate::identity::ResourceTypeName;
     use crate::resource::test_support::{
-        FakeFactory, desired, fake_not_yet_failure, fake_refused_failure, harness, harness_over,
-        harness_over_with_factory, harness_targeted, harness_with, key, subject, until,
-        wait_row_gone, wait_status,
+        FakeFactory, desired, fake_not_yet_failure, fake_not_yet_failure_with_retry_after,
+        fake_refused_failure, harness, harness_over, harness_over_with_factory, harness_targeted,
+        harness_with, key, subject, until, wait_row_gone, wait_status,
     };
     use crate::resource::test_support::ReconcileMode;
     use crate::resource::{ResourceMsg, ResourceStatus};
@@ -2943,6 +2943,124 @@ mod tests {
             2,
             "exactly one retry pass per backoff window"
         );
+    }
+
+    /// R13: the ladder doubles and stops at its ceiling. The ceiling is what
+    /// keeps a permanently failing row from spinning while still retrying it.
+    #[test]
+    fn the_retry_ladder_doubles_and_stops_at_its_ceiling() {
+        let base = crate::resource::DEFAULT_REQUEUE_BACKOFF;
+        let ceiling = crate::resource::DEFAULT_REQUEUE_BACKOFF_MAX;
+        assert_eq!(crate::resource::next_retry_backoff(base), base * 2);
+        assert_eq!(crate::resource::next_retry_backoff(base * 4), base * 8);
+        assert_eq!(
+            crate::resource::next_retry_backoff(ceiling),
+            ceiling,
+            "a rung at the ceiling stays there"
+        );
+        assert_eq!(
+            crate::resource::next_retry_backoff(ceiling * 4),
+            ceiling,
+            "a doubling past the ceiling is clamped to it, never beyond"
+        );
+    }
+
+    /// R13: growth belongs to *errors*, not to deferrals. A `NotYet` deferral
+    /// keeps the configured cadence (the driver is asking to be asked again); a
+    /// retryable operational error escalates, from a 50 ms base doubling to
+    /// 100, 200, 400, 800 ms. Across the one-second window below the deferral
+    /// delivers roughly twenty passes and the error a handful - which is what
+    /// lets a transient error ride out while a persistent one is not hammered.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_deferral_keeps_its_cadence_while_an_error_escalates() {
+        let h = harness_with(&["Test"], Duration::from_millis(50)).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::FailRetryable;
+        h.client
+            .ensure(subject(), None, desired("Test", "data", b"one"))
+            .await
+            .expect("ensure");
+        wait_status(
+            &h.client,
+            &k,
+            ResourceStatus::Failed(DriverFailure::retryable(DriverOp::Reconcile)),
+        )
+        .await;
+        let after_first = shared.reconcile_calls.load(AtomicOrdering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        let deferred = shared.reconcile_calls.load(AtomicOrdering::SeqCst) - after_first;
+        assert!(
+            deferred >= 12,
+            "a deferral must keep its cadence instead of escalating: saw {deferred} passes"
+        );
+
+        // The same base, on a row whose pass fails with a retryable error.
+        let h = harness_with(&["Test"], Duration::from_millis(50)).await;
+        let k = key("test", "Test", "errored");
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::FailErrored;
+        h.client
+            .ensure(subject(), None, desired("Test", "errored", b"one"))
+            .await
+            .expect("ensure");
+        wait_status(
+            &h.client,
+            &k,
+            ResourceStatus::Failed(DriverFailure::error(
+                DriverOp::Reconcile,
+                crate::error::FailureKinds::DRIVER_ERROR,
+                crate::error::FailureClass::Retryable,
+            )),
+        )
+        .await;
+        let after_first = shared.reconcile_calls.load(AtomicOrdering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        let errored = shared.reconcile_calls.load(AtomicOrdering::SeqCst) - after_first;
+        assert!(
+            (2..=6).contains(&errored),
+            "a doubling ladder from 50ms delivers a few passes in a second, not the ~20 a \
+             fixed backoff would: saw {errored} after the first"
+        );
+    }
+
+    /// R13: a deferral that names its own delay is scheduled at *that* delay,
+    /// not at the actor's backoff - the driver is the only party that knows why
+    /// the world is not ready. The named 400 ms is eight times the 50 ms this
+    /// actor was configured with, so a fixed cadence is unmistakable.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn a_driver_named_retry_delay_paces_the_deferral() {
+        let h = harness_with(&["Test"], Duration::from_millis(50)).await;
+        let k = key("test", "Test", "data");
+        let shared = h.factory.shared(&k).await;
+        *shared.reconcile_mode.lock().await = ReconcileMode::NotYetWithRetryAfter;
+        h.client
+            .ensure(subject(), None, desired("Test", "data", b"one"))
+            .await
+            .expect("ensure");
+        // The named delay rides the structured verdict into the published
+        // status, so the operator sees the same cadence the actor schedules.
+        wait_status(
+            &h.client,
+            &k,
+            ResourceStatus::Failed(fake_not_yet_failure_with_retry_after()),
+        )
+        .await;
+        assert_eq!(shared.reconcile_calls.load(AtomicOrdering::SeqCst), 1);
+
+        // Past the actor's own 50 ms backoff, well inside the named 400 ms.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(
+            shared.reconcile_calls.load(AtomicOrdering::SeqCst),
+            1,
+            "the driver's named delay paces the deferral, not the actor's backoff"
+        );
+
+        // The named delay expires and the deferral's pass converges.
+        wait_status(&h.client, &k, ResourceStatus::Ready).await;
+        assert_eq!(shared.reconcile_calls.load(AtomicOrdering::SeqCst), 2);
     }
 
     /// Issue #508: a driver's `NotYet` verdict is a defer - it publishes the

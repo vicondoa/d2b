@@ -33,6 +33,7 @@ pub const MODULE_NAME: &str = "error";
 
 use crate::identity::ResourceKey;
 use crate::spec_store::SpecStoreError;
+use std::time::Duration;
 
 // The failure-kind registry lives in `d2b-contracts` so a second consumer
 // (the `d2b` CLI) can read kind notes without depending on this crate;
@@ -292,7 +293,15 @@ impl std::fmt::Display for FailureOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverVerdict {
     /// The operation cannot proceed yet.
-    NotYet { because: String },
+    NotYet {
+        because: String,
+        /// How long the driver wants the actor to wait before the pass it is
+        /// asking for. The driver is the only party that knows why the world is
+        /// not ready, so when it names a delay, the actor schedules at it
+        /// instead of falling back to its own cadence. `None` defers to the
+        /// actor - and a deferral is not a failure, so it never escalates.
+        retry_after: Option<Duration>,
+    },
     /// A decision against this row.
     Refused { why: String },
     /// An operational failure.
@@ -322,7 +331,7 @@ impl DriverVerdict {
     /// The human reason: why not yet, why refused, or the error message.
     pub fn reason(&self) -> &str {
         match self {
-            Self::NotYet { because } => because.as_str(),
+            Self::NotYet { because, .. } => because.as_str(),
             Self::Refused { why } => why.as_str(),
             Self::Error { message, .. } => message.as_str(),
         }
@@ -359,6 +368,7 @@ impl DriverFailure {
             kind,
             DriverVerdict::NotYet {
                 because: kind.means().to_owned(),
+                retry_after: None,
             },
         )
     }
@@ -393,8 +403,19 @@ impl DriverFailure {
             kind,
             DriverVerdict::NotYet {
                 because: because.into(),
+                retry_after: None,
             },
         )
+    }
+
+    /// Name how long the retry this failure asks for should wait. Ignored on a
+    /// verdict that does not defer: only a `NotYet` carries a retry delay,
+    /// because only a deferral is the driver saying "ask me again later".
+    pub fn with_retry_after(mut self, retry_after: Duration) -> Self {
+        if let DriverVerdict::NotYet { retry_after: slot, .. } = &mut self.verdict {
+            *slot = Some(retry_after);
+        }
+        self
     }
 
     /// A `Refused` with a caller-specific reason.
@@ -520,6 +541,16 @@ impl DriverFailure {
     pub const fn defers(&self) -> bool {
         matches!(self.verdict, DriverVerdict::NotYet { .. })
             || matches!(self.class(), FailureClass::Retryable)
+    }
+
+    /// The delay the driver named for the retry it is asking for, when it
+    /// named one. Only a `NotYet` carries one: an operational error says what
+    /// went wrong, and the actor's own ladder paces its retries.
+    pub const fn retry_after(&self) -> Option<Duration> {
+        match &self.verdict {
+            DriverVerdict::NotYet { retry_after, .. } => *retry_after,
+            DriverVerdict::Refused { .. } | DriverVerdict::Error { .. } => None,
+        }
     }
 
     /// The compared value pairs behind the failure.

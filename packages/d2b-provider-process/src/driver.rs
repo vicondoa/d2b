@@ -227,6 +227,10 @@ impl std::error::Error for ProcessDriverError {}
 pub(crate) enum ProcessDriverStatus {
     /// A launch effect is in flight.
     Launching,
+    /// The row's desired lifecycle is `stopped` and this pass scheduled its
+    /// own re-check: the process is not yet observed gone, so the projection
+    /// stays non-Ready until the stop is established.
+    Stopping,
     /// The exact process is live; `adopted` records whether the Provider
     /// adopted it instead of launching it.
     Ready { adopted: bool },
@@ -1369,11 +1373,48 @@ impl ProcessDriver {
         identity: ProcessResourceIdentity,
         spec: &ProcessSpec,
     ) -> Result<ReconcileOutcome, ProcessDriverError> {
+        // A row whose desired lifecycle is `Stopped` is realized only once the
+        // process is observed gone, so the pass establishes the stop instead
+        // of asserting it: `Satisfied` publishes wire `Ready` and fires every
+        // `WatchCondition::Ready` watcher on the row, and a live process
+        // behind that reading is a realized state the row never reached.
         if spec.desired_lifecycle() == DesiredLifecycle::Stopped {
-            ctx.set_status(ProcessDriverStatus::Succeeded {
-                code: "process-stopped",
-            });
-            return Ok(ReconcileOutcome::Satisfied);
+            // A live identity is stopped through the same exact escalation
+            // every other path uses; with no verified identity there is
+            // nothing this daemon may signal.
+            if self.effects.has_active(
+                &identity.zone,
+                identity.zone_uid.as_ref(),
+                &identity.resource_ref,
+            ) {
+                self.stop_and_finalize(&identity, spec, DriverOp::Reconcile)
+                    .await?;
+            }
+            return match self.effects.probe(&identity, spec).await {
+                // The observed stop: the desired state is realized, so the row
+                // may read its terminal status. The identity is handed back to
+                // the adoption path (a later `running` spec adopts/launches
+                // afresh instead of probing an identity the provider already
+                // released).
+                Ok(ProviderLiveness::Exited) => {
+                    self.durable.mark_exited();
+                    ctx.set_status(ProcessDriverStatus::Succeeded {
+                        code: "process-stopped",
+                    });
+                    Ok(ReconcileOutcome::Satisfied)
+                }
+                // Still live (a process that came up behind the stop, or one
+                // the stop left running) or an identity the provider no longer
+                // confirms: the stop is not established, so the pass schedules
+                // its own re-check and reports the retry - never `Satisfied`
+                // with a live process behind it.
+                Ok(ProviderLiveness::Alive | ProviderLiveness::Unknown) => {
+                    ctx.set_status(ProcessDriverStatus::Stopping);
+                    let _ = ctx.requeue_after(PROCESS_RESYNC);
+                    Ok(ReconcileOutcome::RetryScheduled)
+                }
+                Err(error) => Err(map_provider_error(error, DriverOp::Reconcile)),
+            };
         }
 
         // A retryable launch failure from the previous pass: schedule exactly
@@ -2217,6 +2258,15 @@ mod tests {
     fn never_adopt_row() -> StoredDesiredResource {
         let mut row = test_row();
         row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"reaction","drainTimeout":"250ms","adoptionPolicy":"never-adopt"}"#
+            .to_vec();
+        row
+    }
+
+    /// One durable row whose desired lifecycle is `stopped`: the row is
+    /// realized only once the process is observed gone, never by asserting it.
+    fn stopped_row() -> StoredDesiredResource {
+        let mut row = test_row();
+        row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Host/host-system","processClass":"worker","template":"reaction","drainTimeout":"250ms","desiredLifecycle":"stopped"}"#
             .to_vec();
         row
     }
@@ -4141,6 +4191,107 @@ mod tests {
             fake.stop_calls().is_empty(),
             "no signal reaches the ambiguous candidate"
         );
+    }
+
+    // -- stopped desired lifecycle: realized only when observed stopped ------
+
+    /// A row whose desired lifecycle is `stopped` establishes the stop through
+    /// the same exact escalation every other path uses and reads its terminal
+    /// `Succeeded{process-stopped}` only off the observed stop. Before this the
+    /// pass asserted the state: it published the terminal status and returned
+    /// `Satisfied` - wire `Ready`, every `WatchCondition::Ready` watcher fired -
+    /// with nothing probed and nothing stopped.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn stopped_lifecycle_row_stops_the_live_process_before_reading_succeeded() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            liveness: VecDeque::from([ProviderLiveness::Exited]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(stopped_row());
+        let mut driver = driver(fake.clone()).await;
+
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(
+            fake.call_order(),
+            ["stop", "finalize", "probe"],
+            "the live identity is stopped and the stop is probed, never asserted"
+        );
+        assert_eq!(fake.stop_calls().len(), 1, "the exact escalation ran");
+        assert_eq!(
+            fake.stop_calls()[0].term_timeout,
+            Duration::from_millis(250),
+            "the spec's drainTimeout bounds the term stage"
+        );
+        assert_eq!(
+            fake.finalize_calls(),
+            1,
+            "the provider authority is released"
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Succeeded {
+                code: "process-stopped"
+            }
+        );
+        assert!(
+            f.requeue_calls().is_empty(),
+            "a realized stop needs no re-check"
+        );
+    }
+
+    /// The same row while the process is still running: the stop is not
+    /// established, so the pass schedules its own re-check and reports the
+    /// retry instead of a readiness claim. Only a later observed stop lets the
+    /// row read `Succeeded`.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn stopped_lifecycle_row_still_live_defers_instead_of_claiming_satisfied() {
+        let fake = Arc::new(FakeEffects::new(FakeEffectsConfig {
+            liveness: VecDeque::from([ProviderLiveness::Alive]),
+            ..FakeEffectsConfig::default()
+        }));
+        let mut f = fixture(stopped_row());
+        let mut driver = driver(fake.clone()).await;
+
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::RetryScheduled
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Stopping,
+            "a stop this pass could not establish never reads as a realized row"
+        );
+        assert_eq!(
+            f.requeue_calls(),
+            [super::PROCESS_RESYNC],
+            "the pass schedules its own re-check at the preserved resync"
+        );
+        assert_eq!(
+            fake.call_order(),
+            ["stop", "finalize", "probe"],
+            "the live process is stopped, never left running behind a satisfied pass"
+        );
+
+        // The stop lands: the next pass probes it gone and only then reads the
+        // terminal status.
+        fake.set_active(false);
+        fake.push_liveness(ProviderLiveness::Exited);
+        assert_eq!(
+            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+        assert_eq!(
+            *f.ctx.status::<ProcessDriverStatus>().expect("status"),
+            ProcessDriverStatus::Succeeded {
+                code: "process-stopped"
+            }
+        );
+        assert_eq!(fake.stop_calls().len(), 1, "nothing is signalled twice");
     }
 
     // -- a durable launch no retry can resolve fails terminally --------------

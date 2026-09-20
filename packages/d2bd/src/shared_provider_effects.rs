@@ -244,29 +244,6 @@ impl ProductionSharedProviderEffects {
             .map_err(|_| SharedProviderEffectError::Unavailable)
     }
 
-    /// Re-register the plane's per-resource Volume anchors from the durable
-    /// rows after a Volume or VolumeBinding child commit.
-    ///
-    /// The volume root resolver reads the anchor cache synchronously, so a
-    /// row the manager committed after the plane's last durable load has to
-    /// be published here or its root never resolves.
-    async fn reload_volume_anchors(&self) {
-        let Ok(plane) = self.plane() else {
-            tracing::warn!(
-                zone = %self.zone.as_str(),
-                "volume anchor reload after a child commit skipped: the Zone plane is unavailable",
-            );
-            return;
-        };
-        if let Err(error) = plane.reload_registry().await {
-            tracing::warn!(
-                zone = %self.zone.as_str(),
-                error = ?error,
-                "volume anchor reload after a child commit failed; the child's root stays unresolved until the next reload",
-            );
-        }
-    }
-
     /// The live phase of one resource from the manager view.
     async fn live_phase(
         &self,
@@ -1860,13 +1837,6 @@ impl ProductionSharedProviderEffects {
         }
     }
 
-    /// Re-register the plane's per-resource Volume anchors after the driver
-    /// committed a Volume or VolumeBinding child (the Network family's
-    /// refresh hook).
-    async fn refresh_volume_anchors(&self) {
-        self.reload_volume_anchors().await;
-    }
-
     /// Reconcile one TPM Device through the persistent TPM controller.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     async fn reconcile_tpm(
@@ -2938,10 +2908,6 @@ impl d2b_provider_network_local::NetworkDriverEffects for ProductionSharedProvid
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         self.finalize_network_row(request).await
     }
-
-    async fn refresh_volume_anchors(&self) {
-        self.refresh_volume_anchors().await;
-    }
 }
 
 #[async_trait]
@@ -3018,13 +2984,6 @@ impl d2b_provider_device::DeviceDriverEffects for ProductionSharedProviderEffect
             DeviceComponent::SecurityKey => self.finalize_security_key_device(request).await,
             DeviceComponent::Gpu => self.finalize_gpu_row(request, state).await,
         }
-    }
-
-    /// The TPM controller creates the device's state Volume through the child
-    /// surface, so the plane's anchor cache has to be re-read or that Volume
-    /// resolves as `volume-anchor` and the Device never leaves reconcile.
-    async fn refresh_volume_anchors(&self) {
-        self.refresh_volume_anchors().await;
     }
 }
 
