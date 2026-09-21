@@ -59,9 +59,12 @@ impl BlockingPool {
             })
             .collect();
         // Bounded deadline queue: capacity is twice the blocking-pool limit, so a
-        // registration can never outgrow the in-flight job set; when full the
-        // async caller's try_send refuses (same launch-failed policy as the
-        // disconnected arm) instead of blocking the executor worker.
+        // registration can never outgrow the in-flight job set while the deadline
+        // worker keeps draining. A full queue only means the worker is
+        // momentarily starved: the registration is deferred (the job still runs
+        // and `JobFuture::poll` enforces the deadline) instead of blocking the
+        // executor worker or spurious-failing a healthy launch. Only a
+        // disconnected queue - the worker is gone - refuses with launch-failed.
         let (deadline_sender, deadline_receiver) = sync_channel::<Deadline>(limit * 2);
         let deadline_worker = std::thread::Builder::new()
             .name("d2b-process-deadlines".to_owned())
@@ -93,22 +96,42 @@ impl BlockingPool {
         let worker_state = Arc::clone(&state);
         let job = Box::new(move || worker_state.complete(operation(deadline)));
         let deadline_state: Arc<dyn DeadlineState> = state.clone();
-        if self
+        match self
             .deadline_sender
             .as_ref()
             .expect("deadline sender present")
             .try_send(Deadline {
                 at: deadline,
                 state: Arc::downgrade(&deadline_state),
-            })
-            .is_err()
-        {
-            warn!(
-                provider = "supervisor",
-                "deadline registration failed; reporting launch-failed for the blocked effect"
-            );
-            state.complete(Err(ProcessEffectError::LaunchFailed));
-            return JobFuture { state, deadline };
+            }) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                // The deadline registration is a wake-up optimization, not the
+                // enforcement: `JobFuture::poll` resolves the job once its
+                // deadline passes, and a late completion is quarantined by the
+                // caller's deadline arm. A full queue means the deadline worker
+                // has not drained yet (the host is momentarily starved), not
+                // that the effect failed - so the job still proceeds below and
+                // a healthy launch is never spurious-failed by load. Only a
+                // hung job loses its deadline wake; the poll path still bounds
+                // every caller that keeps polling.
+                warn!(
+                    provider = "supervisor",
+                    "deadline registration deferred; the deadline worker is momentarily starved"
+                );
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                // The deadline worker is gone: no wake source remains for a
+                // hung effect, so refusing here (as the disconnected job-channel
+                // arm does) is honest instead of proceeding into an
+                // unterminated wait.
+                error!(
+                    provider = "supervisor",
+                    "deadline queue disconnected; reporting launch-failed for the blocked effect"
+                );
+                state.complete(Err(ProcessEffectError::LaunchFailed));
+                return JobFuture { state, deadline };
+            }
         }
         let submit_error = match self
             .sender
