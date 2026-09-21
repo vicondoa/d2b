@@ -2476,18 +2476,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 tpm/device step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/endpoint_effects.rs",
-        token: "device_tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/endpoint_effects.rs",
-        token: "tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
         token: "usbip",
         family: "device-usbip",
@@ -3118,12 +3106,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/endpoint_effects.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/host.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
@@ -3549,18 +3531,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "virtiofs",
         family: "volume-virtiofs",
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/binding_effects.rs",
-        token: "virtiofs",
-        family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/binding_effects.rs",
-        token: "volume_virtiofs",
-        family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",

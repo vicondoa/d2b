@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-volume-binding",
+  "provider": "volume-binding",
+  "services": [
+    "volume-binding.d2bus.org/effects"
+  ]
+}

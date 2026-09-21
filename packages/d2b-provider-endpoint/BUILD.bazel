@@ -26,6 +26,9 @@ d2b_rust_library(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
+        "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -39,6 +42,9 @@ d2b_rust_library(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
+        "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
     ] + all_crate_deps(normal = True, cargo_only = True),
@@ -52,7 +58,7 @@ d2b_rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
-        ":d2b_provider_endpoint",
+        ":d2b_provider_endpoint_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

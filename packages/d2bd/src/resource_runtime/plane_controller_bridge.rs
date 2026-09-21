@@ -873,7 +873,7 @@ mod tests {
     }
 
     /// The Endpoint family's committed purpose vocabulary: the purposes the
-    /// declaring provider crates commit, read through the daemon's own
+    /// declaring provider crates commit, read through the family crate's own
     /// derivation.
     struct CommittedEndpointPurposes;
 
@@ -882,14 +882,14 @@ mod tests {
             &self,
             purpose: &str,
         ) -> Option<d2b_provider_endpoint::GuestControlProducer> {
-            crate::endpoint_effects::guest_control_producer(purpose)
+            d2b_provider_endpoint::guest_control_producer(purpose)
         }
 
         fn device_worker_endpoint_class(
             &self,
             purpose: &str,
         ) -> Option<d2b_provider_endpoint::endpoint::EndpointClass> {
-            crate::endpoint_effects::device_worker_endpoint_class(purpose)
+            d2b_provider_endpoint::device_worker_endpoint_class(purpose)
         }
     }
 

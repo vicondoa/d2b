@@ -2,14 +2,10 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use std::sync::Arc;
-
-use d2b_contracts_resource::v3::{ ResourceRef };
-use d2b_provider_endpoint::endpoint::{ EndpointClass };
 use d2b_provider_endpoint::{
-    EndpointDriverArgs, EndpointDriverEffects, EndpointPurposeVocabulary, GuestControlProducer,
-    endpoint_descriptor,
+    ENDPOINT_EFFECTS_SERVICE, EndpointDriverArgs, endpoint_descriptor,
 };
+use d2b_provider_endpoint::test_support::FakeSocketEffects;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, WellKnownType};
@@ -19,70 +15,10 @@ fn endpoint_type() -> ResourceTypeName {
     WellKnownType::ENDPOINT.to_resource_type_name()
 }
 
-/// The committed purpose vocabulary of the declaring providers: the Cloud
-/// Hypervisor provider's child roles and the Device TPM Provider's worker
-/// sockets, without any effect execution.
-struct CommittedPurposes;
-
-impl EndpointPurposeVocabulary for CommittedPurposes {
-    fn guest_control_producer(&self, purpose: &str) -> Option<GuestControlProducer> {
-        match purpose {
-            "ch-api" => Some(GuestControlProducer::VmmProcess),
-            "guest-control" => Some(GuestControlProducer::Guest),
-            _ => None,
-        }
-    }
-
-    fn device_worker_endpoint_class(&self, purpose: &str) -> Option<EndpointClass> {
-        match purpose {
-            "swtpm-tpm-socket" => Some(EndpointClass::Device),
-            "swtpm-control-socket" => Some(EndpointClass::Control),
-            _ => None,
-        }
-    }
-}
-
-/// The port instance the declaration carries; the registration boundary
-/// never runs an effect.
-struct UnusedEffects(CommittedPurposes);
-
-#[async_trait::async_trait]
-impl EndpointDriverEffects for UnusedEffects {
-    async fn socket_present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
-        false
-    }
-
-    async fn ensure_socket(
-        &self,
-        _producer_ref: &ResourceRef,
-        _purpose: &str,
-    ) -> Result<(), String> {
-        Err("registration boundary runs no ensure effect".to_owned())
-    }
-
-    async fn remove_socket(
-        &self,
-        _producer_ref: &ResourceRef,
-        _purpose: &str,
-    ) -> Result<(), String> {
-        Err("registration boundary runs no remove effect".to_owned())
-    }
-}
-
-impl EndpointPurposeVocabulary for UnusedEffects {
-    fn guest_control_producer(&self, purpose: &str) -> Option<GuestControlProducer> {
-        self.0.guest_control_producer(purpose)
-    }
-
-    fn device_worker_endpoint_class(&self, purpose: &str) -> Option<EndpointClass> {
-        self.0.device_worker_endpoint_class(purpose)
-    }
-}
-
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     endpoint_descriptor(EndpointDriverArgs {
         zone: "work".to_owned(),
-        effects: Arc::new(UnusedEffects(CommittedPurposes)),
+        facets: FakeSocketEffects::new().facet_set(),
     })
 }
 
@@ -131,6 +67,11 @@ async fn descriptor_declares_and_registers_the_endpoint_type() {
     );
     assert!(descriptor.operations.is_empty());
     assert!(descriptor.creations.is_empty());
+    assert_eq!(
+        descriptor.services,
+        &[ENDPOINT_EFFECTS_SERVICE],
+        "the family's declared effects service rides the declaration (U6)"
+    );
 
     let mut providers = ProviderDirectory::new();
     providers.register_driver(&descriptor).expect("register");

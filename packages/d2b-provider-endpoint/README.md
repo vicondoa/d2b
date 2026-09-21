@@ -7,13 +7,24 @@ registers the type by.
 The Endpoint family covers the endpoint shapes the plane realizes today:
 
 - the binding-owned virtiofsd socket (transport unix, purpose `virtiofsd`),
-  realized through the daemon's endpoint effect port as a long effect;
+  realized through the family's own effects implementation as a long
+  effect;
 - the guest-runtime control endpoints the Cloud Hypervisor provider's fixed
   child roles declare (`ch-api` on the guest's VMM Process, `guest-control` on
   the Guest), realized on the subject row's committed evidence;
 - the Device TPM Provider's worker sockets (`swtpm-tpm-socket`,
   `swtpm-control-socket`), realized on the producer worker Process row's
   `Ready` status.
+
+The family's driver effects are implemented by this crate itself
+(`effects_service`): the purpose derivations classify one purpose onto the
+realization the plane owns from the declaring providers' own vocabularies,
+and the daemon-owned realization surfaces - the host socket effect for the
+binding-owned virtiofsd socket and the two row-evidence probes - cross the
+provider boundary as the declared `EndpointEffectFacets` the composition
+root supplies. The daemon hosts the family's declared effects service
+(`endpoint.d2bus.org/effects`) per zone from the family's registered
+factory; no externally built port appears at any construction site.
 
 ## Provider identity
 
@@ -56,13 +67,16 @@ the `BUILTIN | STARTUP` allowed-source mask.
 `Endpoint` names no placement anchor, so an endpoint row is reconciled on its
 containing Zone's Host. A realized producer may live in a Guest (a
 guest-owned worker Process, or the Guest itself for `guest-control`); the
-driver reaches that row through the daemon's effect port and the manager,
-never through its own placement.
+driver reaches that row through the declared facets and the manager, never
+through its own placement.
 
-The crate depends only on `d2b-contracts-resource`, `d2b-resource-runtime`,
-and `d2b-resource-types`. The per-provider purpose derivation arrives through
-`EndpointPurposeVocabulary`, so this crate depends on no provider crate and
-the daemon implements the derivation over the declaring providers.
+The crate depends on `d2b-contracts-resource`, `d2b-resource-runtime`,
+`d2b-resource-types`, and `d2b-provider-toolkit`. The purpose derivations
+read the declaring providers' own vocabularies, so the crate also depends on
+`d2b-provider-guest-cloud-hypervisor` (the child roles that declare the
+guest-runtime control purposes) and `d2b-provider-device-tpm` (the declared
+worker-socket purposes); the closed admission set cannot drift from the
+children those providers commit.
 
 ## RBAC requirements
 
@@ -77,8 +91,9 @@ committed realization set.
 The driver never invents a socket path, producer identity, or address from
 spec text: the stored spec is decoded strictly, the admitted shapes are the
 ones the declaring providers commit, and the socket path is resolved by the
-daemon's own registry. Effects are idempotent under retry, and a spec that
-fails to decode is a terminal refusal rather than a best-effort teardown.
+daemon's own registry through the declared socket facet. Effects are
+idempotent under retry, and a spec that fails to decode is a terminal refusal
+rather than a best-effort teardown.
 
 ## State and telemetry
 

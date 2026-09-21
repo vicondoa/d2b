@@ -49,6 +49,53 @@ impl FakeServingEffects {
     pub fn call_order(&self) -> Vec<String> {
         self.log.lock().clone()
     }
+
+    /// The facet set the plane and this crate's tests build the driver and
+    /// the effects service from: the scripted serving double behind the
+    /// three facets.
+    pub fn facet_set(self: &Arc<Self>) -> crate::facets::BindingEffectFacets {
+        crate::facets::BindingEffectFacets {
+            ready: Arc::new(ScriptedReady(Arc::clone(self))),
+            remove: Arc::new(ScriptedRemove(Arc::clone(self))),
+            guest_mount: Arc::new(ScriptedGuestMount(Arc::clone(self))),
+        }
+    }
+}
+
+/// The scripted serving-socket probe facet: records the call on the shared
+/// double and answers its scripted readiness.
+struct ScriptedReady(Arc<FakeServingEffects>);
+
+#[async_trait::async_trait]
+impl crate::facets::SocketReadySource for ScriptedReady {
+    async fn ready(&self, _socket: &SocketIdentity) -> bool {
+        self.0.log.lock().push("socket-ready".to_owned());
+        self.0.ready.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// The scripted socket-removal facet: records the call on the shared
+/// double.
+struct ScriptedRemove(Arc<FakeServingEffects>);
+
+#[async_trait::async_trait]
+impl crate::facets::SocketRemoveSource for ScriptedRemove {
+    async fn remove(&self, _socket: &SocketIdentity) -> Result<(), String> {
+        self.0.log.lock().push("remove-socket".to_owned());
+        Ok(())
+    }
+}
+
+/// The scripted guest-mount observation facet: records the call on the
+/// shared double and answers its scripted mount state.
+struct ScriptedGuestMount(Arc<FakeServingEffects>);
+
+#[async_trait::async_trait]
+impl crate::facets::GuestMountSource for ScriptedGuestMount {
+    async fn guest_mount_ready(&self, _key: &ResourceKey) -> Result<bool, String> {
+        self.0.log.lock().push("guest-mount".to_owned());
+        Ok(self.0.mounted.load(std::sync::atomic::Ordering::SeqCst))
+    }
 }
 
 #[async_trait::async_trait]

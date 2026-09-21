@@ -52,7 +52,10 @@ use d2b_provider_activation_nixos::{
     ActivationEffectsServiceFactory, activation_descriptor,
 };
 use d2b_provider_endpoint::{
-    EndpointDriverArgs, EndpointDriverEffects, GuestControlProducer, endpoint_descriptor,
+    ENDPOINT_EFFECTS_SERVICE, DeviceWorkerEvidenceSource, EndpointDriverArgs,
+    EndpointEffectFacets, EndpointEffectsServiceFactory, EndpointSocketSource,
+    GuestControlProducer, GuestVmmEvidenceSource, device_worker_purpose, endpoint_descriptor,
+    guest_control_producer,
 };
 use d2b_provider_guest::{GuestDriverArgs, GuestDriverEffects, guest_descriptor};
 use d2b_provider_host::{HOST_EFFECTS_SERVICE, HostEffectFacets, HostEffectsServiceFactory, host_descriptor};
@@ -72,7 +75,8 @@ use d2b_provider_volume::{
     VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
 };
 use d2b_provider_volume_binding::{
-    BindingDriverArgs, BindingDriverEffects, binding_descriptor,
+    BINDING_EFFECTS_SERVICE, BindingDriverArgs, BindingEffectFacets, BindingEffectsServiceFactory,
+    GuestMountSource, SocketReadySource, SocketRemoveSource, binding_descriptor,
 };
 use d2b_provider_volume_local::{VolumeLocalController, VolumeLocalProfile};
 use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
@@ -99,13 +103,8 @@ use d2bd_runtime::target_runtime::DaemonMode;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
 use sha2::{Digest, Sha256};
 
-use crate::binding_effects::ProductionBindingDriverEffects;
 use d2b_provider_credential::{
     CredentialDriverArgs, CredentialDriverEffects, credential_descriptor,
-};
-use crate::endpoint_effects::{
-    AsyncSocketEffect, ProductionEndpointDriverEffects, device_worker_purpose,
-    guest_control_producer, guest_control_purpose,
 };
 use crate::process_provider_runtime::PlaneCommittedProviderIdentitySource;
 use crate::volume_effects::ProductionVolumeDriverEffects;
@@ -172,14 +171,15 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
     }
 }
 
-/// Frozen purpose of the binding-owned virtiofsd socket.
-const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
-
 /// Preserved reconcile backoff for the plane's resource actors (R13).
 const PLANE_BACKOFF: Duration = d2b_resource_runtime::DEFAULT_REQUEUE_BACKOFF;
 
-/// Bounded wait budget for endpoint socket realization.
-const SOCKET_REALIZE_BUDGET: Duration = Duration::from_secs(5);
+/// Bounded wait budget for the binding-owned virtiofsd socket bind: the
+/// worker Process child binds the private socket after its launch, and the
+/// daemon's socket facet waits this budget before reporting a retryable
+/// failure (the actor owns the retry, R13). The endpoint family's own
+/// evidence budget lives in the family crate.
+const SOCKET_BIND_BUDGET: Duration = Duration::from_secs(5);
 
 /// The anchor projection drain window: one bounded re-materialization per
 /// drain, at most one window after the first notice of the drain. The window
@@ -1079,18 +1079,65 @@ impl BindingSocketProbe {
     }
 }
 
-/// Endpoint socket realization (transport-unix virtiofsd case): the worker
-/// Process child binds the private socket; the endpoint's ensure waits a
-/// bounded budget for the bind and reports a retryable failure otherwise
-/// (the actor owns the retry, R13). The same effect answers the driver's
-/// presence probe.
-struct SocketWaitEffect {
+/// The binding family's serving-socket probe facet (U6): the daemon's
+/// socket-target registry and runtime directory answer the family's
+/// `socket_ready` through the derived private path.
+#[async_trait::async_trait]
+impl SocketReadySource for BindingSocketProbe {
+    async fn ready(&self, socket: &SocketIdentity) -> bool {
+        match self.path_for(socket).await {
+            Some(path) => socket_is_present(&path).await,
+            None => false,
+        }
+    }
+}
+
+/// The binding family's socket-removal facet (U6): the endpoint-first half
+/// of the teardown, idempotent under retry (R10).
+#[async_trait::async_trait]
+impl SocketRemoveSource for BindingSocketProbe {
+    async fn remove(&self, socket: &SocketIdentity) -> Result<(), String> {
+        match self.path_for(socket).await {
+            Some(path) => remove_socket_file(&path).await,
+            // Unknown socket: nothing was realized on this target.
+            None => Ok(()),
+        }
+    }
+}
+
+/// The binding family's guest-mount observation facet (U6): the daemon's
+/// Zone target directory answers the family's drain gate through the live
+/// authenticated ComponentSession (KTD6/U13) - the same boundary every
+/// other target-local observation crosses.
+struct PlaneGuestMountSource {
+    state: Arc<crate::ServerState>,
+    zone: ZoneId,
+}
+
+#[async_trait::async_trait]
+impl GuestMountSource for PlaneGuestMountSource {
+    async fn guest_mount_ready(&self, key: &ResourceKey) -> Result<bool, String> {
+        Ok(crate::binding_guest_mount_ready(&self.state, &self.zone, key).await)
+    }
+}
+
+/// Production Endpoint socket surface (transport-unix virtiofsd case):
+/// the daemon's host socket facet the Endpoint family's effects service
+/// drives (U6). The worker Process child binds the private socket; the
+/// facet's `ensure` waits a bounded budget for the bind and reports a
+/// retryable failure otherwise (the actor owns the retry, R13), and the
+/// same path resolution answers the family's presence probe and the
+/// endpoint-first removal. The family's own dispatch routes the evidence
+/// purposes onto the evidence facets, so this surface only ever sees the
+/// virtiofsd purpose.
+#[derive(Clone)]
+struct PlaneEndpointSocketSource {
     registry: Arc<PlaneResourceRegistry>,
     socket_runtime_dir: PathBuf,
     zone_token: BoundedToken,
 }
 
-impl SocketWaitEffect {
+impl PlaneEndpointSocketSource {
     /// Resolve the producer's private socket path; a registry miss loads the
     /// derived-child rows from the authority (the spec store) first.
     async fn path_for(&self, producer_ref: &ResourceRef) -> Option<PathBuf> {
@@ -1105,32 +1152,24 @@ impl SocketWaitEffect {
             &target.execution_ref,
         )
     }
+}
 
-    /// Whether the producer's socket is resolved and bound on the host
-    /// target.
-async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
-        if purpose != VIRTIOFSD_PURPOSE {
-            return false;
-        }
+#[async_trait::async_trait]
+impl EndpointSocketSource for PlaneEndpointSocketSource {
+    async fn present(&self, producer_ref: &ResourceRef, _purpose: &str) -> bool {
         let Some(path) = self.path_for(producer_ref).await else {
             return false;
         };
         socket_is_present(&path).await
     }
-}
 
-#[async_trait::async_trait]
-impl AsyncSocketEffect for SocketWaitEffect {
-    async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if purpose != VIRTIOFSD_PURPOSE {
-            return Err(format!("endpoint purpose {purpose:?} is not realized by the v3 plane"));
-        }
+    async fn ensure(&self, producer_ref: &ResourceRef, _purpose: &str) -> Result<(), String> {
         // Resolve the target once (a miss consults the authority); the poll
         // below only re-checks the bound socket on the host target.
         let path = self.path_for(producer_ref).await;
-        let deadline = tokio::time::Instant::now() + SOCKET_REALIZE_BUDGET;
+        let deadline = tokio::time::Instant::now() + SOCKET_BIND_BUDGET;
         loop {
-if let Some(path) = path.as_deref() {
+            if let Some(path) = path.as_deref() {
                 if socket_is_present(path).await {
                     return Ok(());
                 }
@@ -1141,17 +1180,19 @@ if let Some(path) = path.as_deref() {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
-}
 
-/// Endpoint removal - endpoint-first teardown, idempotent under retry (R10).
-struct SocketRemoveEffect {
-    registry: Arc<PlaneResourceRegistry>,
-    socket_runtime_dir: PathBuf,
-    zone_token: BoundedToken,
+    async fn remove(&self, producer_ref: &ResourceRef, _purpose: &str) -> Result<(), String> {
+        match self.path_for(producer_ref).await {
+            Some(path) => remove_socket_file(&path).await,
+            // Unknown producer: nothing was realized on this target.
+            None => Ok(()),
+        }
+    }
 }
 
 /// Presence evidence for the guest-runtime control endpoints (`ch-api`,
-/// `guest-control`).
+/// `guest-control`): the daemon's guest-VMM evidence facet the Endpoint
+/// family's effects service drives (U6).
 ///
 /// The guest's nested VMM carries both private rendezvous - the Cloud
 /// Hypervisor API socket and the authenticated guest-control session - and
@@ -1174,7 +1215,10 @@ impl GuestControlEndpointProbe {
     ) -> Self {
         Self { planes, zone }
     }
+}
 
+#[async_trait::async_trait]
+impl GuestVmmEvidenceSource for GuestControlEndpointProbe {
     /// Whether the producer Guest's committed VMM Process row reports
     /// `Ready` at its current generation.
     ///
@@ -1229,7 +1273,8 @@ impl GuestControlEndpointProbe {
 }
 
 /// Presence evidence for the Device-owning worker endpoints
-/// (`swtpm-tpm-socket`, `swtpm-control-socket`).
+/// (`swtpm-tpm-socket`, `swtpm-control-socket`): the daemon's device-worker
+/// evidence facet the Endpoint family's effects service drives (U6).
 ///
 /// One swtpm launch composes both sockets (`--server` and `--ctrl` of the same
 /// argv) and the declaring Device TPM Provider's worker Process row reports
@@ -1249,7 +1294,10 @@ impl DeviceWorkerEndpointProbe {
     ) -> Self {
         Self { planes, zone }
     }
+}
 
+#[async_trait::async_trait]
+impl DeviceWorkerEvidenceSource for DeviceWorkerEndpointProbe {
     /// Whether the producer worker row reports `Ready` at its current
     /// generation.
     async fn present(&self, producer_ref: &ResourceRef, purpose: &str) -> bool {
@@ -1277,107 +1325,6 @@ impl DeviceWorkerEndpointProbe {
                 );
                 false
             }
-        }
-    }
-}
-
-/// Dispatches each admitted Endpoint purpose onto the realization the plane
-/// owns: `virtiofsd` onto the host socket effect, the guest-runtime control
-/// purposes onto the guest's VMM evidence, the device-worker purposes onto the
-/// producer worker row's evidence. The driver refuses every other purpose at
-/// validate, so anything else is a retryable failure (R13).
-struct EndpointEnsureEffect {
-    socket: Arc<SocketWaitEffect>,
-    control: Arc<GuestControlEndpointProbe>,
-    device_worker: Arc<DeviceWorkerEndpointProbe>,
-}
-
-#[async_trait::async_trait]
-impl AsyncSocketEffect for EndpointEnsureEffect {
-    async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if guest_control_purpose(purpose) || device_worker_purpose(purpose) {
-            let probe = if guest_control_purpose(purpose) {
-                EndpointEvidence::Control(&self.control)
-            } else {
-                EndpointEvidence::DeviceWorker(&self.device_worker)
-            };
-            let deadline = tokio::time::Instant::now() + SOCKET_REALIZE_BUDGET;
-            loop {
-                match probe {
-                    EndpointEvidence::Control(probe) => {
-                        if probe.present(producer_ref, purpose).await {
-                            return Ok(());
-                        }
-                    }
-                    EndpointEvidence::DeviceWorker(probe) => {
-                        if probe.present(producer_ref, purpose).await {
-                            return Ok(());
-                        }
-                    }
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return Err(format!(
-                        "endpoint {purpose:?} is not realized within its realize budget"
-                    ));
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-        self.socket.run(producer_ref, purpose).await
-    }
-}
-
-/// The row-evidenced probe one admitted non-socket family resolves to.
-enum EndpointEvidence<'a> {
-    Control(&'a GuestControlEndpointProbe),
-    DeviceWorker(&'a DeviceWorkerEndpointProbe),
-}
-
-/// Removal for the same dispatch: the guest-runtime control endpoints are
-/// owned by the guest's nested VMM (the daemon creates nothing to remove), so
-/// their removal converges without effects; `virtiofsd` keeps the preserved
-/// endpoint-first socket removal.
-struct EndpointRemoveEffect {
-    socket: Arc<SocketRemoveEffect>,
-}
-
-#[async_trait::async_trait]
-impl AsyncSocketEffect for EndpointRemoveEffect {
-    async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if guest_control_purpose(purpose) || device_worker_purpose(purpose) {
-            return Ok(());
-        }
-        self.socket.run(producer_ref, purpose).await
-    }
-}
-
-impl SocketRemoveEffect {
-    /// Resolve the producer's private socket path; a registry miss loads the
-    /// derived-child rows from the authority (the spec store) first.
-    async fn path_for(&self, producer_ref: &ResourceRef) -> Option<PathBuf> {
-        let target = self
-           .registry
-           .socket_target_by_ref(&self.zone_token, producer_ref)
-           .await?;
-        serving_socket_path(
-            &self.socket_runtime_dir,
-            &self.zone_token,
-            &target.volume_ref,
-            &target.execution_ref,
-        )
-    }
-}
-
-#[async_trait::async_trait]
-impl AsyncSocketEffect for SocketRemoveEffect {
-    async fn run(&self, producer_ref: &ResourceRef, purpose: &str) -> Result<(), String> {
-        if purpose != VIRTIOFSD_PURPOSE {
-            return Err(format!("endpoint purpose {purpose:?} is not realized by the v3 plane"));
-        }
-        match self.path_for(producer_ref).await {
-            Some(path) => remove_socket_file(&path).await,
-            // Unknown producer: nothing was realized on this target.
-            None => Ok(()),
         }
     }
 }
@@ -1814,8 +1761,17 @@ pub struct ConstructionInputs {
     /// daemon-built effect port (R2).
     pub activation_facets: ActivationEffectFacets,
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
-    pub binding_effects: Arc<dyn BindingDriverEffects>,
-    pub endpoint_effects: Arc<dyn EndpointDriverEffects>,
+    /// The daemon-supplied facet set the VolumeBinding family's effects
+    /// implementation is built from (U6): the serving-socket probe, the
+    /// socket removal, and the guest-mount observation, supplied through the
+    /// composition root. The family never receives a daemon-built effect
+    /// port (R2).
+    pub binding_facets: BindingEffectFacets,
+    /// The daemon-supplied facet set the Endpoint family's effects
+    /// implementation is built from (U6): the host socket surface and the
+    /// two row-evidence probes, supplied through the composition root. The
+    /// family never receives a daemon-built effect port (R2).
+    pub endpoint_facets: EndpointEffectFacets,
     pub credential_effects: Arc<dyn CredentialDriverEffects>,
     pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
     pub guest_effects: Arc<dyn GuestDriverEffects>,
@@ -1985,6 +1941,39 @@ impl ConstructionInputs {
                 state: Arc::clone(state),
             }),
         );
+        // U6: the VolumeBinding and Endpoint families' effects ride the
+        // declared facets too: the daemon's socket-target registry, runtime
+        // directory, plane table, and target directory answer the families'
+        // facet traits, and the families' own implementations
+        // (effects_service) build their driver effects and hosted services
+        // from the same facet sets.
+        let binding_facets = BindingEffectFacets {
+            ready: Arc::new(probe.clone()),
+            remove: Arc::new(probe),
+            // U13/KTD6: the guest-mount gate reads the Zone target
+            // directory for the row's assignment (the plane is resolved at
+            // call time - it is registered on `state` after this provider
+            // directory is built).
+            guest_mount: Arc::new(PlaneGuestMountSource {
+                state: Arc::clone(state),
+                zone: zone.clone(),
+            }),
+        };
+        let endpoint_facets = EndpointEffectFacets {
+            socket: Arc::new(PlaneEndpointSocketSource {
+                registry: Arc::clone(&registry),
+                socket_runtime_dir: endpoint_socket_runtime_dir.clone(),
+                zone_token: endpoint_zone_token.clone(),
+            }),
+            guest_vmm: Arc::new(GuestControlEndpointProbe::new(
+                Arc::clone(&state.v3_planes),
+                zone.clone(),
+            )),
+            device_worker: Arc::new(DeviceWorkerEndpointProbe::new(
+                Arc::clone(&state.v3_planes),
+                zone.clone(),
+            )),
+        };
         Ok(Self {
             zone: zone.clone(),
             zone_token,
@@ -2005,94 +1994,8 @@ impl ConstructionInputs {
             host_facets: host_facets.clone(),
             network_facets: network_facets.clone(),
             volume_effects: Arc::new(production_volume_effects(state, zone.clone(), resolver, Arc::clone(&registry))),
-            binding_effects: Arc::new(ProductionBindingDriverEffects::new(
-                Arc::new({
-                    let probe = probe.clone();
-                    move |socket: &SocketIdentity| {
-                        let probe = probe.clone();
-Box::pin(async move {
-                            match probe.path_for(socket).await {
-                                Some(path) => socket_is_present(&path).await,
-                                None => false,
-                            }
-                        })
-                    }
-                }),
-                Arc::new({
-                    let probe = probe;
-                    move |socket: &SocketIdentity| {
-                        let probe = probe.clone();
-                        Box::pin(async move {
-                            match probe.path_for(socket).await {
-                                Some(path) => remove_socket_file(&path).await,
-                                None => Ok(()),
-                            }
-                        })
-                    }
-                }),
-                // U13/KTD6: the guest-mount gate reads the Zone target
-                // directory for the row's assignment (the plane is resolved
-                // at call time - it is registered on `state` after this
-                // provider directory is built).
-                Arc::new({
-                    let state = Arc::clone(state);
-                    let zone = zone.clone();
-                    move |key: &ResourceKey| {
-                        let state = Arc::clone(&state);
-                        let zone = zone.clone();
-                        let key = key.clone();
-                        Box::pin(async move {
-                            crate::binding_guest_mount_ready(&state, &zone, &key).await
-                        })
-                    }
-                }),
-            )),
-            endpoint_effects: {
-                let wait = Arc::new(SocketWaitEffect {
-                    registry: Arc::clone(&registry),
-                    socket_runtime_dir: endpoint_socket_runtime_dir.clone(),
-                    zone_token: endpoint_zone_token.clone(),
-                });
-                let present = Arc::clone(&wait);
-                let control = Arc::new(GuestControlEndpointProbe::new(
-                    Arc::clone(&state.v3_planes),
-                    zone.clone(),
-                ));
-                let ensure_control = Arc::clone(&control);
-                let device_worker = Arc::new(DeviceWorkerEndpointProbe::new(
-                    Arc::clone(&state.v3_planes),
-                    zone.clone(),
-                ));
-                let ensure_device_worker = Arc::clone(&device_worker);
-                Arc::new(ProductionEndpointDriverEffects::new(
-                    Arc::new(move |producer_ref: &ResourceRef, purpose: &str| {
-                        let present = Arc::clone(&present);
-                        let control = Arc::clone(&control);
-                        let device_worker = Arc::clone(&device_worker);
-                        Box::pin(async move {
-                            if guest_control_purpose(purpose) {
-                                control.present(producer_ref, purpose).await
-                            } else if device_worker_purpose(purpose) {
-                                device_worker.present(producer_ref, purpose).await
-                            } else {
-                                present.present(producer_ref, purpose).await
-                            }
-                        })
-                    }),
-                    Arc::new(EndpointEnsureEffect {
-                        socket: Arc::clone(&wait),
-                        control: ensure_control,
-                        device_worker: ensure_device_worker,
-                    }),
-                    Arc::new(EndpointRemoveEffect {
-                        socket: Arc::new(SocketRemoveEffect {
-                            registry: Arc::clone(&registry),
-                            socket_runtime_dir: endpoint_socket_runtime_dir,
-                            zone_token: endpoint_zone_token,
-                        }),
-                    }),
-                ))
-            },
+            binding_facets: binding_facets.clone(),
+            endpoint_facets: endpoint_facets.clone(),
             activation_facets: activation_facets.clone(),
             credential_effects,
             shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects::production(
@@ -2119,6 +2022,8 @@ Box::pin(async move {
                 &process_facets,
                 &network_facets,
                 &host_facets,
+                &binding_facets,
+                &endpoint_facets,
                 &activation_facets,
                 &interaction_facets,
             ),
@@ -2136,6 +2041,8 @@ fn registered_service_factories(
     process_facets: &ProcessEffectFacets,
     network_facets: &NetworkEffectFacets,
     host_facets: &HostEffectFacets,
+    binding_facets: &BindingEffectFacets,
+    endpoint_facets: &EndpointEffectFacets,
     activation_facets: &ActivationEffectFacets,
     interaction_facets: &InteractionEffectFacets,
 ) -> BTreeMap<&'static str, Arc<dyn EffectServiceFactory>> {
@@ -2159,6 +2066,12 @@ fn registered_service_factories(
                         interaction_facets.clone(),
                     ),
                 ) as Arc<dyn EffectServiceFactory>
+            } else if service == BINDING_EFFECTS_SERVICE.id {
+                Arc::new(BindingEffectsServiceFactory::new(binding_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
+            } else if service == ENDPOINT_EFFECTS_SERVICE.id {
+                Arc::new(EndpointEffectsServiceFactory::new(endpoint_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
             } else {
                 continue;
             };
@@ -2523,11 +2436,12 @@ impl ResourcePlaneV3 {
                 Self::registered_drivers(registration, inputs),
             );
         }
-        // The Volume family states its own declaration; the Binding family
-        // states its own. The registry serves each type's decoder and factory
-        // from its driver declaration, and the declaration carries the
-        // family's verbs, execution domains, exportability, reads, and the
-        // children it may create.
+        // The Volume family states its own declaration (the VolumeBinding family
+        // starts through the generated registration table above). The
+        // registry serves each type's decoder and factory from its driver
+        // declaration, and the declaration carries the family's verbs,
+        // execution domains, exportability, reads, and the children it may
+        // create.
         set = set.with(
             d2b_provider_volume::volume_provider_declaration(),
             vec![volume_descriptor(VolumeDriverArgs {
@@ -2535,29 +2449,13 @@ impl ResourcePlaneV3 {
                 effects: Arc::clone(&inputs.volume_effects),
             })],
         );
-        set = set.with(
-            family_declaration("volume-binding"),
-            vec![binding_descriptor(BindingDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                effects: Arc::clone(&inputs.binding_effects),
-                vcpu_count: inputs.authority.vcpu_count,
-            })],
-        );
-        // The Endpoint type starts through its driver declaration: the
-        // registry serves the type's decoder and factory from it, and the
-        // declaration carries the family's verbs, execution domains,
-        // exportability, and reads.
-        set = set.with(
-            family_declaration("endpoint"),
-            vec![endpoint_descriptor(EndpointDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                effects: Arc::clone(&inputs.endpoint_effects),
-            })],
-        );
-        // The Credential type starts through its driver declaration: the
-        // registry serves the type's decoder and factory from it, and the
-        // declaration carries the family's verbs, execution domains,
-        // exportability, reads, and the one declared agent Process child.
+        // The VolumeBinding and Endpoint families start through the
+        // generated registration table above (each row carries the family's
+        // declared effects service). The Credential type starts through its
+        // driver declaration: the registry serves the type's decoder and
+        // factory from it, and the declaration carries the family's verbs,
+        // execution domains, exportability, reads, and the one declared
+        // agent Process child.
         set = set.with(
             family_declaration("credential"),
             vec![credential_descriptor(CredentialDriverArgs {
@@ -2765,6 +2663,21 @@ impl ResourcePlaneV3 {
                 inputs,
                 ShellSession,
             ))],
+            // The VolumeBinding family (U6): the driver builds its effects
+            // from the daemon-supplied facet set; no externally built port
+            // appears at this construction site (R2).
+            "volume-binding" => vec![binding_descriptor(BindingDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                facets: inputs.binding_facets.clone(),
+                vcpu_count: inputs.authority.vcpu_count,
+            })],
+            // The Endpoint family (U6): the driver builds its effects from
+            // the daemon-supplied facet set; no externally built port
+            // appears at this construction site (R2).
+            "endpoint" => vec![endpoint_descriptor(EndpointDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                facets: inputs.endpoint_facets.clone(),
+            })],
             _ => Vec::new(),
         }
     }
@@ -3550,6 +3463,25 @@ use d2b_provider_system_core::MinijailPlatformGate;
         let activation_facets = d2b_provider_activation_nixos::test_support::recording_facets(
             d2b_provider_activation_nixos::test_support::RecordingBrokerDispatch::new(),
         );
+        // U6: the plane tests build the VolumeBinding and Endpoint families'
+        // facet sets from the scripted doubles, exactly as the production
+        // composition root builds them from the daemon's registry, plane
+        // table, and target directory.
+        let binding_facets = {
+            let effects =
+                d2b_provider_volume_binding::test_support::FakeServingEffects::new();
+            // The old plane fake reported the serving socket present
+            // (socket_ready true); the shared double starts absent.
+            effects.make_ready();
+            effects.facet_set()
+        };
+        let endpoint_facets = {
+            let effects = d2b_provider_endpoint::test_support::FakeSocketEffects::new();
+            // The old plane fake reported the socket present
+            // (socket_present true); the shared double starts absent.
+            effects.make_present();
+            effects.facet_set()
+        };
         (
             dir,
             ConstructionInputs {
@@ -3571,21 +3503,8 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 process_facets: process_facets.clone(),
                 host_facets: host_facets.clone(),
                 volume_effects: d2b_provider_volume::test_support::FakeLayoutEffects::new(),
-                binding_effects: {
-                    let effects =
-                        d2b_provider_volume_binding::test_support::FakeServingEffects::new();
-                    // The old plane fake reported the serving socket present
-                    // (socket_ready true); the shared double starts absent.
-                    effects.make_ready();
-                    effects
-                },
-                endpoint_effects: {
-                    let effects = d2b_provider_endpoint::test_support::FakeSocketEffects::new();
-                    // The old plane fake reported the socket present
-                    // (socket_present true); the shared double starts absent.
-                    effects.make_present();
-                    effects
-                },
+                binding_facets: binding_facets.clone(),
+                endpoint_facets: endpoint_facets.clone(),
                 activation_facets: activation_facets.clone(),
                 credential_effects: {
                     let effects = d2b_provider_credential::test_support::FakeEffects::new(
@@ -3625,10 +3544,11 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 },
                 interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
-                // U1/U14/U5: the plane hosts the Process, Network, Host,
-                // and Activation families' declared effects services from
-                // the same facet sets their driver factories are built
-                // from, exactly as the production composition root does.
+                // U1/U14/U5/U6: the plane hosts the Process, Network, Host,
+                // Activation, VolumeBinding, and Endpoint families'
+                // declared effects services from the same facet sets their
+                // driver factories are built from, exactly as the production
+                // composition root does.
                 effect_service_factories: BTreeMap::from([
                     (
                         PROCESS_EFFECTS_SERVICE.id,
@@ -3658,6 +3578,18 @@ use d2b_provider_system_core::MinijailPlatformGate;
                         ACTIVATION_EFFECTS_SERVICE.id,
                         Arc::new(ActivationEffectsServiceFactory::new(activation_facets))
                             as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_volume_binding::BINDING_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_volume_binding::BindingEffectsServiceFactory::new(
+                            binding_facets.clone(),
+                        )) as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_endpoint::ENDPOINT_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_endpoint::EndpointEffectsServiceFactory::new(
+                            endpoint_facets.clone(),
+                        )) as Arc<dyn EffectServiceFactory>,
                     ),
                 ]),
                 foundation: None,
@@ -4431,13 +4363,13 @@ use d2b_provider_system_core::MinijailPlatformGate;
         assert_eq!(
             runtime.startup_order(),
             [
-"activation-nixos",
+                "activation-nixos",
+                "endpoint",
                 "host",
                 "network-local",
                 "process",
-                "volume",
                 "volume-binding",
-                "endpoint",
+                "volume",
                 "credential",
                 "telemetry-service",
                 "telemetry-binding",

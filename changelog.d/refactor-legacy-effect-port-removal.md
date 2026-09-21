@@ -71,4 +71,21 @@
   `interaction_child_sources.rs` modules retire in the same change, the
   display child derivation moves into `d2b-provider-display-wayland`, and
   each of the six interaction types registers through the generated
-  registration table.
+  registration table.- The endpoint family's driver effects ended their daemon-built arm: the
+  family now serves them from its own crate through its declared
+  `endpoint.d2bus.org/effects` service, hosted per zone by the daemon from the
+  family's registered factory over the composition root's facet set. The
+  purpose derivations move into the crate too, reading the declaring
+  providers' own vocabularies (the Cloud Hypervisor child roles and the
+  Device TPM worker-socket purposes); the host socket surface and the two
+  row-evidence probes cross the boundary as daemon-supplied facets. The
+  daemon's `endpoint_effects.rs` module and its port-shaped injection at the
+  driver construction site are deleted in the same change.
+- The volume-binding family's driver effects ended their daemon-built arm
+  too: the family now serves them from its own crate through its declared
+  `volume-binding.d2bus.org/effects` service, hosted per zone by the daemon
+  from the family's registered factory over the composition root's facet set.
+  The serving-socket probe, the socket removal, and the guest-mount
+  observation cross the boundary as daemon-supplied facets. The daemon's
+  `binding_effects.rs` module and its port-shaped injection at the driver
+  construction site are deleted in the same change.
