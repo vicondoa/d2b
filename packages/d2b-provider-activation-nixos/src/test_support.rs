@@ -56,10 +56,10 @@ impl ActivationDriverEffects for FakeActivationEffects {
 // ── RecordingBrokerDispatch ─────────────────────────────────────────────────
 
 /// Scripted broker dispatch double: records each dispatched request and
-/// returns the next scripted response.
+/// returns the next scripted response, first scripted first.
 pub struct RecordingBrokerDispatch {
     requests: parking_lot::Mutex<Vec<BrokerRequest>>,
-    results: parking_lot::Mutex<Vec<Result<BrokerResponse, String>>>,
+    results: parking_lot::Mutex<std::collections::VecDeque<Result<BrokerResponse, String>>>,
 }
 
 impl RecordingBrokerDispatch {
@@ -69,16 +69,17 @@ impl RecordingBrokerDispatch {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             requests: parking_lot::Mutex::new(Vec::new()),
-            results: parking_lot::Mutex::new(Vec::new()),
+            results: parking_lot::Mutex::new(std::collections::VecDeque::new()),
         })
     }
 
     /// Create a double whose dispatches return the given scripted responses
-    /// in order; once the queue is exhausted, a dispatch fails.
+    /// in order (the first scripted response answers the first dispatch);
+    /// once the queue is exhausted, a dispatch fails.
     pub fn with_responses(responses: Vec<Result<BrokerResponse, String>>) -> Arc<Self> {
         Arc::new(Self {
             requests: parking_lot::Mutex::new(Vec::new()),
-            results: parking_lot::Mutex::new(responses),
+            results: parking_lot::Mutex::new(responses.into()),
         })
     }
 
@@ -93,7 +94,7 @@ impl ActivationBrokerDispatch for RecordingBrokerDispatch {
         self.requests.lock().push(request);
         self.results
             .lock()
-            .pop()
+            .pop_front()
             .unwrap_or_else(|| Err("scripted-dispatch-exhausted".to_owned()))
     }
 }
