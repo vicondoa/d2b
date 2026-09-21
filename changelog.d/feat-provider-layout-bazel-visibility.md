@@ -7,10 +7,12 @@
   consumer lists (`package(default_visibility = [...])`), so a depending
   crate whose package is missing from the depended-on package's list used to
   pass every cargo test and fail only when Bazel analyzed the target; the
-  check compares the declared deps against the grants and reports the crate,
-  the depended-on package, and the exact consumer entry to add
+  check compares the declared link edges (`deps` and `proc_macro_deps`,
+  which resolve through the same grant logic) against the grants and reports
+  the crate, the depended-on package, and the exact consumer entry to add
   (`//packages/<crate>:__pkg__`). A dependency on a genuinely public target
   (the shared platform crates) or on a public re-export target (the
   `d2b-contracts` test-support alias) is satisfied without an entry; the
-  check does not cover dependencies reached transitively, `data`/`tools`
-  edges, or the existence of the depended-on target itself.
+  check does not cover dependencies reached transitively, the other edge
+  kinds (such as `data` and `tools`), nor the existence of the depended-on
+  target itself.

@@ -9201,16 +9201,28 @@ fn bazel_strings(text: &str) -> Vec<String> {
 
 /// The string values of one `name = [...]` list attribute in a rule body.
 ///
-/// The list's first closing bracket ends the attribute: the generated BUILD
-/// files write `deps = [...]` and `visibility = [...]` as plain string lists,
-/// optionally extended by `] + all_crate_deps(...)`, so the first `]` is the
-/// list itself and no dependency label contains one.
+/// The attribute name must stand alone: `proc_macro_deps = [` must not
+/// satisfy a `deps = [` lookup, because the link-edge pass reads both
+/// attributes from the same body. The list's first closing bracket ends the
+/// attribute: the generated BUILD files write `deps = [...]` and
+/// `visibility = [...]` as plain string lists, optionally extended by
+/// `] + all_crate_deps(...)`, so the first `]` is the list itself and no
+/// dependency label contains one.
 fn bazel_list_attribute(body: &str, attribute: &str) -> Vec<String> {
     let needle = format!("{attribute} = [");
+    let bytes = body.as_bytes();
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(relative) = body[from..].find(&needle) {
-        let start = from + relative + needle.len();
+        let absolute = from + relative;
+        if absolute > 0 {
+            let previous = bytes[absolute - 1];
+            if previous == b'_' || previous.is_ascii_alphanumeric() {
+                from = absolute + needle.len();
+                continue;
+            }
+        }
+        let start = absolute + needle.len();
         let Some(end_relative) = body[start..].find(']') else {
             break;
         };
@@ -9255,18 +9267,23 @@ fn bazel_visibility_grants(text: &str) -> BazelVisibilityGrants {
     grants
 }
 
-/// The cross-package dependencies one BUILD file declares, as
-/// (declaring rule, dependency label) pairs. Same-package (`:name`) and
-/// external (`@crates//:...`) labels are not cross-package dependencies.
+/// The cross-package link edges one BUILD file declares, as (declaring rule,
+/// dependency label) pairs. The link edges are the `deps` and
+/// `proc_macro_deps` attributes - both are visibility-enforced target edges
+/// resolved through the same grant logic, and the committed tree already
+/// carries proc-macro edges. Same-package (`:name`) and external
+/// (`@crates//:...`) labels are not cross-package dependencies.
 fn bazel_cross_package_deps(text: &str) -> Vec<(String, String)> {
     let mut deps = Vec::new();
     for block in bazel_rule_blocks(text) {
         let Some(name) = bazel_rule_name(&block.body) else {
             continue;
         };
-        for label in bazel_list_attribute(&block.body, "deps") {
-            if label.starts_with("//packages/") {
-                deps.push((name.clone(), label));
+        for attribute in ["deps", "proc_macro_deps"] {
+            for label in bazel_list_attribute(&block.body, attribute) {
+                if label.starts_with("//packages/") {
+                    deps.push((name.clone(), label));
+                }
             }
         }
     }
@@ -9304,12 +9321,12 @@ fn bazel_visibility_granted(grants: &BazelVisibilityGrants, consumer: &str, targ
 /// crates publish public targets), or when the dependency reaches a public
 /// re-export target (the `d2b-contracts` `d2b_contracts_test_support` alias
 /// re-exports the contracts crate publicly); those are grants the check
-/// recognizes, not exemptions. The check does not cover a dependency reached
-/// transitively (only the deps a crate declares directly), nor `data`/`tools`
-/// edges, nor whether the depended-on target exists - a typo'd target is
-/// Bazel's own analysis failure, not a visibility one. Passed the
-/// provider-crate list so fixture tests exercise both directions on tiny
-/// trees.
+/// recognizes, not exemptions. The check covers the link edges a crate
+/// declares directly - `deps` and `proc_macro_deps` - and not a dependency
+/// reached transitively, the other edge kinds (such as `data`/`tools`), nor
+/// whether the depended-on target exists - a typo'd target is Bazel's own
+/// analysis failure, not a visibility one. Passed the provider-crate list so
+/// fixture tests exercise both directions on tiny trees.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_bazel_dependency_visibility_with(
     repo_root: &Path,
@@ -10841,6 +10858,49 @@ mod tests {
         fs::write(
             fixture.root.join("packages/d2b-core/BUILD.bazel"),
             "package(default_visibility = [\"//packages/d2bd:__pkg__\", \"//packages/d2b-provider-fixture-example:__pkg__\"])\n\nd2b_rust_library(\n    name = \"d2b_core\",\n)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            check_bazel_dependency_visibility_with(
+                &fixture.root,
+                &["d2b-provider-fixture-example"]
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_cross_package_proc_macro_dependency_is_gated_like_a_link_dependency() {
+        let fixture = Fixture::new("visibility-proc-macro");
+        // A proc-macro edge is a visibility-enforced link edge like a `deps`
+        // edge: the provider declares one cross-package, the depended-on
+        // package grants nothing, and the check must name the target.
+        fs::write(
+            fixture
+                .root
+                .join("packages/d2b-provider-fixture-example/BUILD.bazel"),
+            "d2b_rust_library(\n    name = \"d2b_provider_fixture_example\",\n    deps = [],\n    proc_macro_deps = [\n        \"//packages/d2b-core:d2b_core_proc\",\n    ],\n)\n",
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("packages/d2b-core/BUILD.bazel"),
+            "d2b_rust_library(\n    name = \"d2b_core_proc\",\n)\n",
+        )
+        .unwrap();
+        let error = check_bazel_dependency_visibility_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+        )
+        .expect_err("a cross-package proc-macro dependency without a grant is refused");
+        assert!(error.contains("bazel-visibility-grant-missing"), "{error}");
+        assert!(error.contains("d2b_core_proc"), "{error}");
+        assert!(error.contains("//packages/d2b-provider-fixture-example:__pkg__"), "{error}");
+
+        // The target-level grant is the fix, exactly as for a `deps` edge.
+        fs::write(
+            fixture.root.join("packages/d2b-core/BUILD.bazel"),
+            "d2b_rust_library(\n    name = \"d2b_core_proc\",\n    visibility = [\"//packages/d2b-provider-fixture-example:__pkg__\"],\n)\n",
         )
         .unwrap();
         assert_eq!(
