@@ -2113,3 +2113,73 @@ authoritative member specifications and focused checks.
 
 CHK054 is checked as a specification-quality resolution. Prospective implementation
 resolves from authoritative objects.
+
+## 22. Effect-port conversion residuals and known-open items
+
+Recorded at the legacy effect-port programme's inventory close (2026-09-21). The
+programme's authoritative inventory is the lane and unit table in
+`docs/plans/2026-09-19-001-refactor-legacy-effect-port-removal-plan.md`; this section
+records what the close found and the items a future contributor must not need to
+rediscover. The ledger (`tasks.md`) mirrors the same list.
+
+### Residuals after the conversions
+
+- The network family is partially converted on the mainline: `network_effect_port.rs` is
+  deleted and the crate serves `network.d2bus.org/effects`, but the network controller's
+  child-port reconcile remains daemon-side in
+  `packages/d2bd/src/shared_provider_effects.rs` (`SharedProviderKind::Network`,
+  `NetworkResourcePort` for `NetworkChildPort`, with `NetworkReconciler` driven at the two
+  reconcile sites). The port moved; the reconcile behaviour stayed behind the runtime
+  facet the crate reconciles over.
+- The host family is partially converted on the mainline, and the two halves must be
+  read together. The effect moved completely: the family's declared effect port is fully
+  served by `packages/d2b-provider-host/` (the crate holds the effects service, its
+  registration declares it, the only implementations of the host driver-effects trait are
+  in that crate, and the daemon's shared effects module retains only the user half). The
+  unit stays partial because daemon-runtime probe work remains daemon-side: the
+  kernel-module matrix self-check and the pidfs self-probe still live in the daemon
+  runtime crate (`packages/d2bd-runtime/src/kernel_module_check.rs` and `pidfs_probe.rs`,
+  renamed there with the d2bd split, never deleted), are still exported by the crate's
+  module root, and are still driven by the daemon's composition at startup (the startup
+  kernel-module matrix self-check and the startup pidfs kernel-floor gate). These are
+  daemon-runtime self-checks, not a family effect that failed to move.
+- `packages/d2bd/src/process_provider_runtime.rs` stays on the mainline by design as the
+  declared-facet boundary: it supplies the composed process providers the process crate's
+  effects service receives as facets. It is not a conversion residual and is not debt.
+- `packages/d2bd/src/credential_resource_runtime.rs` stays daemon-side on the credential
+  lane: the Provider-session handoff registry, the authenticated Provider session, and the
+  same-Zone ResourceService gate the credential crate's declared service serves over.
+- `packages/d2bd/src/interaction_composition.rs`, `audio_host_controller.rs`, and
+  `audio_dispatch.rs` stay daemon-side on the interaction lane: the composition layer that
+  may join a sealed ComponentSession admission to process effects, the broker-backed
+  PipeWire host controller, and the CLI audio policy dispatch. The frozen stream-plane
+  wire vocabulary is the KTD9 documented permanent carve-out.
+- Until the user lane merges, `packages/d2bd/src/system_core_effects.rs` still serves the
+  user half on the mainline (the host half is empty; the user lane deletes the module).
+- Until the volume lane merges, the neutral volume effect-port contract
+  (`packages/d2b-contracts/src/v3/effect_port.rs`) and its host wrapper
+  (`packages/d2b-host/src/volume_effect_adapter.rs`) still stand on the mainline; the lane
+  retires them (KD3).
+- Until the process-systemd lane merges, `packages/d2b-broker/src/ops/systemd.rs` still
+  serves the five systemd rows on the mainline.
+- The daemon effect modules for the endpoint, binding, volume, device, guest, and
+  interaction families remain on the mainline until their lanes merge; each lane head
+  deletes its module. The activation family's module is already gone (3e3050d3c, #567).
+
+### Known open items, not fixed by the programme
+
+1. The daemon's own Bazel test targets cannot build: `rules_rs` emits two configurations
+   for one crate, producing duplicate rlib identities (the `d2b_rust_test` targets in
+   `packages/d2bd/BUILD.bazel`, covering the test files under `packages/d2bd/tests/`). The
+   daemon's behaviour is exercised through the integration and host-integration lanes
+   instead.
+2. The daemon's clippy target fails on a clean state for lints in untouched code, so a
+   clean clippy run is not currently a usable signal for the daemon crate.
+3. The process-systemd provider's identity read cannot complete under systemd 260. The
+   lane observed the identity binding refusing on both buses and at both privilege levels.
+   The cause is not established: the explanation that systemd 260 removed the `MainPID`
+   and `ControlGroup` properties for transient units is ruled out (both properties remain
+   defined on the unit interface at the v260 tag). Site:
+   `packages/d2b-provider-process-systemd/src/operations.rs` on the lane; the mainline's
+   broker copy (`packages/d2b-broker/src/ops/systemd.rs`) reads the same two properties.
+   This is a defect in shipped behaviour, not a conversion item.

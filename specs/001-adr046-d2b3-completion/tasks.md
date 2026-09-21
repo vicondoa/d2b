@@ -67,6 +67,50 @@ The restored planning history identified two implementation prerequisites that r
 Historical specification-quality, delivery-tooling, review, and wave-entry tasks are not
 current implementation requirements.
 
+## Conversion inventory: legacy effect-port programme
+
+Recorded at inventory close (2026-09-21). The authoritative inventory for the legacy
+effect-port removal programme is the lane and unit table in
+`docs/plans/2026-09-19-001-refactor-legacy-effect-port-removal-plan.md`; this section
+mirrors it in the ledger. A unit is classified by what is in the tree, never by the
+existence of a pull request or a branch. A lane whose conversion is on a branch is
+awaiting merge; a branch is not the tree.
+
+| Unit | State | Location and residual |
+|---|---|---|
+| U1 process | Converted and merged | daemon `process_effects.rs` deleted; the crate serves `process.d2bus.org/effects`; the daemon keeps `process_provider_runtime.rs` as the declared-facet supply (by design) |
+| U14 network | Converted and merged; partial | daemon `network_effect_port.rs` deleted; the crate serves `network.d2bus.org/effects`; the network controller's child-port reconcile remains daemon-side in `shared_provider_effects.rs` (`SharedProviderKind::Network`) |
+| U15 process-systemd | Converted on branch, awaiting merge | `refactor/process-systemd-lane2` (b91751cd7), sibling `refactor-process-systemd-family` (086135898); deletes broker `ops/systemd.rs` |
+| U2, U3, U4 enabling | Landed and merged | operation-row declarations, real service payload and capability object, per-crate generation and drift gates on the mainline |
+| U5 host | Partially converted and merged; residual named | the host family's declared effect port is fully served by the crate (`packages/d2b-provider-host/` holds the effects service and the only implementations of its driver-effects trait), and the daemon's shared effects module retains only the user half - the effect moved completely; the unit stays partial because the kernel-module matrix self-check and the pidfs kernel-floor gate remain in `packages/d2bd-runtime/src/` (renamed there, never deleted) and are still driven from composition at startup |
+| U5 user | Converted on branch, awaiting merge | `refactor/user-family-lane` (07c48b849); deletes `system_core_effects.rs` |
+| U6 endpoint | Converted on branch, awaiting merge | `refactor/endpoint-binding-family` (9be4bd210); deletes `endpoint_effects.rs` |
+| U6 volume-binding | Converted on branch, awaiting merge | the same branch; deletes `binding_effects.rs` |
+| U7 volume | Converted on branch, awaiting merge; partial retirement | `refactor/volume-family-lane` (cf3a3dffd); deletes `volume_effects.rs` and `resource_runtime/volume_effect_adapter.rs`, and retires the neutral volume contract on the branch |
+| U8 credential | Converted on branch, awaiting merge; partial | `refactor/credential-family-lane` (3ae65894e); deletes `credential_effects.rs` and `credential_backend_runtime.rs`; `credential_resource_runtime.rs` stays daemon-side |
+| U9 device | Converted on branch, awaiting merge | `refactor/device-families-lane` (08b6f40a4); deletes the implementations `tpm_effect_port.rs` and `usbip_production.rs`; the four device arms (TPM, GPU, security-key, USBIP) remain in `shared_provider_effects.rs` with their reconcile paths, instantiating the crates' declared ports over the daemon-supplied facet sets |
+| U10 guest runtime | Converted on branch, awaiting merge | `refactor/guest-runtime-family-lane` (b436faf1d); deletes `guest_effects.rs` |
+| U11 interaction and desktop | Converted on branch, awaiting merge; partial | `refactor/interaction-desktop-family` (1018ba258); deletes `interaction_effects.rs` and `audio_resource_runtime.rs`; `interaction_composition.rs`, `audio_host_controller.rs`, and `audio_dispatch.rs` stay daemon-side; the frozen stream-plane wire vocabulary stays the KTD9 documented permanent carve-out |
+| U12 activation | Converted and merged | `activation_effects.rs` deleted (3e3050d3c, #567); the handoff serves from `packages/d2b-provider-activation-nixos/` over daemon-supplied facets |
+| R3 retirements | Retired rather than converted | the process providers' declared spawn ports and the transport-vsock effect-port module are deleted on the mainline (9e39a030b); the neutral volume contract retires with U7 and is outstanding until that lane merges |
+| U13 close | Open | the documentation half records this inventory; the `provider_crate_policy.rs` retirement, the dossier and `critical-subsystems.md` sweeps, and the final proof run remain |
+
+### Known open items at inventory close
+
+1. The daemon's own Bazel test targets cannot build: `rules_rs` emits two configurations
+   for one crate, producing duplicate rlib identities.
+2. The daemon's clippy target fails on a clean state for lints in untouched code.
+3. The process-systemd provider's identity read cannot complete under systemd 260: the
+   lane observed the identity binding refusing on both buses and at both privilege levels.
+   The cause is not established; the explanation that systemd 260 removed the main-pid and
+   control-group properties for transient units is ruled out (both properties remain
+   defined on the unit interface at the v260 tag). The failure is a defect in shipped
+   behaviour, not a conversion item.
+
+Each residual and open item is recorded with its site and ownership in
+`implementation-debt.md` section 22; the ledger and the debt register stay consistent with
+the plan's unit table.
+
 ## Implementation sequence: Primitive resource composition and Zone routing
 
 **Requirements**: see spec-coverage.md traceability tables | **Story**: US1 | **Work items**: 19 | **Parallel groups**: 2

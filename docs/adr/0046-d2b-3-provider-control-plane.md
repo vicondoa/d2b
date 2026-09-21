@@ -204,10 +204,15 @@ is the sole author of the fenced binding status projection, never adding
 `Volume` to its exported ResourceTypes.
 
 Semantic Provider controllers compose behavior by creating owned primitive
-resources and by calling typed `EffectPort` interfaces whose host-mutating
-implementations are resolved by core and executed through the privileged
-broker; controllers never call spawn, systemd, minijail, broker, filesystem,
-network, or device effects directly.
+resources and by invoking their family's declared effect services: the family
+provider crate implements the service and serves it over daemon-supplied
+declared facets, hosted per zone by the daemon from the family's registered
+factory. Families whose conversion lane has not merged still call the
+daemon-side effect ports their crates declare; the per-family state is tracked
+in the effect-port removal plan
+(`docs/plans/2026-09-19-001-refactor-legacy-effect-port-removal-plan.md`).
+Controllers never call spawn, systemd, minijail, broker, filesystem, network,
+or device effects directly.
 
 Controller processes own their watch/coalescing queues and retry decisions.
 Core validates signed watch plans, filters by API/scope/ownership/dependencies,
