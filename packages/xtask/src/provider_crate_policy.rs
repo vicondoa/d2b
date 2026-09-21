@@ -8058,28 +8058,57 @@ fn cargo_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
             }
         })
         .unwrap_or_else(|| PathBuf::from("cargo"));
-    let mut command = Command::new(cargo);
-    if let Some(tmpdir) = std::env::var_os("TEST_TMPDIR") {
-        let cargo_home = PathBuf::from(tmpdir).join("cargo-home");
-        fs::create_dir_all(&cargo_home)
-            .map_err(|_| "provider-crate-layout-metadata-home-unavailable".to_owned())?;
-        command.env("CARGO_HOME", cargo_home);
-    }
-    let output = command
-        .current_dir(repo_root)
-        .args([
-            "metadata",
-            "--no-deps",
-            "--format-version",
-            "1",
-            "--manifest-path",
-        ])
-        .arg(repo_root.join("Cargo.toml"))
-        .output()
-        .map_err(|_| "provider-crate-layout-metadata-unavailable".to_owned())?;
-    if !output.status.success() {
-        return Err("provider-crate-layout-metadata-failed".to_owned());
-    }
+    let cargo_home = std::env::var_os("TEST_TMPDIR")
+        .map(PathBuf::from)
+        .map(|tmpdir| tmpdir.join("cargo-home"))
+        .map(|cargo_home| {
+            fs::create_dir_all(&cargo_home)
+                .map_err(|_| "provider-crate-layout-metadata-home-unavailable".to_owned())?;
+            Ok::<PathBuf, String>(cargo_home)
+        })
+        .transpose()?;
+    // Metadata for the committed tree must never depend on registry or
+    // network state: the workspace lockfile pins the graph, and cargo is
+    // asked to resolve offline first (mirroring production_closure.rs).
+    // Surface cargo's stderr so a future failure names its own cause.
+    let invoke = |offline: bool| -> Result<std::process::Output, String> {
+        let mut command = Command::new(cargo.as_os_str());
+        if let Some(home) = &cargo_home {
+            command.env("CARGO_HOME", home);
+        }
+        if offline {
+            command.arg("--offline");
+        }
+        let output = command
+            .current_dir(repo_root)
+            .args([
+                "metadata",
+                "--no-deps",
+                "--locked",
+                "--format-version",
+                "1",
+                "--manifest-path",
+            ])
+            .arg(repo_root.join("Cargo.toml"))
+            .output()
+            .map_err(|error| {
+                format!("provider-crate-layout-metadata-unavailable: {error}")
+            })?;
+        if !output.status.success() {
+            return Err(format!(
+                "provider-crate-layout-metadata-failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(output)
+    };
+    let output = match invoke(true) {
+        Ok(output) => output,
+        Err(offline_error) => match invoke(false) {
+            Ok(output) => output,
+            Err(_) => return Err(offline_error),
+        },
+    };
     serde_json::from_slice(&output.stdout)
         .map_err(|_| "provider-crate-layout-metadata-malformed".to_owned())
 }
