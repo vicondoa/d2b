@@ -26,6 +26,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
@@ -229,7 +230,8 @@ fn ensure_export_dir(export_dir: &Path) -> io::Result<()> {
 /// Append one projected StoreSync observability record to the day's
 /// rotated export file (`<export-dir>/store-sync-<utc-date>.jsonl`).
 ///
-/// Files are created `0640` (owner-write, group-read). In production the
+/// Files are created `0640` (owner-write, group-read), pinned on every
+/// open so the ambient umask cannot narrow the mode. In production the
 /// directory's default ACL grants `alloy` read on new files; the broker
 /// does not chown to or know about the `alloy` gid. Daily rotation is by
 /// filename, so a long-lived broker that crosses midnight simply opens
@@ -254,6 +256,11 @@ pub fn append_export_record(
         .mode(0o640)
         .custom_flags(libc::O_CLOEXEC)
         .open(&path)?;
+    // `OpenOptions::mode` is masked by the ambient umask; pin the
+    // documented 0640 posture on the fd so a restrictive broker umask
+    // cannot strip group-read (the alloy default-ACL read depends on it).
+    // Same convention as `audit::open_append_cloexec`.
+    crate::sys::path_safe::fchmod(file.as_fd(), 0o640)?;
     let line = record.to_jsonl()?;
     file.write_all(line.as_bytes())?;
     file.flush()?;
@@ -414,11 +421,23 @@ mod tests {
         let audit = StoreSyncAuditFields::ok_non_fast_path(ctx(), 5, 12, vec![42]);
         let export = StoreSyncObservabilityRecord::from_audit_fields(&audit);
 
+        let date = crate::audit::utc_date_string();
+        let path = dir.join(format!("store-sync-{date}.jsonl"));
+        // Simulate first creation under a restrictive ambient umask:
+        // `.mode(0o640)` alone would yield 0600 there. The product must
+        // pin 0640 on open regardless of the umask the file was first
+        // created with, so this test fails if the fchmod pin is removed.
+        fs::create_dir_all(&dir).expect("export dir");
+        fs::write(&path, b"").expect("pre-create export file");
+        fs::set_permissions(
+            &path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )
+        .expect("seed export file at 0600");
+
         append_export_record(&dir, &export).expect("first append");
         append_export_record(&dir, &export).expect("second append");
 
-        let date = crate::audit::utc_date_string();
-        let path = dir.join(format!("store-sync-{date}.jsonl"));
         let contents = fs::read_to_string(&path).expect("read export file");
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(lines.len(), 2, "each append adds exactly one line");
@@ -430,7 +449,7 @@ mod tests {
         assert_eq!(
             std::os::unix::fs::PermissionsExt::mode(&mode) & 0o777,
             0o640,
-            "export file is 0640"
+            "export file is 0640 even when first created under a restrictive umask"
         );
 
         let _ = fs::remove_dir_all(&dir);

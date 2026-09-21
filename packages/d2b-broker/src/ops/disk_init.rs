@@ -1005,6 +1005,10 @@ mod tests {
             .mode(mode)
             .open(path)
             .unwrap();
+        // `OpenOptions::mode` is masked by the ambient umask; pin the
+        // requested mode on the fd so a seeded posture is deterministic
+        // under any runner umask (repair tests deliberately seed 0644).
+        file.set_permissions(fs::Permissions::from_mode(mode)).unwrap();
         file.set_len(size).unwrap();
         file
     }
