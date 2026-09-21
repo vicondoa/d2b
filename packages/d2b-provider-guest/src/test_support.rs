@@ -173,6 +173,7 @@ pub struct ScriptedFacets {
     committed: parking_lot::Mutex<BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>>,
     session_generation: parking_lot::Mutex<Option<ReconnectGeneration>>,
     cloud_hypervisor_outcome: parking_lot::Mutex<GuestCloudHypervisorOutcome>,
+    fail_reads: parking_lot::Mutex<bool>,
     calls: parking_lot::Mutex<Vec<String>>,
 }
 
@@ -188,6 +189,7 @@ impl ScriptedFacets {
             committed: parking_lot::Mutex::new(BTreeMap::new()),
             session_generation: parking_lot::Mutex::new(None),
             cloud_hypervisor_outcome: parking_lot::Mutex::new(GuestCloudHypervisorOutcome::Ready),
+            fail_reads: parking_lot::Mutex::new(false),
             calls: parking_lot::Mutex::new(Vec::new()),
         })
     }
@@ -229,6 +231,12 @@ impl ScriptedFacets {
         *self.cloud_hypervisor_outcome.lock() = outcome;
     }
 
+    /// Script the manager view as unanswerable: every read refuses, the
+    /// same fail-closed surface the effects treat as `Unavailable`.
+    pub fn set_fail_reads(&self, fail: bool) {
+        *self.fail_reads.lock() = fail;
+    }
+
     /// The observed read labels in arrival order.
     pub fn call_order(&self) -> Vec<String> {
         self.calls.lock().clone()
@@ -239,6 +247,9 @@ impl ScriptedFacets {
 impl GuestManagerView for ScriptedFacets {
     async fn row_view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ()> {
         self.calls.lock().push(format!("row:{}", key.to_string()));
+        if *self.fail_reads.lock() {
+            return Err(());
+        }
         Ok(self.rows.lock().get(key).cloned())
     }
 
@@ -249,11 +260,17 @@ impl GuestManagerView for ScriptedFacets {
         self.calls
             .lock()
             .push(format!("committed:{}", provider_ref.to_canonical_string()));
+        if *self.fail_reads.lock() {
+            return Err(());
+        }
         Ok(self.committed.lock().get(provider_ref).cloned())
     }
 
     fn controller_session_generation(&self) -> Result<Option<ReconnectGeneration>, ()> {
         self.calls.lock().push("session-generation".to_owned());
+        if *self.fail_reads.lock() {
+            return Err(());
+        }
         Ok(self.session_generation.lock().clone())
     }
 }

@@ -1686,13 +1686,52 @@ impl EffectServiceFactory for GuestEffectsServiceFactory {
 mod tests {
     use std::sync::Arc;
 
-    use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+    use d2b_contracts_resource::v3::{
+        CanonicalJsonObject, ControllerGeneration, ResourceGeneration,
+        ResourceRef, ResourceUid, ZoneId,
+    };
+    use d2b_provider_toolkit::{EffectService, EffectServiceError};
+    use d2b_resource_runtime::identity::ResourceKey;
+    use d2b_resource_runtime::ResourceStatus;
+    use serde_json::json;
 
     use super::{
         FrameworkAcaControl, FrameworkAcaLease, FrameworkAcaState, FrameworkAzureCredential,
-        FrameworkAzureEffect, FrameworkAzureState, FrameworkQemuEffect, GuestRuntimeController,
-        aca_runtime, azure_vm_runtime, guest_media_runtime,
+        FrameworkAzureEffect, FrameworkAzureState, FrameworkQemuEffect, GUEST_EFFECTS_SERVICE,
+        GuestRuntimeController, aca_runtime, azure_vm_runtime, guest_media_runtime,
     };
+    use crate::driver::{
+        GuestChildSurface, GuestDriverEffects, GuestEffectRequest, guest_status_sink,
+    };
+    use crate::test_support::{ScriptedFacets, row_fixture};
+
+    /// One `guest-phase` service invocation over the canonical payload.
+    fn invocation<'a>(
+        payload: &'a CanonicalJsonObject,
+        resources: &'a mut d2b_resource_runtime::context::ServiceResourceContext,
+    ) -> d2b_provider_toolkit::ServiceInvocation<'a> {
+        d2b_provider_toolkit::ServiceInvocation {
+            zone: "work",
+            invocation_id: "invocation-guest-phase-test",
+            payload,
+            resources,
+            state_cells: &[],
+            kernel: None,
+            request_fds: &[],
+            response_fds: d2b_resource_types::MethodFdContract::NONE,
+            payload_schema: None,
+        }
+    }
+
+    /// An inert child surface for effect requests that never read children.
+    struct NoChildren;
+
+    #[async_trait::async_trait]
+    impl GuestChildSurface for NoChildren {
+        async fn owned(&self) -> Result<Vec<crate::driver::GuestChildObservation>, crate::driver::GuestEffectError> {
+            Ok(Vec::new())
+        }
+    }
 
     /// The guest media framework state machine drives its controller to
     /// `PausedAtBoot` and converges the finalizer through the effect port.
@@ -1901,5 +1940,319 @@ mod tests {
             }
         }
         assert!(!controller.finalizer_installed());
+    }
+
+    // -- `guest-phase` admission (U10) ---------------------------------------
+
+    /// The canonical payload every admission test starts from.
+    fn guest_phase_payload() -> CanonicalJsonObject {
+        serde_json::from_value(json!({
+            "zone": "work",
+            "zoneUid": serde_json::Value::Null,
+            "resourceRef": "Guest/worker",
+        }))
+        .expect("canonical payload")
+    }
+
+    /// Run one `guest-phase` invocation over the scripted facets and return
+    /// the service's refusal, asserting it refused.
+    async fn guest_phase_refusal(
+        facets: &Arc<ScriptedFacets>,
+        payload: CanonicalJsonObject,
+    ) -> EffectServiceError {
+        let service = super::GuestEffectsService::new(facets.facet_set());
+        let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
+        service
+            .handle(invocation(&payload, &mut resources))
+            .await
+            .expect_err("the admission gate refuses")
+    }
+
+    /// A payload that names a different zone than the invocation's
+    /// authoritative one is refused with its own closed code, never
+    /// answered from the wrong zone's view.
+    #[tokio::test]
+    async fn guest_phase_refuses_a_payload_that_names_another_zone() {
+        let facets = ScriptedFacets::new();
+        let payload = serde_json::from_value(json!({
+            "zone": "other",
+            "zoneUid": serde_json::Value::Null,
+            "resourceRef": "Guest/worker",
+        }))
+        .expect("canonical payload");
+        let error = guest_phase_refusal(&facets, payload).await;
+        assert_eq!(
+            error,
+            EffectServiceError::Declined {
+                service: GUEST_EFFECTS_SERVICE.id.to_owned(),
+                reason: "guest-phase-zone-mismatch".to_owned(),
+            },
+        );
+    }
+
+    /// A payload that carries no zone at all is refused with its own closed
+    /// code.
+    #[tokio::test]
+    async fn guest_phase_refuses_a_payload_without_zone() {
+        let facets = ScriptedFacets::new();
+        let payload = serde_json::from_value(json!({
+            "zoneUid": serde_json::Value::Null,
+            "resourceRef": "Guest/worker",
+        }))
+        .expect("canonical payload");
+        let error = guest_phase_refusal(&facets, payload).await;
+        assert_eq!(
+            error,
+            EffectServiceError::Declined {
+                service: GUEST_EFFECTS_SERVICE.id.to_owned(),
+                reason: "guest-phase-zone-missing".to_owned(),
+            },
+        );
+    }
+
+    /// The zone-authority uid is host-supplied scope: a payload that asserts
+    /// one is refused instead of trusted.
+    #[tokio::test]
+    async fn guest_phase_refuses_a_payload_that_asserts_a_zone_uid() {
+        let facets = ScriptedFacets::new();
+        let payload = serde_json::from_value(json!({
+            "zone": "work",
+            "zoneUid": "123e4567-e89b-42d3-a456-426614174000",
+            "resourceRef": "Guest/worker",
+        }))
+        .expect("canonical payload");
+        let error = guest_phase_refusal(&facets, payload).await;
+        assert_eq!(
+            error,
+            EffectServiceError::Declined {
+                service: GUEST_EFFECTS_SERVICE.id.to_owned(),
+                reason: "guest-phase-zone-uid-unsupplied".to_owned(),
+            },
+        );
+    }
+
+    /// A payload that names no resource is refused with its own closed code.
+    #[tokio::test]
+    async fn guest_phase_refuses_a_payload_without_a_resource_ref() {
+        let facets = ScriptedFacets::new();
+        let payload = serde_json::from_value(json!({
+            "zone": "work",
+            "zoneUid": serde_json::Value::Null,
+        }))
+        .expect("canonical payload");
+        let error = guest_phase_refusal(&facets, payload).await;
+        assert_eq!(
+            error,
+            EffectServiceError::Declined {
+                service: GUEST_EFFECTS_SERVICE.id.to_owned(),
+                reason: "guest-phase-resource-ref-missing".to_owned(),
+            },
+        );
+    }
+
+    /// A resource reference that cannot parse is refused with its own closed
+    /// code.
+    #[tokio::test]
+    async fn guest_phase_refuses_an_invalid_resource_ref() {
+        let facets = ScriptedFacets::new();
+        let payload = serde_json::from_value(json!({
+            "zone": "work",
+            "zoneUid": serde_json::Value::Null,
+            "resourceRef": "not-a-reference",
+        }))
+        .expect("canonical payload");
+        let error = guest_phase_refusal(&facets, payload).await;
+        assert_eq!(
+            error,
+            EffectServiceError::Declined {
+                service: GUEST_EFFECTS_SERVICE.id.to_owned(),
+                reason: "guest-phase-resource-ref-invalid".to_owned(),
+            },
+        );
+    }
+
+    /// The service answers Guest rows only: a payload naming another
+    /// resource type is refused with its own closed code.
+    #[tokio::test]
+    async fn guest_phase_refuses_a_non_guest_resource() {
+        let facets = ScriptedFacets::new();
+        let payload = serde_json::from_value(json!({
+            "zone": "work",
+            "zoneUid": serde_json::Value::Null,
+            "resourceRef": "Process/worker",
+        }))
+        .expect("canonical payload");
+        let error = guest_phase_refusal(&facets, payload).await;
+        assert_eq!(
+            error,
+            EffectServiceError::Declined {
+                service: GUEST_EFFECTS_SERVICE.id.to_owned(),
+                reason: "guest-phase-not-a-guest".to_owned(),
+            },
+        );
+    }
+
+    /// A manager view that cannot answer refuses with its own closed code
+    /// instead of answering a half-built report.
+    #[tokio::test]
+    async fn guest_phase_refuses_when_the_manager_cannot_answer() {
+        let facets = ScriptedFacets::new();
+        facets.set_fail_reads(true);
+        let error = guest_phase_refusal(&facets, guest_phase_payload()).await;
+        assert_eq!(
+            error,
+            EffectServiceError::Declined {
+                service: GUEST_EFFECTS_SERVICE.id.to_owned(),
+                reason: "guest-phase-manager-unavailable".to_owned(),
+            },
+        );
+    }
+
+    /// A row the manager holds answers its live phase - the same
+    /// manager-view read the driver's effects gate on.
+    #[tokio::test]
+    async fn guest_phase_answers_the_live_phase_of_a_held_row() {
+        let facets = ScriptedFacets::new();
+        facets.add_row(row_fixture(
+            "work",
+            "Guest",
+            "worker",
+            json!({ "providerRef": "Provider/runtime-qemu-media" }),
+            ResourceStatus::Ready,
+        ));
+        let service = super::GuestEffectsService::new(facets.facet_set());
+        let payload = guest_phase_payload();
+        let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
+        let response = service
+            .handle(invocation(&payload, &mut resources))
+            .await
+            .expect("the held row answers");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(json!({
+                "family": "guest",
+                "resourceType": "Guest",
+                "guestRef": "Guest/worker",
+                "phase": "Ready",
+            }))
+            .expect("canonical payload"),
+        );
+    }
+
+    // -- Cloud Hypervisor round through the effects service (U10) ------------
+
+    /// One Cloud Hypervisor reconcile request: the spec selects the Cloud
+    /// Hypervisor provider, the manager holds that Provider row Ready, the
+    /// plane registry holds its committed identity, and a controller session
+    /// is enrolled - the full fence the old effect ran.
+    fn cloud_hypervisor_request() -> GuestEffectRequest<'static> {
+        GuestEffectRequest {
+            zone: ZoneId::parse("work").expect("zone"),
+            target: ResourceRef::parse("Guest/acceptance-guest").expect("guest"),
+            key: ResourceKey::new("work", "Guest", "acceptance-guest"),
+            uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid"),
+            generation: ResourceGeneration::new(1).expect("generation"),
+            controller_generation: ControllerGeneration::new(3).expect("generation"),
+            operation_id: "guest-phase-round".to_owned(),
+            spec: json!({ "providerRef": "Provider/runtime-cloud-hypervisor" }),
+            metadata: json!({}),
+            provider_spec: None,
+            status: None,
+            children: &NoChildren,
+            status_sink: guest_status_sink(),
+        }
+    }
+
+    /// The Cloud Hypervisor arm drives the daemon-supplied controller
+    /// session facets through the real effects service: the target session
+    /// is established, the reconcile runs over the scripted outcome, and the
+    /// Provider's published status is captured for the row. The KTD7 fence
+    /// reads the committed identity and the enrolled session generation
+    /// first.
+    #[tokio::test]
+    async fn cloud_hypervisor_reconcile_drives_the_controller_session_facets() {
+        let facets = ScriptedFacets::new();
+        facets.add_row(row_fixture(
+            "work",
+            "Provider",
+            "runtime-cloud-hypervisor",
+            json!({ "config": {} }),
+            ResourceStatus::Ready,
+        ));
+        facets.add_committed_provider(
+            ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").expect("uid"),
+            ResourceGeneration::new(4).expect("generation"),
+        );
+        facets.set_session_generation(Some(
+            d2b_contracts_resource::v3::identity::ReconnectGeneration::new(2).expect("generation"),
+        ));
+        facets.set_cloud_hypervisor_outcome(
+            crate::facets::GuestCloudHypervisorOutcome::Ready,
+        );
+        let service = super::GuestEffectsService::new(facets.facet_set());
+        let request = cloud_hypervisor_request();
+        // The controller session's status write is captured into the sink
+        // before the pass, exactly as the driver's effect call observes it.
+        *request.status_sink.lock() = Some(json!({ "phase": "Ready" }));
+
+        let outcome = service
+            .reconcile(crate::driver::GuestKind::CloudHypervisor, &request)
+            .await
+            .expect("the Cloud Hypervisor arm reconciles");
+        assert_eq!(outcome.phase, crate::driver::GuestEffectPhase::Ready);
+        assert_eq!(
+            outcome.resource_projection,
+            Some(json!({ "phase": "Ready" })),
+            "the controller's status write is the row's projection",
+        );
+        assert_eq!(
+            facets.call_order(),
+            vec![
+                "row:work/Provider/runtime-cloud-hypervisor".to_owned(),
+                "committed:Provider/runtime-cloud-hypervisor".to_owned(),
+                "session-generation".to_owned(),
+                "row:work/Provider/runtime-cloud-hypervisor".to_owned(),
+                "ensure-session:Guest/acceptance-guest".to_owned(),
+                "reconcile-ch:Guest/acceptance-guest".to_owned(),
+            ],
+            "the dependency barrier and fence reads precede the provider document, the session establishment, and the reconcile",
+        );
+    }
+
+    /// The Cloud Hypervisor finalize completes through the controller
+    /// session facet: the same reconcile entry the driver calls, with the
+    /// manager's deleting-row hold replacing the old durable finalizer.
+    #[tokio::test]
+    async fn cloud_hypervisor_finalize_completes_through_the_controller_session() {
+        let facets = ScriptedFacets::new();
+        facets.add_row(row_fixture(
+            "work",
+            "Provider",
+            "runtime-cloud-hypervisor",
+            json!({ "config": {} }),
+            ResourceStatus::Ready,
+        ));
+        facets.add_committed_provider(
+            ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider"),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").expect("uid"),
+            ResourceGeneration::new(4).expect("generation"),
+        );
+        facets.set_session_generation(Some(
+            d2b_contracts_resource::v3::identity::ReconnectGeneration::new(2).expect("generation"),
+        ));
+        let service = super::GuestEffectsService::new(facets.facet_set());
+        let request = cloud_hypervisor_request();
+
+        let stage = service
+            .finalize(crate::driver::GuestKind::CloudHypervisor, &request)
+            .await
+            .expect("the Cloud Hypervisor finalize completes");
+        assert_eq!(stage, crate::driver::GuestFinalizeStage::Complete);
+        assert_eq!(
+            facets.call_order(),
+            vec!["reconcile-ch:Guest/acceptance-guest".to_owned()],
+            "the Cloud Hypervisor finalize rides the same controller-session reconcile entry alone",
+        );
     }
 }
