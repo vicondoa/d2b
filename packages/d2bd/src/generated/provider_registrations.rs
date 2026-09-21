@@ -38,6 +38,10 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &["process.d2bus.org/effects"],
     },
     ProviderRegistration {
+        provider_ref: "process-systemd",
+        services: &["process-systemd.d2bus.org/effects"],
+    },
+    ProviderRegistration {
         provider_ref: "shell-pool",
         services: &[],
     },

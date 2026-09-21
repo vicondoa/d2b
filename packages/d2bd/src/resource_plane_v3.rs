@@ -4195,6 +4195,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
 
         // The empty registry answers the empty bindings list.
