@@ -2,7 +2,7 @@ mod common;
 
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialLeaseState, CredentialMethod, CredentialRequest,
@@ -28,6 +28,22 @@ fn now_unix_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64
+}
+
+/// Wait until the wall clock has passed `timestamp_ms`. Used instead of a
+/// fixed sleep so an expiry boundary is crossed deterministically: the wait
+/// ends exactly when the timestamp is in the past, regardless of load, and
+/// the subsequent assertion observes the expired state rather than racing it.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn wait_until_unix_ms(timestamp_ms: u64) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while now_unix_ms() <= timestamp_ms {
+        assert!(
+            Instant::now() < deadline,
+            "wall clock did not advance past {timestamp_ms} ms"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
 }
 
 fn dispatch(
@@ -341,7 +357,11 @@ fn expired_sessions_and_leases_fail_closed() {
         0
     );
 
-    let expires_soon = now_unix_ms() + 5;
+    // The expiry boundary sits well in the future so the provider's real-time
+    // expiry checks (operation deadline, grant metadata) cannot race the
+    // in-process dispatch; `wait_until_unix_ms` below then crosses the
+    // boundary deterministically.
+    let expires_soon = now_unix_ms() + 2_000;
     let lease_request = CredentialRequest::new(
         ResourceRef::parse("Credential/aca-relay-mi").unwrap(),
         "operation-expiring",
@@ -365,7 +385,7 @@ fn expired_sessions_and_leases_fail_closed() {
         session.clone(),
     )
     .unwrap();
-    thread::sleep(Duration::from_millis(10));
+    wait_until_unix_ms(expires_soon);
     assert_eq!(
         dispatch(
             &provider,
@@ -391,7 +411,11 @@ fn expired_lease_reacquire_replaces_predecessor_before_refresh() {
         1,
         1,
     );
-    let expiry = now_unix_ms() + 5;
+    // The expiry boundary sits well in the future so the provider's real-time
+    // expiry checks (operation deadline, grant metadata) cannot race the
+    // in-process dispatch; `wait_until_unix_ms` below then crosses the
+    // boundary deterministically.
+    let expiry = now_unix_ms() + 2_000;
     let first_request = CredentialRequest::new(
         ResourceRef::parse("Credential/aca-relay-mi").unwrap(),
         "expire-reacquire-first",
@@ -412,7 +436,7 @@ fn expired_lease_reacquire_replaces_predecessor_before_refresh() {
     };
     assert_eq!(first.metadata.rotation_generation, 1);
 
-    thread::sleep(Duration::from_millis(20));
+    wait_until_unix_ms(expiry);
     let reacquired = dispatch(
         &provider,
         CredentialMethod::AcquireToken,
@@ -939,6 +963,10 @@ fn cleanup_only_records_do_not_open_a_spare_live_lease_slot() {
 #[test]
 fn session_expiry_reacquire_revokes_the_previous_handle() {
     let (provider, client) = setup();
+    // The session expiry sits well in the future so the provider's real-time
+    // expiry checks cannot race the in-process dispatch;
+    // `wait_until_unix_ms` below then crosses the boundary deterministically.
+    let session_expiry = now_unix_ms() + 2_000;
     let first_session = authenticated_session_with_expiry(
         "Provider/workload-a",
         "Zone/dev",
@@ -946,7 +974,7 @@ fn session_expiry_reacquire_revokes_the_previous_handle() {
         "Provider/runtime-azure-container-apps",
         1,
         1,
-        now_unix_ms() + 80,
+        session_expiry,
     );
     dispatch(
         &provider,
@@ -955,7 +983,7 @@ fn session_expiry_reacquire_revokes_the_previous_handle() {
         first_session,
     )
     .unwrap();
-    thread::sleep(Duration::from_millis(120));
+    wait_until_unix_ms(session_expiry);
     let successor = authenticated_session(
         "Provider/workload-a",
         "Zone/dev",

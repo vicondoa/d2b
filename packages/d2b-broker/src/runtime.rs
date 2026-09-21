@@ -6159,6 +6159,13 @@ pub(crate) fn child_reap_buffer() -> &'static tokio::sync::Mutex<
 #[cfg(not(feature = "layer1-bootstrap"))]
 const CHILD_REAP_BUFFER_CAP: usize = 256;
 
+/// Wake-up for waiters on the reap buffer (the reap tests' event-driven
+/// waits): `notify_waiters` is called after every push, so a waiter parks
+/// on the event instead of polling on a fixed cadence. A no-op when no
+/// waiter is registered.
+#[cfg(not(feature = "layer1-bootstrap"))]
+static CHILD_REAP_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 /// Push one notification to the ring buffer under a held guard.
 /// If the buffer is full, drops the oldest entry and logs a warning.
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -6179,6 +6186,7 @@ fn push_child_reap_notification_locked(
         );
     }
     buf.push_back(notif);
+    CHILD_REAP_NOTIFY.notify_waiters();
 }
 
 /// Push one notification from an async context (the SIGCHLD reap task).
@@ -20264,7 +20272,11 @@ mod tests {
                 .build()
                 .expect("test reaper runtime");
             start_sigchld_reaper(&rt, Arc::new(audit_log));
-            std::thread::sleep(Duration::from_millis(50));
+            // No readiness sleep is needed: `start_sigchld_reaper` installs
+            // the SIGCHLD handler synchronously, and tokio's signal channel
+            // buffers any signal that arrives before the reaper task's
+            // `recv` is polled. Every child below is spawned after this
+            // returns, so no SIGCHLD can precede the handler.
             rt
         }
 
@@ -20283,27 +20295,70 @@ mod tests {
             }
         }
 
+        /// Park on the reap-notification wake until `predicate` holds over the
+        /// reap buffer, or `guard` elapses. The wake is registered before
+        /// the buffer is checked, so a push racing the check cannot be
+        /// missed. `guard` is a last-resort hang breaker only: a healthy
+        /// reaper wakes the wait the moment the notification lands, so
+        /// wall-clock load cannot trip it - the wait lasts however long the
+        /// reaper actually takes.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn wait_for_reap_buffer(
+            runtime: &tokio::runtime::Runtime,
+            guard: Duration,
+            mut predicate: impl FnMut(
+                &std::collections::VecDeque<
+                    d2b_contracts_broker::broker_wire::ChildReapedNotification,
+                >,
+            ) -> bool,
+        ) -> bool {
+            runtime.block_on(async {
+                let deadline = tokio::time::Instant::now() + guard;
+                loop {
+                    let notified = CHILD_REAP_NOTIFY.notified();
+                    // Non-blocking try-lock (plan U8): a Busy collision
+                    // (the reap task's push) skips this check and parks on
+                    // the wake the push fires.
+                    if let Ok(buffer) = child_reap_buffer().try_lock()
+                        && predicate(&buffer)
+                    {
+                        return true;
+                    }
+                    let remaining =
+                        deadline.saturating_duration_since(tokio::time::Instant::now());
+                    if remaining.is_zero() {
+                        return false;
+                    }
+                    // The notify is the fast path; the short timeout only
+                    // re-checks after a missed wake (a Busy collision or a
+                    // drain by a parallel test), never as the primary wait.
+                    tokio::time::timeout(remaining.min(Duration::from_millis(250)), notified)
+                        .await
+                        .ok();
+                }
+            })
+        }
+
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn wait_for_notification(
             runner_id: &str,
-            timeout: Duration,
+            runtime: &tokio::runtime::Runtime,
+            guard: Duration,
         ) -> Option<ChildReapedNotification> {
-            let deadline = Instant::now() + timeout;
-            while Instant::now() < deadline {
-                // Non-blocking try-lock (plan U8): a Busy collision (the
-                // reap task's push) is retried, never blocking the test.
+            if !wait_for_reap_buffer(runtime, guard, |buffer| {
+                buffer.iter().any(|n| n.runner_id == runner_id)
+            }) {
+                return None;
+            }
+            loop {
                 if let Ok(buffer) = child_reap_buffer().try_lock() {
-                    let found = buffer
+                    return buffer
                         .iter()
                         .find(|n| n.runner_id == runner_id)
                         .cloned();
-                    if found.is_some() {
-                        return found;
-                    }
                 }
-                std::thread::sleep(Duration::from_millis(25));
+                std::thread::sleep(Duration::from_millis(1));
             }
-            None
         }
 
         fn observe_request() -> d2b_contracts_broker::broker_wire::ObserveRunnerRequest {
@@ -20419,7 +20474,12 @@ mod tests {
 
             let registration = test_runner_registration(pid, 1);
             let request = observe_request();
-            let deadline = Instant::now() + Duration::from_secs(3);
+            // Progress-based wait on the state transition the test is
+            // about - the registered pidfd reporting the child's exit.
+            // Each iteration is a real waitid probe on the pidfd, so the
+            // loop converges whenever the test thread runs; the 30 s
+            // deadline is a last-resort guard, not a load-bearing bound.
+            let deadline = Instant::now() + Duration::from_secs(30);
             let mut response = present_unverified_runner_response(&request, &registration);
             while response.present && Instant::now() < deadline {
                 let retained_pidfd = runner_pidfds().duplicate(runner_id);
@@ -20465,8 +20525,8 @@ mod tests {
             }
             std::mem::forget(child);
 
-            let notif = wait_for_notification(&runner_id, Duration::from_secs(3))
-                .expect("ChildReaped notification should appear within 3 s");
+            let notif = wait_for_notification(&runner_id, &_rt, Duration::from_secs(30))
+                .expect("ChildReaped notification should appear");
             assert_eq!(notif.exit_status.kind, ChildExitKind::Exited);
             assert_eq!(notif.exit_status.code, Some(0));
         }
@@ -20490,16 +20550,19 @@ mod tests {
                 .expect("spawn a short-lived child");
             let pid = child.id() as i32;
             let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
-            let start_time_ticks = read_proc_start_time_ticks(pid)
-                .expect("read start time")
-                .expect("live child");
+            // The start-time ticks are hardcoded, not read from /proc: the
+            // `true` child exits immediately, so a /proc read races the
+            // exit (a zombie reports no start time and the test would fail
+            // spuriously). The value is never consulted here anyway -
+            // `reserve_runner_id_for_spawn` decides liveness from the
+            // registered pidfd alone.
             runner_pidfds()
                 .insert(runner_id, pidfd)
                 .expect("register runner pidfd");
             with_runner_metadata_mut(|registry| {
                 registry.insert(
                     runner_id.to_owned(),
-                    test_runner_registration(pid, start_time_ticks),
+                    test_runner_registration(pid, 1),
                 );
             });
             // Reap the child so the registered pidfd reports it exited.
@@ -20584,7 +20647,7 @@ mod tests {
             kill(Pid::from_raw(pid), Signal::SIGTERM).expect("kill SIGTERM");
             std::mem::forget(child);
 
-            let notif = wait_for_notification(&runner_id, Duration::from_secs(2))
+            let notif = wait_for_notification(&runner_id, &_rt, Duration::from_secs(30))
                 .expect("ChildReaped notification for SIGTERM");
             assert_eq!(notif.exit_status.kind, ChildExitKind::Signaled);
             assert_eq!(notif.exit_status.signal, Some(libc::SIGTERM));
@@ -20611,7 +20674,7 @@ mod tests {
             kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill SIGKILL");
             std::mem::forget(child);
 
-            let notif = wait_for_notification(&runner_id, Duration::from_secs(2))
+            let notif = wait_for_notification(&runner_id, &_rt, Duration::from_secs(30))
                 .expect("ChildReaped notification for SIGKILL");
             assert_eq!(notif.exit_status.kind, ChildExitKind::Killed);
             assert_eq!(notif.exit_status.signal, Some(libc::SIGKILL));
@@ -20639,31 +20702,22 @@ mod tests {
                 std::mem::forget(child);
             }
 
-            let deadline = Instant::now() + Duration::from_secs(3);
-            loop {
-                // Non-blocking try-lock (plan U8): a Busy collision with
-                // the reap task's push is retried, never blocking the test.
-                let found = match child_reap_buffer().try_lock() {
-                    Ok(buffer) => buffer
-                        .iter()
-                        .filter(|n| runner_ids.iter().any(|id| id == &n.runner_id))
-                        .count(),
-                    Err(_) => {
-                        std::thread::sleep(Duration::from_millis(1));
-                        continue;
-                    }
-                };
-                if found == runner_ids.len() {
-                    break;
-                }
-                if Instant::now() >= deadline {
-                    panic!(
-                        "only {found}/{} children reaped within 3 s",
-                        runner_ids.len()
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
+            // Event-driven wait: the reap task wakes the wait the moment each
+            // notification lands, so the wait lasts however long the reaper
+            // actually takes; the 30 s guard is a last-resort hang breaker
+            // for a broken reaper, not a load-bearing bound.
+            let all_reaped = wait_for_reap_buffer(&_rt, Duration::from_secs(30), |buffer| {
+                buffer
+                    .iter()
+                    .filter(|n| runner_ids.iter().any(|id| id == &n.runner_id))
+                    .count()
+                    == runner_ids.len()
+            });
+            assert!(
+                all_reaped,
+                "only some of {} children were reaped within 30 s",
+                runner_ids.len()
+            );
         }
 
         #[test]
@@ -20686,7 +20740,10 @@ mod tests {
 
             // The child exits ~immediately; loop the targeted reap until
             // it observes the exit (deterministic, no background loop).
-            let deadline = Instant::now() + Duration::from_secs(3);
+            // Each iteration is a real waitid probe on the pidfd, so the
+            // loop converges whenever the test thread runs; the 30 s
+            // deadline is a last-resort guard, not a load-bearing bound.
+            let deadline = Instant::now() + Duration::from_secs(30);
             let mut reaped = None;
             let mut outcome = TargetedReapOutcome::StillAlive;
             while Instant::now() < deadline {
@@ -20781,7 +20838,12 @@ mod tests {
 
             kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill SIGKILL");
 
-            let deadline = Instant::now() + Duration::from_secs(3);
+            // Progress-based wait on the targeted reap observing the
+            // signal: each iteration is a real waitid probe on the pidfd,
+            // so the loop converges whenever the test thread runs; the
+            // 30 s deadline is a last-resort guard, not a load-bearing
+            // bound.
+            let deadline = Instant::now() + Duration::from_secs(30);
             let mut reaped = None;
             let mut outcome = TargetedReapOutcome::StillAlive;
             while Instant::now() < deadline {

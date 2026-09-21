@@ -32,8 +32,46 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      # Bazel repository fetches (rules_rs, rules_nixpkgs, jq.bzl, rules_buf,
+      # rules_llvm kernel headers, rust-redist, ...) download third-party
+      # release artifacts during analysis. A transient HTTP 5xx from the
+      # release host aborts analysis and, with it, the whole job; a bounded
+      # retry of the fetch/analysis phase lets the second or third attempt
+      # succeed. Only Bazel's own `GET returned 5xx` download-failure line
+      # triggers a retry: a 404, a hash mismatch, a compile error, or a test
+      # failure still fails the job on the first attempt.
       - name: Fixed Bazel preflight
-        run: make check-tier0
+        env:
+          D2B_CI_FETCH_RETRY_CMD: make check-tier0
+        run: &bazel-fetch-retry |
+          set -eu
+          cmd=${D2B_CI_FETCH_RETRY_CMD:?}
+          unset D2B_CI_FETCH_RETRY_CMD
+          attempts=3
+          attempt=1
+          while :; do
+            log=$(mktemp)
+            set +e
+            bash -c "$cmd" 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then
+              rm -f "$log"
+              exit 0
+            fi
+            if ! grep -Eq 'GET returned 5[0-9][0-9]' "$log"; then
+              rm -f "$log"
+              exit "$status"
+            fi
+            rm -f "$log"
+            if [ "$attempt" -ge "$attempts" ]; then
+              echo "::error::Bazel download failed with a transient HTTP 5xx after $attempts attempts" >&2
+              exit "$status"
+            fi
+            echo "::warning::Transient Bazel download error (HTTP 5xx); retrying attempt $((attempt + 1))/$attempts" >&2
+            sleep 15
+            attempt=$((attempt + 1))
+          done
 
   policy-tooling:
     runs-on: ubuntu-latest
@@ -51,7 +89,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Policy and tooling suite
-        run: make test-policy
+        env:
+          D2B_CI_FETCH_RETRY_CMD: make test-policy
+        run: *bazel-fetch-retry
 
   rust-main:
     runs-on: ubuntu-latest
@@ -73,7 +113,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Portable Rust main suite
-        run: make test-rust-main
+        env:
+          D2B_CI_FETCH_RETRY_CMD: make test-rust-main
+        run: *bazel-fetch-retry
 
   rust-broker:
     runs-on: ubuntu-latest
@@ -91,7 +133,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Broker suite
-        run: make test-rust-broker
+        env:
+          D2B_CI_FETCH_RETRY_CMD: make test-rust-broker
+        run: *bazel-fetch-retry
 
   nix-eval:
     runs-on: ubuntu-latest
@@ -109,7 +153,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Nix evaluation suite
-        run: make test-flake
+        env:
+          D2B_CI_FETCH_RETRY_CMD: make test-flake
+        run: *bazel-fetch-retry
 
   nix-unit:
     runs-on: ubuntu-latest
@@ -127,7 +173,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Nix surface suite
-        run: make test-nix-unit
+        env:
+          D2B_CI_FETCH_RETRY_CMD: make test-nix-unit
+        run: *bazel-fetch-retry
 
   nix-realized:
     runs-on: ubuntu-latest
@@ -145,7 +193,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Realized Nix suite
-        run: make test-flake-realized
+        env:
+          D2B_CI_FETCH_RETRY_CMD: make test-flake-realized
+        run: *bazel-fetch-retry
 
   nix-aarch64:
     runs-on: ubuntu-latest
@@ -163,7 +213,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: AArch64 Nix smoke suite
-        run: make test-flake-aarch64
+        env:
+          D2B_CI_FETCH_RETRY_CMD: make test-flake-aarch64
+        run: *bazel-fetch-retry
 
   fixtures-proofs:
     runs-on: ubuntu-latest
@@ -181,7 +233,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Fixtures and proofs suite
-        run: make test-fixture-contracts
+        env:
+          D2B_CI_FETCH_RETRY_CMD: make test-fixture-contracts
+        run: *bazel-fetch-retry
 
   census:
     runs-on: ubuntu-latest
@@ -199,7 +253,9 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
       - name: Blocking-API census cap
-        run: make check-census
+        env:
+          D2B_CI_FETCH_RETRY_CMD: make check-census
+        run: *bazel-fetch-retry
 
   test-performance-budgets:
     runs-on: ubuntu-latest

@@ -3,7 +3,7 @@
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::Duration;
@@ -116,7 +116,7 @@ impl TestBroker {
             .spawn()
             .expect("spawn d2b-broker profile");
 
-        let broker = Self {
+        let mut broker = Self {
             scratch,
             child,
             socket_path,
@@ -254,18 +254,37 @@ impl TestBroker {
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn wait_for_socket(&self) {
-        for _ in 0..50 {
-            if is_socket(&self.socket_path) {
+    fn wait_for_socket(&mut self) {
+        // Progress-based wait for the broker's accept loop to be reachable:
+        // poll until a connect to the socket succeeds. The socket file can
+        // exist before the listener is live (or a crashed broker can leave
+        // a stale file behind), so file existence is not readiness - the
+        // connect probe is the actual condition the tests need. Fail fast
+        // if the broker exits first, and keep a generous deadline only as
+        // a last-resort guard against a wedged broker. Startup time is
+        // load-dependent; the guard is not an assertion - a healthy broker
+        // ends the wait by accepting the probe connection, however long
+        // that takes.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            if socket_is_connectable(&self.socket_path) {
                 return;
             }
-            std::thread::sleep(Duration::from_millis(100));
+            if let Ok(Some(status)) = self.child.try_wait() {
+                panic!(
+                    "broker exited before serving {} (status {status}); server log:\n{}",
+                    self.socket_path.display(),
+                    self.server_log()
+                );
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "broker did not create a connectable socket at {} within 30 s; server log:\n{}",
+                self.socket_path.display(),
+                self.server_log()
+            );
+            std::thread::sleep(Duration::from_millis(50));
         }
-        panic!(
-            "broker did not create {}; server log:\n{}",
-            self.socket_path.display(),
-            self.server_log()
-        );
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -281,6 +300,34 @@ impl TestBroker {
                 .expect("run broker probe command"),
         )
     }
+}
+
+/// Whether a connect to the broker's socket would succeed right now. The
+/// socket file can exist before the listener is live (and a crashed broker
+/// leaves a stale file behind), so this probes the actual readiness
+/// condition instead of the file's existence.
+fn socket_is_connectable(path: &Path) -> bool {
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};
+    use std::os::fd::AsRawFd;
+    // nix 0.27+ returns an `OwnedFd`, so the probe descriptor is closed on
+    // every path below - including the `UnixAddr::new` and `connect`
+    // failure paths - and a successful probe does not leave a connection
+    // (and with it one of the broker's in-flight permits) open for the
+    // broker's lifetime. Keep the socket call's result owned: turning it
+    // into a raw fd here would leak one descriptor per poll against a
+    // slow-starting broker, starving the sibling tests in this process.
+    let Ok(probe) = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    ) else {
+        return false;
+    };
+    let Ok(addr) = UnixAddr::new(path) else {
+        return false;
+    };
+    connect(probe.as_raw_fd(), &addr).is_ok()
 }
 
 impl Drop for TestBroker {
@@ -352,9 +399,4 @@ pub fn audit_file_metadata(path: &Path) -> io::Result<(u32, u32, u32)> {
     ))
 }
 
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-fn is_socket(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_socket())
-        .unwrap_or(false)
-}
+

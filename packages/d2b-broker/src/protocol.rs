@@ -466,16 +466,21 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_bounded_dial_to_an_absent_peer_refuses_instead_of_waiting() {
         let dir = tempfile::tempdir().expect("dir");
-        let started = std::time::Instant::now();
+        // Virtual time: the dial's 5 s budget is driven by the paused
+        // clock, so an immediate refusal must consume none of it. The
+        // assertion is exact - wall-clock load cannot stretch it into a
+        // flake, and a dial that waited out its budget would fail it.
+        tokio::time::pause();
+        let started = tokio::time::Instant::now();
         let error =
             connect_seqpacket_bounded(&dir.path().join("absent.sock"), Duration::from_secs(5))
                 .await
                 .expect_err("an absent peer refuses the dial");
         assert_eq!(error.kind(), io::ErrorKind::NotFound, "{error:?}");
-        assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "the refusal must be immediate, not the budget: {:?}",
-            started.elapsed()
+        assert_eq!(
+            started.elapsed(),
+            Duration::ZERO,
+            "the refusal must be immediate, not the budget: the dial consumed none of its 5 s budget"
         );
     }
 

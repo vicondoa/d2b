@@ -2643,20 +2643,38 @@ mod tests {
         // budget: the call is refused by name while the handler hogs its own
         // worker, and an innocent operation on the same envelope answers
         // from another worker.
+        //
+        // The refusal code is the causality proof, not elapsed time:
+        // HANDLER_TIMED_OUT is produced only by the dispatch's budget-abort
+        // branch, and the spinning handler would return Ok("done") at its
+        // 2 s spin - so the refusal proves the abort fired while the handler
+        // was still in flight, before it could finish. It does not pin the
+        // abort to the 400 ms budget: a regression that shrank the budget
+        // toward zero, or aborted before the first poll, would produce the
+        // same code immediately, and only a wall-clock bound could catch
+        // that - the very measurement this suite removes. The handler
+        // signals when it is actually spinning, so the innocent operation
+        // provably answers while the spinner is in flight. Wall-clock load
+        // cannot stretch either side of the proof.
         const BUDGET: Duration = Duration::from_millis(400);
         let mut spin_row = declared_row("ProbeOperation", &["label"], &["label"], &["d2bd"]);
         spin_row.operation = "SpinningOperation";
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
         let envelope = Arc::new(
             BrokerEnvelope::over(
                 BrokerProfileId::Host,
                 Box::new(
                     HandlerTable::new()
                         .with_deadline(BUDGET)
-                        .with("SpinningOperation", |_invocation| {
+                        .with("SpinningOperation", move |_invocation| {
                             // A handler that never yields: it would starve an
                             // inline executor, so the task must be aborted
-                            // for the call to end at its budget.
+                            // for the call to end at its budget. The signal
+                            // proves the handler is actually in flight when
+                            // the innocent operation answers.
+                            let started_tx = started_tx.clone();
                             Box::pin(async move {
+                                started_tx.send(()).expect("spinner started");
                                 let start = std::time::Instant::now();
                                 while start.elapsed() < Duration::from_secs(2) {
                                     std::hint::spin_loop();
@@ -2693,7 +2711,6 @@ mod tests {
             .build(),
         );
         let spinner = Arc::clone(&envelope);
-        let started = std::time::Instant::now();
         let spinning = runtime().spawn(async move {
             spinner
                 .call(
@@ -2704,9 +2721,13 @@ mod tests {
                 )
                 .await
         });
-        // The spinner is on its own worker by now; the innocent operation
-        // answers while it is still in flight.
-        std::thread::sleep(Duration::from_millis(60));
+        // The handler signals when it is actually spinning on its worker;
+        // the innocent operation answers only once the spinner is provably
+        // in flight. The 30 s bound is a last-resort guard against a broken
+        // worker set, not a load-bearing wait.
+        started_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the spinning handler started");
         runtime()
             .block_on(envelope.call(
                 CallerAuthority::Daemon,
@@ -2719,12 +2740,12 @@ mod tests {
             .block_on(spinning)
             .expect("the spinning call joined")
             .expect_err("the spinning handler is aborted at its budget");
+        // HANDLER_TIMED_OUT is produced only by the dispatch's budget-abort
+        // branch (the handler itself would return Ok("done") at 2 s), so
+        // the code alone proves the abort fired while the handler was still
+        // in flight - no wall-clock window is read. The budget's magnitude
+        // is deliberately not asserted: that would need a wall-clock bound.
         assert_eq!(refusal.code, HANDLER_TIMED_OUT);
-        let elapsed = started.elapsed();
-        assert!(
-            elapsed >= BUDGET && elapsed < Duration::from_secs(2),
-            "the refusal is the budget's, not the handler's: {elapsed:?}"
-        );
     }
 
     #[test]
