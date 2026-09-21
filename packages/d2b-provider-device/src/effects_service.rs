@@ -136,10 +136,12 @@ impl EffectService for DeviceEffectsService {
 
 /// The composition-root factory that hosts the Device effects service in one
 /// zone (R5): the daemon registers one per zone, carrying that zone's facet
-/// set, and the host rebuilds the service from it on respawn.
+/// set for the respawn path, which is not yet wired.
 pub struct DeviceEffectsServiceFactory {
-    // The facet set is carried for the R5 respawn contract even though the
-    // current inspect service is static; `build()` rebuilds from it.
+    // The facet set is carried for the R5 respawn contract: the daemon
+    // registers one factory per zone with that zone's facet set. The
+    // respawn path that rebuilds the service from the facets is not wired
+    // yet, and the current static inspect service does not read them.
     #[allow(dead_code)]
     facets: DeviceEffectFacets,
 }

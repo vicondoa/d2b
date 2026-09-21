@@ -132,10 +132,12 @@ impl EffectService for SecurityKeyEffectsService {
 
 /// The composition-root factory that hosts the security-key effects service
 /// in one zone (R5): the daemon registers one per zone, carrying that
-/// zone's facet set, and the host rebuilds the service from it on respawn.
+/// zone's facet set for the respawn path, which is not yet wired.
 pub struct SecurityKeyEffectsServiceFactory {
-    // The facet set is carried for the R5 respawn contract even though the
-    // current inspect service is static; `build()` rebuilds from it.
+    // The facet set is carried for the R5 respawn contract: the daemon
+    // registers one factory per zone with that zone's facet set. The
+    // respawn path that rebuilds the service from the facets is not wired
+    // yet, and the current static inspect service does not read them.
     #[allow(dead_code)]
     facets: SecurityKeyEffectFacets,
 }
