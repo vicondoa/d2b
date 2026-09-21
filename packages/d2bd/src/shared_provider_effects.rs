@@ -196,10 +196,19 @@ pub(crate) struct ProductionSharedProviderEffects {
     state: Arc<ServerState>,
     zone: ZoneId,
     controller_generation: ControllerGeneration,
-    /// The trusted bundle this zone's effects resolve their intents from
-    /// (U14): the same resolver the plane was composed from, supplied by
-    /// the daemon host and never derived from caller input.
-    intents: Arc<d2b_provider_network_local::broker::ResolverNetworkIntentSource>,
+    /// The daemon-supplied Network intent-resolution facet (U14): every
+    /// method resolves against a resolver the daemon's loader fresh from the
+    /// on-disk bundle, so an on-disk bundle replacement is picked up without
+    /// a daemon restart (the retired `network_effect_port` reloaded the
+    /// resolver on every reconcile, finalize, and effect).
+    intents: Arc<dyn d2b_provider_network_local::broker::NetworkIntentSource>,
+    /// The last verified trusted bundle the runtime facet serves
+    /// ([`NetworkRuntime::bundle`]): `bundle()` reloads the on-disk bundle
+    /// per invocation and falls back to the last verified resolver when
+    /// the load fails, so an unreadable bundle never mints facts while the
+    /// reconcile, finalize, and kernel paths refuse closed. Seeded at
+    /// plane composition, which already verified the same bundle file.
+    bundle: tokio::sync::Mutex<Arc<BundleResolver>>,
     /// The authenticated daemon-to-broker origination socket (U14).
     broker_socket: PathBuf,
     /// Zone-wide USBIP authority ledger (old `usbip_ledger`), shared by every
@@ -217,13 +226,25 @@ impl ProductionSharedProviderEffects {
         resolver: BundleResolver,
     ) -> Self {
         let broker_socket = crate::broker_socket_path(&state);
+        // Per-invocation freshness (the retired adapter reloaded the trusted
+        // bundle on every reconcile, finalize, and effect): the daemon's
+        // neutral loader yields a fresh, fully re-verified resolver per call,
+        // and the provider crate's intent source resolves every intent against
+        // that per-call resolver.
+
+        let daemon_state = Arc::clone(&state);
+        let intents: Arc<dyn d2b_provider_network_local::broker::NetworkIntentSource> =
+            Arc::new(
+                d2b_provider_network_local::broker::LoaderNetworkIntentSource::new(move || {
+                    crate::load_bundle_resolver(&daemon_state).ok()
+                }),
+            );
         Self {
             state,
             zone,
             controller_generation,
-            intents: Arc::new(
-                d2b_provider_network_local::broker::ResolverNetworkIntentSource::new(resolver),
-            ),
+            intents,
+            bundle: tokio::sync::Mutex::new(Arc::new(resolver)),
             broker_socket,
             usbip_ledger: crate::usbip_production::new_authority_ledger(),
             usbip_services: Arc::new(tokio::sync::Mutex::new(BTreeSet::new())),
@@ -1802,10 +1823,17 @@ impl ProductionSharedProviderEffects {
             ));
         }
         let spec = self.network_spec(request)?;
-        let resolver = self.intents.resolver();
+        // Per-invocation freshness (the retired adapter reloaded the trusted
+        // bundle on every reconcile): the worker-side load re-verifies every
+        // artifact hash, so a replaced bundle is admitted under its new
+        // generation without a daemon restart, and a missing, tampered, or
+        // unreadable bundle fails this reconcile closed.
+        let resolver = crate::load_bundle_resolver_on_worker(&self.state)
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let runtime = self.runtime()?;
         let admission = self
-            .network_admission(&runtime, request, &spec, resolver)
+            .network_admission(&runtime, request, &spec, &resolver)
             .await?;
         let fence = self
             .network_content_fence(SharedProviderKind::Network, &runtime, request, &admission)
@@ -1818,7 +1846,7 @@ impl ProductionSharedProviderEffects {
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let broker_context = crate::resolve_network_effect_context(
             &Self::envelope(request),
-            resolver,
+            &resolver,
             &admission,
         )
         .map_err(|_| SharedProviderEffectError::Unavailable)?
@@ -1834,7 +1862,7 @@ impl ProductionSharedProviderEffects {
                     BrokerCallerRole::AdminUid {
                         uid: self.state.daemon_uid,
                     },
-                    Arc::clone(&self.intents) as Arc<dyn d2b_provider_network_local::broker::NetworkIntentSource>,
+                    Arc::clone(&self.intents),
                 ),
             ),
             broker_context,
@@ -2634,10 +2662,17 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let spec = self.network_spec(request)?;
-        let resolver = self.intents.resolver();
+        // Per-invocation freshness (the retired adapter reloaded the trusted
+        // bundle on every finalize): the worker-side load re-verifies every
+        // artifact hash, so a replaced bundle is torn down under its new
+        // generation without a daemon restart, and a missing, tampered, or
+        // unreadable bundle fails this finalize closed.
+        let resolver = crate::load_bundle_resolver_on_worker(&self.state)
+            .await
+            .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let runtime = self.runtime()?;
         let admission = self
-            .network_admission(&runtime, request, &spec, resolver)
+            .network_admission(&runtime, request, &spec, &resolver)
             .await?;
         let fence = self
             .network_content_fence(SharedProviderKind::Network, &runtime, request, &admission)
@@ -2684,7 +2719,7 @@ impl ProductionSharedProviderEffects {
         }
         let broker_context = crate::resolve_network_effect_context(
             &Self::envelope(request),
-            resolver,
+            &resolver,
             &admission,
         )
         .map_err(|_| SharedProviderEffectError::Unavailable)?
@@ -2698,7 +2733,7 @@ impl ProductionSharedProviderEffects {
                     BrokerCallerRole::AdminUid {
                         uid: self.state.daemon_uid,
                     },
-                    Arc::clone(&self.intents) as Arc<dyn d2b_provider_network_local::broker::NetworkIntentSource>,
+                    Arc::clone(&self.intents),
                 ),
             ),
             broker_context,
@@ -2926,8 +2961,25 @@ impl ProductionSharedProviderEffects {
 // daemon-resolved bundle intents ([`NetworkIntentSource`]).
 #[async_trait]
 impl d2b_provider_network_local::NetworkRuntime for ProductionSharedProviderEffects {
-    fn bundle(&self) -> &d2b_core::bundle_resolver::BundleResolver {
-        self.intents.resolver()
+    fn bundle(&self) -> Arc<d2b_core::bundle_resolver::BundleResolver> {
+        // Per-invocation freshness, mirroring the retired adapter's per-call
+        // reload: re-verify the on-disk bundle before serving any bundle
+        // fact, so a replaced bundle is observed without a daemon restart.
+        // The owned `Arc` keeps the served resolver valid for the caller's
+        // synchronous read even when a later invocation refreshes the slot.
+        // A bundle that fails verification keeps the last verified resolver
+        // (an unreadable bundle never mints facts), while the reconcile,
+        // finalize, and kernel paths refuse closed.
+        let mut slot = loop {
+            match self.bundle.try_lock() {
+                Ok(guard) => break guard,
+                Err(_) => std::hint::spin_loop(),
+            }
+        };
+        if let Ok(resolver) = crate::load_bundle_resolver(&self.state) {
+            *slot = Arc::new(resolver);
+        }
+        Arc::clone(&slot)
     }
 
     fn broker_socket_path(&self) -> &std::path::Path {
@@ -3038,6 +3090,8 @@ mod tests {
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance};
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::resource::ResourceStatus;
+
+    use super::*;
 
     use super::view_phase;
 
@@ -3230,6 +3284,187 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The Network runtime facet ([`NetworkRuntime::bundle`]) and the
+    /// intent source re-verify the on-disk bundle on every invocation (the
+    /// retired `network_effect_port`'s per-call reload), so a bundle
+    /// generation change is observed without a daemon restart.
+    ///
+    /// Red observation (the snapshot behaviour this restores): the resolver
+    /// captured at plane composition was frozen into the intent source and
+    /// served by `bundle()`, so after the on-disk bundle was replaced both
+    /// reads kept answering the old generation - the family reconciled
+    /// against stale intents and the broker's generation fence refused
+    /// every projection as stale until a daemon restart.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn network_effects_observe_a_replaced_bundle_without_a_daemon_restart() {
+        use d2b_provider_network_local::NetworkRuntime as _;
+
+        let (state, _dir) = test_state_with_bundle("composed");
+        let effects = ProductionSharedProviderEffects::new(
+            Arc::new(state.clone()),
+            ZoneId::parse("test").unwrap(),
+            ControllerGeneration::new(1).unwrap(),
+            d2b_core::bundle_resolver::BundleResolver::load_with_policy(
+                &state.config.artifacts.bundle_path,
+                &d2b_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
+            )
+            .expect("load the composed bundle"),
+        );
+
+        let composed = effects
+            .bundle()
+            .installed_generation_identity()
+            .expect("composed bundle generation")
+            .as_str()
+            .to_owned();
+        let composed_fence = d2b_provider_network_local::broker::NetworkIntentSource::
+            installed_generation_identity(&*effects.intents)
+            .expect("composed generation fence");
+        assert_eq!(
+            composed_fence.as_str(),
+            composed,
+            "the runtime facet and the kernel generation fence resolve one bundle state"
+        );
+
+        // Replace the on-disk bundle (a new installed generation) without a
+        // daemon restart, then observe the next invocations.
+        write_v3_native_bundle(&state.config.artifacts.bundle_path, "replaced");
+        let replaced = effects
+            .bundle()
+            .installed_generation_identity()
+            .expect("replaced bundle generation")
+            .as_str()
+            .to_owned();
+        let replaced_fence = d2b_provider_network_local::broker::NetworkIntentSource::
+            installed_generation_identity(&*effects.intents)
+            .expect("replaced generation fence");
+        assert_ne!(
+            composed, replaced,
+            "the runtime facet re-verifies the on-disk bundle per invocation: \
+             a bundle replacement is observed without a daemon restart (the \
+             composition snapshot keeps answering the old generation)"
+        );
+        assert_eq!(
+            replaced_fence.as_str(),
+            replaced,
+            "the kernel generation fence follows the replaced bundle"
+        );
+    }
+
+    /// A daemon state whose trusted bundle path names a freshly written
+    /// self-hashed v3 zone-native bundle carrying the given generator
+    /// marker.
+    fn test_state_with_bundle(generator: &str) -> (ServerState, tempfile::TempDir) {
+        use std::collections::HashMap;
+        let dir = tempfile::tempdir().expect("network freshness test state");
+        let daemon_state_dir = dir.path().join("daemon-state");
+        let bundle_path = dir.path().join("bundle.json");
+        write_v3_native_bundle(&bundle_path, generator);
+        let broker_reap_log = d2bd_runtime::supervisor::pidfd_table::BrokerReapLog::new();
+        let pidfd_table = Arc::new(
+            d2bd_runtime::supervisor::pidfd_table::PidfdTable::new(
+                daemon_state_dir.join("pidfd-table.json"),
+            )
+            .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+        );
+        let state = ServerState {
+            config: d2bd_runtime::daemon_config::DaemonConfig {
+                artifacts: d2bd_runtime::daemon_config::ArtifactPaths {
+                    bundle_path,
+                    ..d2bd_runtime::daemon_config::ArtifactPaths::default()
+                },
+                ..d2bd_runtime::daemon_config::DaemonConfig::default()
+            },
+            daemon_uid: 0,
+            daemon_state_dir,
+            pidfd_table,
+            broker_reap_log,
+            metrics_registry: Arc::new(d2bd_runtime::metrics::Registry::new()),
+            daemon_audit: Arc::new(d2bd_runtime::daemon_audit::DaemonAuditLog::no_op()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
+            conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
+            op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(
+                d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
+            ),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
+            typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
+            zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
+                d2b_provider_device_security_key::SkSessionTable::default(),
+            )),
+            unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
+                0,
+                [],
+            )),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            runtime_handle: tokio::runtime::Handle::try_current()
+                .expect("the network freshness test runs on a tokio runtime"),
+        };
+        (state, dir)
+    }
+
+    /// Write a minimal self-hashed v3 zone-native bundle whose installed
+    /// generation identity is the `bundleHash` digest (the same contract
+    /// `verify_bundle_hash` enforces for `schemaVersion >= 2`).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn write_v3_native_bundle(bundle_path: &std::path::Path, generator: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mut bundle = json!({
+            "bundleVersion": 1,
+            "schemaVersion": "v3",
+            "privilegesPath": "privileges.json",
+            "zones": [],
+            "artifactHashes": {},
+            "generation": {
+                "generator": generator,
+                "sourceRevision": null,
+                "generatedAt": null
+            }
+        });
+        // `verify_bundle_hash` re-derives the digest over the serialization
+        // with `bundleHash` absent and `artifactHashes` nullified.
+        let mut preimage_value = bundle.clone();
+        if let Some(obj) = preimage_value.as_object_mut() {
+            obj.remove("bundleHash");
+            obj.insert("artifactHashes".to_owned(), serde_json::Value::Null);
+        }
+        let preimage =
+            serde_json::to_vec(&preimage_value).expect("serialize v3 bundle hash preimage");
+        let digest = {
+            use sha2::Digest as _;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(&preimage);
+            let hex: String = hasher
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            format!("sha256:{hex}")
+        };
+        bundle["bundleHash"] = json!(digest);
+        std::fs::write(
+            bundle_path,
+            serde_json::to_vec(&bundle).expect("serialize v3 native bundle"),
+        )
+        .expect("write v3 native bundle");
+        std::fs::set_permissions(bundle_path, std::fs::Permissions::from_mode(0o640))
+            .expect("chmod test bundle");
     }
 }
 

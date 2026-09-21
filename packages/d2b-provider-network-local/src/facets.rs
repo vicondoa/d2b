@@ -21,9 +21,10 @@
 //!   runs the privileged cores over the broker-generic network kernels.
 //! - [`crate::broker::NetworkIntentSource`] is the intent-resolution facet
 //!   the kernel broker resolves its trusted bundle inputs through: the
-//!   daemon supplies the already-resolved Network intents and the installed
-//!   generation identity from its own bundle, and the crate never derives
-//!   an intent from caller input.
+//!   daemon supplies a loader over its own trusted bundle that yields a
+//!   fresh resolver per invocation (the retired adapter's per-call
+//!   reload),and every intent the crate resolves through it is resolved
+//!   against that per-call resolver - never from caller input.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -63,7 +64,13 @@ pub struct NetworkEffectFacets {
 #[async_trait]
 pub trait NetworkRuntime: Send + Sync + 'static {
     /// The trusted bundle the family's effects resolve their intents from.
-    fn bundle(&self) -> &BundleResolver;
+    ///
+    /// The daemon implementation loads a fresh, fully re-verified resolver
+    /// per invocation (the retired adapter's per-call reload), so an
+    /// on-disk bundle replacement is observed without a daemon restart; the
+    /// owned `Arc` keeps the served resolver valid for the caller's
+    /// synchronous read.
+    fn bundle(&self) -> Arc<BundleResolver>;
 
     /// The authenticated daemon-to-broker origination socket one kernel
     /// invocation goes over.

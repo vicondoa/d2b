@@ -49,8 +49,8 @@ impl RecordingRuntime {
 
 #[async_trait]
 impl NetworkRuntime for RecordingRuntime {
-    fn bundle(&self) -> &d2b_core::bundle_resolver::BundleResolver {
-        &FIXTURE_BUNDLE
+    fn bundle(&self) -> Arc<d2b_core::bundle_resolver::BundleResolver> {
+        Arc::new(FIXTURE_BUNDLE.clone())
     }
 
     fn broker_socket_path(&self) -> &Path {
