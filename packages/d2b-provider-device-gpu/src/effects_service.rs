@@ -670,4 +670,55 @@ mod tests {
             "a row replaced under a new uid is stale, not ambiguous"
         );
     }
+
+    /// The declared row's template is the video posture gate: the video role
+    /// exists for two postures (the plain vaapi template and the NVIDIA
+    /// decode template the owning Device's `videoNvidiaDecode` setting
+    /// selects), so the declared row must be launchable through either,
+    /// while no other role may read a video posture as its own row and an
+    /// undecodable row must be refused rather than read as a posture.
+    #[test]
+    fn declared_worker_rows_accept_both_video_postures() {
+        let view = |template: &str| {
+            let mut view = worker_row_view([0x33; 16], 7, Some(ResourceStatus::Ready));
+            view.spec =
+                serde_json::to_vec(&serde_json::json!({ "template": template })).expect("spec");
+            view
+        };
+
+        for (role, template) in [
+            (GpuProcessRole::FullGpu, "gpu-worker"),
+            (GpuProcessRole::RenderNode, "gpu-render-node"),
+            (GpuProcessRole::Video, "video-worker"),
+            (GpuProcessRole::Video, "video-worker-nvidia"),
+        ] {
+            assert_eq!(
+                DeclaredWorkerGpuPort::declared_row_template(&view(template), role),
+                Ok(template),
+                "{role:?} resolves its declared row template"
+            );
+        }
+        assert_eq!(
+            DeclaredWorkerGpuPort::declared_row_template(
+                &view("video-worker-nvidia"),
+                GpuProcessRole::FullGpu,
+            ),
+            Err(GpuEffectError::SpawnRejected),
+            "another role's posture is never this role's row"
+        );
+        assert_eq!(
+            DeclaredWorkerGpuPort::declared_row_template(
+                &view("video-worker"),
+                GpuProcessRole::Video,
+            ),
+            Ok("video-worker")
+        );
+        let mut foreign = worker_row_view([0x33; 16], 7, Some(ResourceStatus::Ready));
+        foreign.spec = b"not-json".to_vec();
+        assert_eq!(
+            DeclaredWorkerGpuPort::declared_row_template(&foreign, GpuProcessRole::Video),
+            Err(GpuEffectError::SpawnRejected),
+            "an undecodable row is refused, never read as a posture"
+        );
+    }
 }
