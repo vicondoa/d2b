@@ -9,7 +9,7 @@ use d2b_provider_transport_vsock::{
 use ring::rand::{SystemRandom, generate};
 use std::{
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, duplex};
 use tokio::sync::Mutex;
@@ -37,7 +37,7 @@ impl VsockEffectPort for FakeEffect {
         _: &OpaqueEndpointId,
         _: &OpaqueBindingId,
         _: TransportRole,
-        _: Instant,
+        _: tokio::time::Instant,
     ) -> Result<Self::Stream, VsockEffectError> {
         if let Some(delay) = self.open_delay {
             tokio::time::sleep(delay).await;
@@ -134,6 +134,23 @@ fn request() -> OpenTransportRequest {
         1_000,
     )
     .with_session_generation(1)
+}
+
+/// Drive the paused virtual clock forward in fixed steps until `task` settles,
+/// then return its output. Every timer in the driven tests is registered on
+/// the virtual clock, so the loop is deterministic: it never reads the real
+/// clock and cannot race a deadline under load. The 6s virtual budget is only
+/// a last-resort guard against a genuinely hung task; all real timers in these
+/// tests fire within 1.1s of virtual time.
+async fn drive_until_settled<T>(task: tokio::task::JoinHandle<T>) -> T {
+    for _ in 0..120 {
+        tokio::time::advance(Duration::from_millis(50)).await;
+        tokio::task::yield_now().await;
+        if task.is_finished() {
+            return task.await.unwrap();
+        }
+    }
+    panic!("spawned task did not settle within the virtual-time budget");
 }
 
 #[test]
@@ -369,6 +386,7 @@ fn open_observe_and_close_release_the_bridge() {
 fn open_effect_is_bounded_by_the_request_deadline() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
+        .start_paused(true)
         .build()
         .unwrap();
     runtime.block_on(async {
@@ -392,11 +410,18 @@ fn open_effect_is_bounded_by_the_request_deadline() {
             },
             identity(),
         );
+        let session = session();
+        let request = request();
+        let open = tokio::spawn(async move {
+            service.open_transport(&session, request).await
+        });
+        // The fake effect open takes 1_100ms of virtual time; the request
+        // deadline is 1_000ms. The deadline timer therefore fires first and
+        // the open must settle with DeadlineExceeded before the fake's sleep
+        // could ever complete.
+        let result = drive_until_settled(open).await;
         assert_eq!(
-            service
-                .open_transport(&session(), request())
-                .await
-                .unwrap_err(),
+            result.unwrap_err(),
             ServiceError::Effect(VsockEffectError::DeadlineExceeded)
         );
     });
@@ -407,6 +432,7 @@ fn open_effect_is_bounded_by_the_request_deadline() {
 fn named_stream_open_uses_remaining_end_to_end_deadline() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
+        .start_paused(true)
         .build()
         .unwrap();
     runtime.block_on(async {
@@ -430,12 +456,19 @@ fn named_stream_open_uses_remaining_end_to_end_deadline() {
             },
             identity(),
         );
-
+        let session = session();
+        let request = request();
+        let open = tokio::spawn(async move {
+            service.open_transport(&session, request).await
+        });
+        // The effect open consumes 850ms of virtual time, leaving only 150ms
+        // of the 1_000ms end-to-end deadline for the named stream open, whose
+        // fake takes 200ms. The remaining-deadline timer must fire first and
+        // the open must settle with DeadlineExceeded before that sleep could
+        // ever complete.
+        let result = drive_until_settled(open).await;
         assert_eq!(
-            service
-                .open_transport(&session(), request())
-                .await
-                .unwrap_err(),
+            result.unwrap_err(),
             ServiceError::Effect(VsockEffectError::DeadlineExceeded)
         );
     });
@@ -525,6 +558,7 @@ fn failed_endpoint_close_is_reported_as_degraded() {
 fn close_waits_for_both_endpoint_grace_periods() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
+        .start_paused(true)
         .build()
         .unwrap();
     runtime.block_on(async {
@@ -544,15 +578,22 @@ fn close_waits_for_both_endpoint_grace_periods() {
             close_delay: Some(Duration::from_millis(CLOSE_GRACE_MS / 2 + 25)),
             hang_close: false,
         };
-        let service = VsockTransportService::new(effect, streams, identity());
+        let service = Arc::new(VsockTransportService::new(effect, streams, identity()));
         let opened = service.open_transport(&session(), request()).await.unwrap();
 
-        service
-            .close_transport(d2b_provider_transport_vsock::CloseTransportRequest {
-                transport_handle: opened.transport_handle,
-            })
-            .await
-            .unwrap();
+        let close_service = Arc::clone(&service);
+        let close = tokio::spawn(async move {
+            close_service
+                .close_transport(d2b_provider_transport_vsock::CloseTransportRequest {
+                    transport_handle: opened.transport_handle,
+                })
+                .await
+        });
+        // Both endpoint closes take CLOSE_GRACE_MS / 2 + 25ms of virtual time
+        // each, so the bridge needs both grace periods before it can mark the
+        // transport Released; the close must settle with Ok only after both
+        // fakes have run to completion.
+        drive_until_settled(close).await.unwrap();
         assert_eq!(
             service
                 .observe_snapshot(d2b_provider_transport_vsock::ObserveTransportRequest {
