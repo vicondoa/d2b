@@ -384,10 +384,7 @@ impl ScopedCredentialClient for SameZoneScopedCredentialClient {
         let value = serde_json::from_slice::<serde_json::Value>(&resource.canonical_json)
             .map_err(|_| RelayCredentialError::Unavailable)?;
         if response.error.is_some()
-            || value
-                .pointer("/metadata/zone")
-                .and_then(serde_json::Value::as_str)
-                != Some(request.zone().as_str())
+            || resource.identity.zone != request.zone().as_str()
             || value
                 .pointer("/spec/scope/executionRef")
                 .and_then(serde_json::Value::as_str)

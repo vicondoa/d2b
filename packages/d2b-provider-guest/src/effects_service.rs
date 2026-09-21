@@ -906,9 +906,7 @@ impl GuestEffectsService {
         }
         let gateway_resource = Self::projected_row(self.resource_value(&gateway).await)?
             .ok_or(GuestEffectError::Unavailable)?;
-        if gateway_resource.pointer("/metadata/zone").and_then(Value::as_str)
-            != Some(self.zone.as_str())
-            || gateway_resource.pointer("/status/phase").and_then(Value::as_str) != Some("Ready")
+        if gateway_resource.pointer("/status/phase").and_then(Value::as_str) != Some("Ready")
         {
             return Err(GuestEffectError::Unavailable);
         }
