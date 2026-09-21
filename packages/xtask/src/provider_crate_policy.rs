@@ -8068,8 +8068,8 @@ fn cargo_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
         })
         .transpose()?;
     // --no-deps means no dependency-graph resolution, so cargo never touches
-    // registry or network state:this is the hermeticity source. --lockedand
-    // --offline harden the invocation against future argument changes;the
+    // registry or network state: this is the hermeticity source. --locked and
+    // --offline harden the invocation against future argument changes; the
     // lockfile is not read by this check (lockfile drift is enforced by the
     // production-closure drift check, not here). Surface cargo's stderr so a
     // future failure names its own cause.
