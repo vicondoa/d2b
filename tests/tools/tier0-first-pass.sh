@@ -62,14 +62,24 @@ scan_dashes() {
   local -a files=() scan_files=() batch=()
   local file chunk status all_hits start
 
+  # The scan root can be Bazel's execroot mirror (see find_repo_root), which
+  # Bazel's own LocalSpawnRunner mutates concurrently: every process-wrapper
+  # action creates a short-lived `local-spawn-runner.<n>/` temp dir there and
+  # deletes it when the action finishes. The walk must prune that prefix at
+  # enumeration time, or git's `--others` traversal descends into live temp
+  # trees (a vanished dir mid-walk is an observed 300s-gate-timeout stall, and
+  # the content is already exempt from scanning below - enumeration should not
+  # pay for it either).
   if git -C "$root" rev-parse --show-toplevel >/dev/null 2>&1; then
     while IFS= read -r -d '' file; do
       files+=("$file")
-    done < <(git -C "$root" ls-files -z --cached --others --exclude-standard)
+    done < <(git -C "$root" ls-files -z --cached --others --exclude-standard \
+      --exclude='local-spawn-runner.*')
   else
     while IFS= read -r -d '' file; do
       files+=("${file#"$root"/}")
-    done < <(find "$root" -type f -not -path '*/.git/*' -not -path '*/target/*' -print0)
+    done < <(find "$root" -type f -not -path '*/.git/*' -not -path '*/target/*' \
+      -not -path '*/local-spawn-runner.*' -print0)
   fi
 
   [ "${#files[@]}" -gt 0 ] || fail "source-hygiene scan found no files"
