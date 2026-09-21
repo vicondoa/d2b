@@ -4,7 +4,7 @@
   "features": [
     "fake-backends"
   ],
-  "lockSha256": "ac553b9b002050ad4adfba23e9a21dfa94992635299a1e4d149f19cdccf728cc",
+  "lockSha256": "0cce04d75ca13e8bb20760b2a66110937326b8d1fe7f8bdc91a20971d755c604",
   "policyPackageCount": 163,
   "policyPackageIds": [
     "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",

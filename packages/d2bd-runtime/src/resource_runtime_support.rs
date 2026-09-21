@@ -2,10 +2,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
-    io::{self, Read},
-    os::unix::fs::FileTypeExt,
-    path::Path,
     sync::{
         Arc,
         Mutex,
@@ -230,35 +226,6 @@ impl NewPlaneReadinessState {
             initial_load_complete: self.initial_load_complete.load(Ordering::SeqCst),
         }
     }
-}
-
-/// Sync seat retained for d2bd's sync callers (system_core_effects.rs reads
-/// `/proc`/os-release through it); the async form replaces it at U10 when the
-/// daemon's probes convert.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn read_bounded(path: impl AsRef<Path>, limit: usize) -> io::Result<String> {
-    let mut file = File::open(path)?;
-    let mut bytes = Vec::with_capacity(limit.min(4096));
-    file.by_ref()
-        .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > limit {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "bounded host probe exceeded limit",
-        ));
-    }
-    String::from_utf8(bytes)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "host probe was not utf-8"))
-}
-
-/// Sync seat retained for d2bd's sync callers (system_core_effects probes the
-/// pipewire/wayland runtime sockets through it); converts at U10.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-pub fn is_socket(path: &Path) -> bool {
-    fs::metadata(path)
-        .map(|metadata| metadata.file_type().is_socket())
-        .unwrap_or(false)
 }
 
 pub fn mark_core_handlers(

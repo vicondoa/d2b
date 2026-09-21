@@ -32,3 +32,17 @@
   caller input. The daemon's `network_effect_port.rs` module, the network
   field of the shared provider effects, and the port-shaped injection at the
   driver construction site are deleted in the same change.
+- The host family's driver effects ended their daemon-built arm too: the
+  bounded capability/platform/proc probe now runs inside
+  `d2b-provider-host` behind the family's declared `host.d2bus.org/effects`
+  service, hosted per zone by the daemon from the family's registered
+  factory. The one daemon-owned read - the minijail platform gate - crosses
+  the boundary as the declared `MinijailPlatformGateSource` facet supplied
+  by the composition root, and every other probe input is host state the
+  crate reads itself with the same bounded seats (moved out of
+  `d2bd-runtime`). The daemon's host probe implementation and its
+  port-shaped injection at the driver construction site are deleted in the
+  same change, with the degraded observation fallback preserved; the
+  `HostProbeEffectPort` surface became an async-trait port so the probe can
+  ride the hosted service. The probe's family-knowledge rows the layout
+  check reported for the daemon module are retired.

@@ -8,8 +8,9 @@
 //! must not be cited as test evidence. The future scenario must boot the
 //! daemon plane, commit the bootstrap `Host/host-system` row, and prove: the
 //! row validates through the declared decoder and the `Provider/system-core`
-//! fence, the bounded capability/platform/metadata probe observes the local
-//! host through the daemon's effect port, the published status carries that
-//! observation, a probe that cannot complete still converges as a degraded
-//! observation rather than failing the resource, and a second reconcile pass
-//! at the same generation re-probes nothing.
+//! fence, the crate's own bounded capability/platform/metadata probe observes
+//! the local host (with the minijail platform gate from the daemon-supplied
+//! facet), the published status carries that observation, a probe that
+//! cannot complete still converges as a degraded observation rather than
+//! failing the resource, and a second reconcile pass at the same generation
+//! re-probes nothing.

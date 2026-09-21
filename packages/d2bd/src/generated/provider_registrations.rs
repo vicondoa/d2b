@@ -14,6 +14,10 @@ pub(crate) struct ProviderRegistration {
 /// The registered provider families, in declaration order.
 pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
     ProviderRegistration {
+        provider_ref: "host",
+        services: &["host.d2bus.org/effects"],
+    },
+    ProviderRegistration {
         provider_ref: "network-local",
         services: &["network.d2bus.org/effects"],
     },

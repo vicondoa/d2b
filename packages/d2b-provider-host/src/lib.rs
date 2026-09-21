@@ -1,5 +1,6 @@
 //! The Host provider crate: the `Host` resource type's driver, its spec
-//! decoder, and its driver declaration.
+//! decoder, its driver declaration, and the implementation of the family's
+//! driver effects.
 //!
 //! The crate owns the Host type's complete resource knowledge: the closed
 //! Host base contract, the admission fence that pins `spec.providerRef` to
@@ -8,17 +9,28 @@
 //! [`DriverDescriptor`](d2b_resource_types::DriverDescriptor) the plane
 //! registers the type by.
 //!
-//! Everything the driver needs from outside arrives through the driver effect
-//! port ([`HostDriverEffects`]): the bounded capability/platform/proc probe
-//! with its degraded fallback, which the daemon realizes over the preserved
-//! `HostReconciler`. The production implementation lives in the daemon behind
-//! that port, so this crate depends on no daemon runtime.
+//! The family's driver effects (U5) are implemented by this crate itself
+//! ([`crate::effects_service`]): the bounded capability/platform/proc probe
+//! ([`crate::probe`]) with its preserved degraded fallback runs inside the
+//! crate over the preserved `HostReconciler`, and the one daemon-owned read
+//! (the minijail platform gate) crosses the provider boundary as the
+//! declared [`crate::facets::MinijailPlatformGateSource`] facet the
+//! composition root supplies. The daemon hosts the family's declared
+//! effects service ([`crate::effects_service::HOST_EFFECTS_SERVICE`]) per
+//! zone from the family's registered factory; no externally built port
+//! appears at any construction site (R2).
 
 #![deny(missing_docs)]
 
 mod driver;
 
-// The scripted HostDriverEffects recording double. Needed both by
+mod effects_service;
+mod facets;
+mod probe;
+
+// The test-support doubles: the scripted HostDriverEffects recording
+// double, the scripted HostProbeEffectPort probe double, and the scripted
+// minijail gate source the production probe is built from. Needed both by
 // external crates (d2bd's plane tests, which opt in via the `test-support`
 // feature) and by this crate's own tests. Gating on
 // `any(test, feature = "test-support")` makes it available automatically to
@@ -32,3 +44,13 @@ pub use driver::{
     HostDriver, HostDriverEffects, HostDriverError, HostDriverFactory, HostDriverStatus,
     host_descriptor, host_spec_decoder,
 };
+pub use effects_service::{
+    HOST_EFFECTS_SERVICE, HostEffectsService, HostEffectsServiceFactory,
+};
+pub use facets::{HostEffectFacets, MinijailPlatformGateSource};
+pub use probe::{PIPEWIRE_RUNTIME_SOCKET, USBIP_CORE_MODULE, USBIP_HOST_MODULE, production_probe};
+// The gate type the family's facets carry: re-exported through the owning
+// crate so a daemon composition module can name it without importing the
+// system-core crate path (the same re-export shape the process crate uses
+// for its conformance vocabulary).
+pub use d2b_provider_system_core::MinijailPlatformGate;

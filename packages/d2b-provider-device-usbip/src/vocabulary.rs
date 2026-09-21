@@ -3,7 +3,9 @@
 //! Every fact here is owned by this crate: the host device-matrix class the
 //! USBIP role claims, the inventory `busClass` the family binds, the
 //! per-busid lock directory, the kernel-module names the host capability
-//! probe reads under `/sys/module`, the runner-role spelling the bind
+//! probe asserts under `/sys/module` (shared by contract: the host family's
+//! probe spells the same kernel-visible names rather than importing them,
+//! so it needs no sibling crate), the runner-role spelling the bind
 //! extension keys on, and the host device-node facts (major/minor pair and
 //! owner account) the privileged open validates. Shared consumers read these
 //! constants instead of restating the spellings.

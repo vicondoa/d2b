@@ -1931,18 +1931,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 audio step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
-        token: "audio_pipewire",
-        family: "audio-pipewire",
-        retires_with: "U12 audio step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
-        token: "pipewire",
-        family: "audio-pipewire",
-        retires_with: "U12 audio step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_runtime/interaction_effects.rs",
         token: "audio_pipewire",
         family: "audio-pipewire",
@@ -2100,12 +2088,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
-        token: "gpu",
-        family: "device-gpu",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
         token: "gpu",
         family: "device-gpu",
         retires_with: "U12 tpm/device step",
@@ -2635,18 +2617,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 usbip step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
-        token: "device_usbip",
-        family: "device-usbip",
-        retires_with: "pending: the daemon reads the usbip kernel-module names from d2b-provider-device-usbip; the import carries the family crate name",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
-        token: "usbip",
-        family: "device-usbip",
-        retires_with: "U12 usbip step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "usbip",
         family: "device-usbip",
@@ -2787,12 +2757,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "display_wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
-        token: "wayland",
         family: "display-wayland",
         retires_with: "U10-U12 family rollout (display-wayland)",
     },
@@ -3434,12 +3398,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (system-minijail)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
-        token: "minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/foundation_seed.rs",
         token: "minijail",
         family: "system-minijail",
@@ -3675,12 +3633,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
-        token: "virtiofs",
-        family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
         retires_with: "U12 volume/store step",
@@ -4205,12 +4157,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
-        token: "systemd",
-        family: "system-systemd",
-        retires_with: "U12 systemd step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
         token: "systemd",
         family: "system-systemd",
         retires_with: "U12 systemd step",
@@ -8677,6 +8623,9 @@ const PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS: &[ProviderFamilyKnowledgeExemption] 
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest-qemu-media", module: "packages/d2b-provider-guest-qemu-media/src/types/guest.rs", token: "runtime_azure_virtual_machine", family: "runtime-azure-virtual-machine", reason: "guest-kind runtime resource name template" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-guest-qemu-media", module: "packages/d2b-provider-guest-qemu-media/src/types/guest.rs", token: "runtime_cloud_hypervisor", family: "runtime-cloud-hypervisor", reason: "guest-kind runtime resource name template" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-host", module: "packages/d2b-provider-host/src/driver.rs", token: "system_core", family: "system-core", reason: "the host error-code strings keep the system-core prefix stable" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-host", module: "packages/d2b-provider-host/src/probe.rs", token: "system_core", family: "system-core", reason: "the host probe implements the system-core-declared probe port whose error type is system-core's" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-host", module: "packages/d2b-provider-host/src/test_support.rs", token: "system_core", family: "system-core", reason: "the host test-support double implements the same system-core-declared probe port whose error type is system-core's" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-host", module: "packages/d2b-provider-host/src/probe.rs", token: "audio_pipewire", family: "audio-pipewire", reason: "the host probe names the audio-pipewire capability class the system-core host declares" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-observability-otel", module: "packages/d2b-provider-observability-otel/src/agent.rs", token: "system_core", family: "system-core", reason: "the otel agent names the system-core user workload" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "device_gpu", family: "device-gpu", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-process", module: "packages/d2b-provider-process/src/operations.rs", token: "device_security_key", family: "device-security-key", reason: "assembled resource-name templates the sibling device families share a shape the family slot fills" },
