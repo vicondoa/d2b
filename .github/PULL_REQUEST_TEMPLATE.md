@@ -10,6 +10,7 @@
 ## Validation evidence
 
 - [ ] **Exact `make check`:** result=`passed`; evidence=`<truthful workflow URL or concise local run summary>`.
+- [ ] **`ce-code-review` completed for this head:** verdict=`<clean | findings addressed>`; evidence=`<review comment or recorded findings>`. A green gate and a verified head are not a substitute for the review.
 - [ ] **Focused tests for the changed components** were run; list exact
       commands and results.
 - [ ] **Wider lanes are conditional.** Run the applicable public lane when the

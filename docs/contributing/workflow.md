@@ -47,12 +47,9 @@ outer workflow that supplies an implementation-ready plan and owns the
 shipping tail.
 
 Ponytail supplies minimal safe implementation discipline. Caveman is for
-transient communication only. Planning, orchestration, and implementation use
-`gpt-5.6-luna` with max reasoning and long context (`long_context`).
-Independent review uses `grok-4.6` with high reasoning and long context and
-does not run tests. If unavailable, use the strongest
-native role-equivalent model and record the substitution only in a transient
-handoff. Shipped prose never attributes a model or tool.
+transient communication only. No model, tool, or agent is mandated for any
+role; choose whatever is available and effective. Shipped prose never
+attributes a model or tool.
 
 ```bash
 # From the primary clone, one worktree per concurrent scope:
@@ -170,7 +167,11 @@ behaviour described here, update this file in the same commit.
 
 ## Reviewed-head PR lifecycle
 
-Every code diff gets an independent review in a separate clean context.
+Every pull request gets a `ce-code-review mode:agent` pass in a separate clean
+context before it merges, unconditionally - small fixes, flake and dependency
+updates, prose-only PRs, and follow-up PRs alike. The findings and verdict are
+recorded on the PR itself, and a verified head or a green required check is not
+a substitute for them.
 `ce-code-review` is report-only; the repository-owned caller applies
 actionable fixes. After any review fix, CI fix, push, base update, or other
 head-changing update, validate the new head and obtain fresh independent

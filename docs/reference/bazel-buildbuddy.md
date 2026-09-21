@@ -98,10 +98,10 @@ The committed `.bazelrc` defines:
 | `trusted-seed` | Protected `v3` cache seeding with synchronous uploads |
 
 Bare Bazel build and test commands, along with public Make aliases, select the
-`remote` profile by default through `.bazelrc`. Set
-`D2B_BAZEL_PROFILE=local` to opt into local execution; Make passes an explicit
-profile only when that variable is set. GitHub Layer-1 jobs set the local
-profile themselves.
+`remote` profile by default through `.bazelrc`. GitHub Layer-1 jobs set the
+local profile themselves. `D2B_BAZEL_PROFILE` exists so the repository's own
+Make targets and workflows can select a profile; a contributor or agent
+invocation never sets it, and a validation run adds no profile of its own.
 
 Remote profiles use the BuildBuddy Linux worker contract, Ubuntu GCC
 toolchain, minimal output downloads, compressed cache blobs, zero Bazel remote
@@ -216,15 +216,16 @@ gRPC deadline, that permit the one local retry from ambiguous, post-dispatch,
 or check failures that must fail closed. A successful Bazel invocation must
 also emit at least one `testResult` event in its BEP.
 
-Reproduce a failure through the same alias and profile:
+Reproduce a failure through the same alias, with no profile of your own:
 
 ```bash
-D2B_BAZEL_PROFILE=local make bazel-check
-D2B_BAZEL_PROFILE=local make test-rust-main
+make bazel-check
+make test-rust-main
 ```
 
 This keeps target exclusions, tags, credential handling, redaction, and
-fallback behavior identical to the normal graph.
+fallback behavior identical to the normal graph, and lets the repository
+select the profile.
 
 ## Updating the graph
 

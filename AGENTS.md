@@ -77,7 +77,7 @@ Persisted prose remains normal repository prose. Caveman governs transient
 communication only and never creates compressed or otherwise special shipped
 documentation.
 
-### Skill roles and model defaults
+### Skill roles
 
 - Compound Engineering (`ce-work`, `ce-code-review`, `ce-resolve-pr-feedback`,
   `ce-commit-push-pr`, `ce-babysit-pr`, and `ce-simplify-code`) routes, reviews,
@@ -86,13 +86,9 @@ documentation.
   lifecycle or framework machinery.
 - Caveman is for transient communication only; it does not govern persisted
   prose.
-- Planning, orchestration, and implementation use `gpt-5.6-luna` with max
-  reasoning and long context (`long_context`).
-- Independent review uses `grok-4.6` with high reasoning and long context
-  (`long_context`) and does not run tests.
-- If a preferred profile is unavailable, use the strongest native
-  role-equivalent model; record that substitution only in the transient handoff.
-  Do not put model, tool, or agent attribution in shipped artifacts.
+- No model, tool, or agent is mandated for any role. Choose whatever is
+  available and effective. Do not put model, tool, or agent attribution in
+  shipped artifacts.
 
 ### Review and PR contract
 
@@ -110,11 +106,21 @@ Use bare `ce-work` for a clear bounded change. Use caller mode only when an
 outer workflow supplies an implementation-ready plan and owns the shipping
 tail.
 
-Every code diff receives independent review in a separate clean context.
+Every pull request receives a `ce-code-review mode:agent` pass in a separate
+clean context before it merges. This is unconditional: small fixes, flake and
+dependency updates, prose-only PRs, and follow-up PRs all get the review. No
+diff is exempt for looking mechanical, for being authored by the same agent
+that verified it, or for resting on a passing gate.
+
+The review covers that PR's own diff against its observed base, and its
+findings and verdict are recorded on the PR itself so any reader can see what
+was reviewed and what was found. A verified head, a green required check, or a
+clean mergeable state is not a substitute for review evidence.
+
 The repository-owned caller applies actionable fixes, validates them, and
-requests fresh review after every fix or other head-changing update.
-Missing review evidence fails closed to fresh review; no actionable finding
-remains at merge.
+requests fresh review after every fix or other head-changing update. A PR whose
+current head has no recorded review is not mergeable; missing review evidence
+fails closed to fresh review, and no actionable finding remains at merge.
 
 `ce-babysit-pr` watches review feedback, required checks, and head currency.
 Immediately before merge, refresh the current reviewed head, required checks,
@@ -144,6 +150,20 @@ settings or claim atomic base binding.
   regenerates committed artifacts through the local Bazel profile.
   `make test-integration` adds the conditional container lane. Do not cite an
   advisory skip as validation evidence.
+- Never pass a Bazel profile override of your own, and never set
+  `D2B_BAZEL_PROFILE` yourself: no `--config=local`, no `--config=remote`, on
+  gates or on focused single-target builds alike. Run the documented command
+  exactly as written. That covers every form the override can take: a `--config`
+  flag, the variable in any form, a Make variable that carries one such as
+  `D2B_BAZEL_PROFILE_ARG` or a replaced `BAZEL_BIN`, and any personal or user
+  bazelrc that selects a profile. Only a profile the repository's own
+  configuration selects counts as repository behavior: the `.bazelrc` remote
+  default, the `--config=local` that specific Make targets such as `make generate`
+  pass themselves, and the CI jobs that set `D2B_BAZEL_PROFILE` in their own
+  environment. The Makefile passes a `D2B_BAZEL_PROFILE` you exported straight
+  through to Bazel, so that is your override and not the repository's. A
+  remote-cache or internal error is retried with the same unmodified command and
+  reported; it is never worked around by switching profiles.
 - U20 final acceptance must run both `make test-integration` and
   `make test-host-integration`. They may run alongside the `/etc/nixos`
   real-host switch, d2b startup, and Cloud Hypervisor Guest boot. U19
