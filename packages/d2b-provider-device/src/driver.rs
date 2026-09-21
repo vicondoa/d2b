@@ -47,6 +47,8 @@ use d2b_resource_runtime::context::ResourceContext;
 use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 use serde_json::Value;
 
+use crate::effects_service::DEVICE_EFFECTS_SERVICE;
+
 /// The Device ResourceType served by the four hardware Providers.
 pub const DEVICE_TYPE_NAME: &str = "Device";
 
@@ -131,9 +133,13 @@ pub struct DeviceResourceState {
     /// GPU authority-fenced lifecycle controllers (old `gpu_controllers`).
     pub gpu_controllers:
         Arc<Mutex<std::collections::BTreeMap<ResourceUid, d2b_provider_device_gpu::GpuController>>>,
-    /// GPU authority leases (old `gpu_authority_leases`).
+    /// GPU authority leases (old `gpu_authority_leases`). The GPU port's
+    /// declared construction contract locks this cache with
+    /// `parking_lot::Mutex`, so the driver-owned state uses the same lock.
     pub gpu_authority_leases: Arc<
-        Mutex<std::collections::BTreeMap<[u8; 16], d2b_core_controller::authority::AuthorityLease>>,
+        parking_lot::Mutex<
+            std::collections::BTreeMap<[u8; 16], d2b_core_controller::authority::AuthorityLease>,
+        >,
     >,
 }
 
@@ -170,8 +176,10 @@ pub struct DeviceDriverArgs {
     pub zone: String,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
-    /// The daemon-realized effect port the driver drives.
-    pub effects: Arc<dyn DeviceDriverEffects>,
+    /// The daemon-supplied facet set the family's own effects
+    /// implementation is built from (U12 device step): the driver never
+    /// receives a daemon-built effect port (R2).
+    pub facets: crate::facets::DeviceEffectFacets,
 }
 
 /// The family's declarations and typed Provider effect.
@@ -282,14 +290,14 @@ pub fn device_descriptor(args: DeviceDriverArgs) -> DriverDescriptor {
         operations: &[],
         creations: &[],
         startup: &[],
-        services: &[],
+        services: &[DEVICE_EFFECTS_SERVICE],
         decoder: shared_provider_spec_decoder(),
         factory: Arc::new(SharedProviderDriverFactory::new(
             SharedProviderDriverArgs {
                 zone: args.zone,
                 controller_generation: args.controller_generation,
                 family: Arc::new(DeviceFamily {
-                    effects: args.effects,
+                    effects: Arc::new(crate::effects_service::DeviceEffects::new(args.facets)),
                 }),
             },
         )),

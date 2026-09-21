@@ -95,3 +95,19 @@
   is alive, and the shared value lets the qemu-media, azure-container-apps,
   and azure-virtual-machine controllers resume their generation-fenced slots
   instead of restarting from scratch.
+- The device families' driver effects ended their daemon-built arms: the
+  Device, USBIP, and security-key families now serve them from their own
+  crates through their declared effects services (`device.d2bus.org/effects`,
+  `usbip.d2bus.org/effects`, `security-key.d2bus.org/effects`), registered in
+  the generated provider-registration table and hosted per zone by the daemon
+  from the families' registered factories over the composition root's facet
+  sets. The TPM and GPU effect ports moved into their crates too
+  (`tpm.d2bus.org/effects`, `gpu.d2bus.org/effects`), with the USBIP kernel
+  dispatcher and authority ledger behind the declared broker-dispatch facet
+  and the BrokerCallerRole. The daemon's `tpm_effect_port.rs` and
+  `usbip_production.rs` modules and the shared `SharedProviderEffects`
+  port bundle are deleted; the daemon composes each family only through the
+  generated registration table and its registered drivers and service
+  factories, and keeps only the runtime traits the families' effects delegate
+  to. Fail-closed identity bindings, the exact-admission checks, and the
+  single repair owner for device state are preserved.

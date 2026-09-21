@@ -10,21 +10,22 @@ use std::sync::Arc;
 
 use d2b_contracts_resource::v3::ControllerGeneration;
 use d2b_provider_device::{
-    DEVICE_REGISTRATIONS, DeviceDriverArgs, DeviceDriverEffects, DeviceResourceState,
+    DEVICE_REGISTRATIONS, DeviceComponent, DeviceDriverArgs, DeviceResourceState,
     device_descriptor,
 };
+use d2b_provider_device::facets::{DeviceEffectFacets, DeviceRuntime};
 use d2b_provider_toolkit::{
     SharedProviderEffectOutcome, SharedProviderEffectError, SharedProviderEffectPhase,
     SharedProviderEffectRequest, SharedProviderFinalize,
 };
 
-struct UnavailableEffects;
+struct UnavailableRuntime;
 
 #[async_trait::async_trait]
-impl DeviceDriverEffects for UnavailableEffects {
+impl DeviceRuntime for UnavailableRuntime {
     async fn reconcile_device(
         &self,
-        _component: d2b_provider_device::DeviceComponent,
+        _component: DeviceComponent,
         _request: &SharedProviderEffectRequest<'_>,
         _state: &DeviceResourceState,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
@@ -35,7 +36,7 @@ impl DeviceDriverEffects for UnavailableEffects {
 
     async fn finalize_device(
         &self,
-        _component: d2b_provider_device::DeviceComponent,
+        _component: DeviceComponent,
         _request: &SharedProviderEffectRequest<'_>,
         _state: &DeviceResourceState,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
@@ -48,7 +49,9 @@ fn the_device_type_registers_one_driver_over_four_provider_rows() {
     let descriptor = device_descriptor(DeviceDriverArgs {
         zone: "integration".to_owned(),
         controller_generation: ControllerGeneration::new(1).expect("generation"),
-        effects: Arc::new(UnavailableEffects),
+        facets: DeviceEffectFacets {
+            runtime: Arc::new(UnavailableRuntime),
+        },
     });
     let registered = descriptor
         .factory

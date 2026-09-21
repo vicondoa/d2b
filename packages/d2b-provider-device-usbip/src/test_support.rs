@@ -2,6 +2,8 @@
 //! tests and by `d2bd`'s plane tests (which opt in via the `test-support`
 //! feature).
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use d2b_provider_toolkit::{
     SharedProviderEffectError, SharedProviderEffectOutcome, SharedProviderEffectPhase,
@@ -9,6 +11,7 @@ use d2b_provider_toolkit::{
 };
 
 use crate::driver::{UsbipComponent, UsbipDriverEffects};
+use crate::facets::{UsbipBrokerFacets, UsbipEffectFacets, UsbipRuntime};
 
 /// Recording [`UsbipDriverEffects`] double.
 ///
@@ -55,5 +58,63 @@ impl UsbipDriverEffects for RecordingEffects {
         self.calls.lock().push("finalize");
         self.finalized.lock().push(component);
         Ok(SharedProviderFinalize::Complete)
+    }
+}
+
+/// Recording [`UsbipRuntime`] double: answers Ready/Complete for every
+/// effect call and records the driven components, so `d2bd`'s plane tests
+/// can build a facet set without a daemon.
+#[derive(Default)]
+pub struct RecordingRuntime {
+    /// Components reconciled, in call order.
+    pub reconciled: parking_lot::Mutex<Vec<UsbipComponent>>,
+    /// Components finalized, in call order.
+    pub finalized: parking_lot::Mutex<Vec<UsbipComponent>>,
+}
+
+#[async_trait]
+impl UsbipRuntime for RecordingRuntime {
+    async fn reconcile_usbip(
+        &self,
+        component: UsbipComponent,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        self.reconciled.lock().push(component);
+        Ok(SharedProviderEffectOutcome::phase(
+            SharedProviderEffectPhase::Ready,
+        ))
+    }
+
+    async fn finalize(
+        &self,
+        component: UsbipComponent,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        self.finalized.lock().push(component);
+        Ok(SharedProviderFinalize::Complete)
+    }
+}
+
+/// Build a USBIP facet set from a recording runtime double. The broker
+/// dispatch facet is a fail-closed double: the plane tests never invoke a
+/// bind/unbind, so a call is a test bug rather than a silent success.
+pub fn recording_facets(runtime: Arc<RecordingRuntime>) -> UsbipEffectFacets {
+    UsbipEffectFacets {
+        runtime,
+        broker: UsbipBrokerFacets {
+            dispatch: Arc::new(FailClosedDispatch),
+        },
+    }
+}
+
+/// A broker-dispatch double that refuses every call by name.
+struct FailClosedDispatch;
+
+impl crate::facets::UsbipBrokerDispatch for FailClosedDispatch {
+    fn ack(
+        &self,
+        _request: d2b_contracts_broker::broker_wire::BrokerRequest,
+    ) -> Result<(), crate::lifecycle::ServiceLifecycleError> {
+        Err(crate::lifecycle::ServiceLifecycleError::Transient)
     }
 }

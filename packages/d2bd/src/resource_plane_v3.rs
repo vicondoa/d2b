@@ -117,9 +117,17 @@ use crate::provider_lifecycle::{
     family_declaration,
 };
 use d2b_provider_toolkit::EffectServiceFactory;
-use d2b_provider_device::{DeviceDriverArgs, device_descriptor};
-use d2b_provider_device_security_key::{SecurityKeyDriverArgs, security_key_descriptors};
-use d2b_provider_device_usbip::{UsbipDriverArgs, usbip_descriptors};
+use d2b_provider_device::{
+    DEVICE_EFFECTS_SERVICE, DeviceDriverArgs, device_descriptor,
+};
+use d2b_provider_device_security_key::{
+    SECURITY_KEY_EFFECTS_SERVICE, SecurityKeyDriverArgs, security_key_descriptors,
+};
+use d2b_provider_device_usbip::{
+    USBIP_EFFECTS_SERVICE, UsbipDriverArgs, usbip_descriptors,
+};
+use d2b_provider_device_tpm::effects_service::TPM_EFFECTS_SERVICE;
+use d2b_provider_device_gpu::effects_service::GPU_EFFECTS_SERVICE;
 use d2b_provider_network_local::{
     NETWORK_EFFECTS_SERVICE, NetworkDriverArgs, NetworkEffectFacets, NetworkEffectsServiceFactory,
     network_descriptor,
@@ -1827,14 +1835,21 @@ pub struct ConstructionInputs {
     pub binding_effects: Arc<dyn BindingDriverEffects>,
     pub endpoint_effects: Arc<dyn EndpointDriverEffects>,
     pub credential_effects: Arc<dyn CredentialDriverEffects>,
-    pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
-/// The daemon-supplied facet set the Guest family's effects
+pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
+    /// The daemon-supplied facet set the Guest family's effects
     /// implementation is built from (U10):the zone's manager view (live
     /// rows, committed Provider identities, and the controller-session
     /// generation)and the Cloud Hypervisor controller session, supplied
     /// through the composition root. The family never receives a
     /// daemon-built effect port (R2).
     pub guest_facets: GuestEffectFacets,
+    /// The daemon-supplied facet sets the device families' effects
+    /// implementations are built from (U12): each family's driver never
+    /// receives a daemon-built effect port (R2); the family crates serve
+    /// their own effects over these facets.
+    pub usbip_facets: d2b_provider_device_usbip::facets::UsbipEffectFacets,
+    pub security_key_facets: d2b_provider_device_security_key::facets::SecurityKeyEffectFacets,
+    pub device_facets: d2b_provider_device::facets::DeviceEffectFacets,
     /// The daemon-supplied facet set the interaction family's effects
     /// implementation is built from (U12): the committed interaction
     /// identity, the zone's manager-plane reads, and the broker-backed audio
@@ -1952,12 +1967,54 @@ impl ConstructionInputs {
         // facet's bundle read and the kernel intent source's per-call loader)
         // reloads and re-verifies the on-disk bundle (the retired adapter's
         // per-call behaviour).
+        // U12 (device families): each device family's effects ride the
+        // declared facets, and the composition root hosts the family's
+        // declared effects service from the same facet set the driver
+        // factories are built from. The shared-provider adapter serves as
+        // every family's runtime over the plane's trusted bundle, admission,
+        // and broker seam; the sub-family facet sets the Device runtime
+        // drives (the TPM and GPU ports, the USBIP kernel dispatcher) are
+        // built here from the same adapter and attached to it (the facet
+        // sets are circular with the adapter, which is their runtime).
         let shared_provider_effects = Arc::new(ProductionSharedProviderEffects::new(
             Arc::clone(state),
             zone.clone(),
             controller_generation,
             resolver.clone(),
         ));
+        let usbip_facets = d2b_provider_device_usbip::facets::UsbipEffectFacets {
+            runtime: Arc::clone(&shared_provider_effects)
+                as Arc<dyn d2b_provider_device_usbip::facets::UsbipRuntime>,
+            broker: d2b_provider_device_usbip::facets::UsbipBrokerFacets {
+                dispatch: Arc::new(crate::DaemonUsbipBrokerDispatch::new(
+                    Arc::clone(state),
+                )),
+            },
+        };
+        let security_key_facets =
+            d2b_provider_device_security_key::facets::SecurityKeyEffectFacets {
+                runtime: Arc::clone(&shared_provider_effects)
+                    as Arc<
+                        dyn d2b_provider_device_security_key::facets::SecurityKeyRuntime,
+                    >,
+            };
+        let device_facets = d2b_provider_device::facets::DeviceEffectFacets {
+            runtime: Arc::clone(&shared_provider_effects)
+                as Arc<dyn d2b_provider_device::facets::DeviceRuntime>,
+        };
+        let tpm_facets = d2b_provider_device_tpm::facets::TpmEffectFacets {
+            runtime: Arc::clone(&shared_provider_effects)
+                as Arc<dyn d2b_provider_device_tpm::facets::TpmRuntime>,
+        };
+        let gpu_facets = d2b_provider_device_gpu::facets::GpuEffectFacets {
+            runtime: Arc::clone(&shared_provider_effects)
+                as Arc<dyn d2b_provider_device_gpu::facets::GpuRuntime>,
+        };
+        shared_provider_effects.attach_device_facets(
+            Arc::clone(&usbip_facets.broker.dispatch),
+            tpm_facets.clone(),
+            gpu_facets.clone(),
+        );
         let network_facets = NetworkEffectFacets {
             runtime: Arc::clone(&shared_provider_effects)
                 as Arc<dyn d2b_provider_network_local::NetworkRuntime>,
@@ -2138,6 +2195,9 @@ Box::pin(async move {
                 shared_provider_effects,
             ),
             guest_facets: guest_facets.clone(),
+            usbip_facets: usbip_facets.clone(),
+            security_key_facets: security_key_facets.clone(),
+            device_facets: device_facets.clone(),
             interaction_facets: interaction_facets.clone(),
             trusted_context_publication: Some(
                 crate::provider_lifecycle::TrustedContextPublication::production(
@@ -2158,6 +2218,11 @@ Box::pin(async move {
                 &activation_facets,
                 &interaction_facets,
                 &user_facets,
+                &usbip_facets,
+                &security_key_facets,
+                &device_facets,
+                &tpm_facets,
+                &gpu_facets,
             ),
             foundation: None,
         })
@@ -2177,6 +2242,11 @@ fn registered_service_factories(
     activation_facets: &ActivationEffectFacets,
     interaction_facets: &InteractionEffectFacets,
     user_facets: &UserEffectFacets,
+    usbip_facets: &d2b_provider_device_usbip::facets::UsbipEffectFacets,
+    security_key_facets: &d2b_provider_device_security_key::facets::SecurityKeyEffectFacets,
+    device_facets: &d2b_provider_device::facets::DeviceEffectFacets,
+    tpm_facets: &d2b_provider_device_tpm::facets::TpmEffectFacets,
+    gpu_facets: &d2b_provider_device_gpu::facets::GpuEffectFacets,
 ) -> BTreeMap<&'static str, Arc<dyn EffectServiceFactory>> {
     let mut factories = BTreeMap::new();
     for registration in PROVIDER_REGISTRATIONS {
@@ -2193,6 +2263,25 @@ fn registered_service_factories(
                 Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone()))
             } else if service == USER_EFFECTS_SERVICE.id {
                 Arc::new(UserEffectsServiceFactory::new(user_facets.clone()))
+            } else if service == USBIP_EFFECTS_SERVICE.id {
+                Arc::new(d2b_provider_device_usbip::effects_service::
+                    UsbipEffectsServiceFactory::new(usbip_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
+            } else if service == SECURITY_KEY_EFFECTS_SERVICE.id {
+                Arc::new(d2b_provider_device_security_key::effects_service::
+                    SecurityKeyEffectsServiceFactory::new(security_key_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
+            } else if service == DEVICE_EFFECTS_SERVICE.id {
+                Arc::new(d2b_provider_device::effects_service::
+                    DeviceEffectsServiceFactory::new(device_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
+            } else if service == TPM_EFFECTS_SERVICE.id {
+                Arc::new(d2b_provider_device_tpm::effects_service::
+                    TpmEffectsServiceFactory::new(tpm_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
+            } else if service == GPU_EFFECTS_SERVICE.id {
+                Arc::new(d2b_provider_device_gpu::effects_service::
+                    GpuEffectsServiceFactory::new(gpu_facets.clone()))
                     as Arc<dyn EffectServiceFactory>
             } else if service == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id {
                 Arc::new(
@@ -2741,35 +2830,6 @@ impl ResourcePlaneV3 {
             family_declaration("telemetry-binding"),
             vec![telemetry_binding_descriptor()],
         );
-        // The two USB types start through the USB family's, the two
-        // security-key types through the security-key family's, and the
-        // Device type (four hardware Providers) through the Device family's.
-        // Each declaration carries its decoder, so the registry serves it
-        // for the type.
-        set = set.with(
-            family_declaration("device-usbip"),
-            Vec::from(usbip_descriptors(UsbipDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                controller_generation: inputs.authority.controller_generation,
-                effects: Arc::clone(&inputs.shared_provider_effects.usbip),
-            })),
-        );
-        set = set.with(
-            family_declaration("device-security-key"),
-            Vec::from(security_key_descriptors(SecurityKeyDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                controller_generation: inputs.authority.controller_generation,
-                effects: Arc::clone(&inputs.shared_provider_effects.security_key),
-            })),
-        );
-        set = set.with(
-            family_declaration("device"),
-            vec![device_descriptor(DeviceDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                controller_generation: inputs.authority.controller_generation,
-                effects: Arc::clone(&inputs.shared_provider_effects.device),
-            })],
-        );
 // The Guest family starts through the generated registration table
         // above (its row carries the family's declared effects service); the
         // descriptor construction lives in `registered_drivers` beside the
@@ -2912,6 +2972,25 @@ impl ResourcePlaneV3 {
                 zone: inputs.zone.as_str().to_owned(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.guest_facets.clone(),
+            // U12 (device families): each device family's driver builds its
+            // effects from the declared facets; no externally built port
+            // appears here (R2). The Device and USBIP families serve the
+            // two USB and two security-key types through their own
+            // declarations.
+            "device-usbip" => Vec::from(usbip_descriptors(UsbipDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                facets: inputs.usbip_facets.clone(),
+            })),
+            "device-security-key" => Vec::from(security_key_descriptors(SecurityKeyDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                facets: inputs.security_key_facets.clone(),
+            })),
+            "device" => vec![device_descriptor(DeviceDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                facets: inputs.device_facets.clone(),
             })],
             _ => Vec::new(),
         }
@@ -3710,6 +3789,21 @@ use d2b_provider_system_core::MinijailPlatformGate;
         // Activation, and Guest families' declared effects services from the
         // same facet sets their driver factories are built from, exactly as
         // the production composition root does.
+        // U12 (device families): the plane tests build each device
+        // family's facet set from the recording runtime, exactly as
+        // the production composition root builds it from the
+        // daemon's runtime.
+        let usbip_facets = d2b_provider_device_usbip::test_support::recording_facets(
+            Arc::new(d2b_provider_device_usbip::test_support::RecordingRuntime::default()),
+        );
+        let security_key_facets = d2b_provider_device_security_key::test_support::recording_facets(
+            Arc::new(d2b_provider_device_security_key::test_support::RecordingRuntime::default()),
+        );
+        let device_facets = d2b_provider_device::test_support::recording_facets(
+            Arc::new(d2b_provider_device::test_support::RecordingRuntime::default()),
+        );
+        let tpm_facets = d2b_provider_device_tpm::test_support::recording_facets();
+        let gpu_facets = d2b_provider_device_gpu::test_support::recording_facets();
         (
             dir,
             ConstructionInputs {
@@ -3759,17 +3853,9 @@ use d2b_provider_system_core::MinijailPlatformGate;
                     effects.set_session(None);
                     effects
                 },
-                shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects {
-                    usbip: Arc::new(
-                        d2b_provider_device_usbip::test_support::RecordingEffects::default(),
-                    ),
-                    security_key: Arc::new(
-                        d2b_provider_device_security_key::test_support::RecordingEffects::default(),
-                    ),
-                    device: Arc::new(
-                        d2b_provider_device::test_support::RecordingEffects::default(),
-                    ),
-                },
+                usbip_facets: usbip_facets.clone(),
+                security_key_facets: security_key_facets.clone(),
+                device_facets: device_facets.clone(),
                 // U14: the plane tests build the Network family's facet set
                 // from the recording runtime, exactly as the production
                 // composition root builds it from the daemon's runtime.
@@ -3832,6 +3918,38 @@ HOST_EFFECTS_SERVICE.id,
                     (
                         GUEST_EFFECTS_SERVICE.id,
                         Arc::new(GuestEffectsServiceFactory::new(guest_facets))
+                            as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        USBIP_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_device_usbip::effects_service::
+                            UsbipEffectsServiceFactory::new(
+                                usbip_facets,
+                            )) as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        SECURITY_KEY_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_device_security_key::effects_service::
+                            SecurityKeyEffectsServiceFactory::new(
+                                security_key_facets,
+                            )) as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        DEVICE_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_device::effects_service::
+                            DeviceEffectsServiceFactory::new(device_facets))
+                            as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        TPM_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_device_tpm::effects_service::
+                            TpmEffectsServiceFactory::new(tpm_facets))
+                            as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        GPU_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_device_gpu::effects_service::
+                            GpuEffectsServiceFactory::new(gpu_facets))
                             as Arc<dyn EffectServiceFactory>,
                     ),
                 ]),

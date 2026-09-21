@@ -16,6 +16,8 @@
 #![deny(missing_docs)]
 
 mod driver;
+pub mod effects_service;
+pub mod facets;
 pub mod vocabulary;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -26,3 +28,4 @@ pub use driver::{
     DeviceDriverEffects, DeviceResourceState, GPU_CONTROLLER_REF, SECURITY_KEY_CONTROLLER_REF,
     TPM_CONTROLLER_REF, USBIP_CONTROLLER_REF, declared_dependency_refs, device_descriptor,
 };
+pub use effects_service::DEVICE_EFFECTS_SERVICE;

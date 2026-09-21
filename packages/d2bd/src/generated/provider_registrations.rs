@@ -26,6 +26,18 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &[],
     },
     ProviderRegistration {
+        provider_ref: "device",
+        services: &["device.d2bus.org/effects"],
+    },
+    ProviderRegistration {
+        provider_ref: "device-security-key",
+        services: &["security-key.d2bus.org/effects"],
+    },
+    ProviderRegistration {
+        provider_ref: "device-usbip",
+        services: &["usbip.d2bus.org/effects"],
+    },
+    ProviderRegistration {
         provider_ref: "guest",
         services: &["guest.d2bus.org/effects"],
     },

@@ -41,8 +41,10 @@ use d2b_provider_toolkit::{
 use d2b_resource_runtime::context::{ChildEnsure, ResourceContext};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{
-    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, ServiceDecl, WellKnownType,
 };
+
+use crate::effects_service::SECURITY_KEY_EFFECTS_SERVICE;
 use serde_json::{Value, json};
 
 pub use crate::{PROVIDER_REF, SECURITY_KEY_BINDING_RESOURCE_TYPE, SECURITY_KEY_SERVICE_RESOURCE_TYPE};
@@ -170,8 +172,10 @@ pub struct SecurityKeyDriverArgs {
     pub zone: String,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
-    /// The daemon-realized effect port the driver drives.
-    pub effects: Arc<dyn SecurityKeyDriverEffects>,
+    /// The daemon-supplied facet set the family's own effects
+    /// implementation is built from (U12 security-key step): the driver
+    /// never receives a daemon-built effect port (R2).
+    pub facets: crate::facets::SecurityKeyEffectFacets,
 }
 
 /// The family's declarations and typed Provider effect.
@@ -325,21 +329,25 @@ const SECURITY_KEY_BINDING_READS: &[WellKnownType] =
 /// security-key hardware presence is host-dependent, so the driver may arrive
 /// late. The Service is a qualified semantic Service and is therefore
 /// exportable; a Binding is not. The Service's relay and the Binding's
-/// frontend are declared in [`SECURITY_KEY_SERVICE_CREATIONS`] and
-/// [`SECURITY_KEY_BINDING_CREATIONS`].
+/// frontend are declared in [`SECURITY_KEY_SERVICE_CREATIONS`]and
+/// [`SECURITY_KEY_BINDING_CREATIONS`]. The family's declared effects
+/// service rides on the Service descriptor alone (U8):the family
+/// hosts one effects service per zone; a Binding descriptor declares
+/// none.
 pub fn security_key_descriptors(args: SecurityKeyDriverArgs) -> [DriverDescriptor; 2] {
     let factory: Arc<dyn d2b_resource_runtime::driver::ResourceDriverFactory> =
         Arc::new(SharedProviderDriverFactory::new(SharedProviderDriverArgs {
             zone: args.zone,
             controller_generation: args.controller_generation,
             family: Arc::new(SecurityKeyFamily {
-                effects: args.effects,
+                effects: Arc::new(crate::effects_service::SecurityKeyEffects::new(args.facets)),
             }),
         }));
     let descriptor = |resource_type: WellKnownType,
                       exportable: bool,
                       reads: &'static [WellKnownType],
-                      creations: &'static [ChildCreation]| DriverDescriptor {
+                      creations: &'static [ChildCreation],
+                      services: &'static [ServiceDecl]| DriverDescriptor {
         resource_type,
         allowed_sources: AllowedSources::BUILTIN
             | AllowedSources::STARTUP
@@ -351,7 +359,7 @@ pub fn security_key_descriptors(args: SecurityKeyDriverArgs) -> [DriverDescripto
         operations: &[],
         creations,
         startup: &[],
-        services: &[],
+        services,
         decoder: shared_provider_spec_decoder(),
         factory: Arc::clone(&factory),
     };
@@ -361,12 +369,14 @@ pub fn security_key_descriptors(args: SecurityKeyDriverArgs) -> [DriverDescripto
             true,
             SECURITY_KEY_SERVICE_READS,
             &SECURITY_KEY_SERVICE_CREATIONS,
+            &[SECURITY_KEY_EFFECTS_SERVICE],
         ),
         descriptor(
             WellKnownType::SECURITY_KEY_BINDING,
             false,
             SECURITY_KEY_BINDING_READS,
             &SECURITY_KEY_BINDING_CREATIONS,
+            &[],
         ),
     ]
 }
@@ -546,21 +556,19 @@ fn binding_child_ensures(
 mod tests {
     use std::sync::Arc;
 
-    use crate::test_support::RecordingEffects;
-
     use super::{
         PROVIDER_REF, SECURITY_KEY_BINDING_RESOURCE_TYPE, SECURITY_KEY_REGISTRATIONS,
         SECURITY_KEY_SERVICE_RESOURCE_TYPE, SecurityKeyDriverArgs, security_key_descriptors,
     };
 
-    fn descriptors(
-        effects: Arc<RecordingEffects>,
-    ) -> [d2b_resource_types::DriverDescriptor; 2] {
+    fn descriptors() -> [d2b_resource_types::DriverDescriptor; 2] {
         security_key_descriptors(SecurityKeyDriverArgs {
             zone: "dev".to_owned(),
             controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
                 .expect("generation"),
-            effects,
+            facets: crate::test_support::recording_facets(Arc::new(
+                crate::test_support::RecordingRuntime::default(),
+            )),
         })
     }
 
@@ -568,7 +576,7 @@ mod tests {
     /// ResourceTypes, and the Service's relay is a declared creation.
     #[test]
     fn descriptors_declare_the_security_key_types() {
-        let descriptors = descriptors(Arc::new(RecordingEffects::default()));
+        let descriptors = descriptors();
         let types = descriptors
             .iter()
             .map(|descriptor| {

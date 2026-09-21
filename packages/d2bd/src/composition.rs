@@ -402,9 +402,6 @@ pub mod provider_effects;
 pub mod provider_registry;
 pub mod provider_shutdown;
 pub mod resource_runtime;
-pub mod tpm_effect_port;
-pub mod usbip_production;
-
 use d2bd_runtime::typed_error::TypedError;
 
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
@@ -13836,6 +13833,42 @@ fn emit_detached_create_audit(state: &ServerState, peer_uid: u32, vm: &str, exec
             error = %err,
             "failed to write detached exec create daemon audit event"
         );
+    }
+}
+
+/// The daemon-side typed USBIP broker dispatch facet (U12 usbip step): the
+/// USBIP crate's kernel dispatcher sends its typed bind/unbind requests
+/// through this object, which dispatches them over the daemon's broker
+/// socket with the daemon's AdminUid authority. The dispatcher logic itself
+/// lives in the declaring crate; only the privileged wire path stays here.
+pub(crate) struct DaemonUsbipBrokerDispatch {
+    state: Arc<ServerState>,
+}
+
+impl DaemonUsbipBrokerDispatch {
+    /// Bind the dispatch to the daemon's broker seam.
+    pub(crate) fn new(state: Arc<ServerState>) -> Self {
+        Self { state }
+    }
+}
+
+impl d2b_provider_device_usbip::facets::UsbipBrokerDispatch for DaemonUsbipBrokerDispatch {
+    fn ack(
+        &self,
+        request: BrokerRequest,
+    ) -> Result<(), d2b_provider_device_usbip::ServiceLifecycleError> {
+        use d2b_provider_device_usbip::ServiceLifecycleError;
+        match dispatch_broker_request_as(
+            &self.state,
+            request,
+            BrokerCallerRole::AdminUid {
+                uid: self.state.daemon_uid,
+            },
+        ) {
+            Ok(BrokerResponse::Ack(response)) if response.accepted => Ok(()),
+            Ok(BrokerResponse::Error(_)) | Ok(_) => Err(ServiceLifecycleError::Transient),
+            Err(_) => Err(ServiceLifecycleError::Transient),
+        }
     }
 }
 

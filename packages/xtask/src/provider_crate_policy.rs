@@ -1038,20 +1038,9 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "d2bd-state",
         retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/usbip_production.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
+    
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/tpm_effect_port.rs",
         token: "server_state",
         family: "d2bd-state",
         retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
@@ -1261,22 +1250,10 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 tpm/device step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/tpm_effect_port.rs",
-        token: "swtpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "swtpm",
         family: "device-tpm",
         retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/tpm_effect_port.rs",
-        token: "tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
@@ -2392,12 +2369,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/tpm_effect_port.rs",
-        token: "device_tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
         token: "device_tpm",
         family: "device-tpm",
@@ -2488,6 +2459,30 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 usbip step",
     },
     SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "tpm",
+        family: "device-tpm",
+        retires_with: "U12 tpm/device step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "device_tpm",
+        family: "device-tpm",
+        retires_with: "U12 tpm/device step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "gpu",
+        family: "device-gpu",
+        retires_with: "U12 gpu/device step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "device_gpu",
+        family: "device-gpu",
+        retires_with: "U12 gpu/device step",
+    },
+    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/authority.rs",
         token: "usbip",
         family: "device-usbip",
@@ -2504,12 +2499,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "usbip",
         family: "device-usbip",
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/usbip_production.rs",
-        token: "usbip",
-        family: "device-usbip",
-        retires_with: "U12 usbip step",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/bootstrap.rs",
@@ -2541,12 +2530,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "device-usbip",
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/usbip_production.rs",
-        token: "device_usbip",
-        family: "device-usbip",
-        retires_with: "U12 usbip step",
-    },
+    
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/host.rs",
         token: "usbip",
