@@ -2,20 +2,22 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
+use std::sync::Arc;
+
 use d2b_provider_volume::{
-    VOLUME_CREATIONS, VOLUME_TYPE_NAME, VolumeDriverArgs, volume_descriptor,
+    VOLUME_CREATIONS, VOLUME_EFFECTS_SERVICE, VOLUME_TYPE_NAME, VolumeDriverArgs, volume_descriptor,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, ChildCustody, WellKnownType};
 
-/// The facet set the declaration carries; the registration boundary never
+/// The facet set the declaration carries;the registration boundary never
 /// runs an effect. The runtime double refuses every call, so a test that
-/// accidentally drives an effect fails loudly instead of passing silently.
+/// accidentally drives an effect fails loudly instead of passing silently。
 fn unused_facets() -> d2b_provider_volume::VolumeEffectFacets {
-    d2b_provider_volume::test_support::recording_facets(
-        d2b_provider_volume::test_support::RecordingRuntime::new(),
-    )
+    d2b_provider_volume::VolumeEffectFacets {
+        runtime: Arc::new(d2b_provider_volume::test_support::RefusingRuntime),
+    }
 }
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
@@ -68,6 +70,11 @@ async fn descriptor_declares_and_registers_the_volume_type() {
         ]
     );
     assert!(descriptor.operations.is_empty());
+    assert_eq!(
+        descriptor.services,
+        &[VOLUME_EFFECTS_SERVICE],
+        "the family's declared effects service rides the declaration (U7)"
+    );
 
     let mut providers = ProviderDirectory::new();
     providers.register_driver(&descriptor).expect("register");

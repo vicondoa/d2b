@@ -15,7 +15,39 @@ use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 
 use crate::facets::{VolumeEffectFacets, VolumeRuntime};
 
+/// A runtime double that refuses every call: the registration boundary never
+/// runs an effect, so a test that accidentally drives one fails loudly
+/// instead of passing silently.
+#[derive(Default)]
+pub struct RefusingRuntime;
+
+#[async_trait]
+impl VolumeRuntime for RefusingRuntime {
+    async fn reconcile_volume(
+        &self,
+        _volume_uid: &ResourceUid,
+        _spec: &VolumeSpec,
+        _provider: Option<&serde_json::Value>,
+        _owner_ref: Option<&ResourceRef>,
+    ) -> Result<bool, String> {
+        Err("refused:the registration boundary must never run an effect".to_owned())
+    }
+
+    async fn cleanup_volume(
+        &self,
+        _volume_uid: &ResourceUid,
+        _spec: &VolumeSpec,
+    ) -> Result<(), String> {
+        Err("refused:the registration boundary must never run an effect".to_owned())
+    }
+
+    fn has_layout(&self, _volume_uid: &ResourceUid) -> bool {
+        panic!("refused:the registration boundary must never run an effect")
+    }
+}
+
 /// Scripted layout runtime: records every call in order.
+
 pub struct RecordingRuntime {
     calls: parking_lot::Mutex<Vec<&'static str>>,
     /// Whether the runtime currently reports a Ready layout
