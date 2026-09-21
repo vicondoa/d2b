@@ -548,6 +548,16 @@ mod tests {
     /// frame, which the responder surfaces as a `ControlProcessed` event;
     /// receiving one proves the frame was accepted (or that the session died,
     /// which fails the wait instead of passing it).
+    ///
+    /// Coupling: `ControlProcessed` is not assignment-specific - the engine
+    /// also emits it for stream credit grants, keepalive ping/pong, and empty
+    /// reassembled records. This wait is sound only because the session
+    /// keepalive interval (30s) exceeds the 5s guard, so within the window
+    /// the only plausible `ControlProcessed` source is the assignment's own
+    /// credit grant. If the keepalive interval is ever lowered to at or below
+    /// the guard, this wait would pass on keepalive traffic alone and the
+    /// assignment-acceptance proof would silently degrade into the
+    /// fixed-sleep race it replaced.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn wait_for_assignment_processing(responder: &SessionDriverHandle) {
         tokio::time::timeout(Duration::from_secs(5), async {
