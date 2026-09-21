@@ -1651,7 +1651,7 @@ mod tests {
     use crate::resource::test_support::{
         FakeFactory, desired, fake_not_yet_failure, fake_not_yet_failure_with_retry_after,
         fake_refused_failure, harness, harness_over, harness_over_with_factory, harness_targeted,
-        harness_with, key, subject, until, wait_row_gone, wait_status,
+        harness_with, key, pass_virtual, subject, until, wait_row_gone, wait_status,
     };
     use crate::resource::test_support::ReconcileMode;
     use crate::resource::{ResourceMsg, ResourceStatus};
@@ -2610,7 +2610,24 @@ mod tests {
 
         handle.actor.send_message(ResourceMsg::Reconcile).expect("cast 1");
         handle.actor.send_message(ResourceMsg::Reconcile).expect("cast 2");
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        // Causal barrier instead of a wall-clock sleep: `TargetUnavailable`
+        // publishes a status through the same mailbox, so the moment it
+        // appears both coalesced triggers have been processed (FIFO). If
+        // either had entered the driver, the pass count would already be
+        // past one - no elapsed-time window is involved.
+        handle
+            .actor
+            .send_message(ResourceMsg::TargetUnavailable { session_generation: 1 })
+            .expect("cast barrier");
+        wait_status(
+            &h.client,
+            &k,
+            ResourceStatus::Failed(DriverFailure::not_yet(
+                DriverOp::Recover,
+                crate::error::FailureKinds::TARGET_UNAVAILABLE,
+            )),
+        )
+        .await;
         assert_eq!(
             shared.reconcile_calls.load(AtomicOrdering::SeqCst),
             1,
@@ -2692,7 +2709,8 @@ mod tests {
         let tkey = key("test", "Test", "data");
         let shared = h.factory.shared(&tkey).await;
         *shared.reconcile_mode.lock().await = ReconcileMode::GatedEffectOnce;
-        h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+        let handle =
+            h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         until(|| shared.reconcile_calls.load(AtomicOrdering::SeqCst) == 1).await;
 
         let (notify, mut rx) = mpsc::unbounded_channel::<WatchSatisfied>();
@@ -2722,7 +2740,33 @@ mod tests {
             .expect("satisfied");
         assert_eq!(satisfied.watch, id);
         wait_status(&h.client, &tkey, ResourceStatus::Ready).await;
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // Exactly-once proof without a wall-clock wait: force a second
+        // transition cycle (Reconciling -> Ready) through the mailbox, then
+        // register a barrier watch whose condition is already true. The
+        // barrier registration is processed after the churn pass (FIFO), so
+        // its immediate notification proves the churn's Ready transition -
+        // and the watcher evaluation that would re-notify a still-registered
+        // watch - completed. The original queue must still be empty.
+        handle.actor.send_message(ResourceMsg::Reconcile).expect("cast churn");
+        let (barrier_notify, mut barrier_rx) = mpsc::unbounded_channel::<WatchSatisfied>();
+        let barrier_watch = key("test", "Test", "barrier");
+        let barrier_id = h
+            .client
+            .register_watch(
+                barrier_watch,
+                crate::context::WatchRegistration {
+                    target: tkey.clone(),
+                    condition: WatchCondition::Ready,
+                    notify: barrier_notify,
+                },
+            )
+            .await
+            .expect("register barrier watch");
+        let barrier = tokio::time::timeout(Duration::from_secs(5), barrier_rx.recv())
+            .await
+            .expect("barrier notification after the churn transition")
+            .expect("satisfied");
+        assert_eq!(barrier.watch, barrier_id);
         assert!(rx.try_recv().is_err(), "exactly one notification per registration");
     }
 
@@ -2870,7 +2914,8 @@ mod tests {
         let k = key("test", "Test", "data");
         let shared = h.factory.shared(&k).await;
         *shared.reconcile_mode.lock().await = ReconcileMode::FailRetryable;
-        h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
+        let handle =
+            h.client.ensure(subject(), None, desired("Test", "data", b"one")).await.expect("ensure");
         wait_status(
             &h.client,
             &k,
@@ -2879,23 +2924,45 @@ mod tests {
         .await;
         assert_eq!(shared.reconcile_calls.load(AtomicOrdering::SeqCst), 1);
 
-        // Delete well before the 300ms requeue timer would fire.
+        // The delete's driver step fails terminally: the deleting actor stays
+        // alive (a terminal verdict never requeues and never stops it), so a
+        // stale requeue timer that survives the delete is *observable* - its
+        // Reconcile would be processed by the live deleting actor instead of
+        // being dropped at stop.
+        shared.delete_terminal_failure.store(true, AtomicOrdering::SeqCst);
         h.client.remove(subject(), k.clone()).await.expect("remove");
-        wait_row_gone(&h.client, &k).await;
-        tokio::time::sleep(Duration::from_millis(700)).await;
+        until(|| shared.delete_calls.load(AtomicOrdering::SeqCst) == 1).await;
+
+        // Freeze the clock and pass well past the 300ms requeue deadline.
+        // Whether the stale timer (if the delete failed to cancel it) fires
+        // before the freeze or during the frozen advance, its Reconcile is
+        // delivered to the live deleting actor and the settled state below
+        // is the deterministic signal - no wall-clock window is read.
+        tokio::time::pause();
+        pass_virtual(Duration::from_millis(700)).await;
         assert_eq!(
             shared.reconcile_calls.load(AtomicOrdering::SeqCst),
             1,
             "the cancelled requeue timer must never deliver a reconcile"
         );
-        // The termination event can race ahead of DeletionComplete in the
-        // manager mailbox; the durable deleting row then makes the manager
-        // respawn once more, and the idempotent driver delete runs again.
-        // Both passes are cleanup; the invariant under test is that the
-        // cancelled requeue never delivers a reconcile.
-        assert!(
-            shared.delete_calls.load(AtomicOrdering::SeqCst) >= 1,
-            "driver delete ran to completion"
+        assert_eq!(
+            shared.delete_calls.load(AtomicOrdering::SeqCst),
+            1,
+            "a stale requeue must not re-drive the delete while it is in flight"
+        );
+
+        // Let the delete complete: the next pass succeeds and the row goes.
+        // The send may miss if the manager respawned the actor for the
+        // durable deleting row (the termination event can race ahead of
+        // DeletionComplete); the respawned actor's start pass runs the same
+        // idempotent delete, so the row goes either way.
+        shared.delete_terminal_failure.store(false, AtomicOrdering::SeqCst);
+        let _ = handle.actor.send_message(ResourceMsg::Reconcile);
+        wait_row_gone(&h.client, &k).await;
+        assert_eq!(
+            shared.reconcile_calls.load(AtomicOrdering::SeqCst),
+            1,
+            "the cancelled requeue never delivers a reconcile, only the delete pass"
         );
     }
 
@@ -2905,7 +2972,7 @@ mod tests {
     /// re-enters the pass at effect-completion rate, which is what bounds a
     /// degraded Volume's layout effect - and the broker `StoreSync` its source
     /// resolution performs - to one run per backoff window.
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn retryable_effect_failure_backs_off_before_the_next_pass() {
         let h = harness_with(&["Test"], Duration::from_millis(400)).await;
@@ -2928,8 +2995,11 @@ mod tests {
             "the retryable effect failure must not immediately re-enter the pass"
         );
 
-        // Well inside the backoff window: still exactly one pass.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Well inside the backoff window: still exactly one pass. The clock
+        // is paused, so this is a deterministic virtual advance to +100ms -
+        // the 400ms requeue cannot have fired, and no wall-clock time is
+        // read.
+        pass_virtual(Duration::from_millis(100)).await;
         assert_eq!(
             shared.reconcile_calls.load(AtomicOrdering::SeqCst),
             1,
@@ -3029,7 +3099,7 @@ mod tests {
     /// not at the actor's backoff - the driver is the only party that knows why
     /// the world is not ready. The named 400 ms is eight times the 50 ms this
     /// actor was configured with, so a fixed cadence is unmistakable.
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_driver_named_retry_delay_paces_the_deferral() {
         let h = harness_with(&["Test"], Duration::from_millis(50)).await;
@@ -3051,7 +3121,10 @@ mod tests {
         assert_eq!(shared.reconcile_calls.load(AtomicOrdering::SeqCst), 1);
 
         // Past the actor's own 50 ms backoff, well inside the named 400 ms.
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        // The clock is paused: a deterministic virtual advance to +150ms, so
+        // a requeue paced by the actor's backoff would already have fired
+        // and been processed, while the named 400ms schedule cannot.
+        pass_virtual(Duration::from_millis(150)).await;
         assert_eq!(
             shared.reconcile_calls.load(AtomicOrdering::SeqCst),
             1,
@@ -3067,7 +3140,7 @@ mod tests {
     /// structured failure and schedules exactly one backoff requeue (never
     /// terminal), and the published wire status is the failure's own
     /// projection; the log line renders the same fields.
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn not_yet_failure_defers_with_a_requeue_and_publishes_its_structured_detail() {
         let h = harness_with(&["Test"], Duration::from_millis(400)).await;
@@ -3110,8 +3183,10 @@ mod tests {
         }
 
         // Well inside the backoff window: the deferral must not re-enter the
-        // pass; the one requeue later delivers the converging pass.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // pass; the one requeue later delivers the converging pass. The
+        // clock is paused, so this is a deterministic virtual advance to
+        // +100ms - the 400ms requeue cannot have fired.
+        pass_virtual(Duration::from_millis(100)).await;
         assert_eq!(
             shared.reconcile_calls.load(AtomicOrdering::SeqCst),
             1,
@@ -3202,7 +3277,7 @@ mod tests {
     /// committed row - it publishes its evidence (registered kind, stage, and
     /// compared values) into the wire layer and never requeues. A requeue
     /// here would busy-loop a row that can never converge.
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn terminal_refusal_publishes_its_evidence_and_never_requeues() {
         let h = harness_with(&["Test"], Duration::from_millis(300)).await;
@@ -3221,8 +3296,11 @@ mod tests {
         assert_eq!(layer["resource"]["driverFailure"]["retryable"], false);
         assert_eq!(layer["resource"]["driverFailure"]["comparisons"][0]["field"], "spec.schema");
 
-        // Several backoff windows: a refusal must not be requeued.
-        tokio::time::sleep(Duration::from_millis(1_000)).await;
+        // Several backoff windows: a refusal must not be requeued. The clock is
+        // paused, so this is a deterministic virtual advance to +1s - any
+        // wrongly scheduled requeue would have fired and been processed by
+        // now, and no wall-clock time is read.
+        pass_virtual(Duration::from_millis(1_000)).await;
         assert_eq!(
             shared.reconcile_calls.load(AtomicOrdering::SeqCst),
             1,
