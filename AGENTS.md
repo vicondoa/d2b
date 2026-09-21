@@ -153,10 +153,13 @@ settings or claim atomic base binding.
 - Never pass a Bazel profile override of your own, and never set
   `D2B_BAZEL_PROFILE` yourself: no `--config=local`, no `--config=remote`, on
   gates or on focused single-target builds alike. Run the documented command
-  exactly as written. Only a profile the repository's own configuration selects
-  counts as repository behavior: the `.bazelrc` remote default, the
-  `--config=local` that specific Make targets such as `make generate` pass
-  themselves, and the CI jobs that set `D2B_BAZEL_PROFILE` in their own
+  exactly as written. That covers every form the override can take: a `--config`
+  flag, the variable in any form, a Make variable that carries one such as
+  `D2B_BAZEL_PROFILE_ARG` or a replaced `BAZEL_BIN`, and any personal or user
+  bazelrc that selects a profile. Only a profile the repository's own
+  configuration selects counts as repository behavior: the `.bazelrc` remote
+  default, the `--config=local` that specific Make targets such as `make generate`
+  pass themselves, and the CI jobs that set `D2B_BAZEL_PROFILE` in their own
   environment. The Makefile passes a `D2B_BAZEL_PROFILE` you exported straight
   through to Bazel, so that is your override and not the repository's. A
   remote-cache or internal error is retried with the same unmodified command and
