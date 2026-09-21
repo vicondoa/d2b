@@ -305,6 +305,19 @@ pub fn row_fixture(
     spec: serde_json::Value,
     status: ResourceStatus,
 ) -> ResourceView {
+    row_fixture_with_metadata(zone, type_name, name, spec, status, serde_json::json!({}))
+}
+
+/// A manager row fixture with explicit metadata (the gateway-custody
+/// validation reads the gateway Guest's `metadata.zone`).
+pub fn row_fixture_with_metadata(
+    zone: &str,
+    type_name: &str,
+    name: &str,
+    spec: serde_json::Value,
+    status: ResourceStatus,
+    metadata: serde_json::Value,
+) -> ResourceView {
     ResourceView {
         key: ResourceKey::new(zone, type_name, name),
         uid: [0x42; 16],
@@ -312,7 +325,7 @@ pub fn row_fixture(
         deleting: false,
         provenance: d2b_resource_runtime::identity::ResourceProvenance::Resource,
         spec: serde_json::to_vec(&spec).expect("spec bytes"),
-        metadata: Vec::new(),
+        metadata: serde_json::to_vec(&metadata).expect("metadata bytes"),
         owner_key: None,
         status: Some(status),
         status_generation: Some(1),

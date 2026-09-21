@@ -745,9 +745,22 @@ pub struct GuestDriverArgs {
 /// Factory for the `Guest` ResourceType.
 ///
 /// Construction is infallible by contract (R3).
+///
+/// The factory builds the family's effects implementation ONCE from the
+/// daemon-supplied facet set and shares the one value across every driver
+/// it creates (U10): the effects service holds the framework-controller
+/// map, and the old daemon adapter kept that map per zone plane. A
+/// resource-actor restart or re-Ensure re-runs `create_driver` while the
+/// plane is alive, so a per-driver effects value would restart the
+/// qemu-media / azure-container-apps / azure-virtual-machine state machines
+/// from scratch on every recreation; the shared value preserves their
+/// progress exactly as the retired daemon adapter did.
 pub struct GuestDriverFactory {
     types: Vec<ResourceTypeName>,
     args: GuestDriverArgs,
+    /// The family's effects implementation, built once per zone from the
+    /// facet set (the framework-controller map survives driver recreation).
+    effects: Arc<dyn GuestDriverEffects>,
 }
 
 impl GuestDriverFactory {
@@ -755,6 +768,9 @@ impl GuestDriverFactory {
     pub fn new(args: GuestDriverArgs) -> Self {
         Self {
             types: vec![ResourceTypeName::new(GUEST_TYPE_NAME)],
+            effects: Arc::new(crate::effects_service::GuestEffectsService::new(
+                args.facets.clone(),
+            )),
             args,
         }
     }
@@ -767,15 +783,15 @@ impl ResourceDriverFactory for GuestDriverFactory {
     }
 
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
-        Box::new(GuestDriver::new(self.args.clone()))
+        Box::new(GuestDriver::new(
+            self.args.zone.clone(),
+            self.args.controller_generation,
+            Arc::clone(&self.effects),
+        ))
     }
 }
 
 /// One desired Guest resource.
-
-/// The effects are this crate's own implementation (U10), built from the
-/// daemon-supplied facet set:the construction site holds no externally
-/// built port (R2).
 pub struct GuestDriver {
     zone: ZoneId,
     controller_generation: ControllerGeneration,
@@ -785,23 +801,13 @@ pub struct GuestDriver {
 }
 
 impl GuestDriver {
-    /// Build one driver for a single row over the family's production effects
-    /// (U10: built from the daemon-supplied facet set inside the factory).
-    pub fn new(args: GuestDriverArgs) -> Self {
-        let zone = ZoneId::parse(args.zone).expect("driver zone was validated at construction");
-        Self {
-            zone,
-            controller_generation: args.controller_generation,
-            effects: Arc::new(crate::effects_service::GuestEffectsService::new(args.facets)),
-            watched: Vec::new(),
-        }
-    }
-
-    /// Build one driver over an explicit effects port (driver tests script
-    /// the typed seam;the production composition never takes this surface).
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_effects(
-        zone: &str,
+    /// Build one driver for a single row over the family's shared effects
+    /// value (U10: the factory builds it once per zone from the
+    /// daemon-supplied facet set, so the framework-controller state
+    /// survives driver recreation; the construction site holds no
+    /// externally built port (R2)).
+    pub fn new(
+        zone: String,
         controller_generation: ControllerGeneration,
         effects: Arc<dyn GuestDriverEffects>,
     ) -> Self {
@@ -1514,7 +1520,7 @@ fn aca_child_ensures(
 mod tests {
     use std::sync::Arc;
 
-    use d2b_contracts_resource::v3::ControllerGeneration;
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
         WatchRegistration,
@@ -1870,8 +1876,8 @@ mod tests {
     }
 
     fn driver(effects: Arc<ScriptedEffects>) -> GuestDriver {
-        GuestDriver::with_effects(
-            "work",
+        GuestDriver::new(
+            "work".to_owned(),
             ControllerGeneration::new(3).expect("generation"),
             effects,
         )
@@ -1933,6 +1939,138 @@ mod tests {
         });
         assert_eq!(factory.resource_types().len(), 1);
         assert_eq!(factory.resource_types()[0].as_str(), GUEST_TYPE_NAME);
+    }
+
+    /// The azure-container-apps provider document the effects read: the
+    /// gateway execution reference the custody validation binds and the
+    /// control credential it validates the scope of.
+    fn aca_provider_spec() -> serde_json::Value {
+        let profile = d2b_provider_guest_azure_container_apps::AcaSandboxProfile::new(
+            d2b_provider_guest_azure_container_apps::AcaProfileId::parse("default").unwrap(),
+            d2b_provider_guest_azure_container_apps::AcaDiskImageSource::ConfiguredDisk {
+                binding_id: d2b_provider_guest_azure_container_apps::AcaConfiguredDiskId::parse(
+                    "image-1",
+                )
+                .unwrap(),
+            },
+            d2b_provider_guest_azure_container_apps::AcaCpuMillis::new(500).unwrap(),
+            d2b_provider_guest_azure_container_apps::AcaMemoryMib::new(2_048).unwrap(),
+            300,
+            None,
+        )
+        .unwrap();
+        let defaults = d2b_provider_guest_azure_container_apps::AcaRuntimeConfig::new(
+            profile,
+            d2b_provider_guest_azure_container_apps::AcaReadinessPolicy::new(3, 10).unwrap(),
+            1_000,
+            4,
+        )
+        .unwrap();
+        let config = d2b_provider_guest_azure_container_apps::AcaProviderConfig::new(
+            ResourceRef::parse("Guest/gateway").unwrap(),
+            d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("tenant").unwrap(),
+            d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("client").unwrap(),
+            d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("subscription").unwrap(),
+            ResourceRef::parse("Credential/control").unwrap(),
+            None,
+            d2b_provider_guest_azure_container_apps::AcaConfiguredImageId::parse("environment")
+                .unwrap(),
+            d2b_provider_guest_azure_container_apps::AcaConfiguredImageId::parse("resource-group")
+                .unwrap(),
+            None,
+            d2b_provider_guest_azure_container_apps::AcaProfileId::parse("relay").unwrap(),
+            defaults,
+        )
+        .unwrap();
+        serde_json::json!({ "config": serde_json::to_value(config).expect("aca config") })
+    }
+
+    /// U10 lifetime pin: the factory builds the family's effects
+    /// implementation once per zone and shares the one value across every
+    /// driver it creates, so the framework-controller map survives a driver
+    /// recreation (a resource-actor restart or re-Ensure re-runs
+    /// `create_driver` while the plane is alive). The azure-container-apps
+    /// controller progresses `Progressing` -> `Converged` across passes, so
+    /// a recreated driver that shares the factory's effects value reports
+    /// `Ready` on its first pass, where a fresh per-driver effects value
+    /// would restart the state machine and report `Pending` again.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn driver_recreation_shares_the_factorys_controller_state() {
+        let facets = crate::test_support::ScriptedFacets::new();
+        facets.add_row(crate::test_support::row_fixture(
+            "work",
+            "Provider",
+            "runtime-azure-container-apps",
+            aca_provider_spec(),
+            ResourceStatus::Ready,
+        ));
+        facets.add_row(crate::test_support::row_fixture_with_metadata(
+            "work",
+            "Guest",
+            "gateway",
+            serde_json::json!({}),
+            ResourceStatus::Ready,
+            serde_json::json!({ "zone": "work" }),
+        ));
+        facets.add_row(crate::test_support::row_fixture(
+            "work",
+            "Credential",
+            "control",
+            serde_json::json!({ "scope": { "executionRef": "Guest/gateway" } }),
+            ResourceStatus::Ready,
+        ));
+        facets.add_committed_provider(
+            ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+            d2b_contracts_resource::v3::ResourceUid::parse(
+                "123e4567-e89b-42d3-a456-426614174001",
+            )
+            .unwrap(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+        );
+        facets.set_session_generation(Some(
+            d2b_contracts_resource::v3::identity::ReconnectGeneration::new(2).unwrap(),
+        ));
+        let factory = GuestDriverFactory::new(GuestDriverArgs {
+            zone: "work".to_owned(),
+            controller_generation: ControllerGeneration::new(3).expect("generation"),
+            facets: facets.facet_set(),
+        });
+        let manager = RecordingManager::new();
+        manager.add(
+            provider_row("runtime-azure-container-apps", aca_provider_spec()),
+            ResourceStatus::Ready,
+        );
+        manager.set_children_ready(true);
+        let key = ResourceKey::new("work", GUEST_TYPE_NAME, "work-vm");
+
+        let mut driver_a = factory.create(&key).await;
+        let mut ctx_a = context(
+            guest_row("work-vm", serde_json::json!({ "providerRef": "Provider/runtime-azure-container-apps" })),
+            Arc::clone(&manager),
+            RecordingRequeue::new(),
+        );
+        driver_a.reconcile(&mut ctx_a).await.expect("first pass");
+        assert_eq!(
+            guest_status(&ctx_a).phase,
+            GuestEffectPhase::Pending,
+            "the first pass progresses the controller without converging"
+        );
+
+        // The actor restarts while the plane is alive: a fresh driver from
+        // the same factory, over the same row and generation set.
+        let mut driver_b = factory.create(&key).await;
+        let mut ctx_b = context(
+            guest_row("work-vm", serde_json::json!({ "providerRef": "Provider/runtime-azure-container-apps" })),
+            Arc::clone(&manager),
+            RecordingRequeue::new(),
+        );
+        driver_b.reconcile(&mut ctx_b).await.expect("recreated pass");
+        assert_eq!(
+            guest_status(&ctx_b).phase,
+            GuestEffectPhase::Ready,
+            "the recreated driver shares the factory's controller state and resumes, not restarts"
+        );
     }
 
     /// The table is the family fence: four Provider rows, one kind each,
