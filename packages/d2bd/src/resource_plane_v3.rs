@@ -2003,8 +2003,6 @@ impl ConstructionInputs {
         // itself (U5), so the composition root supplies no externally built
         // port.
         let user_facets = UserEffectFacets::production();
-        Ok(Self {
-            zone: zone.clone(),
             zone_token,
             spec_store_dir,
             authority: ZoneAuthorityInputs {
@@ -2022,7 +2020,7 @@ impl ConstructionInputs {
             process_facets: process_facets.clone(),
             host_facets: host_facets.clone(),
             network_facets: network_facets.clone(),
-            user_facets,
+            user_facets: user_facets.clone(),
             volume_effects: Arc::new(production_volume_effects(state, zone.clone(), resolver, Arc::clone(&registry))),
             binding_effects: Arc::new(ProductionBindingDriverEffects::new(
                 Arc::new({
@@ -2176,7 +2174,7 @@ fn registered_service_factories(
             } else if service == ACTIVATION_EFFECTS_SERVICE.id {
                 Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone()))
             } else if service == USER_EFFECTS_SERVICE.id {
-                Arc::new(UserEffectsServiceFactory::new(*user_facets))
+                Arc::new(UserEffectsServiceFactory::new(user_facets.clone()))
                     as Arc<dyn EffectServiceFactory>
             } else if service == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id {
                 Arc::new(
@@ -2786,7 +2784,7 @@ impl ResourcePlaneV3 {
             // decoder and factory, whose effects come from the crate's own
             // implementation over the daemon-supplied facet set (U5); no
             // externally built port appears here (R2).
-            "user" => vec![user_descriptor(inputs.user_facets)],
+            "user" => vec![user_descriptor(inputs.user_facets.clone())],
             _ => Vec::new(),
         }
     }
@@ -3340,6 +3338,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
     use d2b_contracts_resource::v3::ResourceName;
     use d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata;
     use d2b_process_conformance::ProcessIdentityDigest;
+    use d2b_provider_system_core::UserIdentityDigest;
     use d2b_resource_runtime::revision::ManualClock;
     use d2b_resource_runtime::watch::{ChangeKind, ChangeNotice, WatchHubConfig};
 
@@ -3575,7 +3574,6 @@ use d2b_provider_system_core::MinijailPlatformGate;
         let user_facets = d2b_provider_user::test_support::recording_facets(
             d2b_provider_user::test_support::ScriptedProbe::new(),
         );
-        (
             dir,
             ConstructionInputs {
                 zone: ZoneId::parse("test").unwrap(),
@@ -3639,7 +3637,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 // from the recording runtime, exactly as the production
                 // composition root builds it from the daemon's runtime.
                 network_facets: network_facets.clone(),
-                user_facets,
+                user_facets: user_facets.clone(),
                 guest_effects: {
                     let effects = d2b_provider_guest::test_support::ScriptedEffects::new();
                     // The old plane fake reported Pending (the plane tests
@@ -3687,7 +3685,7 @@ HOST_EFFECTS_SERVICE.id,
                         ACTIVATION_EFFECTS_SERVICE.id,
                         Arc::new(ActivationEffectsServiceFactory::new(activation_facets))
                         USER_EFFECTS_SERVICE.id,
-                        Arc::new(UserEffectsServiceFactory::new(user_facets))
+                        Arc::new(UserEffectsServiceFactory::new(user_facets.clone()))
                             as Arc<dyn EffectServiceFactory>,
                     ),
                 ]),
@@ -4433,17 +4431,13 @@ HOST_EFFECTS_SERVICE.id,
     /// service from the family's own factory over the plane's facet set, and
     /// the hosted service answers `inspect-user` through the real invocation
     /// capability object carrying the real envelope payload - the same
-    /// implementation value the driver factory is built from. The report is
-    /// the family's bounded local-account probe running inside the owning
-    /// crate: the discovery condition and phase for the declared identity,
-    /// with the opaque identity digest when the account resolves.
+    /// implementation value the driver factory is built from. The plane's
+    /// test inputs carry the scripted probe, so the report is unconditional:
+    /// the declared identity resolves as discovered with the scripted
+    /// opaque identity digest, on any host.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn the_user_effects_service_answers_inspect_user_through_the_binding() {
-        let current = nix::unistd::User::from_uid(nix::unistd::Uid::current())
-            .expect("the current uid resolves")
-            .expect("the current process's account resolves");
-        let username = current.name.as_str();
         let (_dir, inputs, _readiness) = test_inputs();
         let runtime = ResourcePlaneV3::provider_set(&inputs)
             .start()
@@ -4458,7 +4452,8 @@ HOST_EFFECTS_SERVICE.id,
             invocation_id: "invocation-u5-inspect-user".to_owned(),
             payload: serde_json::from_value(serde_json::json!({
                 "userRef": "User/inspect-user-u5",
-                "osUsername": username,
+                "osUsername": "alice",
+                "groups": [],
             }))
             .expect("canonical payload"),
             resources: ServiceResourceContext::fail_closed(),
@@ -4478,36 +4473,23 @@ HOST_EFFECTS_SERVICE.id,
         assert_eq!(string_field("family"), "user");
         assert_eq!(string_field("resourceType"), "User");
         assert_eq!(string_field("userRef"), "User/inspect-user-u5");
-        assert_eq!(string_field("username"), username);
+        assert_eq!(string_field("username"), "alice");
         assert_eq!(string_field("provider"), "system-core");
-        assert!(
-            matches!(
-                string_field("phase").as_str(),
-                "Pending" | "Ready" | "Degraded" | "Unknown"
-            ),
-            "the observation carries the reconciler's closed phase set"
+        assert_eq!(
+            string_field("phase"),
+            "Ready",
+            "the scripted probe resolves the declared identity"
         );
-        assert!(
-            matches!(
-                string_field("discovery").as_str(),
-                "absent" | "discovered" | "drifted" | "unverified"
-            ),
-            "the observation carries the reconciler's closed discovery conditions"
+        assert_eq!(
+            string_field("discovery"),
+            "discovered",
+            "the scripted probe resolves the declared identity"
         );
-        // The current account resolves, so the crate's probe observes it as
-        // this User: Ready/discovered with the opaque identity present.
-        assert_eq!(string_field("phase"), "Ready");
-        assert_eq!(string_field("discovery"), "discovered");
-        match response.payload.get("identity") {
-            Some(d2b_contracts_resource::v3::CanonicalJsonValue::String(identity)) => {
-                assert_eq!(identity.len(), 64, "the identity digest is opaque hex");
-                assert!(
-                    identity.bytes().all(|byte| byte.is_ascii_hexdigit()),
-                    "the identity digest is lowercase hex"
-                );
-            }
-            other => panic!("identity is not a canonical string: {other:?}"),
-        }
+        assert_eq!(
+            string_field("identity"),
+            UserIdentityDigest::from_bytes([0x5a; 32]).to_hex(),
+            "the observation carries the scripted opaque identity digest"
+        );
     }
 
     /// KTD8 restart adoption for the rows this lane moves: an
@@ -4518,14 +4500,11 @@ HOST_EFFECTS_SERVICE.id,
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_restarted_plane_rehosts_the_user_effects_service() {
-        let current = nix::unistd::User::from_uid(nix::unistd::Uid::current())
-            .expect("the current uid resolves")
-            .expect("the current process's account resolves");
-        let username = current.name.as_str();
         let payload: d2b_contracts_resource::v3::CanonicalJsonObject =
             serde_json::from_value(serde_json::json!({
                 "userRef": "User/inspect-user-u5",
-                "osUsername": username,
+                "osUsername": "alice",
+                "groups": [],
             }))
             .expect("canonical payload");
         let (_dir, inputs, _readiness) = test_inputs();

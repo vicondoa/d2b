@@ -6,9 +6,10 @@
 //!   refusal.
 //! - [`ScriptedProbe`], the scripted double for the
 //!   [`UserDiscoveryEffectPort`] seam the crate's production probe
-//!   implements: resolves every declared identity with a fixed digest and
-//!   verified bindings, records the requested usernames, and can script an
-//!   absent account or a discovery refusal.
+//!   implements: resolves every declared identity as discovered, deriving
+//!   the opaque identity digest from the declared identity material the
+//!   way the production probe does, records the requested usernames, and
+//!   can script an absent account or a discovery refusal.
 //!
 //! [`recording_facets`] builds the declared facet set over a scripted
 //! probe, exactly as the production composition root builds it over the
@@ -88,11 +89,15 @@ impl UserDriverEffects for RecordingEffects {
 // -- the discovery-port seam -------------------------------------------------
 
 /// Scripted [`UserDiscoveryEffectPort`]: resolves every declared identity
-/// as discovered with a fixed opaque digest and the fully verified
-/// bindings, records every requested username order-preservingly, and can
-/// script an absent account or a discovery refusal. The scripted state
-/// lives behind an `Arc`, so a test can keep a handle and script the
-/// service-held probe.
+/// as discovered with the opaque identity digest derived from the declared
+/// identity material the way the production probe does - the fixed base
+/// digest for a group-free identity, extended with every declared group -
+/// and verifies the record and primary group but never a declared group
+/// membership, so a spec that declares groups classifies as drifted, like
+/// a machine whose declared memberships do not verify. Records every
+/// requested username order-preservingly, and can script an absent account
+/// or a discovery refusal. The scripted state lives behind an `Arc`, so a
+/// test can keep a handle and script the service-held probe.
 pub struct ScriptedProbe {
     core: Arc<ScriptedCore>,
 }
@@ -104,8 +109,6 @@ struct ScriptedCore {
     absent: AtomicBool,
     /// Whether the next discovery refuses.
     failing: AtomicBool,
-    /// The opaque identity every resolved discovery reports.
-    identity: UserIdentityDigest,
 }
 
 impl ScriptedProbe {
@@ -117,7 +120,6 @@ impl ScriptedProbe {
                 calls: parking_lot::Mutex::new(Vec::new()),
                 absent: AtomicBool::new(false),
                 failing: AtomicBool::new(false),
-                identity: UserIdentityDigest::from_bytes([0x5a; 32]),
             }),
         })
     }
@@ -142,7 +144,7 @@ impl ScriptedProbe {
 impl UserDiscoveryEffectPort for ScriptedProbe {
     async fn discover(
         &self,
-        _user_ref: &ResourceRef,
+        user_ref: &ResourceRef,
         spec: &UserSpec,
     ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
         self.core.calls.lock().push(spec.os_username().clone());
@@ -153,13 +155,37 @@ impl UserDiscoveryEffectPort for ScriptedProbe {
             return Ok(None);
         }
         Ok(Some(DiscoveredUser {
-            identity: self.core.identity,
+            identity: scripted_identity(user_ref, spec),
             observed: UserObservation::from_verified([
                 UserBinding::NssRecord,
                 UserBinding::PrimaryGroup,
             ]),
         }))
     }
+}
+
+/// The scripted identity for one declared spec: the fixed base digest for
+/// a group-free identity, extended with every declared group under the
+/// scripted domain - the declared group names are identity material the
+/// production probe folds into its digest, so the scripted digest must
+/// track them too, or a group-declaring identity would share a group-free
+/// identity's digest and the group half of the declared identity could
+/// never be observed.
+fn scripted_identity(user_ref: &ResourceRef, spec: &UserSpec) -> UserIdentityDigest {
+    if spec.groups().is_empty() {
+        return UserIdentityDigest::from_bytes([0x5a; 32]);
+    }
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"scripted-user-v1");
+    hasher.update(user_ref.name().as_str().as_bytes());
+    hasher.update([0]);
+    hasher.update(spec.os_username().as_str().as_bytes());
+    for group in spec.groups() {
+        hasher.update([0]);
+        hasher.update(group.as_str().as_bytes());
+    }
+    UserIdentityDigest::from_bytes(hasher.finalize().into())
 }
 
 // -- the declared facet seam -------------------------------------------------

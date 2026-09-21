@@ -15,8 +15,10 @@
 //! - the declared zone-plane service [`USER_EFFECTS_SERVICE`], hosted per
 //!   zone by the daemon through [`UserEffectsServiceFactory`]. Its one
 //!   method (`inspect-user`) answers the family's bounded discovery
-//!   observation for one declared User identity - the same probe the
-//!   driver effects reconcile over.
+//!   observation for one declared User identity - the reference, the OS
+//!   username, and the declared group memberships the payload names - the
+//!   same probe and classification the driver effects reconcile over for
+//!   that declared identity.
 //!
 //! Everything the effects read crosses the provider boundary as declared
 //! facets ([`crate::facets`]); every probe input is host state this crate
@@ -26,7 +28,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::CanonicalJsonObject;
-use d2b_contracts_resource::v3::user::{OsUsername, UserSpec, USER_RESOURCE_TYPE};
+use d2b_contracts_resource::v3::execution_policy::BoundedText;
+use d2b_contracts_resource::v3::user::{
+    MAX_USER_GROUPS, OsGroupName, OsUsername, UserSpec, USER_RESOURCE_TYPE,
+};
 use d2b_provider_system_core::{UserDiscoveryEffectPort, UserReconciler, UserStatusReport};
 use d2b_provider_toolkit::{
     EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceInvocation,
@@ -39,14 +44,17 @@ use crate::facets::UserEffectFacets;
 /// The User family's declared effects service.
 ///
 /// One zone-plane method, `inspect-user`: it answers the family's bounded
-/// discovery observation for one declared User identity - the reference and
-/// OS username the payload names, resolved through the crate's own
-/// local-account probe over the preserved `UserReconciler` (the same probe
-/// and classification the driver's `observe_user` reconciles over). The
-/// observation is served from the crate's own probe, so it proves the
-/// family's probe runs inside the owning crate (U5); a discovery that
-/// cannot complete refuses with its own closed code instead of answering a
-/// half-built report.
+/// discovery observation for one declared User identity - the reference,
+/// the OS username, and the declared group memberships the payload names -
+/// resolved through the crate's own local-account probe over the preserved
+/// `UserReconciler` (the same probe and classification the driver's
+/// `observe_user` reconciles over for a row whose stored spec declares
+/// that identity; the payload declares the identity to observe, so a row
+/// whose stored spec declares groups is inspected with those groups
+/// declared). The observation is served from the crate's own probe, so it
+/// proves the family's probe runs inside the owning crate (U5); a
+/// discovery that cannot complete refuses with its own closed code instead
+/// of answering a half-built report.
 ///
 /// The service is declared on the `User` descriptor alone; the family's
 /// driver effects (the typed seam) stay the driver's object, not a hosted
@@ -85,13 +93,18 @@ fn inspect_user_response(
 }
 
 /// The request contract the `inspect-user` method serves: one declared User
-/// identity - the row reference and the OS username the probe resolves.
-/// Both ride the canonical payload and are validated through the closed
-/// contract types, never a caller-supplied path or handle, so a malformed
-/// identity refuses before any probe runs.
+/// identity - the row reference, the OS username the probe resolves, and
+/// the declared group memberships the probe must verify. All ride the
+/// canonical payload and are validated through the closed contract types,
+/// never a caller-supplied path or handle, so a malformed identity refuses
+/// before any probe runs. The payload declares the identity to observe; a
+/// row whose stored spec declares groups must be inspected with those
+/// groups declared, or the answer describes a different identity than the
+/// row's.
 struct InspectUserRequest {
     user_ref: d2b_contracts_resource::v3::ResourceRef,
     username: OsUsername,
+    groups: Vec<OsGroupName>,
 }
 
 impl InspectUserRequest {
@@ -117,15 +130,37 @@ impl InspectUserRequest {
             }
             _ => return Err(declined("inspect-user-request-invalid")),
         };
-        Ok(Self { user_ref: reference, username })
+        let groups = match payload.get("groups") {
+            Some(d2b_contracts_resource::v3::CanonicalJsonValue::Array(values)) => {
+                let mut groups = Vec::with_capacity(values.len());
+                for value in values {
+                    let d2b_contracts_resource::v3::CanonicalJsonValue::String(spelling) = value
+                    else {
+                        return Err(declined("inspect-user-request-invalid"));
+                    };
+                    groups.push(
+                        OsGroupName::parse(spelling.as_str())
+                            .map_err(|_| declined("inspect-user-request-invalid"))?,
+                    );
+                }
+                if groups.len() > MAX_USER_GROUPS {
+                    return Err(declined("inspect-user-request-invalid"));
+                }
+                groups
+            }
+            _ => return Err(declined("inspect-user-request-invalid")),
+        };
+        Ok(Self { user_ref: reference, username, groups })
     }
 }
 
 /// Serve the `inspect-user` method: run the family's bounded probe for the
-/// declared identity and answer its discovery observation. A discovery that
-/// cannot complete refuses with its own closed code instead of answering a
-/// half-built report; the driver seam keeps the same refusal mapping it
-/// always had (the row's own reconcile classifies it).
+/// declared identity - the reference, the OS username, and the declared
+/// group memberships the payload names - and answer its discovery
+/// observation. A discovery that cannot complete refuses with its own
+/// closed code instead of answering a half-built report; the driver seam
+/// keeps the same refusal mapping it always had (the row's own reconcile
+/// classifies it).
 async fn serve_inspect_user(
     reconciler: &UserReconciler<Arc<dyn UserDiscoveryEffectPort>>,
     payload: &CanonicalJsonObject,
@@ -135,7 +170,15 @@ async fn serve_inspect_user(
         reason: reason.to_owned(),
     };
     let request = InspectUserRequest::parse(payload)?;
-    let spec = UserSpec::minimal(request.username.clone());
+    // The probe input is the declared identity itself: the spec carries the
+    // declared groups, so the identity digest and the required bindings are
+    // the ones the row's own reconcile would demand for that identity.
+    let spec = UserSpec::new(
+        request.username.clone(),
+        BoundedText::parse(String::new()).expect("empty text is always valid"),
+        request.groups.clone(),
+    )
+    .map_err(|_| declined("inspect-user-request-invalid"))?;
     let report = reconciler
         .reconcile(&request.user_ref, &spec)
         .await
@@ -224,7 +267,8 @@ mod tests {
 
     use d2b_contracts_resource::v3::{
         CanonicalJsonValue, ResourcePhase, ResourceRef,
-        user::{OsUsername, UserSpec},
+        execution_policy::BoundedText,
+        user::{MAX_USER_GROUPS, OsGroupName, OsUsername, UserSpec},
     };
     use d2b_provider_system_core::{
         SystemCoreError, UserDiscoveryCondition, UserIdentityDigest,
@@ -352,6 +396,7 @@ mod tests {
         let payload = canonical(serde_json::json!({
             "userRef": "User/alice",
             "osUsername": "alice",
+            "groups": [],
         }));
         let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
         let response = service
@@ -382,6 +427,7 @@ mod tests {
         let payload = canonical(serde_json::json!({
             "userRef": "User/alice",
             "osUsername": "alice",
+            "groups": [],
         }));
         let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
         let response = service(probe)
@@ -406,6 +452,7 @@ mod tests {
         let payload = canonical(serde_json::json!({
             "userRef": "User/alice",
             "osUsername": "alice",
+            "groups": [],
         }));
         let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
         let error = service(probe)
@@ -421,20 +468,47 @@ mod tests {
         );
     }
 
-    /// A malformed identity refuses before any probe runs.
+    /// A malformed identity refuses before any probe runs: a missing or
+    /// mistyped field, an invalid or oversized group declaration, or a
+    /// group name the closed contract rejects.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn inspect_user_refuses_a_malformed_request() {
+        let oversized_groups = canonical(serde_json::json!({
+            "userRef": "User/alice",
+            "osUsername": "alice",
+            "groups": (0..(MAX_USER_GROUPS + 1))
+                .map(|index| format!("group{index}"))
+                .collect::<Vec<_>>(),
+        }));
         for payload in [
             canonical(serde_json::json!({})),
             canonical(serde_json::json!({
                 "userRef": "Guest/alice",
                 "osUsername": "alice",
+                "groups": [],
             })),
             canonical(serde_json::json!({
                 "userRef": "User/alice",
                 "osUsername": "",
+                "groups": [],
             })),
+            canonical(serde_json::json!({
+                "userRef": "User/alice",
+                "osUsername": "alice",
+                "groups": "wheel",
+            })),
+            canonical(serde_json::json!({
+                "userRef": "User/alice",
+                "osUsername": "alice",
+                "groups": [1],
+            })),
+            canonical(serde_json::json!({
+                "userRef": "User/alice",
+                "osUsername": "alice",
+                "groups": ["", "wheel"],
+            })),
+            oversized_groups,
         ] {
             let mut resources =
                 d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
@@ -450,6 +524,69 @@ mod tests {
                 }
             );
         }
+    }
+
+    /// The hosted `inspect-user` method answers the observation for the
+    /// *declared* identity, and the declared identity includes its group
+    /// memberships: a row whose stored spec declares a membership that
+    /// does not verify is classified as drifted by the driver, and the
+    /// hosted surface must answer the same observation for that row - the
+    /// same degraded phase, the same drifted condition, the same identity
+    /// digest. A group-free identity cannot detect this; this test
+    /// declares groups, so it fails if the declared groups are not fed to
+    /// the probe (the answer would then claim `Ready`/`discovered` with
+    /// the group-free digest).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn inspect_user_answers_the_declared_groups_observation() {
+        let probe = ScriptedProbe::new();
+        let service = service(probe);
+        let grouped_spec = UserSpec::new(
+            OsUsername::parse("alice").expect("username"),
+            BoundedText::parse(String::new()).expect("empty text is always valid"),
+            vec![OsGroupName::parse("wheel").expect("group name")],
+        )
+        .expect("the declared groups are within the contract bound");
+
+        // The row's own observation: the driver reconciles the stored spec
+        // and publishes the group-declaring identity as drifted, because
+        // the declared membership does not verify.
+        let row = service
+            .observe_user(&user_ref(), &grouped_spec)
+            .await
+            .expect("the row's observation");
+        assert_eq!(row.phase, ResourcePhase::Degraded, "the row reports drift");
+        assert_eq!(row.discovery, UserDiscoveryCondition::Drifted);
+        let row_identity = row
+            .identity
+            .expect("a drifted identity still resolved an identity digest");
+        assert_ne!(
+            row_identity.to_hex(),
+            UserIdentityDigest::from_bytes([0x5a; 32]).to_hex(),
+            "the declared group must be part of the resolved identity, or the scripted probe \
+             cannot exercise the digest half of the declared identity"
+        );
+
+        // The hosted surface for the same declared identity must publish
+        // the same observation.
+        let payload = canonical(serde_json::json!({
+            "userRef": "User/alice",
+            "osUsername": "alice",
+            "groups": ["wheel"],
+        }));
+        let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
+        let response = service
+            .handle(invocation(&payload, &mut resources))
+            .await
+            .expect("served");
+        assert_eq!(string_field(&response.payload, "phase"), "Degraded");
+        assert_eq!(string_field(&response.payload, "discovery"), "drifted");
+        assert_eq!(
+            string_field(&response.payload, "identity"),
+            row_identity.to_hex(),
+            "the hosted answer carries the same identity digest the driver publishes for \
+             the declared identity"
+        );
     }
 
     // -- factory ---------------------------------------------------------------
@@ -468,6 +605,7 @@ mod tests {
         let payload = canonical(serde_json::json!({
             "userRef": "User/alice",
             "osUsername": "alice",
+            "groups": [],
         }));
         let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
         let response = service
