@@ -14,7 +14,7 @@ use std::{
 use async_trait::async_trait;
 use d2b_bus::{
     AuthorizationError, BusAuthorizer, BusConfig, BusError, CommittedControllerProcessSubjectInput,
-    ComponentSessionAdmission, EndpointError, OperationId, OperationSpec, ResourceCall,
+    ComponentSessionAdmission, EndpointError, ManualClock, OperationId, OperationSpec, ResourceCall,
     ResourceQuery, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
 use d2b_contracts_provider::v3::{
@@ -566,6 +566,19 @@ fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
 }
 
 fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
+    let (zone, authorizer) = test_authorizer();
+    ZoneBus::new(zone, authorizer, config).unwrap()
+}
+
+/// Like [`bus_with_config`], but with a deterministic injected clock so
+/// operation deadlines resolve against virtual time instead of the wall
+/// clock.
+fn bus_with_manual_clock(clock: Arc<dyn d2b_bus::BusClock>) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
+    let (zone, authorizer) = test_authorizer();
+    ZoneBus::with_clock(zone, authorizer, BusConfig::default(), clock).unwrap()
+}
+
+fn test_authorizer() -> (ZoneId, BusAuthorizer) {
     let catalog = ApiCatalog::standard();
     let zone = ZoneId::parse("dev").unwrap();
     let rule = PolicyRule::new(
@@ -623,7 +636,22 @@ fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         bootstrap_phase: BootstrapPhase::Disabled,
         now_tick: 1,
     };
-    ZoneBus::new(zone, BusAuthorizer::new(native, state).unwrap(), config).unwrap()
+    (zone, BusAuthorizer::new(native, state).unwrap())
+}
+
+/// Advance the paused virtual clock in 1ms steps, yielding to the runtime
+/// between steps so real work (signals, I/O) can proceed. Completes after
+/// `limit` of virtual time. Used as the deterministic counterpart of a
+/// real-time guard in `start_paused` tests: the bound is virtual, so
+/// scheduling delay under load cannot race it.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+async fn advance_virtual(limit: std::time::Duration) {
+    let mut remaining = limit;
+    while remaining > std::time::Duration::ZERO {
+        let step = remaining.min(std::time::Duration::from_millis(1));
+        tokio::time::advance(step).await;
+        remaining -= step;
+    }
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -2544,7 +2572,7 @@ async fn uncorrelatable_response_terminates_every_waiter() {
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn revocation_waits_for_an_admitted_batch_before_returning() {
     let (_bus, mut registrar) = bus();
     let pause = Arc::new(WriterPause::default());
@@ -2594,12 +2622,15 @@ async fn revocation_waits_for_an_admitted_batch_before_returning() {
             .await
     });
 
-    tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        pause.wait_until_entered(),
-    )
-    .await
-    .expect("request batch must reach the paused writer");
+    // Condition-driven wait under paused virtual time: the advance branch is
+    // the deterministic counterpart of a real-time guard, so scheduling
+    // delay under load cannot race it.
+    tokio::select! {
+        () = pause.wait_until_entered() => {}
+        () = advance_virtual(std::time::Duration::from_secs(15)) => {
+            panic!("request batch must reach the paused writer")
+        }
+    }
     let mut revocation = Box::pin(registrar.disconnect_component_session(endpoint));
     tokio::select! {
         result = &mut revocation => {
@@ -2777,9 +2808,14 @@ async fn receive_failure_terminates_without_retaining_the_operation() {
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn deadline_signals_the_correlated_remote_request() {
-    let (_bus, mut registrar) = bus();
+    // A manual clock keeps the 500-tick operation deadline deterministic:
+    // with the system clock the ticks count real time since bus creation, so
+    // a loaded machine that spends >500ms in setup would expire the deadline
+    // before the invoke even dispatches. The tokio deadline timer then
+    // resolves in virtual time, advanced by the waits below.
+    let (_bus, mut registrar) = bus_with_manual_clock(Arc::new(ManualClock::new(1)));
     let (endpoint, remote, echo) = admit(
         &registrar,
         policy(
@@ -2839,23 +2875,36 @@ async fn deadline_signals_the_correlated_remote_request() {
             )
             .await
     });
+    // The waits below are condition-driven (oneshot channels) under paused
+    // virtual time: the advance branches are the deterministic counterpart of
+    // a real-time guard, so scheduling delay under load cannot race them. The
+    // dispatch guard stays below the 500ms deadline so a stalled dispatch
+    // fails with its own message before the deadline can fire.
     tokio::select! {
         dispatched = dispatched_wait => dispatched.unwrap(),
         result = &mut invoke => panic!("invoke completed before remote dispatch: {result:?}"),
-        () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+        () = advance_virtual(std::time::Duration::from_millis(250)) => {
             panic!("invoke did not reach the remote request")
         }
     }
+    let invoke_result = tokio::select! {
+        result = &mut invoke => result,
+        () = advance_virtual(std::time::Duration::from_secs(15)) => {
+            panic!("invoke did not complete after remote dispatch")
+        }
+    };
     assert!(matches!(
-        invoke.await.unwrap(),
+        invoke_result.unwrap(),
         Err(d2b_bus::BusError::Operation(
             d2b_bus::operations::OperationError::DeadlineExceeded
         ))
     ));
-    tokio::time::timeout(std::time::Duration::from_secs(1), cancelled_wait)
-        .await
-        .expect("remote cancellation must be signalled")
-        .unwrap();
+    tokio::select! {
+        result = cancelled_wait => result.unwrap(),
+        () = advance_virtual(std::time::Duration::from_secs(15)) => {
+            panic!("remote cancellation must be signalled")
+        }
+    }
     registrar
         .disconnect_component_session(endpoint)
         .await
@@ -2865,7 +2914,7 @@ async fn deadline_signals_the_correlated_remote_request() {
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn explicit_cancel_signals_the_correlated_remote_request() {
     let (_bus, mut registrar) = bus();
     let (endpoint, remote, echo) = admit(
@@ -2931,19 +2980,26 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
             )
             .await
     });
-    tokio::time::timeout(std::time::Duration::from_secs(1), dispatched_wait)
-        .await
-        .expect("invoke must reach the remote request")
-        .unwrap();
+    // Condition-driven waits under paused virtual time: the advance branches
+    // are the deterministic counterpart of a real-time guard, so scheduling
+    // delay under load cannot race them.
+    tokio::select! {
+        result = dispatched_wait => result.unwrap(),
+        () = advance_virtual(std::time::Duration::from_secs(15)) => {
+            panic!("invoke must reach the remote request")
+        }
+    }
     caller.cancel(&operation).await.unwrap();
     assert!(matches!(
         invoke.await.unwrap(),
         Err(d2b_bus::BusError::Cancelled)
     ));
-    tokio::time::timeout(std::time::Duration::from_secs(1), cancelled_wait)
-        .await
-        .expect("remote cancellation must be signalled")
-        .unwrap();
+    tokio::select! {
+        result = cancelled_wait => result.unwrap(),
+        () = advance_virtual(std::time::Duration::from_secs(15)) => {
+            panic!("remote cancellation must be signalled")
+        }
+    }
     registrar
         .disconnect_component_session(endpoint)
         .await
@@ -2953,7 +3009,7 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn dropped_invoke_signals_the_correlated_remote_request() {
     let (_bus, mut registrar) = bus();
     let (endpoint, remote, echo) = admit(
@@ -3015,16 +3071,23 @@ async fn dropped_invoke_signals_the_correlated_remote_request() {
             )
             .await
     });
-    tokio::time::timeout(std::time::Duration::from_secs(1), dispatched_wait)
-        .await
-        .expect("invoke must reach the remote request")
-        .unwrap();
+    // Condition-driven waits under paused virtual time: the advance branches
+    // are the deterministic counterpart of a real-time guard, so scheduling
+    // delay under load cannot race them.
+    tokio::select! {
+        result = dispatched_wait => result.unwrap(),
+        () = advance_virtual(std::time::Duration::from_secs(15)) => {
+            panic!("invoke must reach the remote request")
+        }
+    }
     invoke.abort();
     assert!(invoke.await.unwrap_err().is_cancelled());
-    tokio::time::timeout(std::time::Duration::from_secs(1), cancelled_wait)
-        .await
-        .expect("dropping an invoke must signal remote cancellation")
-        .unwrap();
+    tokio::select! {
+        result = cancelled_wait => result.unwrap(),
+        () = advance_virtual(std::time::Duration::from_secs(15)) => {
+            panic!("dropping an invoke must signal remote cancellation")
+        }
+    }
     registrar
         .disconnect_component_session(endpoint)
         .await

@@ -1000,6 +1000,11 @@ fn persist_locked(
         .write(true)
         .create_new(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        // Deliberately unpinned: 0640 is the open-time default; the
+        // umask may narrow it to 0600, which the broker-root-only
+        // reader tolerates. A post-open fchmod would widen the file
+        // relative to what the operator's umask chose - do not mirror
+        // the store_sync_export/audit pins here.
         .mode(0o640)
         .open(&temp_path)
         .map_err(CellStoreError::Io)?;

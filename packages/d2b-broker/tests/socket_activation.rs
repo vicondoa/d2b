@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use d2b_broker::protocol::{connect_seqpacket, recv_json_frame, send_json_frame};
+use d2b_broker::protocol::connect_seqpacket_bounded;
 use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope, BrokerResponse, HelloRequest,
 };
@@ -175,35 +175,54 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
     // Parent's copy is no longer needed; the child has inherited it.
     drop(listen_fd);
 
-    // Allow time for the broker to initialise the accept loop.
-    std::thread::sleep(Duration::from_millis(400));
-
-    // Verify the broker is still running.
-    if let Some(status) = broker_proc.try_wait().expect("try_wait") {
-        panic!(
-            "broker exited prematurely with status {status}; \
-             socket_path={}",
-            sock_path.display()
-        );
-    }
-
-    // Connect and round-trip a Hello request.
-    let client_fd = connect_seqpacket(&sock_path).expect("connect to activated socket");
-
-    let envelope = BrokerRequestEnvelope {
-        request: BrokerRequest::Hello(HelloRequest {
-            client_version: "test-0".to_owned(),
-            supported_features: vec![],
-        }),
-        caller_role: BrokerCallerRole::default(),
-        test_peer_uid: Some(current_uid),
-        audit_join: None,
+    // Wait until the broker's accept loop is actually serving: retry the
+    // whole Hello round trip until it completes, fail fast if the broker
+    // exits, and keep a generous deadline only as a last-resort guard
+    // against a wedged broker. The wait is progress-based - each attempt
+    // either completes or is retried, so wall-clock load cannot trip it.
+    let response = {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("socket-activation test runtime");
+        runtime.block_on(async {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                if let Some(status) = broker_proc.try_wait().expect("try_wait") {
+                    panic!(
+                        "broker exited prematurely with status {status}; \
+                         socket_path={}",
+                        sock_path.display()
+                    );
+                }
+                let attempt = async {
+                    let client =
+                        connect_seqpacket_bounded(&sock_path, Duration::from_millis(500)).await?;
+                    let envelope = BrokerRequestEnvelope {
+                        request: BrokerRequest::Hello(HelloRequest {
+                            client_version: "test-0".to_owned(),
+                            supported_features: vec![],
+                        }),
+                        caller_role: BrokerCallerRole::default(),
+                        test_peer_uid: Some(current_uid),
+                        audit_join: None,
+                    };
+                    client.send_json_frame(&envelope).await?;
+                    client.recv_json_frame::<BrokerResponse>().await
+                };
+                match tokio::time::timeout(Duration::from_millis(500), attempt).await {
+                    Ok(Ok(Some(response))) => break response,
+                    Ok(Ok(None)) | Ok(Err(_)) | Err(_) => {
+                        assert!(
+                            tokio::time::Instant::now() < deadline,
+                            "broker never served Hello within 30 s; socket_path={}",
+                            sock_path.display()
+                        );
+                    }
+                }
+            }
+        })
     };
-    send_json_frame(client_fd.as_raw_fd(), &envelope).expect("send hello");
-
-    let response: Option<BrokerResponse> =
-        recv_json_frame(client_fd.as_raw_fd()).expect("recv hello response");
-    let response = response.expect("expected a response, got EOF");
 
     // Kill the broker before asserting so cleanup runs even on assertion failure.
     let _ = broker_proc.kill();

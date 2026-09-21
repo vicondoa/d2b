@@ -3108,6 +3108,16 @@ mod tests {
         fn cli_socket_reports_a_stalled_peer_as_a_bounded_deadline() {
             let (socket, server) = test_socket_pair();
             let started = Instant::now();
+            // The TimedOut error kind is the mechanism: `recv_frame`'s own
+            // budget (100ms) fired the timeout branch. The elapsed bound
+            // below is the magnitude guard: 30s is 300x the budget, so
+            // scheduling delay cannot trip it, but a regression that inflates
+            // the budget (a millis/seconds slip) fails on the measurement.
+            // A regression that removes the internal timeout entirely would
+            // park `block_on` and hang this test - the runner sets no per-test
+            // timeout - so the equivalent process-level hang is guarded by
+            // `run_with_guard` in audit_contract.rs, where a child process
+            // exists to kill.
             let error = block_on(async {
                 socket
                     .recv_frame(Duration::from_millis(100))
@@ -3116,8 +3126,8 @@ mod tests {
             });
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
             assert!(
-                started.elapsed() < Duration::from_secs(5),
-                "the deadline must bound the wait, took {:?}",
+                started.elapsed() < Duration::from_secs(30),
+                "the 100ms receive budget must bound the wait, took {:?}",
                 started.elapsed()
             );
             drop(server);

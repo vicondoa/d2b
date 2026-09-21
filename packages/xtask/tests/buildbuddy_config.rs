@@ -1971,11 +1971,20 @@ fn ci_uses_public_make_aliases_without_nested_nix_develop_wrappers() {
             && workflow.contains("D2B_BAZEL_UNTRUSTED: \"1\""),
         "CI must keep the local and untrusted BuildBuddy boundary"
     );
+    // The bounded fetch-retry anchor (`run: *bazel-fetch-retry`) routes the
+    // make alias through `D2B_CI_FETCH_RETRY_CMD`, so a retry-wrapped step
+    // carries the literal `make <alias>` invocation in its env rather than on
+    // the `run:` line. Count both forms: the assertion is that the workflow
+    // exercises the public Make aliases directly - the per-target Nix wrapper
+    // form is guarded by the first assertion above, and the retry wrapper
+    // still runs the alias through `bash -c "$cmd"` unchanged.
     let make_runs = workflow
         .lines()
         .filter(|line| {
             let trimmed = line.trim_start();
-            trimmed.starts_with("run: make ") || trimmed == "run: make"
+            trimmed.starts_with("run: make ")
+                || trimmed == "run: make"
+                || trimmed.starts_with("D2B_CI_FETCH_RETRY_CMD: make ")
         })
         .count();
     assert!(
