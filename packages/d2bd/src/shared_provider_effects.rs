@@ -3724,9 +3724,16 @@ mod tests {
             .effects
             .network_admission(&harness.runtime, &request, &harness.spec, &harness.resolver)
             .await;
+        // The refusal reason, not the result: the error Display is a closed
+        // vocabulary and never carries the network or guest identity, so the
+        // assertion message logs no uid.
+        let verdict = match &result {
+            Ok(_) => "admitted".to_owned(),
+            Err(error) => error.to_string(),
+        };
         assert!(
             matches!(result, Ok(_)),
-            "a same-zone attached Guest must be admitted: {result:?}",
+            "a same-zone attached Guest must be admitted: {verdict}",
         );
     }
 }
