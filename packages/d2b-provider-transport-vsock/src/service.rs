@@ -26,12 +26,12 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc},
-    time::timeout,
+    time::{Instant, timeout},
 };
 
 /// Opaque endpoint resolution identity supplied by the child Zone core.
@@ -445,6 +445,12 @@ where
             );
             ServiceError::ProviderOverloaded
         })?;
+        // The deadline must live on tokio's clock: the enforcing `timeout`
+        // sleeps run on it, so a std-clock deadline would desynchronize from
+        // them under a paused/virtual clock and could let a slow effect open
+        // outlive the deadline it is meant to be bounded by. On an unpaused
+        // runtime tokio's clock is the real clock, so production behavior is
+        // unchanged.
         let deadline = Instant::now() + Duration::from_millis(u64::from(request.deadline_ms));
         let effect_stream = timeout(
             remaining_until(deadline),
