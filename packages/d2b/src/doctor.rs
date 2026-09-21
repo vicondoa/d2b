@@ -2408,25 +2408,36 @@ mod tests {
         // before waitpid - it should be in Z state.
         let mut child = system_tool_command("true").spawn().expect("spawn true");
         let pid = child.id() as i32;
-        // Give the child time to exit without being reaped.
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        // Read state; if it's already reaped by the OS before we get here
-        // (proc entry gone), skip the assertion.
-        if let Some(state_char) = read_proc_stat_state(pid) {
-            // May be zombie ('Z'), already gone/dead ('X'), or transiently
-            // still runnable ('R'), sleeping ('S'), or in uninterruptible
-            // sleep ('D') before the scheduler reaches process teardown.
+        // Wait for the child to exit without being reaped: the exited state
+        // is the observable condition, not a fixed sleep. The guard only
+        // bounds the environment producing the precondition (the child always
+        // exits; load only delays the observation). Nothing reaps the child
+        // before the explicit wait below, so its proc entry staying absent is
+        // a failure, not a skip.
+        let settled = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let state = loop {
+            match read_proc_stat_state(pid) {
+                Some(state @ ('Z' | 'X')) => break state,
+                Some(_) => {}
+                // Nothing reaps this test's own unreaped child, so a vanished
+                // proc entry is a parser or environment failure, not a reason
+                // to skip the assertion: a test that can skip its own checks
+                // is a silent pass. (Mirrors the readiness sibling's Gone
+                // panic.)
+                None => panic!("child {pid} vanished before its exited state was observed"),
+            }
             assert!(
-                state_char == 'Z'
-                    || state_char == 'X'
-                    || state_char == 'R'
-                    || state_char == 'S'
-                    || state_char == 'D',
-                "unexpected state: {state_char}"
+                std::time::Instant::now() < settled,
+                "child {pid} did not reach an exited state within the guard window"
             );
-        }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
         // Reap to avoid leaking zombies.
         let _ = child.wait();
+        assert!(
+            state == 'Z' || state == 'X',
+            "child {pid} exited but read_proc_stat_state reported {state:?}"
+        );
     }
 
     // --- check_bridge_ipv6_sysctl ---

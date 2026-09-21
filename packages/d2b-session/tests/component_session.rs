@@ -2140,29 +2140,66 @@ async fn cancellation_aborts_an_in_progress_guarded_write() {
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn outbound_cancel_fails_closed_before_a_queued_call_dispatch() {
     let (initiator, responder, handles) = engine_pair().await;
     handles.block_sends_a.store(true, Ordering::Release);
     let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
     let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
+
+    // Handoff contract (no wake-order assumptions; the flavor is spelled
+    // because single-threaded cooperation is required): the entry ack is sent
+    // BEFORE the driver call, inside the spawned task's first poll. A task's
+    // poll runs to its first suspension, so the test cannot observe the ack
+    // until that poll has completed - and the command enqueue happens
+    // synchronously earlier in the same poll (or its waiter is registered),
+    // so by the time the ack resolves, the command is already ordered in the
+    // bounded channel. The channel is FIFO and the single driver task
+    // consumes it in order, so commands below are ordered: SendTtrpc, then
+    // StartTtrpc, then Cancel. The writer task likewise consumes its batch
+    // channel FIFO, so the queued call's batch is never processed before the
+    // fence-holding first batch completes, and the entry ack plus that FIFO
+    // means the queued call is registered before the cancel is handled.
+    let (first_entered_tx, first_entered_rx) = tokio::sync::oneshot::channel();
     let first_send = {
         let initiator = Arc::clone(&initiator);
-        tokio::spawn(async move { initiator.send_ttrpc(vec![0x11]).await })
+        tokio::spawn(async move {
+            let _ = first_entered_tx.send(());
+            initiator.send_ttrpc(vec![0x11]).await
+        })
     };
-    tokio::task::yield_now().await;
+    first_entered_rx.await.unwrap();
     let request_id = RequestId::new(vec![0x91; 16]).unwrap();
+    let (queued_entered_tx, queued_entered_rx) = tokio::sync::oneshot::channel();
     let queued_call = {
         let initiator = Arc::clone(&initiator);
         let request_id = request_id.clone();
-        tokio::spawn(async move { initiator.start_ttrpc(request_id, vec![0x22]).await })
+        tokio::spawn(async move {
+            let _ = queued_entered_tx.send(());
+            initiator.start_ttrpc(request_id, vec![0x22]).await
+        })
     };
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    queued_entered_rx.await.unwrap();
+    let (cancel_entered_tx, cancel_entered_rx) = tokio::sync::oneshot::channel();
     let cancel = {
         let initiator = Arc::clone(&initiator);
-        tokio::spawn(async move { initiator.cancel(7, request_id).await })
+        tokio::spawn(async move {
+            let _ = cancel_entered_tx.send(());
+            initiator.cancel(7, request_id).await
+        })
     };
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    cancel_entered_rx.await.unwrap();
+
+    // Barrier: this command is queued behind the Cancel command in the same
+    // FIFO channel, and the driver answers it synchronously (unlike the
+    // blocked writes), so awaiting its reply proves the cancel has been fully
+    // processed - the queued call's token revoked - before the transport
+    // fence drops. The revocation therefore cannot lose a race with the
+    // writer draining the queued batch.
+    initiator
+        .complete_ttrpc(RequestId::new(vec![0x99; 16]).unwrap())
+        .await
+        .unwrap();
 
     handles.block_sends_a.store(false, Ordering::Release);
     handles.send_release_a.notify_waiters();

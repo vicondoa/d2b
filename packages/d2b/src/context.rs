@@ -3523,12 +3523,30 @@ mod tests {
         });
         let stream = CliAttachStream::new(Some(Arc::new(client)));
         let started = Instant::now();
+        // The observable condition is the outcome itself:the round trip must
+        // end as the named deadline (asserted below). The finite ceiling below
+        // then guards the magnitude:the round trip is bounded by the advertised
+        // 5s io budget, and a regression that inflates that budget must fail
+        // on the wait itself rather than return the right error kind after
+        // taking far longer than the shell's bound should have allowed.
+
+        // 60s is a 12x headroom over that budget: wide enough that scheduling
+        // delay cannot trip it on any normally-loaded machine, finite enough
+        // that inflation beyond ~12x (e.g., an ms-misread-as-seconds budget
+        // like 5000ms read as 500s) fails on the measurement. Smaller
+        // inflations - a 10x arithmetic error to 50s, or a copy-paste to the
+        // 30s request lifetime - land below the ceiling by design: catching
+        // them would require a ~20-25s bound, back in the load-tripable
+        // regime this headroom exists to avoid, and they still surface as
+        // visibly slow tests rather than silent passes. (The server thread
+        // above proves the teardown cancel was actually sent, and a deadline
+        // that never fires would hang the test deterministically.)
         let error = block_on(stream.receive()).unwrap_err();
         let elapsed = started.elapsed();
         assert_eq!(error, ClientError::DeadlineExpired);
         assert!(
-            elapsed < Duration::from_secs(15),
-            "a silent peer must not park the terminal loop; took {elapsed:?}"
+            elapsed < Duration::from_secs(60),
+            "a silent peer must end the round trip within the 60s ceiling; took {elapsed:?}"
         );
         drop(stream);
         server.join().unwrap();

@@ -568,8 +568,26 @@ mod wait_for_one_shot_exit_tests {
         let mut child = spawn_zombie_child();
         let pid = child.id();
 
-        // Give 'sleep 0' a moment to exit and become a zombie.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Wait for the child to exit and become a zombie: the exited state is
+        // the observable condition, not a fixed sleep. The guard only bounds
+        // the environment producing the precondition (the child always exits;
+        // load only delays the observation).
+        let settled = Instant::now() + Duration::from_secs(5);
+        loop {
+            match read_proc_state(pid as i32).await {
+                Ok(ProcState::Alive('Z')) | Ok(ProcState::Alive('X')) => break,
+                Ok(ProcState::Gone) => {
+                    panic!("child {pid} vanished before it was observed as a zombie")
+                }
+                _ => {
+                    assert!(
+                        Instant::now() < settled,
+                        "child {pid} did not reach an exited state within the guard window"
+                    );
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+        }
 
         // The zombie's /proc/<pid>/stat is still present with 'Z' state
         // and the original starttime; read it now.
@@ -600,8 +618,27 @@ mod wait_for_one_shot_exit_tests {
         let mut child = spawn_sleeping_child();
         let pid = child.id();
 
-        // Give the child a moment to be scheduled.
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        // Wait until the child is scheduled and alive: the live state is the
+        // observable condition, not a fixed sleep. The guard only bounds the
+        // environment producing the precondition (the child runs for 30s;
+        // load only delays the observation).
+        let settled = Instant::now() + Duration::from_secs(5);
+        loop {
+            match read_proc_state(pid as i32).await {
+                Ok(ProcState::Alive('R' | 'S' | 'D')) => break,
+                Ok(ProcState::Alive('Z' | 'X')) => {
+                    panic!("sleeping child {pid} exited before the test ran")
+                }
+                Ok(ProcState::Gone) => panic!("child {pid} vanished before the test ran"),
+                _ => {
+                    assert!(
+                        Instant::now() < settled,
+                        "child {pid} did not reach a live state within the guard window"
+                    );
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+        }
 
         let start_ticks = read_start_time_ticks(pid);
 

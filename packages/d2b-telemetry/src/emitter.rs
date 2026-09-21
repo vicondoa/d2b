@@ -878,7 +878,22 @@ mod tests {
         emitter.emit(Signal::Log, &first).unwrap();
         emitter.emit(Signal::Log, &second).unwrap();
         assert_eq!(emitter.buffered_frames().unwrap(), 1);
-        std::thread::sleep(Duration::from_millis(2));
+        // Wait for the age bound to prune the retained frame: the observable
+        // condition is the buffer emptying after a prune-triggering drain, not
+        // a fixed sleep. The guard only bounds the environment producing the
+        // precondition (the frame's age passing max_age; load only delays it).
+        let settled = Instant::now() + Duration::from_secs(5);
+        loop {
+            emitter.drain().unwrap();
+            if emitter.buffered_frames().unwrap() == 0 {
+                break;
+            }
+            assert!(
+                Instant::now() < settled,
+                "the age bound did not prune the retained frame within the guard window"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(emitter.drain().unwrap(), 0);
         assert_eq!(emitter.buffered_frames().unwrap(), 0);
         assert!(emitter.drops().log >= 2);
