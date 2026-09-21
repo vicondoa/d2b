@@ -148,8 +148,12 @@ Bare developer Bazel commands and public Make aliases use the BuildBuddy
 `remote` profile by default through `.bazelrc`; Make passes an explicit
 `--config=$(D2B_BAZEL_PROFILE)` only when that variable is set. CI invokes the
 same public Make aliases after installing Nix and sets
-`D2B_BAZEL_PROFILE=local`. Public Make aliases run `bazel test` directly with no
-`tests/tools/bazel-check` wrapper. `tests/tools/bazel-check` remains the
+`D2B_BAZEL_PROFILE=local`. A contributor or agent never sets that variable and
+never passes a profile flag of its own, so the Makefile passing through a value
+you exported is your override rather than the repository's selection; see the
+profile rule in [`AGENTS.md`](../../AGENTS.md). Public Make aliases run
+`bazel test` directly with no `tests/tools/bazel-check` wrapper.
+`tests/tools/bazel-check` remains the
 BuildBuddy credential helper only. Post-dispatch, analysis, policy, build, and
 test failures fail closed.
 

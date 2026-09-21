@@ -150,13 +150,15 @@ settings or claim atomic base binding.
   regenerates committed artifacts through the local Bazel profile.
   `make test-integration` adds the conditional container lane. Do not cite an
   advisory skip as validation evidence.
-- Never pass a Bazel profile override of your own: no `--config=local`, no
-  `--config=remote`, no `D2B_BAZEL_PROFILE`, on gates or on focused
-  single-target builds alike. Run the documented command exactly as written and
-  let the repository choose its profile: the `.bazelrc` remote default for
-  developer aliases, and `local` for the generated CI jobs, which set
-  `D2B_BAZEL_PROFILE` themselves. A profile the repository's own Makefile,
-  `.bazelrc`, or workflow selects is repository behavior, not an override. A
+- Never pass a Bazel profile override of your own, and never set
+  `D2B_BAZEL_PROFILE` yourself: no `--config=local`, no `--config=remote`, on
+  gates or on focused single-target builds alike. Run the documented command
+  exactly as written. Only a profile the repository's own configuration selects
+  counts as repository behavior: the `.bazelrc` remote default, the
+  `--config=local` that specific Make targets such as `make generate` pass
+  themselves, and the CI jobs that set `D2B_BAZEL_PROFILE` in their own
+  environment. The Makefile passes a `D2B_BAZEL_PROFILE` you exported straight
+  through to Bazel, so that is your override and not the repository's. A
   remote-cache or internal error is retried with the same unmodified command and
   reported; it is never worked around by switching profiles.
 - U20 final acceptance must run both `make test-integration` and
