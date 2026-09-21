@@ -33,6 +33,7 @@ use d2b_contracts_broker::broker_wire::{
 use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
 use d2bd_runtime::broker_transport::ModeBoundBrokerAdapter;
 use d2bd_runtime::target_runtime::DaemonMode;
+use d2b_provider_host::HOST_EFFECTS_SERVICE;
 use d2b_provider_network_local::NETWORK_EFFECTS_SERVICE;
 use d2b_provider_process::PROCESS_EFFECTS_SERVICE;
 use d2b_provider_process_systemd::effects_service::PROCESS_SYSTEMD_EFFECTS_SERVICE;
@@ -62,6 +63,8 @@ fn registered_service_decl(service: &str) -> Option<&'static ServiceDecl> {
         Some(&PROCESS_EFFECTS_SERVICE)
     } else if service == NETWORK_EFFECTS_SERVICE.id {
         Some(&NETWORK_EFFECTS_SERVICE)
+    } else if service == HOST_EFFECTS_SERVICE.id {
+        Some(&HOST_EFFECTS_SERVICE)
     } else if service == PROCESS_SYSTEMD_EFFECTS_SERVICE.id {
         Some(&PROCESS_SYSTEMD_EFFECTS_SERVICE)
     } else {

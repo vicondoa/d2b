@@ -265,7 +265,11 @@ const COMMITTED_SERVICE_FACET_SCOPES: &[(&str, CommittedServiceFacetScope)] = &[
     (
         "d2b-provider-process-systemd",
         CommittedServiceFacetScope {
-            privileges: &[],
+            privileges: &[
+                "systemd-unit/per-VM/role",
+                "systemd-user-manager/per-user",
+                "systemd-unit-pidfd/per-VM/role",
+            ],
             state_cells: &[],
             fd_kinds: &["Any"],
             max_fds: 1,

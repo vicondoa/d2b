@@ -3992,6 +3992,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: HOST_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         let string_field = |key: &str| -> String {
@@ -4081,6 +4082,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: HOST_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let before = binding.call(call).await.expect("call before restart");
         drop(started);
@@ -4103,6 +4105,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: HOST_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let after = adopted.call(call).await.expect("call after restart");
         // `activeProcessCount` is computed from the live `/proc` process
