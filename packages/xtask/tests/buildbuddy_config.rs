@@ -964,7 +964,7 @@ fn concurrent_facades_isolate_warning_evidence() {
     );
 
     let evidence = scratch.join("evidence");
-    let warning = Command::new("bash")
+    let mut warning = Command::new("bash")
         .arg(repo_root().join("tests/tools/bazel-check"))
         .args(["--profile", "local", "--", "//:test"])
         .env("D2B_BAZEL_BIN", &warning_bazel)
@@ -978,16 +978,23 @@ fn concurrent_facades_isolate_warning_evidence() {
         .spawn()
         .expect("start warning bazel-check");
 
-    for _ in 0..500 {
+    // Wait for the warning facade to reach the barrier. The wait is bounded
+    // by progress, not by wall time: it ends as soon as the marker file
+    // appears, or as soon as the facade process exits (in which case the
+    // marker can never appear, because bazel-check only exits after the
+    // bazel wrapper it spawned returns). A busy machine slows the facade
+    // down but can no longer time the barrier out.
+    loop {
         if warning_ready.exists() {
             break;
         }
+        if let Ok(Some(status)) = warning.try_wait() {
+            panic!(
+                "warning facade exited with {status} before reaching the barrier"
+            );
+        }
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(
-        warning_ready.exists(),
-        "warning facade did not reach barrier"
-    );
 
     let clean = Command::new("bash")
         .arg(repo_root().join("tests/tools/bazel-check"))
