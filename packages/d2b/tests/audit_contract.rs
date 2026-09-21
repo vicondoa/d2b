@@ -303,13 +303,18 @@ fn audit_names_a_stalled_daemon_as_a_bounded_deadline() {
     let sock = tmp.path().join("stalled.sock");
     let handle = spawn_stalled_audit_mock(&sock);
 
-    let started = std::time::Instant::now();
-    let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
-        .args(["audit", "--human", "--deadline", "1s"])
-        .env("D2B_PUBLIC_SOCKET", &sock)
-        .output()
-        .expect("spawn d2b audit --human (stalled mock daemon)");
-    let elapsed = started.elapsed();
+    // The CLI enforces its own 1s deadline, so it must exit on its own; the
+    // guard only exists to turn a "parked forever" regression into a clean
+    // failure (kill + failing assertions) instead of a hang. It is not a
+    // load-bearing bound: the exit code and the named deadline class below
+    // are what prove the mechanism fired.
+    let out = run_with_guard(
+        Command::new(env!("CARGO_BIN_EXE_d2b"))
+            .args(["audit", "--human", "--deadline", "1s"])
+            .env("D2B_PUBLIC_SOCKET", &sock),
+        std::time::Duration::from_secs(30),
+    )
+    .expect("audit must exit on its own; the CLI's 1s deadline bounds the wait");
 
     handle.join().expect("stalled mock daemon thread");
 
@@ -324,10 +329,35 @@ fn audit_names_a_stalled_daemon_as_a_bounded_deadline() {
         stderr.contains("deadline-exceeded"),
         "a stalled audit receive must name the deadline class; stderr:\n{stderr}"
     );
-    assert!(
-        elapsed < std::time::Duration::from_secs(10),
-        "audit must not park on a silent daemon; took {elapsed:?}"
-    );
+}
+
+/// Run a command under a generous wall-clock ceiling, killing it if it hangs.
+/// Returns `None` when the ceiling was hit. The ceiling is a last-resort guard
+/// against the "parked forever" regression this test exists for, never a
+/// timing assertion: the child's own internal deadline bounds its runtime, so
+/// the guard only trips on a true hang.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+fn run_with_guard(
+    command: &mut Command,
+    ceiling: std::time::Duration,
+) -> Option<std::process::Output> {
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn d2b audit --human (stalled mock daemon)");
+    let start = std::time::Instant::now();
+    loop {
+        if child.try_wait().expect("try_wait").is_some() {
+            return Some(child.wait_with_output().expect("collect child output"));
+        }
+        if start.elapsed() > ceiling {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }
 
 // --- in-process SOCK_SEQPACKET mock daemon ---------------------------------

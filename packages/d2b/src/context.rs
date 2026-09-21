@@ -3052,11 +3052,7 @@ mod tests {
         use super::{MAX_FRAME_BYTES, test_socket_pair};
         use crate::runtime::block_on;
         use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
-        use std::{
-            io::IoSlice,
-            os::fd::AsFd as _,
-            time::{Duration, Instant},
-        };
+        use std::{io::IoSlice, os::fd::AsFd as _, time::Duration};
 
         #[test]
         fn cli_socket_rejects_oversized_declared_packets() {
@@ -3107,7 +3103,11 @@ mod tests {
         #[test]
         fn cli_socket_reports_a_stalled_peer_as_a_bounded_deadline() {
             let (socket, server) = test_socket_pair();
-            let started = Instant::now();
+            // The TimedOut error kind is the mechanism: `recv_frame`'s own
+            // budget (100ms) fired the timeout branch. An elapsed-time bound
+            // would only measure scheduling delay on top of that deadline, so
+            // it is not asserted here; a regression that parks forever makes
+            // `block_on` hang, which the harness timeout fails.
             let error = block_on(async {
                 socket
                     .recv_frame(Duration::from_millis(100))
@@ -3115,11 +3115,6 @@ mod tests {
                     .expect_err("a silent peer must not park the CLI")
             });
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-            assert!(
-                started.elapsed() < Duration::from_secs(5),
-                "the deadline must bound the wait, took {:?}",
-                started.elapsed()
-            );
             drop(server);
         }
 

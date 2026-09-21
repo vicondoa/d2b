@@ -288,7 +288,9 @@ mod tests {
     use d2b_core_controller::{
         AssignmentRequest, AssignmentTarget, ControllerAssignmentRegistry, ControllerRoleContract,
     };
-    use d2b_session::{ComponentSessionDriver, SessionEngine};
+    use d2b_session::{
+        ComponentSessionDriver, SessionDriverHandle, SessionEngine, SessionEvent,
+    };
     use d2b_session_unix::ReceivedPacket;
 
     async fn receive_bootstrap(
@@ -483,21 +485,28 @@ mod tests {
             )
             .unwrap();
         let bytes = lease.assignment_grant().encode().unwrap();
-        responder
-            .send_named_stream(stream, bytes.clone())
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert!(!controller_task.is_finished());
-        responder
-            .send_named_stream(stream, bytes.clone())
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert!(!controller_task.is_finished());
+        // Each accepted assignment frame makes the controller grant stream
+        // credit back, which the responder surfaces as a ControlProcessed
+        // event. Waiting for that grant proves the controller processed the
+        // frame before the liveness assertion, instead of a fixed sleep that
+        // passes before the controller has even seen the duplicate.
+        for _ in 0..3 {
+            responder
+                .send_named_stream(stream, bytes.clone())
+                .await
+                .unwrap();
+            wait_for_assignment_processing(&responder).await;
+            assert!(
+                !controller_task.is_finished(),
+                "duplicate assignment must not terminate the controller session"
+            );
+        }
+        // A stream reset must be survived: the controller reopens the stream
+        // and keeps serving. The reopen is local to the controller (no wire
+        // acknowledgement), so assert liveness over a generous window instead
+        // of a fixed sleep.
         responder.reset_named_stream(stream).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert!(!controller_task.is_finished());
+        assert_controller_alive(&controller_task, Duration::from_secs(1)).await;
         responder
             .open_named_stream(
                 stream,
@@ -510,8 +519,11 @@ mod tests {
             .send_named_stream(stream, bytes.clone())
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert!(!controller_task.is_finished());
+        wait_for_assignment_processing(&responder).await;
+        assert!(
+            !controller_task.is_finished(),
+            "assignment after a stream reset must not terminate the controller session"
+        );
         let revocation = d2b_core_controller::ControllerAssignmentGrant::encode_revocation(
             lease.provider_ref(),
             lease.identity(),
@@ -522,12 +534,75 @@ mod tests {
             .await
             .unwrap();
         responder.send_named_stream(stream, bytes).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert!(controller_task.is_finished());
+        // The revocation makes the controller exit with the Assignment error;
+        // wait for the exit instead of racing a fixed sleep.
+        wait_until_finished(&controller_task, Duration::from_secs(5)).await;
         assert_eq!(
             controller_task.await.unwrap(),
             Err(ControllerSessionError::Assignment)
         );
+    }
+
+    /// Wait until the controller has processed the previously sent assignment
+    /// frame. The controller grants stream credit back for every accepted
+    /// frame, which the responder surfaces as a `ControlProcessed` event;
+    /// receiving one proves the frame was accepted (or that the session died,
+    /// which fails the wait instead of passing it).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn wait_for_assignment_processing(responder: &SessionDriverHandle) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match responder
+                    .receive_control()
+                    .await
+                    .expect("controller session must stay connected while processing assignments")
+                {
+                    SessionEvent::ControlProcessed => return,
+                    _ => continue,
+                }
+            }
+        })
+        .await
+        .expect("controller did not process the assignment within the guard bound");
+    }
+
+    /// Assert the controller task stays alive for a bounded window. Used where
+    /// the controller's processing has no wire-visible acknowledgement (the
+    /// stream-reset reopen); the window is generous relative to the
+    /// in-process processing time, so a controller that dies on the event
+    /// fails the window instead of passing a fixed-sleep race.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn assert_controller_alive(
+        controller_task: &tokio::task::JoinHandle<Result<(), ControllerSessionError>>,
+        window: Duration,
+    ) {
+        let deadline = Instant::now() + window;
+        loop {
+            assert!(
+                !controller_task.is_finished(),
+                "controller session terminated while it must have stayed alive"
+            );
+            if Instant::now() >= deadline {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Wait until the controller task finishes, or fail after a generous
+    /// bound.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn wait_until_finished(
+        controller_task: &tokio::task::JoinHandle<Result<(), ControllerSessionError>>,
+        bound: Duration,
+    ) {
+        tokio::time::timeout(bound, async {
+            while !controller_task.is_finished() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("controller session did not finish within the guard bound");
     }
 
     fn guest_resource() -> ResourceEnvelope {

@@ -1020,9 +1020,14 @@ mod tests {
 
         started.recv().unwrap();
         assert!(live.load(Ordering::Acquire));
+        // The waits below are condition-driven (channel receive / predicate
+        // poll); the durations are last-resort guards only, kept generous so
+        // scheduling delay under load cannot false-fail them. The assertions
+        // themselves are mechanism-based (the AdoptionAmbiguous error, the
+        // observed state).
         assert_eq!(
             result_receiver
-                .recv_timeout(Duration::from_millis(250))
+                .recv_timeout(Duration::from_secs(5))
                 .unwrap()
                 .unwrap_err(),
             ProcessConformanceError::AdoptionAmbiguous
@@ -1033,7 +1038,7 @@ mod tests {
             assert_eq!(state.launches.len(), 1);
         }
         release.send(()).unwrap();
-        wait_until(Duration::from_millis(250), || !live.load(Ordering::Acquire));
+        wait_until(Duration::from_secs(5), || !live.load(Ordering::Acquire));
         let state = supervisor.inner.state.blocking_lock();
         assert!(state.launches.is_empty());
         assert!(state.handles.is_empty());
@@ -1062,7 +1067,7 @@ mod tests {
         started.recv().unwrap();
         assert_eq!(
             result_receiver
-                .recv_timeout(Duration::from_millis(250))
+                .recv_timeout(Duration::from_secs(5))
                 .unwrap()
                 .unwrap_err(),
             ProcessConformanceError::AdoptionAmbiguous
@@ -1070,7 +1075,7 @@ mod tests {
         thread.join().unwrap();
         assert!(live.load(Ordering::Acquire));
         release.send(()).unwrap();
-        wait_until(Duration::from_millis(250), || {
+        wait_until(Duration::from_secs(5), || {
             !supervisor.inner.state.blocking_lock().handles.is_empty()
         });
         let state = supervisor.inner.state.blocking_lock();

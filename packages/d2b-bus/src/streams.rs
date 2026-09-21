@@ -981,7 +981,7 @@ mod tests {
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn bounded_watch_delivery_waits_for_transport_credit() {
         let bridge = bridge(16);
         let (outgoing, incoming) = bridge
@@ -999,13 +999,32 @@ mod tests {
         };
         tokio::task::yield_now().await;
         incoming.grant(outgoing.name(), 2).await.unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(1), sender)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
+        // Condition-driven wait under paused virtual time: the advance branch
+        // is the deterministic counterpart of a real-time guard, so
+        // scheduling delay under load cannot race it.
+        tokio::select! {
+            result = sender => result.unwrap().unwrap(),
+            () = advance_virtual(std::time::Duration::from_secs(15)) => {
+                panic!("send_wait did not complete within the virtual bound")
+            }
+        }
         let frame = incoming.receive_next().await.unwrap();
         assert_eq!(frame.payload(), &[1, 2, 3, 4]);
+    }
+
+    /// Advance the paused virtual clock in 1ms steps, yielding to the runtime
+    /// between steps so real work (signals, I/O) can proceed. Completes after
+    /// `limit` of virtual time. Used as the deterministic counterpart of a
+    /// real-time guard in `start_paused` tests: the bound is virtual, so
+    /// scheduling delay under load cannot race it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn advance_virtual(limit: std::time::Duration) {
+        let mut remaining = limit;
+        while remaining > std::time::Duration::ZERO {
+            let step = remaining.min(std::time::Duration::from_millis(1));
+            tokio::time::advance(step).await;
+            remaining -= step;
+        }
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
