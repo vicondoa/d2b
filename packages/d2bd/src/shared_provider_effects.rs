@@ -984,21 +984,26 @@ impl ProductionSharedProviderEffects {
                 .resource_value(attachment.execution_ref())
                 .await?
                 .ok_or(SharedProviderEffectError::InvalidResource)?;
-            if attached.pointer("/metadata/zone").and_then(Value::as_str)
-                != Some(request.zone.as_str())
-            {
+            // The attached row's authoritative zone is the zone its key
+            // resolved under (`resource_value` reads the plane for
+            // `self.zone`); the stored metadata carries no zone, so the old
+            // `/metadata/zone` read was always `None` and refused every
+            // attachment unconditionally. `request.zone` is external input,
+            // so the fence stays: a request naming a zone the resolved rows
+            // cannot be in is refused.
+            if self.zone.as_str() != request.zone.as_str() {
                 return Err(SharedProviderEffectError::InvalidResource);
             }
             attachment_generation = attachment_generation.max(
                 attached
-                    .pointer("/metadata/generation")
+                    .get("generation")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
             );
             if attachment.execution_ref().resource_type().as_str() == "Guest" {
                 guest_uids.push(
                     attached
-                        .pointer("/metadata/uid")
+                        .get("uid")
                         .and_then(Value::as_str)
                         .and_then(|value| ResourceUid::parse(value.to_owned()).ok())
                         .ok_or(SharedProviderEffectError::InvalidResource)?,
@@ -1034,9 +1039,12 @@ impl ProductionSharedProviderEffects {
             if !attached {
                 continue;
             }
-            if guest.pointer("/metadata/zone").and_then(Value::as_str)
-                != Some(request.zone.as_str())
-            {
+            // The committed Guest rows were resolved under `self.zone` (the
+            // type-scoped manager list selects the plane's own zone), so the
+            // row's authoritative zone is `self.zone`; the fence compares it
+            // against the request zone instead of a projection-synthesised
+            // field.
+            if self.zone.as_str() != request.zone.as_str() {
                 return Err(SharedProviderEffectError::InvalidResource);
             }
             let guest_uid = guest
@@ -3180,6 +3188,546 @@ mod tests {
         .expect("write v3 native bundle");
         std::fs::set_permissions(bundle_path, std::fs::Permissions::from_mode(0o640))
             .expect("chmod test bundle");
+    }
+
+    // -------------------------------------------------------------------
+    // Network admission (same-zone Guest attachments): the attached row's
+    // `resource_value` document carries the manager's authoritative `uid`
+    // and `generation` at the top level, but the old reads looked for them
+    // under `/metadata/*` - the raw stored metadata (ownerRef, labels,
+    // annotations) carries neither, so the generation silently contributed
+    // zero and the uid read refused every Guest attachment. These tests
+    // drive the real `network_admission` over a real manager plane with
+    // Nix-ingested rows, reproducing the exact raw-metadata shape the
+    // admission reads.
+    // -------------------------------------------------------------------
+
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use d2b_contracts_resource::v3::{
+        ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
+    };
+
+    use super::ProductionSharedProviderEffects;
+
+    /// One no-op child surface: `network_admission` never consults children.
+    struct UnusedChildSurface;
+
+    #[async_trait::async_trait]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl d2b_provider_toolkit::SharedProviderChildSurface for UnusedChildSurface {
+        async fn ensure(
+            &self,
+            _child: d2b_resource_runtime::context::ChildEnsure,
+        ) -> Result<
+            d2b_resource_runtime::spec_store::EnsureOutcome,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Err(d2b_provider_toolkit::SharedProviderEffectError::Unavailable)
+        }
+
+        async fn delete(
+            &self,
+            _key: &d2b_resource_runtime::identity::ResourceKey,
+        ) -> Result<(), d2b_provider_toolkit::SharedProviderEffectError> {
+            Err(d2b_provider_toolkit::SharedProviderEffectError::Unavailable)
+        }
+
+        async fn view(
+            &self,
+            _key: &d2b_resource_runtime::identity::ResourceKey,
+        ) -> Result<
+            Option<d2b_resource_runtime::manager::ResourceView>,
+            d2b_provider_toolkit::SharedProviderEffectError,
+        > {
+            Ok(None)
+        }
+    }
+
+    /// The same fake plane inputs the plane tests own, for the given zone.
+    fn network_admission_plane_inputs(
+        zone: d2b_contracts_resource::v3::ZoneId,
+    ) -> (tempfile::TempDir, crate::resource_plane_v3::ConstructionInputs) {
+        use d2bd_runtime::resource_runtime_support::NewPlaneReadinessState;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spec_store_dir = dir.path().join("daemon-state/zones").join(zone.as_str());
+        let _readiness = Arc::new(NewPlaneReadinessState::new());
+        let process_facets = {
+            let effects = Arc::new(
+                d2b_provider_process::test_support::FakeFacets::new(Default::default()),
+            );
+            // The old plane fake reported no retained identity
+            // (has_active false); the shared double's default reports
+            // one (active true), so script it back so the launch path
+            // (and only it) is what the plane tests observe.
+            effects.set_active(false);
+            effects.facet_set()
+        };
+        let network_facets = d2b_provider_network_local::test_support::recording_facets(
+            Arc::new(d2b_provider_network_local::test_support::RecordingRuntime::default()),
+        );
+        // U5: the plane tests build the Host family's facet set from the
+        // scripted minijail gate double, exactly as the production
+        // composition root builds it from the daemon's gate probe.
+        let host_facets = d2b_provider_host::test_support::recording_facets(
+            d2b_provider_host::test_support::RecordingMinijailGate::new(
+                d2b_provider_system_core::MinijailPlatformGate::new(6, 9, true),
+            ),
+        );
+        (
+            dir,
+            crate::resource_plane_v3::ConstructionInputs {
+                zone: zone.clone(),
+                zone_token: d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
+                    zone.as_str().to_owned(),
+                )
+                .unwrap(),
+                spec_store_dir,
+                authority: crate::resource_plane_v3::ZoneAuthorityInputs {
+                    zone_uid: None,
+                    policy_revision: Some(1),
+                    provider_assignment_generation: None,
+                    controller_generation:
+                        d2b_contracts_resource::v3::ControllerGeneration::new(1).unwrap(),
+                    guest_execution: None,
+                    mode: d2bd_runtime::target_runtime::DaemonMode::Host,
+                    vcpu_count: 1,
+                },
+                committed_provider_identities: BTreeMap::new(),
+                registry: Arc::new(crate::resource_plane_v3::PlaneResourceRegistry::new()),
+                provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
+                process_facets: process_facets.clone(),
+                host_facets: host_facets.clone(),
+                volume_effects: d2b_provider_volume::test_support::FakeLayoutEffects::new(),
+                binding_effects: {
+                    let effects =
+                        d2b_provider_volume_binding::test_support::FakeServingEffects::new();
+                    // The old plane fake reported the serving socket present
+                    // (socket_ready true); the shared double starts absent.
+                    effects.make_ready();
+                    effects
+                },
+                endpoint_effects: {
+                    let effects = d2b_provider_endpoint::test_support::FakeSocketEffects::new();
+                    // The old plane fake reported the socket present
+                    // (socket_present true); the shared double starts absent.
+                    effects.make_present();
+                    effects
+                },
+                activation_effects: d2b_provider_activation_nixos::test_support::
+                    FakeActivationEffects::new(
+                        d2b_provider_activation_nixos::HostHandoffResult::Incomplete,
+                    ),
+                credential_effects: {
+                    let effects = d2b_provider_credential::test_support::FakeEffects::new(
+                        d2b_provider_credential::test_support::log(),
+                    );
+                    // The old plane fake answered no provider/execution
+                    // facts, no live agent, and no bound session; the shared
+                    // double's defaults differ, so script them back.
+                    effects.set_facts(None);
+                    effects.set_agent_ready(false);
+                    effects.set_session(None);
+                    effects
+                },
+                shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects {
+                    usbip: Arc::new(
+                        d2b_provider_device_usbip::test_support::RecordingEffects::default(),
+                    ),
+                    security_key: Arc::new(
+                        d2b_provider_device_security_key::test_support::RecordingEffects::default(),
+                    ),
+                    device: Arc::new(
+                        d2b_provider_device::test_support::RecordingEffects::default(),
+                    ),
+                },
+                // U14: the plane tests build the Network family's facet set
+                // from the recording runtime, exactly as the production
+                // composition root builds it from the daemon's runtime.
+                network_facets: network_facets.clone(),
+                guest_effects: {
+                    let effects = d2b_provider_guest::test_support::ScriptedEffects::new();
+                    // The old plane fake reported Pending (the plane tests
+                    // only need the Guest driver registered, never a Guest
+                    // reaching Ready); the shared double starts Ready, so
+                    // script it back.
+                    effects.set_phase(d2b_provider_guest::GuestEffectPhase::Pending);
+                    effects
+                },
+                interaction_effects:
+                    d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
+                trusted_context_publication: None,
+                // U1/U14: the plane hosts the Process and Network families'
+                // declared effects services from the same facet sets their
+                // driver factories are built from, exactly as the production
+                // composition root does.
+                effect_service_factories: BTreeMap::from([
+                    (
+                        d2b_provider_process::PROCESS_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_process::ProcessEffectsServiceFactory::new(
+                            process_facets,
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_network_local::NETWORK_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_network_local::NetworkEffectsServiceFactory::new(
+                            network_facets.clone(),
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_host::HOST_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_host::HostEffectsServiceFactory::new(
+                            host_facets,
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                ]),
+                foundation: None,
+            },
+        )
+    }
+
+    /// One Network row's authored spec: one attached Guest.
+    fn network_admission_spec(guest_name: &str) -> d2b_contracts_resource::v3::network::NetworkSpec {
+        use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+        use d2b_contracts_resource::v3::network::{
+            DhcpSpec, DnsSpec, Ipv4Cidr, IsolationSpec, MdnsSpec, NetworkAttachmentEntry,
+            NetworkSpec, RoutingSpec,
+        };
+        NetworkSpec::new(
+            // TEST-NET-2 LAN and a benchmark-range uplink: the admission
+            // observes the real host, so the intent's CIDRs must not overlap
+            // any address the host actually configures (a host on
+            // TEST-NET-3, for example, collides with the classic
+            // `203.0.113.0/30` uplink choice).
+            Ipv4Cidr::parse("198.51.100.0/24").unwrap(),
+            Ipv4Cidr::parse("198.18.0.0/30").unwrap(),
+            None,
+            false,
+            IsolationSpec::default(),
+            RoutingSpec::default(),
+            DhcpSpec::default(),
+            DnsSpec::default(),
+            None,
+            MdnsSpec::default(),
+            None,
+            BoundedToken::parse("net-vm-base").unwrap(),
+            vec![NetworkAttachmentEntry::new(
+                ResourceRef::parse(&format!("Guest/{guest_name}")).unwrap(),
+                2,
+                None,
+            )
+            .unwrap()],
+        )
+        .unwrap()
+    }
+
+    /// One Guest row committed into the plane, carrying the reciprocal
+    /// `networkAttachments` the Network row's admission requires.
+    fn network_admission_guest_row(
+        zone: &d2b_contracts_resource::v3::ZoneId,
+        network_ref: &str,
+    ) -> d2b_contracts_zone_session::v3::resource_bundle::BundleResource {
+        use d2b_contracts_resource::v3::execution_policy::{
+            BudgetSpec, ExecutionDomain, ExecutionPolicy, NetworkAttachment,
+        };
+        use d2b_contracts_resource::v3::resource_schema::CanonicalJsonObject;
+
+        let policy = ExecutionPolicy::new(
+            ExecutionDomain::System,
+            vec![ExecutionDomain::System],
+            None,
+            BudgetSpec::default(),
+            vec![NetworkAttachment::new(
+                ResourceRef::parse(network_ref).unwrap(),
+                true,
+            )
+            .unwrap()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let spec = d2b_provider_guest::GuestSpec::new(policy, None);
+        d2b_contracts_zone_session::v3::resource_bundle::BundleResource::new(
+            d2b_contracts_resource::v3::ResourceTypeName::parse("Guest").unwrap(),
+            d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata::new(
+                d2b_contracts_resource::v3::ResourceName::parse("gateway").unwrap(),
+                zone.clone(),
+                None,
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            serde_json::from_value::<CanonicalJsonObject>(
+                serde_json::to_value(&spec).expect("serialize Guest spec"),
+            )
+            .expect("canonical Guest spec"),
+        )
+        .expect("Guest bundle row")
+    }
+
+    /// One Network row committed into the plane with the given authored spec.
+    fn network_admission_network_row(
+        zone: &d2b_contracts_resource::v3::ZoneId,
+        spec: &d2b_contracts_resource::v3::network::NetworkSpec,
+    ) -> d2b_contracts_zone_session::v3::resource_bundle::BundleResource {
+        use d2b_contracts_resource::v3::resource_schema::CanonicalJsonObject;
+
+        d2b_contracts_zone_session::v3::resource_bundle::BundleResource::new(
+            d2b_contracts_resource::v3::ResourceTypeName::parse("Network").unwrap(),
+            d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata::new(
+                d2b_contracts_resource::v3::ResourceName::parse("zone-net").unwrap(),
+                zone.clone(),
+                None,
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            serde_json::from_value::<CanonicalJsonObject>(
+                serde_json::to_value(spec).expect("serialize Network spec"),
+            )
+            .expect("canonical Network spec"),
+        )
+        .expect("Network bundle row")
+    }
+
+    /// One canonical per-Zone storage row binding the bundle's Zone UID.
+    fn network_admission_storage_row(
+        zone: &str,
+        zone_uid: &d2b_contracts_resource::v3::ResourceUid,
+        store_uid: &d2b_contracts_resource::v3::ResourceUid,
+    ) -> d2b_contracts_resource::v3::storage::ZoneStoreStorageRow {
+        let store_identity = d2b_contracts_resource::v3::storage::ZoneStoreIdentity::new(
+            zone_uid.clone(),
+            store_uid.clone(),
+            1,
+        )
+        .expect("valid store identity");
+        serde_json::from_value(serde_json::json!({
+            "identity": store_identity,
+            "zoneStoreId": format!("zone-store-{zone}"),
+            "storageOwnerPrincipal": "d2b-zonert",
+            "parentDirectoryId": format!("zone-store-parent-{zone}"),
+            "ownership": {
+                "owner": "d2b-zonert", "group": "d2b-zonert",
+                "mode": "0640", "linkCount": 1
+            },
+            "auxiliaryDirectories": {
+                "audit": {
+                    "directoryId": format!("zone-store-audit-{zone}"),
+                    "owner": "d2bd", "group": "d2bd",
+                    "mode": "0700", "repairOwner": "privileged-broker"
+                },
+                "telemetry": {
+                    "directoryId": format!("zone-store-telemetry-{zone}"),
+                    "owner": "d2bd", "group": "d2bd",
+                    "mode": "0700", "repairOwner": "privileged-broker"
+                }
+            },
+            "filesystem": "regular-file-anchored-fd-relative-no-follow",
+            "locking": "ofd-close-on-exec",
+            "marker": {
+                "identityMarkerId": format!("zone-store-marker-{zone}")
+            },
+            "replacementDetection": "fail-closed-on-missing-replaced-or-identity-mismatch",
+            "fsync": "database-and-parent-directory",
+            "publication": {
+                "descriptor": "owned-descriptor-close-on-exec-verified-before-concurrency",
+                "replacement": "atomic-rename-retain-prior-quarantine-ambiguity"
+            }
+        }))
+        .expect("valid storage row")
+    }
+
+    /// A fixture resolver the admission's installed-generation read needs.
+    fn network_admission_resolver() -> d2b_core::bundle_resolver::BundleResolver {
+        use d2b_core::bundle::{Bundle, BundleGeneration};
+        use d2b_core::manifest_v04::ManifestV04;
+        use d2b_core::processes::ProcessesJson;
+
+        let host = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .unwrap();
+        let manifest = ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .unwrap();
+        d2b_core::bundle_resolver::BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                realm_workloads_launcher_v2_path: None,
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some(format!("sha256:{}", "a".repeat(64))),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::new(),
+        )
+    }
+
+    /// Every live piece `network_admission` needs, over one committed
+    /// Network row and one committed Guest row in the same zone.
+    struct NetworkAdmissionHarness {
+        runtime: std::sync::Arc<crate::resource_runtime::ZoneResourceRuntime>,
+        effects: ProductionSharedProviderEffects,
+        network_uid: d2b_contracts_resource::v3::ResourceUid,
+        network_generation: d2b_contracts_resource::v3::ResourceGeneration,
+        resolver: d2b_core::bundle_resolver::BundleResolver,
+        spec: d2b_contracts_resource::v3::network::NetworkSpec,
+        _plane_dir: tempfile::TempDir,
+    }
+
+    async fn network_admission_harness() -> NetworkAdmissionHarness {
+        let zone = ZoneId::parse("work").unwrap();
+        let zone_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let store_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+
+        let spec = network_admission_spec("gateway");
+        let guest_row = network_admission_guest_row(&zone, "Network/zone-net");
+        let network_row = network_admission_network_row(&zone, &spec);
+        let bundle = d2b_contracts_zone_session::v3::resource_bundle::ResourceBundle::new(
+            zone.clone(),
+            vec![guest_row, network_row],
+            format!("sha256:{}", "a".repeat(64)),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            d2b_contracts_resource::v3::Timestamp::parse("2026-01-01T00:00:00.000Z").unwrap(),
+        )
+        .unwrap()
+        .with_zone_uid(zone_uid.clone());
+        let storage_row = network_admission_storage_row(zone.as_str(), &zone_uid, &store_uid);
+        let authority =
+            d2bd_runtime::zone_authority::ZoneAuthorityIdentity::from_bundle_and_storage(
+                &zone,
+                &bundle,
+                &storage_row,
+            )
+            .expect("bundle authority");
+
+        let state = crate::detached_exec_routing_tests::test_state(
+            crate::exec_session::ExecSessionCaps::default(),
+        );
+        let (plane_dir, inputs) = network_admission_plane_inputs(zone.clone());
+        let plane = Arc::new(
+            crate::resource_plane_v3::ResourcePlaneV3::open(inputs)
+                .await
+                .expect("open plane"),
+        );
+        plane
+            .ingest_nix_bundle(&bundle)
+            .await
+            .expect("ingest Network and Guest rows");
+
+        let runtime = crate::resource_runtime::ZoneResourceRuntime::open_production_with_identity(
+            zone.clone(),
+            bundle,
+            authority,
+        )
+        .await
+        .expect("open zone runtime");
+
+        runtime.attach_v3_planes(Arc::new(tokio::sync::Mutex::new(
+            std::collections::HashMap::from([(
+                zone.as_str().to_owned(),
+                Arc::clone(&plane),
+            )]),
+        )));
+        let mut composition = crate::resource_runtime::ResourcePlane::new();
+        composition.set_topology_root(zone.clone());
+        let runtime_arc = composition.insert(runtime).expect("insert zone runtime");
+        let state_arc = Arc::new(state);
+        *state_arc.resource_plane.lock().await = Some(Arc::new(composition));
+
+        let resolver = network_admission_resolver();
+        let network_key = ResourceKey::new("work", "Network", "zone-net");
+        let view = plane
+            .client()
+            .get(network_key.clone())
+            .await
+            .expect("manager read")
+            .expect("Network row committed");
+        let network_uid = resource_uid(&view.uid).expect("committed Network uid");
+        let network_generation =
+            ResourceGeneration::new(view.generation).expect("committed Network generation");
+
+        NetworkAdmissionHarness {
+            runtime: runtime_arc,
+            effects: ProductionSharedProviderEffects::new(
+                Arc::clone(&state_arc),
+                zone,
+                ControllerGeneration::new(3).unwrap(),
+                resolver.clone(),
+            ),
+            network_uid,
+            network_generation,
+            resolver,
+            spec,
+            _plane_dir: plane_dir,
+        }
+    }
+
+    /// One effect request shaped exactly as the driver would build it.
+    fn network_admission_request<'a>(
+        zone: ZoneId,
+        network_name: &str,
+        uid: d2b_contracts_resource::v3::ResourceUid,
+        generation: d2b_contracts_resource::v3::ResourceGeneration,
+        children: &'a UnusedChildSurface,
+    ) -> d2b_provider_toolkit::SharedProviderEffectRequest<'a> {
+        d2b_provider_toolkit::SharedProviderEffectRequest {
+            zone,
+            target: ResourceKey::new("work", "Network", network_name),
+            uid,
+            generation,
+            operation_id: "network-admission-test".to_owned(),
+            spec: serde_json::json!({}),
+            metadata: serde_json::json!({}),
+            status: None,
+            children: children as &dyn d2b_provider_toolkit::SharedProviderChildSurface,
+        }
+    }
+
+    /// The attached Guest row is in the same zone as the Network row (both
+    /// resolved under the plane's own zone): the admission must complete.
+    ///
+    /// Pre-fix this refused deterministically: the attached row's raw stored
+    /// metadata carries no uid, so the old `/metadata/uid` read refused
+    /// every Guest attachment (and the `/metadata/generation` read silently
+    /// contributed zero). The fix reads the manager-authoritative
+    /// `uid`/`generation` the `resource_value` document carries at the top
+    /// level.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn network_admission_admits_a_same_zone_attached_guest() {
+        let harness = network_admission_harness().await;
+        let children = UnusedChildSurface;
+
+        let request = network_admission_request(
+            ZoneId::parse("work").unwrap(),
+            "zone-net",
+            harness.network_uid.clone(),
+            harness.network_generation,
+            &children,
+        );
+        let result = harness
+            .effects
+            .network_admission(&harness.runtime, &request, &harness.spec, &harness.resolver)
+            .await;
+        assert!(
+            matches!(result, Ok(_)),
+            "a same-zone attached Guest must be admitted: {result:?}",
+        );
     }
 }
 
