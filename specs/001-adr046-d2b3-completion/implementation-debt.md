@@ -2131,12 +2131,18 @@ rediscover. The ledger (`tasks.md`) mirrors the same list.
   `NetworkResourcePort` for `NetworkChildPort`, with `NetworkReconciler` driven at the two
   reconcile sites). The port moved; the reconcile behaviour stayed behind the runtime
   facet the crate reconciles over.
-- The host family is partially converted on the mainline: the probe effect serves from
-  `packages/d2b-provider-host/`, but the kernel-module check and the pidfs self-probe still
-  live in the daemon runtime crate (`packages/d2bd-runtime/src/kernel_module_check.rs` and
-  `pidfs_probe.rs`, renamed there with the d2bd split, never deleted), are still exported
-  by the crate's module root, and are still driven by the daemon's composition (the
-  startup kernel-module matrix self-check and the startup pidfs kernel-floor gate).
+- The host family is partially converted on the mainline, and the two halves must be
+  read together. The effect moved completely: the family's declared effect port is fully
+  served by `packages/d2b-provider-host/` (the crate holds the effects service, its
+  registration declares it, the only implementations of the host driver-effects trait are
+  in that crate, and the daemon's shared effects module retains only the user half). The
+  unit stays partial because daemon-runtime probe work remains daemon-side: the
+  kernel-module matrix self-check and the pidfs self-probe still live in the daemon
+  runtime crate (`packages/d2bd-runtime/src/kernel_module_check.rs` and `pidfs_probe.rs`,
+  renamed there with the d2bd split, never deleted), are still exported by the crate's
+  module root, and are still driven by the daemon's composition at startup (the startup
+  kernel-module matrix self-check and the startup pidfs kernel-floor gate). These are
+  daemon-runtime self-checks, not a family effect that failed to move.
 - `packages/d2bd/src/process_provider_runtime.rs` stays on the mainline by design as the
   declared-facet boundary: it supplies the composed process providers the process crate's
   effects service receives as facets. It is not a conversion residual and is not debt.
@@ -2156,9 +2162,9 @@ rediscover. The ledger (`tasks.md`) mirrors the same list.
   retires them (KD3).
 - Until the process-systemd lane merges, `packages/d2b-broker/src/ops/systemd.rs` still
   serves the five systemd rows on the mainline.
-- The daemon effect modules for the endpoint, binding, volume, device, guest, activation,
-  and interaction families remain on the mainline until their lanes merge; each lane head
-  deletes its module.
+- The daemon effect modules for the endpoint, binding, volume, device, guest, and
+  interaction families remain on the mainline until their lanes merge; each lane head
+  deletes its module. The activation family's module is already gone (3e3050d3c, #567).
 
 ### Known open items, not fixed by the programme
 
