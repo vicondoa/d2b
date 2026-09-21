@@ -1989,20 +1989,14 @@ impl ConstructionInputs {
             Arc::new(DaemonAudioMediatorSource {
                 state: Arc::clone(state),
             }),
-        );
-||||||| rpv3.base
-        // The User family's effects build from an empty declared facet set:
-        // the probe reads host state the crate reads itself (U5).
-        let user_facets = UserEffectFacets {};
-||||||| rpv3.c2.base
-        // The User family's effects build from an empty declared facet set:
-        // the probe reads host state the crate reads itself (U5).
-        let user_facets = UserEffectFacets {};
+);
         // The User family's effects build from the facet set carrying the
         // crate's own probe: the probe reads host state the crate reads
         // itself (U5), so the composition root supplies no externally built
         // port.
         let user_facets = UserEffectFacets::production();
+        Ok(Self {
+            zone: zone.clone(),
             zone_token,
             spec_store_dir,
             authority: ZoneAuthorityInputs {
@@ -2138,7 +2132,6 @@ Box::pin(async move {
                 &host_facets,
                 &activation_facets,
                 &interaction_facets,
-||||||| rpv3.base
                 &user_facets,
             ),
             foundation: None,
@@ -2157,7 +2150,6 @@ fn registered_service_factories(
     host_facets: &HostEffectFacets,
     activation_facets: &ActivationEffectFacets,
     interaction_facets: &InteractionEffectFacets,
-||||||| rpv3.base
     user_facets: &UserEffectFacets,
 ) -> BTreeMap<&'static str, Arc<dyn EffectServiceFactory>> {
     let mut factories = BTreeMap::new();
@@ -2779,7 +2771,6 @@ impl ResourcePlaneV3 {
                 inputs,
                 ShellSession,
             ))],
-||||||| rpv3.base
             // The User family: one descriptor over the family's shared
             // decoder and factory, whose effects come from the crate's own
             // implementation over the daemon-supplied facet set (U5); no
@@ -3574,6 +3565,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
         let user_facets = d2b_provider_user::test_support::recording_facets(
             d2b_provider_user::test_support::ScriptedProbe::new(),
         );
+        (
             dir,
             ConstructionInputs {
                 zone: ZoneId::parse("test").unwrap(),
@@ -3684,6 +3676,9 @@ HOST_EFFECTS_SERVICE.id,
                     (
                         ACTIVATION_EFFECTS_SERVICE.id,
                         Arc::new(ActivationEffectsServiceFactory::new(activation_facets))
+                            as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
                         USER_EFFECTS_SERVICE.id,
                         Arc::new(UserEffectsServiceFactory::new(user_facets.clone()))
                             as Arc<dyn EffectServiceFactory>,
@@ -4427,6 +4422,9 @@ HOST_EFFECTS_SERVICE.id,
         assert_eq!(
             after.payload, before.payload,
             "the restarted plane re-hosts the same committed surface"
+        );
+    }
+
     /// U5: the composition root hosts the User family's declared effects
     /// service from the family's own factory over the plane's facet set, and
     /// the hosted service answers `inspect-user` through the real invocation
@@ -4585,10 +4583,16 @@ HOST_EFFECTS_SERVICE.id,
             runtime.startup_order(),
             [
 "activation-nixos",
+                "audio-binding",
+                "audio-service",
                 "host",
                 "network-local",
                 "process",
+                "shell-pool",
+                "shell-session",
                 "user",
+                "wayland-policy",
+                "wayland-session",
                 "volume",
                 "volume-binding",
                 "endpoint",
@@ -4599,8 +4603,6 @@ HOST_EFFECTS_SERVICE.id,
                 "device-security-key",
                 "device",
                 "guest",
-"host",
-                "user",
                 "zone",
                 "zone-link",
                 "provider",
@@ -4613,12 +4615,6 @@ HOST_EFFECTS_SERVICE.id,
                 "command",
                 "operation",
                 "seccomp-profile",
-                "wayland-policy",
-                "wayland-session",
-                "audio-service",
-                "audio-binding",
-                "shell-pool",
-                "shell-session",
             ]
         );
         runtime.drain().await.expect("the providers drain");

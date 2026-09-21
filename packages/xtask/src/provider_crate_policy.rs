@@ -3262,12 +3262,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (system-core)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/lib.rs",
-        token: "system_core",
-        family: "system-core",
-        retires_with: "U10-U12 family rollout (system-core)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-zone-session/src/v3/zone.rs",
         token: "system_core",
         family: "system-core",
