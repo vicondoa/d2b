@@ -1296,6 +1296,15 @@ fn parse_resolved_bridge_intent(
         .unwrap_or(false),
         ipv6_suppressed: optional_field_bool(invocation.payload, "ipv6Suppressed")?
             .unwrap_or(false),
+        ipv4_address: optional_str(invocation.payload, "ipv4Address")?
+            .map(|value| {
+                d2b_contracts_resource::v3::network::Ipv4Cidr::parse(&value).map_err(|_| {
+                    refused(format!(
+                        "ipv4Address: expected a validated IPv4 CIDR, got {value}"
+                    ))
+                })
+            })
+            .transpose()?,
         provenance: optional_parse_field(invocation.payload, "provenance")?,
         ownership_marker: optional_str(invocation.payload, "ownershipMarker")?,
     })

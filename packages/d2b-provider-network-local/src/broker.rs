@@ -1428,6 +1428,7 @@ fn resolved_bridge_payload(intent: &ResolvedBridgeIntent) -> serde_json::Value {
         "stpDisabled": intent.stp_disabled,
         "multicastSnoopingDisabled": intent.multicast_snooping_disabled,
         "ipv6Suppressed": intent.ipv6_suppressed,
+        "ipv4Address": intent.ipv4_address.as_ref().map(|cidr| cidr.as_str()),
         "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().ok().flatten(),
         "ownershipMarker": intent.ownership_marker,
     })
