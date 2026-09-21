@@ -56,9 +56,11 @@ row's optional `providerRef` names the Provider the role resolves to (the
 role-to-provider mapping; a role no Provider serves omits it), and its
 optional `description` is emitted as the generated role vocabulary's variant
 documentation. It does
-not name effects: each family crate serves its own effect implementation over
-the declared facets (the daemon supplies the facet implementations), and the
-declaration names no daemon surface.
+not name effects: the families that declare effect services - network-local and
+process - serve their own effect implementation over the declared facets (the
+daemon supplies the facet implementations), while in the remaining family
+crates the production implementation of the declared port still lives in the
+daemon. Either way the declaration names no daemon surface.
 
 The resource-type authority (U4) aggregates the declared role vocabulary into
 two committed consumers:
@@ -250,9 +252,11 @@ and the declared facets that daemon and tests supply.
   `Arc<dyn <Family>Effects>`, built by the one public constructor over the
   facet-carried port and by nothing else;
 - the registration surface - the spec decoder, the factory
-  (`<Family>DriverFactory`), and the declaration (`<Family>Descriptor`) the
-  plane registers the type by, carrying the declared verbs, execution
-  domains, exportability, reads, and allowed sources; and
+  (`<Family>DriverFactory`), and the declaration (the shared
+  `d2b_resource_types::DriverDescriptor` built by a family constructor such as
+  `credential_descriptor`, `host_descriptor`, or `volume_descriptor`) the plane
+  registers the type by, carrying the declared verbs, execution domains,
+  exportability, reads, and allowed sources; and
 - the scripting double - `pub mod test_support`, gated
   `#[cfg(any(test, feature = "test-support"))]`, so this crate's unit tests
   and other crates' tests (the daemon's plane tests, the integration crates)
