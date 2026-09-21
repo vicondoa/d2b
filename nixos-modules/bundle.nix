@@ -39,6 +39,10 @@ let
       key = "/etc/d2b/realm-workloads-launcher-v2.json";
       path = config.d2b._bundle.realmWorkloadsLauncherV2Json.path;
     }
+    {
+      key = "/etc/d2b/host.json";
+      path = config.d2b._bundle.hostJson.path;
+    }
   ] ++ map (row: {
     key = "/etc/d2b/${row.path}";
     path = config.d2b._bundle.zoneResourceBundles.${row.zone}.path;
@@ -52,6 +56,7 @@ let
     sitePath = "/etc/d2b/site.json";
     realmWorkloadsLauncherV2Path =
       "/etc/d2b/realm-workloads-launcher-v2.json";
+    hostPath = "/etc/d2b/host.json";
     zones = zoneBundleRefs;
     generation = {
       generator = "nixos-modules/bundle.nix";
