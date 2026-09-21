@@ -2,39 +2,19 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use std::sync::Arc;
-
-use d2b_contracts_broker::host_generation::HostGenerationHandoffIntent;
-use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_activation_nixos::{
-    ACTIVATION_RUNNER_CREATION, ACTIVATION_TYPE_NAME, ActivationDriverArgs,
-    ActivationDriverEffects, FailClosedActivationVerifier, HostHandoffResult,
-    activation_descriptor,
+    ACTIVATION_EFFECTS_SERVICE, ACTIVATION_RUNNER_CREATION, ACTIVATION_TYPE_NAME,
+    ActivationDriverArgs, activation_descriptor,
 };
+use d2b_provider_activation_nixos::test_support::{RecordingBrokerDispatch, recording_facets};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, ChildCustody, WellKnownType};
 
-/// The port instance the declaration carries; the registration boundary never
-/// dispatches a handoff.
-struct UnusedEffects;
-
-#[async_trait::async_trait]
-impl ActivationDriverEffects for UnusedEffects {
-    async fn apply_host_generation_handoff(
-        &self,
-        _target: ResourceRef,
-        _intent: HostGenerationHandoffIntent,
-    ) -> HostHandoffResult {
-        HostHandoffResult::Incomplete
-    }
-}
-
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     activation_descriptor(ActivationDriverArgs {
         zone: "work".to_owned(),
-        effects: Arc::new(UnusedEffects),
-        verifier: Arc::new(FailClosedActivationVerifier),
+        facets: recording_facets(RecordingBrokerDispatch::new()),
     })
 }
 
@@ -89,6 +69,11 @@ async fn descriptor_declares_and_registers_the_generation_type() {
     assert_eq!(ACTIVATION_RUNNER_CREATION.child, WellKnownType::EPHEMERAL_PROCESS);
     assert_eq!(ACTIVATION_RUNNER_CREATION.provider_ref, "Provider/system-minijail");
     assert_eq!(ACTIVATION_RUNNER_CREATION.custody, ChildCustody::DriverOwned);
+    assert_eq!(
+        descriptor.services,
+        &[ACTIVATION_EFFECTS_SERVICE],
+        "the family's declared effects service rides the declaration"
+    );
 
     let mut providers = ProviderDirectory::new();
     providers.register_driver(&descriptor).expect("register");

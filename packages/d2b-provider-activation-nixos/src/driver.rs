@@ -3,9 +3,10 @@
 //!
 //! The driver, its spec decoder, its factory, and the
 //! [`DriverDescriptor`](d2b_resource_types::DriverDescriptor) the plane
-//! registers the type by live in this crate. The production effect
-//! implementation stays in the daemon behind [`ActivationDriverEffects`], so
-//! this crate depends on no daemon runtime.
+//! registers the type by live in this crate. The driver's effects are this
+//! crate's own implementation ([`crate::effects_service`]) built from the
+//! daemon-supplied facet set, so the construction site holds no externally
+//! built port (R2) and this crate depends on no daemon runtime.
 //!
 //! The driver keeps the preserved activation behavior and nothing else: the
 //! pure `ActivationController` policy decides whether an activation runner
@@ -68,6 +69,7 @@ use d2b_resource_types::{
     AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
 };
 
+use crate::effects_service::ACTIVATION_EFFECTS_SERVICE;
 use crate::{
     ActivationApplicationVerifier, ActivationCaller, ActivationController, CallerRole,
     GenerationObservation, GenerationPhase, RunnerRequest, activation_runner_ref,
@@ -329,15 +331,18 @@ fn ordinal_from_name(name: &str) -> Option<u64> {
 // ---------------------------------------------------------------------------
 
 /// Everything the composition unit must construct to instantiate the
-/// activation driver factory for one zone. The application verifier is the
-/// preserved fail-closed gate (old `set_verifier`).
+/// activation driver factory for one zone: the zone's own name and the
+/// daemon-supplied facet set. The driver's effects are this crate's own
+/// implementation ([`crate::effects_service::ActivationEffectsService`])
+/// built from those facets, and the application verifier is the preserved
+/// fail-closed gate (old `set_verifier`) this crate owns - the construction
+/// site holds no externally built port (R2).
 pub struct ActivationDriverArgs {
     /// The zone the driver serves.
     pub zone: String,
-    /// The daemon-realized effect port the driver drives.
-    pub effects: Arc<dyn ActivationDriverEffects>,
-    /// The application verifier the driver gates every effect on.
-    pub verifier: Arc<dyn ActivationApplicationVerifier>,
+    /// The daemon-supplied facet set the family's own effects implementation
+    /// is built from.
+    pub facets: crate::facets::ActivationEffectFacets,
 }
 
 /// [`ResourceDriverFactory`] for the `NixosGeneration` resource type.
@@ -345,6 +350,12 @@ pub struct ActivationDriverArgs {
 pub struct ActivationDriverFactory {
     types: [ResourceTypeName; 1],
     args: ActivationDriverArgs,
+    /// Test-support verifier override: production binds the crate's own
+    /// fail-closed verifier; a test scripts the gate so the full
+    /// facets -> factory -> driver -> handoff seam is observable through
+    /// [`ResourceDriverFactory::create`].
+    #[cfg(any(test, feature = "test-support"))]
+    verifier: Option<Arc<dyn ActivationApplicationVerifier>>,
 }
 
 impl ActivationDriverFactory {
@@ -352,7 +363,40 @@ impl ActivationDriverFactory {
         Self {
             types: [ResourceTypeName::new(ACTIVATION_TYPE_NAME)],
             args,
+            #[cfg(any(test, feature = "test-support"))]
+            verifier: None,
         }
+    }
+
+    /// Test-support constructor over a scripted application verifier: the
+    /// production binding is the crate's own fail-closed gate, so a test
+    /// that needs the handoff to reach the effects (the seam test) scripts
+    /// the gate here instead of weakening the production binding.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_verifier(
+        args: ActivationDriverArgs,
+        verifier: Arc<dyn ActivationApplicationVerifier>,
+    ) -> Self {
+        Self {
+            types: [ResourceTypeName::new(ACTIVATION_TYPE_NAME)],
+            args,
+            verifier: Some(verifier),
+        }
+    }
+
+    /// The application verifier one created driver gates on: the crate's
+    /// own fail-closed gate in production; the scripted override when a
+    /// test supplies one.
+    #[cfg(any(test, feature = "test-support"))]
+    fn verifier(&self) -> Arc<dyn ActivationApplicationVerifier> {
+        self.verifier
+            .clone()
+            .unwrap_or_else(|| Arc::new(crate::FailClosedActivationVerifier))
+    }
+
+    #[cfg(not(any(test, feature = "test-support")))]
+    fn verifier(&self) -> Arc<dyn ActivationApplicationVerifier> {
+        Arc::new(crate::FailClosedActivationVerifier)
     }
 }
 
@@ -363,11 +407,13 @@ impl ResourceDriverFactory for ActivationDriverFactory {
     }
 
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
-        Box::new(ActivationDriver::new(ActivationDriverArgs {
-            zone: self.args.zone.clone(),
-            effects: Arc::clone(&self.args.effects),
-            verifier: Arc::clone(&self.args.verifier),
-        }))
+        Box::new(ActivationDriver::new(
+            self.args.zone.clone(),
+            Arc::new(crate::effects_service::ActivationEffectsService::new(
+                self.args.facets.clone(),
+            )),
+            self.verifier(),
+        ))
     }
 }
 
@@ -387,11 +433,18 @@ pub struct ActivationDriver {
 }
 
 impl ActivationDriver {
-    pub(crate) fn new(args: ActivationDriverArgs) -> Self {
+    /// Build one driver over the family's own effects implementation (the
+    /// factory constructs it from the declared facets) or a scripted seam
+    /// (tests): the driver never constructs a port itself.
+    pub(crate) fn new(
+        zone: String,
+        effects: Arc<dyn ActivationDriverEffects>,
+        verifier: Arc<dyn ActivationApplicationVerifier>,
+    ) -> Self {
         Self {
-            zone: args.zone,
-            effects: args.effects,
-            verifier: args.verifier,
+            zone,
+            effects,
+            verifier,
             controller: ActivationController::new(),
             watched_runner: tokio::sync::Mutex::new(None),
         }
@@ -872,7 +925,10 @@ const ACTIVATION_READS: &[WellKnownType] = &[WellKnownType::NIXOS_GENERATION];
 /// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
 /// generation can never be an export subject. The driver serves no broker
 /// operations and declares the one child creation it performs - the owned
-/// activation runner ([`ACTIVATION_RUNNER_CREATION`]).
+/// activation runner ([`ACTIVATION_RUNNER_CREATION`]) - and the family's
+/// declared effects service ([`crate::effects_service::ACTIVATION_EFFECTS_SERVICE`])
+/// rides the declaration, so a zone that cannot host it refuses startup by
+/// name (R5).
 pub fn activation_descriptor(args: ActivationDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::NIXOS_GENERATION,
@@ -884,7 +940,7 @@ pub fn activation_descriptor(args: ActivationDriverArgs) -> DriverDescriptor {
         operations: &[],
         creations: ACTIVATION_CREATIONS,
         startup: &[],
-        services: &[],
+        services: &[ACTIVATION_EFFECTS_SERVICE],
         decoder: activation_spec_decoder(),
         factory: Arc::new(ActivationDriverFactory::new(args)),
     }
@@ -901,8 +957,9 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
+    use d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse;
     use d2b_contracts_broker::host_generation::{
-        SourceGenerationCompatibilityFloorV1, target_fingerprint,
+        HandoffState, SourceGenerationCompatibilityFloorV1, target_fingerprint,
     };
     use d2b_contracts_resource::v3::{
         ActivationDetail, ActivationMode, ActivationOutcomeCode, ArtifactId, NixosGenerationSpec,
@@ -923,8 +980,9 @@ mod tests {
 
     use super::{
         ACTIVATION_TYPE_NAME, ActivationApplicationVerifier, ActivationController,
-        ActivationDriverArgs, ActivationDriverFactory, ActivationDriverStatus, HostHandoffResult,
-        RunnerRequest, activation_runner_ref, activation_spec_decoder, ordinal_from_name,
+        ActivationDriver, ActivationDriverArgs, ActivationDriverFactory, ActivationDriverStatus,
+        HostHandoffResult, RunnerRequest, activation_runner_ref, activation_spec_decoder,
+        ordinal_from_name,
     };
     use crate::ActivationVerificationError;
     use crate::test_support::FakeActivationEffects;
@@ -1160,14 +1218,10 @@ mod tests {
         effects: Arc<FakeActivationEffects>,
         verifier: Arc<dyn ActivationApplicationVerifier>,
     ) -> Box<dyn DynResourceDriver> {
-        let factory = ActivationDriverFactory::new(ActivationDriverArgs {
-            zone: "work".to_owned(),
-            effects,
-            verifier,
-        });
-        factory
-            .create(&ResourceKey::new("work", ACTIVATION_TYPE_NAME, "gen-1"))
-            .await
+        // The driver's own typed seam, scripted: production builds the same
+        // seam from the facets (the factory); tests drive the behavior
+        // directly over the recording double.
+        Box::new(ActivationDriver::new("work".to_owned(), effects, verifier))
     }
 
     fn status(ctx: &ResourceContext) -> ActivationDriverStatus {
@@ -1181,8 +1235,9 @@ mod tests {
     async fn factory_registers_only_the_generation_resource_type() {
         let factory = ActivationDriverFactory::new(ActivationDriverArgs {
             zone: "work".to_owned(),
-            effects: FakeActivationEffects::new(HostHandoffResult::Incomplete),
-            verifier: Arc::new(AllowVerifier),
+            facets: crate::test_support::recording_facets(
+                crate::test_support::RecordingBrokerDispatch::new(),
+            ),
         });
         assert_eq!(factory.resource_types().len(), 1);
         assert_eq!(factory.resource_types()[0].as_str(), ACTIVATION_TYPE_NAME);
@@ -1275,6 +1330,117 @@ mod tests {
         assert_eq!(projected.outcome(), Some(ActivationOutcomeCode::Succeeded));
         // A Host target realizes through the broker: no runner child.
         assert!(f.manager.log().is_empty());
+    }
+
+    /// The facets -> factory -> driver -> handoff seam the refactor
+    /// introduced: a driver created through the factory dispatches through
+    /// the facets' scripted broker and reduces the response exactly as the
+    /// seam-constructed driver does, end to end through `reconcile`. A
+    /// wiring mistake in `create` - dropping the facets, binding the wrong
+    /// verifier - fails here, not at runtime.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn the_factory_wires_the_facets_into_the_created_driver_end_to_end() {
+        let broker = crate::test_support::RecordingBrokerDispatch::with_responses(vec![Ok(
+            ApplyHostGenerationHandoffResponse {
+                target: ResourceRef::parse("Host/host-system").expect("ref"),
+                state: HandoffState::Completed,
+                source_generation: 1,
+                target_generation: 2,
+                source_remains_usable: false,
+                summary: "scripted".to_owned(),
+            },
+        )]);
+        let factory = ActivationDriverFactory::with_verifier(
+            ActivationDriverArgs {
+                zone: "work".to_owned(),
+                facets: crate::test_support::recording_facets(broker.clone()),
+            },
+            Arc::new(AllowVerifier),
+        );
+        let manager = RecordingManager::new(GENERATION_UID).with_row(generation_row(
+            "gen-1",
+            "Host/host-system",
+            ActivationMode::Switch,
+            None,
+            [0x41; 16],
+        ));
+        let mut f = fixture(
+            generation_row(
+                "gen-2",
+                "Host/host-system",
+                ActivationMode::Switch,
+                Some("gen-1"),
+                GENERATION_UID,
+            ),
+            manager,
+        );
+        let mut d = factory
+            .create(&ResourceKey::new("work", ACTIVATION_TYPE_NAME, "gen-2"))
+            .await;
+
+        assert_eq!(
+            d.reconcile(&mut f.ctx).await.expect("reconcile"),
+            ReconcileOutcome::Satisfied
+        );
+
+        let requests = broker.requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "the factory-created driver dispatches through the facets"
+        );
+        let handoff = &requests[0];
+        assert_eq!(handoff.target.to_canonical_string(), "Host/host-system");
+        assert_eq!(handoff.intent.source_generation, 1);
+        assert_eq!(handoff.intent.target_generation, 2);
+        let projected = status(&f.ctx);
+        assert_eq!(projected.phase(), ResourcePhase::Ready);
+        assert_eq!(projected.detail(), ActivationDetail::Applied);
+        assert_eq!(projected.outcome(), Some(ActivationOutcomeCode::Succeeded));
+    }
+
+    /// The production binding is observed too: a driver created through the
+    /// production factory refuses before any dispatch (the fail-closed
+    /// verifier the factory binds), so the factory cannot silently bind an
+    /// allow-all gate.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_production_factory_created_driver_refuses_before_dispatch() {
+        let broker = crate::test_support::RecordingBrokerDispatch::new();
+        let factory = ActivationDriverFactory::new(ActivationDriverArgs {
+            zone: "work".to_owned(),
+            facets: crate::test_support::recording_facets(broker.clone()),
+        });
+        let manager = RecordingManager::new(GENERATION_UID).with_row(generation_row(
+            "gen-1",
+            "Host/host-system",
+            ActivationMode::Switch,
+            None,
+            [0x41; 16],
+        ));
+        let mut f = fixture(
+            generation_row(
+                "gen-2",
+                "Host/host-system",
+                ActivationMode::Switch,
+                Some("gen-1"),
+                GENERATION_UID,
+            ),
+            manager,
+        );
+        let mut d = factory
+            .create(&ResourceKey::new("work", ACTIVATION_TYPE_NAME, "gen-2"))
+            .await;
+
+        d.reconcile(&mut f.ctx).await.expect("reconcile");
+
+        assert!(
+            broker.requests().is_empty(),
+            "the production factory's fail-closed verifier refuses before any dispatch"
+        );
+        let projected = status(&f.ctx);
+        assert_eq!(projected.outcome(), Some(ActivationOutcomeCode::HelperRefused));
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

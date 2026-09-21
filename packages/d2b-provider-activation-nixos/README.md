@@ -37,8 +37,12 @@ the driver factory, and the declaration
 (`activation_descriptor` -> `DriverDescriptor`) the v3 resource plane
 registers the type by, with the type's verbs, execution domains,
 exportability, reads, and the one child creation the driver performs - the
-owned activation-runner `EphemeralProcess`. The production effect
-implementation stays in the daemon behind the driver's effect port.
+owned activation-runner `EphemeralProcess`. The driver's effects are this
+crate's own implementation, served through the family's declared effects
+service (`activation.d2bus.org/effects`): the preserved
+`ApplyHostGenerationHandoff` dispatch runs inside the crate over the declared
+`ActivationBrokerDispatch` facet the daemon supplies through the composition
+root, and the registered factory hosts the service per zone.
 
 `ActivationController` is the pure reconcile policy; the existing activation
 helper accepts bounded JSON and refuses raw command or path fallbacks.
@@ -74,8 +78,8 @@ Volume.
 
 ## Build and test
 
-The activation Provider Nix module is `nix/default.nix`; the daemon and
-broker retain only effect adapters and helper execution.
+The activation Provider Nix module is `nix/default.nix`; the daemon retains
+only the facet supply (the broker dispatch) and the helper execution.
 
 ```bash
 bazel test //packages/d2b-provider-activation-nixos:d2b_provider_activation_nixos_test

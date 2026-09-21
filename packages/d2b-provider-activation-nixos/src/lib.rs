@@ -1,16 +1,21 @@
 //! Activation-NixOS Provider lifecycle, typed effect boundaries, and the
 //! `NixosGeneration` resource driver.
 //!
-//! This crate is the activation family's home: the pure activation policy
-//! and the driver for the `NixosGeneration` resource type with its spec
-//! decoder, factory, and declaration. The production effect implementation
-//! stays in the daemon behind the driver's effect port, so the family owns
-//! the seam and the daemon owns the broker dispatch.
+//! This crate is the activation family's home: the pure activation policy,
+//! the driver for the `NixosGeneration` resource type with its spec
+//! decoder, factory, and declaration, and the implementation of the
+//! family's driver effects. The effects are served from this crate itself
+//! over the daemon-supplied facet set (see [`crate::effects_service`] and
+//! [`crate::facets`]), so the daemon composes the family's declared effects
+//! service from the generated registration table and no daemon module
+//! implements the family's effect traits any more.
 
 #![deny(missing_docs)]
 
 pub mod controller;
 pub mod driver;
+pub mod effects_service;
+pub mod facets;
 pub mod vocabulary;
 
 // `test_support` is needed both by external crates (which opt in via the
@@ -34,6 +39,10 @@ pub use driver::{
     ActivationDriverFactory, ActivationDriverStatus, HostHandoffResult, RUNNER_PROVIDER_REF,
     RUNNER_TYPE_NAME, activation_descriptor, activation_spec_decoder,
 };
+pub use effects_service::{
+    ACTIVATION_EFFECTS_SERVICE, ActivationEffectsService, ActivationEffectsServiceFactory,
+};
+pub use facets::{ActivationBrokerDispatch, ActivationEffectFacets};
 pub use vocabulary::{
     ACTIVATION_RUNNER_STEPS, ActivationRunnerStep, declared_runner_step, is_declared_runner_step,
 };

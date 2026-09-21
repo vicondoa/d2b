@@ -1030,12 +1030,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/activation_effects.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/audio_dispatch.rs",
         token: "server_state",
         family: "d2bd-state",
@@ -1749,18 +1743,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "nixos",
         family: "activation-nixos",
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/activation_effects.rs",
-        token: "activation_nixos",
-        family: "activation-nixos",
-        retires_with: "permanent: the daemon's activation effects implement the provider's effect port; the crate reference is the dependency itself",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/activation_effects.rs",
-        token: "nixos",
-        family: "activation-nixos",
-        retires_with: "permanent: the daemon's activation effects implement the provider's effect port; the crate reference is the dependency itself",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
