@@ -563,9 +563,11 @@ fn check_banned_api_allows_with(
 /// resource knowledge that still lives in a shared crate, fail on a comment
 /// citation that points at a module the tree no longer has, fail on
 /// family-named knowledge in a shared crate against the shrinking ratchet,
-/// pin the generated views to their committed producers, pin the broker
-/// binary's provider-free manifest, and fail on unsanctioned
-/// `#[allow]`/`#[expect]` suppressions of banned-API lints.
+/// fail on a cross-package Bazel dependency a provider crate declares that
+/// the depended-on package does not grant it visibility to, pin the generated
+/// views to their committed producers, pin the broker binary's provider-free
+/// manifest, and fail on unsanctioned `#[allow]`/`#[expect]` suppressions of
+/// banned-API lints.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn check(repo_root: &Path) -> Result<(), String> {
     let repo_root = repo_root
@@ -574,6 +576,7 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
     let members = cargo_workspace_members(&repo_root)?;
     check_members(&repo_root, members.clone())?;
     check_closed_matrix(&repo_root, &members)?;
+    check_bazel_dependency_visibility(&repo_root)?;
     check_committed_scope(&repo_root, &members)?;
     check_shared_driver_placements(&repo_root)?;
     check_shared_family_knowledge(&repo_root)?;
@@ -9060,6 +9063,319 @@ fn check_committed_scope_with(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Bazel cross-crate dependency visibility grants
+// ---------------------------------------------------------------------------
+
+/// The visibility grants one package's BUILD file declares.
+///
+/// The toolkit and the provider crates gate cross-package links through an
+/// enumerated consumer list - `package(default_visibility = [...])` naming
+/// each permitted `//packages/<consumer>:__pkg__` - rather than public
+/// visibility, so a depending crate whose package the depended-on package
+/// does not list passes every cargo test and fails only when Bazel analyzes
+/// the target. A target with an explicit `visibility` overrides the package
+/// default, exactly as Bazel resolves them.
+struct BazelVisibilityGrants {
+    /// The `package(default_visibility = [...])` entries, verbatim.
+    default_visibility: Vec<String>,
+    /// Target name -> explicit `visibility = [...]` entries. A target without
+    /// an entry has no explicit visibility and inherits the package default.
+    targets: BTreeMap<String, Vec<String>>,
+}
+
+/// One top-level rule call in a BUILD file: the rule name and its body text.
+struct BazelRuleBlock {
+    rule: String,
+    body: String,
+}
+
+/// Split a BUILD file into its top-level rule calls.
+///
+/// A rule call opens when a bare identifier at column zero is followed by
+/// `(` and closes at the matching `)`; nested calls (`all_crate_deps(...)`
+/// inside a `deps` list, `glob(...)` inside `srcs`) stay inside their rule's
+/// body. The BUILD files are machine-generated with this exact shape - a rule
+/// name at column zero, a `)` closing its body - so the column-zero rule and
+/// bracket depth, not a full Starlark parse, are enough.
+fn bazel_rule_blocks(text: &str) -> Vec<BazelRuleBlock> {
+    let bytes = text.as_bytes();
+    let mut blocks = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        let mut col = index;
+        while col < bytes.len() && bytes[col] == b' ' {
+            col += 1;
+        }
+        let mut end = col;
+        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+            end += 1;
+        }
+        if end > col && end < bytes.len() && bytes[end] == b'(' {
+            let mut depth = 1usize;
+            let mut cursor = end + 1;
+            let body_start = cursor;
+            while cursor < bytes.len() && depth > 0 {
+                match bytes[cursor] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                cursor += 1;
+            }
+            blocks.push(BazelRuleBlock {
+                rule: text[col..end].to_owned(),
+                body: text[body_start..cursor.saturating_sub(1)].to_owned(),
+            });
+            index = cursor;
+            continue;
+        }
+        while index < bytes.len() && bytes[index] != b'\n' {
+            index += 1;
+        }
+        if index < bytes.len() {
+            index += 1;
+        }
+    }
+    blocks
+}
+
+/// The string literals in one text span, verbatim.
+fn bazel_strings(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'"' {
+            let start = index + 1;
+            let mut end = start;
+            while end < bytes.len() && bytes[end] != b'"' {
+                end += 1;
+            }
+            out.push(text[start..end].to_owned());
+            index = end + 1;
+            continue;
+        }
+        index += 1;
+    }
+    out
+}
+
+/// The string values of one `name = [...]` list attribute in a rule body.
+///
+/// The attribute name must stand alone: `proc_macro_deps = [` must not
+/// satisfy a `deps = [` lookup, because the link-edge pass reads both
+/// attributes from the same body. The list's first closing bracket ends the
+/// attribute: the generated BUILD files write `deps = [...]` and
+/// `visibility = [...]` as plain string lists, optionally extended by
+/// `] + all_crate_deps(...)`, so the first `]` is the list itself and no
+/// dependency label contains one.
+fn bazel_list_attribute(body: &str, attribute: &str) -> Vec<String> {
+    let needle = format!("{attribute} = [");
+    let bytes = body.as_bytes();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(relative) = body[from..].find(&needle) {
+        let absolute = from + relative;
+        if absolute > 0 {
+            let previous = bytes[absolute - 1];
+            if previous == b'_' || previous.is_ascii_alphanumeric() {
+                from = absolute + needle.len();
+                continue;
+            }
+        }
+        let start = absolute + needle.len();
+        let Some(end_relative) = body[start..].find(']') else {
+            break;
+        };
+        let inner = &body[start..start + end_relative];
+        for value in bazel_strings(inner) {
+            out.push(value);
+        }
+        from = start + end_relative + 1;
+    }
+    out
+}
+
+/// The `name = "..."` of one rule body, when the rule names a target.
+fn bazel_rule_name(body: &str) -> Option<String> {
+    let needle = "name = \"";
+    let relative = body.find(needle)?;
+    let start = relative + needle.len();
+    let rest = &body[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_owned())
+}
+
+/// Parse the visibility declarations of one BUILD file.
+fn bazel_visibility_grants(text: &str) -> BazelVisibilityGrants {
+    let mut grants = BazelVisibilityGrants {
+        default_visibility: Vec::new(),
+        targets: BTreeMap::new(),
+    };
+    for block in bazel_rule_blocks(text) {
+        if block.rule == "package" {
+            grants.default_visibility = bazel_list_attribute(&block.body, "default_visibility");
+            continue;
+        }
+        let Some(name) = bazel_rule_name(&block.body) else {
+            continue;
+        };
+        let visibility = bazel_list_attribute(&block.body, "visibility");
+        if !visibility.is_empty() {
+            grants.targets.insert(name, visibility);
+        }
+    }
+    grants
+}
+
+/// The cross-package link edges one BUILD file declares, as (declaring rule,
+/// dependency label) pairs. The link edges are the `deps` and
+/// `proc_macro_deps` attributes - both are visibility-enforced target edges
+/// resolved through the same grant logic, and the committed tree already
+/// carries proc-macro edges. Same-package (`:name`) and external
+/// (`@crates//:...`) labels are not cross-package dependencies.
+fn bazel_cross_package_deps(text: &str) -> Vec<(String, String)> {
+    let mut deps = Vec::new();
+    for block in bazel_rule_blocks(text) {
+        let Some(name) = bazel_rule_name(&block.body) else {
+            continue;
+        };
+        for attribute in ["deps", "proc_macro_deps"] {
+            for label in bazel_list_attribute(&block.body, attribute) {
+                if label.starts_with("//packages/") {
+                    deps.push((name.clone(), label));
+                }
+            }
+        }
+    }
+    deps
+}
+
+/// Whether the depended-on package grants `consumer` visibility to `target`:
+/// the target's explicit visibility lists the consumer or is public, or -
+/// when the target has no explicit visibility - the package default lists it
+/// or is public.
+fn bazel_visibility_granted(grants: &BazelVisibilityGrants, consumer: &str, target: &str) -> bool {
+    let consumer_package = format!("//packages/{consumer}:__pkg__");
+    let consumer_subpackages = format!("//packages/{consumer}:__subpackages__");
+    if let Some(explicit) = grants.targets.get(target) {
+        return explicit.iter().any(|entry| {
+            entry == "//visibility:public"
+                || *entry == consumer_package
+                || *entry == consumer_subpackages
+        });
+    }
+    grants.default_visibility.iter().any(|entry| {
+        entry == "//visibility:public"
+            || *entry == consumer_package
+            || *entry == consumer_subpackages
+    })
+}
+
+/// Fail when a provider crate's BUILD file declares a dependency on a target
+/// in another package that the depended-on package does not grant it
+/// visibility to. The diagnostic names the crate, the depended-on package,
+/// and the exact consumer entry to add, so the fix is the grant itself.
+///
+/// A dependency is satisfied without a consumer entry when the depended-on
+/// target is genuinely public (`d2b-resource-types` and the shared platform
+/// crates publish public targets), or when the dependency reaches a public
+/// re-export target (the `d2b-contracts` `d2b_contracts_test_support` alias
+/// re-exports the contracts crate publicly); those are grants the check
+/// recognizes, not exemptions. The check covers the link edges a crate
+/// declares directly - `deps` and `proc_macro_deps` - and not a dependency
+/// reached transitively, the other edge kinds (such as `data`/`tools`), nor
+/// whether the depended-on target exists - a typo'd target is Bazel's own
+/// analysis failure, not a visibility one. Passed the provider-crate list so
+/// fixture tests exercise both directions on tiny trees.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn check_bazel_dependency_visibility_with(
+    repo_root: &Path,
+    provider_crates: &[&str],
+) -> Result<(), String> {
+    // The grant side: every package's BUILD file, keyed by package name.
+    let mut grants_by_package: BTreeMap<String, BazelVisibilityGrants> = BTreeMap::new();
+    let packages_dir = repo_root.join("packages");
+    let entries = match fs::read_dir(&packages_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let package_name = entry.file_name().to_string_lossy().into_owned();
+        let build = entry.path().join("BUILD.bazel");
+        let Ok(text) = fs::read_to_string(&build) else { continue };
+        grants_by_package.insert(package_name, bazel_visibility_grants(&text));
+    }
+
+    // The consumer side: every cross-package dep a provider crate declares.
+    let mut violations = Vec::new();
+    for crate_name in provider_crates {
+        let build = repo_root
+            .join("packages")
+            .join(crate_name)
+            .join("BUILD.bazel");
+        let Ok(text) = fs::read_to_string(&build) else {
+            continue; // no BUILD file, no declared Bazel dependencies
+        };
+        for (rule, label) in bazel_cross_package_deps(&text) {
+            let Some(rest) = label.strip_prefix("//packages/") else {
+                continue;
+            };
+            let Some((dep_package, target)) = rest.split_once(':') else {
+                continue;
+            };
+            if dep_package == *crate_name {
+                continue;
+            }
+            let granted = grants_by_package
+                .get(dep_package)
+                .is_some_and(|grants| bazel_visibility_granted(grants, crate_name, target));
+            if !granted {
+                violations.push(
+                    serde_json::json!({
+                        "error": "bazel-visibility-grant-missing",
+                        "crate": crate_name,
+                        "rule": rule,
+                        "package": dep_package,
+                        "target": target,
+                        "missing": format!("//packages/{crate_name}:__pkg__"),
+                    })
+                    .to_string(),
+                );
+            }
+        }
+    }
+
+    violations.sort();
+    violations.dedup();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "bazel dependency visibility violations:\n{}",
+            violations.join("\n")
+        ))
+    }
+}
+
+/// Fail when a provider crate's BUILD file declares a cross-package
+/// dependency whose target the depended-on package does not grant it
+/// visibility to: the toolkit and the provider crates gate links through
+/// enumerated consumer lists, so the missing entry is the grant.
+fn check_bazel_dependency_visibility(repo_root: &Path) -> Result<(), String> {
+    let provider_crates: Vec<&str> = COMMITTED_SCOPE
+        .iter()
+        .filter(|row| matches!(row.class, CommittedScopeClass::Provider))
+        .map(|row| row.crate_name)
+        .collect();
+    check_bazel_dependency_visibility_with(repo_root, &provider_crates)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -10465,6 +10781,134 @@ mod tests {
             check_self_binding_scope(root),
             Ok(()),
             "every committed self-binding stays inside its declaring provider's scope"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_provider_crate_dependency_without_a_visibility_grant_is_refused() {
+        let fixture = Fixture::new("visibility-grant");
+        // The provider depends on the shared crate through Bazel, and the
+        // depended-on package's BUILD file does not grant it visibility.
+        fs::write(
+            fixture
+                .root
+                .join("packages/d2b-provider-fixture-example/BUILD.bazel"),
+            "d2b_rust_library(\n    name = \"d2b_provider_fixture_example\",\n    deps = [\n        \"//packages/d2b-core:d2b_core\",\n    ],\n)\n",
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("packages/d2b-core/BUILD.bazel"),
+            "package(default_visibility = [\"//packages/d2bd:__pkg__\"])\n\nd2b_rust_library(\n    name = \"d2b_core\",\n)\n",
+        )
+        .unwrap();
+        let error = check_bazel_dependency_visibility_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+        )
+        .expect_err("a cross-package dependency without a grant is refused");
+        assert!(error.contains("bazel-visibility-grant-missing"), "{error}");
+        assert!(error.contains("d2b-provider-fixture-example"), "{error}");
+        assert!(error.contains("d2b-core"), "{error}");
+        assert!(
+            error.contains("//packages/d2b-provider-fixture-example:__pkg__"),
+            "{error}"
+        );
+
+        // The grant is the fix: adding the consumer entry to the depended-on
+        // package's default_visibility passes the check.
+        fs::write(
+            fixture.root.join("packages/d2b-core/BUILD.bazel"),
+            "package(default_visibility = [\"//packages/d2bd:__pkg__\", \"//packages/d2b-provider-fixture-example:__pkg__\"])\n\nd2b_rust_library(\n    name = \"d2b_core\",\n)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            check_bazel_dependency_visibility_with(
+                &fixture.root,
+                &["d2b-provider-fixture-example"]
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_cross_package_proc_macro_dependency_is_gated_like_a_link_dependency() {
+        let fixture = Fixture::new("visibility-proc-macro");
+        // A proc-macro edge is a visibility-enforced link edge like a `deps`
+        // edge: the provider declares one cross-package, the depended-on
+        // package grants nothing, and the check must name the target.
+        fs::write(
+            fixture
+                .root
+                .join("packages/d2b-provider-fixture-example/BUILD.bazel"),
+            "d2b_rust_library(\n    name = \"d2b_provider_fixture_example\",\n    deps = [],\n    proc_macro_deps = [\n        \"//packages/d2b-core:d2b_core_proc\",\n    ],\n)\n",
+        )
+        .unwrap();
+        fs::write(
+            fixture.root.join("packages/d2b-core/BUILD.bazel"),
+            "d2b_rust_library(\n    name = \"d2b_core_proc\",\n)\n",
+        )
+        .unwrap();
+        let error = check_bazel_dependency_visibility_with(
+            &fixture.root,
+            &["d2b-provider-fixture-example"],
+        )
+        .expect_err("a cross-package proc-macro dependency without a grant is refused");
+        assert!(error.contains("bazel-visibility-grant-missing"), "{error}");
+        assert!(error.contains("d2b_core_proc"), "{error}");
+        assert!(error.contains("//packages/d2b-provider-fixture-example:__pkg__"), "{error}");
+
+        // The target-level grant is the fix, exactly as for a `deps` edge.
+        fs::write(
+            fixture.root.join("packages/d2b-core/BUILD.bazel"),
+            "d2b_rust_library(\n    name = \"d2b_core_proc\",\n    visibility = [\"//packages/d2b-provider-fixture-example:__pkg__\"],\n)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            check_bazel_dependency_visibility_with(
+                &fixture.root,
+                &["d2b-provider-fixture-example"]
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_public_target_and_a_public_reexport_satisfy_the_grant_without_an_entry() {
+        let fixture = Fixture::new("visibility-public");
+        fs::write(
+            fixture
+                .root
+                .join("packages/d2b-provider-fixture-example/BUILD.bazel"),
+            "d2b_rust_library(\n    name = \"d2b_provider_fixture_example\",\n    deps = [\n        \"//packages/d2b-core:d2b_core\",\n        \"//packages/d2b-core:d2b_core_test_support\",\n        \"//packages/d2b-core:d2b_core_extra\",\n    ],\n)\n",
+        )
+        .unwrap();
+        // A genuinely public target, a public re-export (alias), and a
+        // target-level enumerated grant are all grants the check recognizes,
+        // not exemptions.
+        fs::write(
+            fixture.root.join("packages/d2b-core/BUILD.bazel"),
+            "d2b_rust_library(\n    name = \"d2b_core\",\n    visibility = [\"//visibility:public\"],\n)\n\nalias(\n    name = \"d2b_core_test_support\",\n    actual = \":d2b_core\",\n    visibility = [\"//visibility:public\"],\n)\n\nd2b_rust_library(\n    name = \"d2b_core_extra\",\n    visibility = [\"//packages/d2b-provider-fixture-example:__pkg__\"],\n)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            check_bazel_dependency_visibility_with(
+                &fixture.root,
+                &["d2b-provider-fixture-example"]
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn the_bazel_visibility_grants_match_the_committed_tree() {
+        let root = repo_root().expect("resolve repository root");
+        assert_eq!(
+            check_bazel_dependency_visibility(root),
+            Ok(()),
+            "every cross-package Bazel dependency a provider crate declares must be granted visibility by the depended-on package"
         );
     }
 
