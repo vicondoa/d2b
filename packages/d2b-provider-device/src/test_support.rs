@@ -4,13 +4,16 @@
 //! production consumers never pull this in; `d2bd`'s plane tests read the
 //! [`RecordingEffects`] double through this module.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use d2b_provider_toolkit::{
-    SharedProviderEffectOutcome, SharedProviderEffectPhase, SharedProviderEffectRequest,
-    SharedProviderFinalize,
+    SharedProviderEffectError, SharedProviderEffectOutcome, SharedProviderEffectPhase,
+    SharedProviderEffectRequest, SharedProviderFinalize,
 };
 
 use crate::driver::{DeviceComponent, DeviceDriverEffects, DeviceResourceState};
+use crate::facets::{DeviceEffectFacets, DeviceRuntime};
 
 /// A recording [`DeviceDriverEffects`] double.
 ///
@@ -61,4 +64,45 @@ impl RecordingEffects {
     pub fn call_order(&self) -> Vec<&'static str> {
         self.calls.lock().clone()
     }
+}
+
+/// Recording [`DeviceRuntime`] double: answers Pending/Complete for every
+/// effect call and records the driven components, so `d2bd`'s plane tests
+/// can build a facet set without a daemon.
+#[derive(Default)]
+pub struct RecordingRuntime {
+    /// Components reconciled, in call order.
+    pub reconciled: parking_lot::Mutex<Vec<DeviceComponent>>,
+    /// Components finalized, in call order.
+    pub finalized: parking_lot::Mutex<Vec<DeviceComponent>>,
+}
+
+#[async_trait]
+impl DeviceRuntime for RecordingRuntime {
+    async fn reconcile_device(
+        &self,
+        component: DeviceComponent,
+        _request: &SharedProviderEffectRequest<'_>,
+        _state: &DeviceResourceState,
+    ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        self.reconciled.lock().push(component);
+        Ok(SharedProviderEffectOutcome::phase(
+            SharedProviderEffectPhase::Pending,
+        ))
+    }
+
+    async fn finalize_device(
+        &self,
+        component: DeviceComponent,
+        _request: &SharedProviderEffectRequest<'_>,
+        _state: &DeviceResourceState,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        self.finalized.lock().push(component);
+        Ok(SharedProviderFinalize::Complete)
+    }
+}
+
+/// Build a Device facet set from a recording runtime double.
+pub fn recording_facets(runtime: Arc<RecordingRuntime>) -> DeviceEffectFacets {
+    DeviceEffectFacets { runtime }
 }

@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-device-security-key",
+  "provider": "device-security-key",
+  "services": [
+    "security-key.d2bus.org/effects"
+  ]
+}

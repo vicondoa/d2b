@@ -1,49 +1,134 @@
-//! Core-owned production adapter for the Device TPM Provider effect boundary.
+//! The provider-owned implementation of the TPM family's resource effect
+//! port (U12 tpm step): the family serves its effects over the
+//! daemon-supplied facets instead of a daemon-built port.
 //!
-//! The Provider receives no broker handle, host locator, or Core migration
-//! receipt. Core supplies the migration decision and the Device-owned child
-//! rows; this adapter is the only place that maps the private decision onto
-//! the typed broker operation the migration needs.
+//! The port is the [`TpmResourceEffectPort`] the Device controller calls:
+//! every effect is a manager child mutation or a manager view of a
+//! Device-owned row, plus the one-time legacy state adoption and the
+//! broker-owned state-directory preparation, neither of which launches a
+//! process. The daemon state the port reaches - the trusted bundle the
+//! state-directory intent is resolved from, the authenticated origination
+//! socket and caller authority one kernel invocation goes over, and the
+//! owning Guest's lifecycle admission - crosses the provider boundary as
+//! declared facets ([`crate::facets`]).
 //!
-//! Row ownership (U17, KTD13). The daemon-side effect is realized through the
-//! manager, never through a broker spawn:
-//!
-//! - the controller-owned state Volume `Volume/device-<32hex>-tpm-state` is
-//!   ensured as an owner-scoped child of the requiring Device (the Provider's
-//!   own `build_tpm_state_volume_resource` authors the body);
-//! - the Provider-declared `EphemeralProcess/swtpm-flush-<device>`,
-//!   `Process/swtpm-<device>` and `Endpoint/tpm-<device>` rows are read
-//!   through the same child surface and gated on their published phase, so
-//!   exactly one component - the Process controller - decides when swtpm and
-//!   the flush live, restart, are adopted across daemon restarts, drain, and
-//!   are torn down;
-//! - `stop_swtpm_process` / `delete_flush_process` retire those declared rows
-//!   through the manager, which runs the preserved stop/finalize before
-//!   removal.
-//!
-//! The declared rows are the launch authority: their specs stay the bundle's
-//! (re-authoring them here would differ byte-wise from the seeded row and
-//! mutate it on every pass), and the launch parameters their templates admit
-//! travel on the Process controller's `launch_args` channel.
+//! The declared zone-plane service [`TPM_EFFECTS_SERVICE`] is hosted per
+//! zone by the daemon through [`TpmEffectsServiceFactory`]; its one method
+//! (`inspect-tpm`) answers the family's committed surface: the declared
+//! Device-owned rows and the kernel the state-directory preparation
+//! invokes.
 
 use std::path::PathBuf;
-
+use std::sync::Arc;
 
 use d2b_contracts::types::{BundleOpId, VmId};
-use d2b_contracts_broker::broker_wire::BrokerCallerRole;
-use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
+use d2b_contracts_broker::kernel_client::{KernelInvocation, envelope_invoke_kernel};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+use d2b_core::bundle_resolver::BundleResolver;
+use d2b_core::storage::StoragePathSpec;
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
-use d2b_provider_device_tpm::{
-    TpmResourceController, TpmResourceEffectError, TpmResourceEffectPort, TpmResourceOutcome,
-    build_tpm_state_volume_resource,
+use d2b_provider_toolkit::{
+    EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceInvocation,
+    SharedProviderChildSurface,
 };
 use d2b_resource_runtime::context::ChildEnsure;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::manager::ResourceView;
+use d2b_resource_runtime::ResourceStatus;
+use d2b_resource_types::{ServiceDecl, ServiceMethod};
 use serde_json::Value;
 
-use crate::provider_effects::{GuestLifecycleOperation, LifecycleAuthorization};
-use d2b_provider_toolkit::SharedProviderChildSurface;
+use crate::facets::TpmEffectFacets;
+use crate::resource_controller::{
+    TpmResourceController, TpmResourceControllerError, TpmResourceOutcome,
+};
+use crate::resource_effect::{TpmResourceEffectError, TpmResourceEffectPort};
+
+/// The TPM family's declared effects service.
+///
+/// One zone-plane method, `inspect-tpm`: it answers the family's committed
+/// surface - the Device-owned rows the controller's effects ensure and
+/// read, and the kernel the state-directory preparation invokes. The report
+/// is hermetic: no host state is read or mutated.
+pub const TPM_EFFECTS_SERVICE: ServiceDecl = ServiceDecl {
+    id: "tpm.d2bus.org/effects",
+    methods: &[ServiceMethod::zone_plane("inspect-tpm")],
+    attach_kinds: &[],
+    streams: &[],
+    endpoint_policy: None,
+};
+
+/// The one `inspect-tpm` response payload: the family's committed surface.
+/// The payload is built through the canonical JSON object path, so a
+/// structural character in a trusted value yields a correctly escaped
+/// report rather than an unparseable one; the refusal is unreachable and
+/// names its own code.
+fn inspect_tpm_response() -> Result<EffectResponse, EffectServiceError> {
+    let payload = serde_json::from_value(serde_json::json!({
+        "family": "device-tpm",
+        "provider": crate::PROVIDER_REF,
+        "resourceType": "Device",
+        "rows": [
+            crate::vocabulary::TPM_PROCESS_ROW_PREFIX,
+            crate::vocabulary::TPM_FLUSH_ROW_PREFIX,
+            crate::vocabulary::TPM_ENDPOINT_ROW_PREFIX,
+        ],
+        "operation": "prepare-directory",
+    }))
+    .map_err(|_| EffectServiceError::Declined {
+        service: TPM_EFFECTS_SERVICE.id.to_owned(),
+        reason: "inspect-tpm-response-invalid".to_owned(),
+    })?;
+    Ok(EffectResponse::new(payload))
+}
+
+/// The hosted `inspect-tpm` service: answers the family's committed surface
+/// report. The report is static (the family's own vocabulary), so the
+/// service holds no runtime state.
+struct TpmEffectsService;
+
+#[async_trait::async_trait]
+impl EffectService for TpmEffectsService {
+    async fn handle(
+        &self,
+        _invocation: ServiceInvocation<'_>,
+    ) -> Result<EffectResponse, EffectServiceError> {
+        inspect_tpm_response()
+    }
+}
+
+/// The composition-root factory that hosts the TPM effects service in one
+/// zone (R5): the daemon registers one per zone, carrying that zone's facet
+/// set, and the host rebuilds the service from it on respawn.
+pub struct TpmEffectsServiceFactory {
+    // The facet set is carried for the R5 respawn contract even though the
+    // current inspect service is static; `build()` rebuilds from it.
+    #[allow(dead_code)]
+    facets: TpmEffectFacets,
+}
+
+impl TpmEffectsServiceFactory {
+    /// Build the factory from one zone's facet set.
+    pub fn new(facets: TpmEffectFacets) -> Self {
+        Self { facets }
+    }
+}
+
+impl EffectServiceFactory for TpmEffectsServiceFactory {
+    fn build(&self) -> Arc<dyn EffectService> {
+        Arc::new(TpmEffectsService)
+    }
+}
+
+/// The canonical wire phase of one manager view (the daemon's shared
+/// `view_phase` helper, moved with the port): the published status
+/// classification, or `Pending` for a row without one.
+fn view_phase(view: &ResourceView) -> &'static str {
+    view.observed_status()
+        .as_ref()
+        .map(ResourceStatus::wire_phase)
+        .unwrap_or("Pending")
+}
 
 /// Fail closed (retryable) while a declared row is absent or still
 /// converging, and terminally when its controller reported `Failed`.
@@ -131,7 +216,7 @@ impl DeclaredTpmRows<'_> {
     fn process_ref(&self) -> Result<ResourceRef, TpmResourceEffectError> {
         ResourceRef::parse(&format!(
             "{}{}",
-            d2b_provider_device_tpm::vocabulary::TPM_PROCESS_ROW_PREFIX,
+            crate::vocabulary::TPM_PROCESS_ROW_PREFIX,
             self.device_ref.name().as_str()
         ))
         .map_err(|_| TpmResourceEffectError::InvalidDevice)
@@ -142,7 +227,7 @@ impl DeclaredTpmRows<'_> {
     fn flush_ref(&self) -> Result<ResourceRef, TpmResourceEffectError> {
         ResourceRef::parse(&format!(
             "{}{}",
-            d2b_provider_device_tpm::vocabulary::TPM_FLUSH_ROW_PREFIX,
+            crate::vocabulary::TPM_FLUSH_ROW_PREFIX,
             self.device_ref.name().as_str()
         ))
         .map_err(|_| TpmResourceEffectError::InvalidDevice)
@@ -152,7 +237,7 @@ impl DeclaredTpmRows<'_> {
     fn endpoint_ref(&self) -> Result<ResourceRef, TpmResourceEffectError> {
         ResourceRef::parse(&format!(
             "{}{}",
-            d2b_provider_device_tpm::vocabulary::TPM_ENDPOINT_ROW_PREFIX,
+            crate::vocabulary::TPM_ENDPOINT_ROW_PREFIX,
             self.device_ref.name().as_str()
         ))
         .map_err(|_| TpmResourceEffectError::InvalidDevice)
@@ -163,7 +248,7 @@ impl DeclaredTpmRows<'_> {
     fn state_volume(
         &self,
     ) -> Result<(ResourceRef, ChildEnsure), TpmResourceEffectError> {
-        let document = build_tpm_state_volume_resource(
+        let document = crate::build_tpm_state_volume_resource(
             &self.device_uid,
             &self.device_ref,
             &self.zone,
@@ -206,7 +291,7 @@ impl DeclaredTpmRows<'_> {
             .view(reference)
             .await?
             .as_ref()
-            .map(crate::shared_provider_effects::view_phase))
+            .map(view_phase))
     }
 
     /// Wait for one declared row's controller to reach Ready.
@@ -242,28 +327,17 @@ impl DeclaredTpmRows<'_> {
     }
 }
 
-/// Where one Device's Guest lifecycle admission comes from.
-///
-/// The public Device-start dispatch admits the lease from the requesting peer
-/// and hands the issued lease over; a row-driven reconcile has no peer, so it
-/// resolves the owning Guest's admission itself.
-enum TpmLifecycleAdmission {
-    /// The caller already admitted the lease (the public peer path).
-    Issued(LifecycleAuthorization),
-    /// Resolve the owning Guest's admission on first use (the row-driven
-    /// path).
-    Internal { operation_id: String },
-}
-
-/// Concrete daemon-side TPM resource effect port.
+/// Concrete provider-side TPM resource effect port (U12 tpm step): the
+/// retired daemon adapter moved into the declaring crate, with the daemon
+/// state it reached supplied through the declared facets.
 ///
 /// The port holds no broker spawn surface by construction: every effect is a
 /// manager child mutation or a manager view of a Device-owned row. The two
 /// broker calls that remain are the one-time legacy state adoption and the
 /// broker-owned state-directory preparation, neither of which launches a
 /// process.
-struct LiveTpmResourceEffectPort<'a> {
-    state: &'a crate::ServerState,
+pub struct LiveTpmResourceEffectPort<'a> {
+    facets: TpmEffectFacets,
     vm_id: VmId,
     /// The Zone the Device row lives in: every manager/broker surface this
     /// port touches (declared children, the prepare-directory kernel) is
@@ -272,14 +346,13 @@ struct LiveTpmResourceEffectPort<'a> {
     zone: String,
     migration_intent_ref: BundleOpId,
     migration_decision: LegacyTpmMigrationDecision,
-    caller_role: BrokerCallerRole,
     rows: DeclaredTpmRows<'a>,
     device_uid: ResourceUid,
     device_ref: ResourceRef,
     execution_ref: ResourceRef,
-    /// The Device's owning Guest lifecycle admission, resolved the first time
-    /// the pass reaches the launchable row the lease is consumed by.
-    lifecycle_admission: tokio::sync::Mutex<TpmLifecycleAdmission>,
+    /// The operation id the owning Guest's lifecycle admission is resolved
+    /// for (the retired adapter's `Internal` admission source).
+    operation_id: String,
     /// The guest lifecycle lease is consumed at most once, by the first
     /// effect that reaches a launchable row (the preserved
     /// `lifecycle_lease_consumed` gate of the old executor).
@@ -302,57 +375,6 @@ impl LiveTpmResourceEffectPort<'_> {
         Ok(())
     }
 
-    /// Resolve the owning Guest's lifecycle admission.
-    ///
-    /// Only the launch admission consumes it (`consume_lifecycle_lease`
-    /// below). The controller's earlier stages - the state Volume the Device
-    /// owns, its layout effect, the pre-start flush - are Device-owned rows
-    /// that no Guest lifecycle lease covers, so they must not be gated behind
-    /// this admission: the state directory its worker opens is provisioned
-    /// first, and the launch fails closed here instead.
-    async fn lifecycle_authorization(
-        &self,
-    ) -> Result<LifecycleAuthorization, TpmResourceEffectError> {
-        let mut slot = self
-            .lifecycle_admission
-            .try_lock()
-            .map_err(|_| TpmResourceEffectError::Transient)?;
-        if let TpmLifecycleAdmission::Issued(authorization) = &*slot {
-            return Ok(authorization.clone());
-        }
-        let TpmLifecycleAdmission::Internal { operation_id } = &*slot else {
-            unreachable!("the admission source is Issued or Internal");
-        };
-        let operation_id = operation_id.clone();
-        let zone = ZoneId::parse(self.rows.zone.as_str())
-            .map_err(|_| TpmResourceEffectError::InvalidDevice)?;
-        // Non-blocking `try_lock` per plan U4: a collision reports Transient
-        // (fail-closed), never a stall.
-        let runtime = self
-            .state
-            .resource_plane
-            .try_lock()
-            .ok()
-            .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&zone).ok()))
-            .ok_or(TpmResourceEffectError::Transient)?;
-        let guest_ref = ResourceRef::parse(&format!("Guest/{}", self.vm_id.as_str()))
-            .map_err(|_| TpmResourceEffectError::InvalidDevice)?;
-        let admission = runtime
-            .admit_internal_guest_lifecycle(guest_ref.clone(), &operation_id)
-            .await
-            .map_err(|_| TpmResourceEffectError::Transient)?;
-        let authorization = LifecycleAuthorization::from_lease(
-            admission.lease,
-            guest_ref,
-            admission.guest_uid,
-            admission.guest_generation,
-            admission.provider_assignment_generation,
-        )
-        .map_err(|_| TpmResourceEffectError::StateIntegrity)?;
-        *slot = TpmLifecycleAdmission::Issued(authorization.clone());
-        Ok(authorization)
-    }
-
     /// Consume the Core-issued guest lifecycle lease exactly once. The lease
     /// authorized this Device's start operation; the row's Process controller
     /// owns the process from here, so the port only retires the admission.
@@ -364,14 +386,10 @@ impl LiveTpmResourceEffectPort<'_> {
         if *consumed {
             return Ok(());
         }
-        let authorization = self.lifecycle_authorization().await?;
-        crate::consume_lifecycle_lease(
-            self.state,
-            &authorization,
-            GuestLifecycleOperation::Start,
-            &self.caller_role,
-        )
-        .map_err(|_| TpmResourceEffectError::EffectRejected)?;
+        self.facets
+            .runtime
+            .consume_lifecycle_lease(self.vm_id.as_str(), &self.operation_id)
+            .await?;
         *consumed = true;
         Ok(())
     }
@@ -390,7 +408,10 @@ impl LiveTpmResourceEffectPort<'_> {
     /// spawn-time swtpm-dir fence and the volume-local controller's root all
     /// agree on.
     async fn prepare_state_dir(&self) -> Result<(), TpmResourceEffectError> {
-        let resolver = crate::load_bundle_resolver_on_worker(self.state)
+        let resolver = self
+            .facets
+            .runtime
+            .load_bundle()
             .await
             .map_err(|error| {
                 tracing::warn!(error = ?error, "tpm prepare: bundle resolver load failed");
@@ -425,7 +446,7 @@ impl LiveTpmResourceEffectPort<'_> {
         // Guest target VM, which the host daemon's coordinator does not
         // register (the guest's plane lives inside the nested VM).
         let zone = self.zone.clone();
-        let invocation = d2b_contracts_broker::kernel_client::KernelInvocation {
+        let invocation = KernelInvocation {
             operation: "prepare-directory",
             zone: zone.as_str(),
             payload: serde_json::json!({
@@ -441,10 +462,10 @@ impl LiveTpmResourceEffectPort<'_> {
             chain_root_invocation_id: None,
             chain_identities: None,
         };
-        match d2b_contracts_broker::kernel_client::envelope_invoke_kernel(
-            &crate::broker_socket_path(self.state),
-            crate::KERNEL_IO_TIMEOUT,
-            self.caller_role.clone(),
+        match envelope_invoke_kernel(
+            self.facets.runtime.broker_socket_path(),
+            self.facets.runtime.kernel_io_timeout(),
+            self.facets.runtime.caller_role(),
             invocation,
         ) {
             Ok(_) => Ok(()),
@@ -465,12 +486,12 @@ impl LiveTpmResourceEffectPort<'_> {
 /// subject no trusted artifact names - the caller keeps failing closed
 /// rather than inventing a directory (retired-arm parity).
 fn zone_native_swtpm_state_row<'a>(
-    resolver: &'a d2b_core::bundle_resolver::BundleResolver,
+    resolver: &'a BundleResolver,
     guest: &str,
-) -> Option<(&'a d2b_core::storage::StoragePathSpec, PathBuf)> {
+) -> Option<(&'a StoragePathSpec, PathBuf)> {
     let spec = resolver.find_storage_path_spec(&format!(
         "{}{guest}",
-        d2b_provider_device_tpm::vocabulary::TPM_STATE_STORAGE_ROW_PREFIX
+        crate::vocabulary::TPM_STATE_STORAGE_ROW_PREFIX
     ))?;
     let path = PathBuf::from(spec.path_template.as_str());
     if !path.is_absolute()
@@ -488,7 +509,7 @@ fn zone_native_swtpm_state_row<'a>(
 /// the row's principals or mode cannot be resolved here (retired-arm parity:
 /// a caller that must record a posture fails closed instead of inventing
 /// one).
-fn row_posture(spec: &d2b_core::storage::StoragePathSpec) -> Option<(u32, u32, u32)> {
+fn row_posture(spec: &StoragePathSpec) -> Option<(u32, u32, u32)> {
     use d2b_core::storage::PrincipalKind;
     let owner_uid = match spec.owner.kind {
         PrincipalKind::Uid => spec.owner.value.as_str().parse::<u32>().ok()?,
@@ -553,7 +574,7 @@ impl TpmResourceEffectPort for LiveTpmResourceEffectPort<'_> {
             .view(&flush)
             .await?
             .ok_or(TpmResourceEffectError::Transient)?;
-        gate_declared_phase(Some(crate::shared_provider_effects::view_phase(&view)))?;
+        gate_declared_phase(Some(view_phase(&view)))?;
         gate_flush_outcome(&view)?;
         Ok(flush)
     }
@@ -617,20 +638,21 @@ impl TpmResourceEffectPort for LiveTpmResourceEffectPort<'_> {
 /// Production Device controller reconcile callsite.
 ///
 /// Core supplies the migration decision and opaque state intent; the daemon
-/// supplies only the manager-routed child surface. The migration receipt
-/// never crosses into the Provider crate.
-pub(crate) struct AdmittedTpmDevice {
+/// supplies only the manager-routed child surface and the declared facets.
+/// The migration receipt never crosses into the Provider crate.
+pub struct AdmittedTpmDevice {
     device_uid: ResourceUid,
     device_ref: ResourceRef,
     zone: String,
     execution_ref: ResourceRef,
-    lifecycle_admission: TpmLifecycleAdmission,
+    operation_id: String,
 }
 
 impl AdmittedTpmDevice {
     /// One Device reconciled from its own row: the owning Guest's lifecycle
-    /// admission is resolved when the pass reaches the launchable row.
-    pub(crate) fn from_row(
+    /// admission is resolved by the daemon runtime facet when the pass
+    /// reaches the launchable row.
+    pub fn from_row(
         device_uid: ResourceUid,
         device_ref: ResourceRef,
         zone: impl Into<String>,
@@ -642,28 +664,24 @@ impl AdmittedTpmDevice {
             device_ref,
             zone: zone.into(),
             execution_ref,
-            lifecycle_admission: TpmLifecycleAdmission::Internal {
-                operation_id: operation_id.into(),
-            },
+            operation_id: operation_id.into(),
         }
     }
 
     fn into_port<'a>(
         self,
-        state: &'a crate::ServerState,
+        facets: TpmEffectFacets,
         vm_id: VmId,
         migration_intent_ref: BundleOpId,
         migration_decision: LegacyTpmMigrationDecision,
-        caller_role: BrokerCallerRole,
         children: &'a dyn SharedProviderChildSurface,
     ) -> LiveTpmResourceEffectPort<'a> {
         LiveTpmResourceEffectPort {
-            state,
+            facets,
             vm_id,
             zone: self.zone.clone(),
             migration_intent_ref,
             migration_decision,
-            caller_role,
             rows: DeclaredTpmRows {
                 children,
                 zone: self.zone.clone(),
@@ -674,51 +692,47 @@ impl AdmittedTpmDevice {
             device_uid: self.device_uid,
             device_ref: self.device_ref,
             execution_ref: self.execution_ref,
-            lifecycle_admission: tokio::sync::Mutex::new(self.lifecycle_admission),
+            operation_id: self.operation_id,
             lifecycle_lease_consumed: tokio::sync::Mutex::new(false),
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn reconcile_device_tpm_controller(
-    state: &crate::ServerState,
+/// Reconcile one Device's TPM controller through the provider-owned port.
+pub async fn reconcile_device_tpm_controller(
+    facets: TpmEffectFacets,
     vm_id: VmId,
     migration_intent_ref: BundleOpId,
     migration_decision: LegacyTpmMigrationDecision,
     admitted_device: AdmittedTpmDevice,
-    caller_role: BrokerCallerRole,
     children: &dyn SharedProviderChildSurface,
     controller: &mut TpmResourceController,
-) -> Result<TpmResourceOutcome, d2b_provider_device_tpm::TpmResourceControllerError> {
+) -> Result<TpmResourceOutcome, TpmResourceControllerError> {
     let resource_effect = admitted_device.into_port(
-        state,
+        facets,
         vm_id,
         migration_intent_ref,
         migration_decision,
-        caller_role,
         children,
     );
     controller.reconcile(&resource_effect).await
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn finalize_device_tpm_controller(
-    state: &crate::ServerState,
+/// Finalize one Device's TPM controller through the provider-owned port.
+pub async fn finalize_device_tpm_controller(
+    facets: TpmEffectFacets,
     vm_id: VmId,
     migration_intent_ref: BundleOpId,
     migration_decision: LegacyTpmMigrationDecision,
     admitted_device: AdmittedTpmDevice,
-    caller_role: BrokerCallerRole,
     children: &dyn SharedProviderChildSurface,
     controller: &mut TpmResourceController,
-) -> Result<TpmResourceOutcome, d2b_provider_device_tpm::TpmResourceControllerError> {
+) -> Result<TpmResourceOutcome, TpmResourceControllerError> {
     let resource_effect = admitted_device.into_port(
-        state,
+        facets,
         vm_id,
         migration_intent_ref,
         migration_decision,
-        caller_role,
         children,
     );
     controller.finalize(&resource_effect).await
@@ -1008,7 +1022,7 @@ mod tests {
         );
         let failed = published_view(&rows, &flush).await;
         assert_eq!(
-            gate_declared_phase(Some(crate::shared_provider_effects::view_phase(&failed))),
+            gate_declared_phase(Some(view_phase(&failed))),
             Ok(()),
             "the runtime classifies a concluded pass as ready"
         );

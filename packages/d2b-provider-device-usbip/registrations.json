@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-device-usbip",
+  "provider": "device-usbip",
+  "services": [
+    "usbip.d2bus.org/effects"
+  ]
+}

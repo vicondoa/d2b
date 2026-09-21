@@ -15,6 +15,11 @@ mod runner;
 mod state;
 pub mod swtpm_argv;
 pub mod vocabulary;
+pub mod effects_service;
+pub mod facets;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use migration::LegacyMigrationOutcome;
 pub use resource_controller::{

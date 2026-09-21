@@ -9,6 +9,8 @@
 mod authority;
 mod controller;
 mod driver;
+pub mod effects_service;
+pub mod facets;
 mod lease;
 mod process;
 pub mod relay;
@@ -34,6 +36,7 @@ pub use driver::{
     SECURITY_KEY_SERVICE_CREATIONS, SecurityKeyComponent, SecurityKeyDriverArgs,
     SecurityKeyDriverEffects, declared_dependency_refs, security_key_descriptors,
 };
+pub use effects_service::SECURITY_KEY_EFFECTS_SERVICE;
 pub use lease::{LeaseState, SecurityKeyLease, SecurityKeyLeaseError, SecurityKeySessionId};
 pub use process::{
     FrontendProcessDeclaration, ProcessDeclarationError, RelayProcessDeclaration,

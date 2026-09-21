@@ -8,11 +8,14 @@
 
 #![deny(missing_docs)]
 
+pub mod broker;
 pub mod core_adapter;
 mod arbitration;
 mod busid;
 mod controller;
 mod driver;
+pub mod effects_service;
+pub mod facets;
 mod firewall;
 mod lifecycle;
 mod process;
@@ -40,6 +43,7 @@ pub use driver::{
     UsbipComponent, UsbipDriverArgs, UsbipDriverEffects, declared_dependency_refs,
     usbip_descriptors,
 };
+pub use effects_service::USBIP_EFFECTS_SERVICE;
 pub use firewall::{
     FirewallConfirmation, FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence,
     FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent, FirewallToken,

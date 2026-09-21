@@ -4,6 +4,8 @@
 //! Exposed under `test-support` so the crate's own tests and `d2bd`'s plane
 //! tests read through the same `SecurityKeyDriverEffects` recording double.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use d2b_provider_toolkit::{
     SharedProviderEffectError, SharedProviderEffectOutcome, SharedProviderEffectPhase,
@@ -11,6 +13,7 @@ use d2b_provider_toolkit::{
 };
 
 use crate::driver::{SecurityKeyComponent, SecurityKeyDriverEffects};
+use crate::facets::{SecurityKeyEffectFacets, SecurityKeyRuntime};
 
 /// The canonical recording double for [`SecurityKeyDriverEffects`].
 ///
@@ -52,4 +55,43 @@ impl SecurityKeyDriverEffects for RecordingEffects {
         self.calls.lock().push("finalize");
         Ok(SharedProviderFinalize::Complete)
     }
+}
+
+/// Recording [`SecurityKeyRuntime`] double: answers Ready/Complete for
+/// every effect call and records the driven components, so `d2bd`'s plane
+/// tests can build a facet set without a daemon.
+#[derive(Default)]
+pub struct RecordingRuntime {
+    /// Components reconciled, in call order.
+    pub reconciled: parking_lot::Mutex<Vec<SecurityKeyComponent>>,
+    /// Components finalized, in call order.
+    pub finalized: parking_lot::Mutex<Vec<SecurityKeyComponent>>,
+}
+
+#[async_trait]
+impl SecurityKeyRuntime for RecordingRuntime {
+    async fn reconcile_security_key(
+        &self,
+        component: SecurityKeyComponent,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
+        self.reconciled.lock().push(component);
+        Ok(SharedProviderEffectOutcome::phase(
+            SharedProviderEffectPhase::Ready,
+        ))
+    }
+
+    async fn finalize(
+        &self,
+        component: SecurityKeyComponent,
+        _request: &SharedProviderEffectRequest<'_>,
+    ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
+        self.finalized.lock().push(component);
+        Ok(SharedProviderFinalize::Complete)
+    }
+}
+
+/// Build a security-key facet set from a recording runtime double.
+pub fn recording_facets(runtime: Arc<RecordingRuntime>) -> SecurityKeyEffectFacets {
+    SecurityKeyEffectFacets { runtime }
 }

@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-device",
+  "provider": "device",
+  "services": [
+    "device.d2bus.org/effects"
+  ]
+}

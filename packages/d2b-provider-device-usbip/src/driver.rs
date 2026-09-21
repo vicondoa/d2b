@@ -41,6 +41,8 @@ use d2b_resource_runtime::identity::ResourceTypeName;
 use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 use serde_json::{Value, json};
 
+use crate::effects_service::USBIP_EFFECTS_SERVICE;
+
 pub use crate::{PROVIDER_REF, USB_BINDING_RESOURCE_TYPE, USB_SERVICE_RESOURCE_TYPE};
 
 /// The controller reference the Service row's effects bind.
@@ -116,8 +118,10 @@ pub struct UsbipDriverArgs {
     pub zone: String,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
-    /// The daemon-realized effect port the driver drives.
-    pub effects: Arc<dyn UsbipDriverEffects>,
+    /// The daemon-supplied facet set the family's own effects
+    /// implementation is built from (U12 usbip step): the driver never
+    /// receives a daemon-built effect port (R2).
+    pub facets: crate::facets::UsbipEffectFacets,
 }
 
 /// The family's declarations and typed Provider effect.
@@ -222,7 +226,7 @@ pub fn usbip_descriptors(args: UsbipDriverArgs) -> [DriverDescriptor; 2] {
             zone: args.zone,
             controller_generation: args.controller_generation,
             family: Arc::new(UsbipFamily {
-                effects: args.effects,
+                effects: Arc::new(crate::effects_service::UsbipEffects::new(args.facets)),
             }),
         }));
     let descriptor = |resource_type: WellKnownType,
@@ -239,7 +243,7 @@ pub fn usbip_descriptors(args: UsbipDriverArgs) -> [DriverDescriptor; 2] {
         operations: &[],
         creations: &[],
         startup: &[],
-        services: &[],
+        services: &[USBIP_EFFECTS_SERVICE],
         decoder: shared_provider_spec_decoder(),
         factory: Arc::clone(&factory),
     };
@@ -340,16 +344,14 @@ mod tests {
         usbip_descriptors,
     };
 
-    use crate::test_support::RecordingEffects;
-
-    fn descriptors(
-        effects: Arc<RecordingEffects>,
-    ) -> [d2b_resource_types::DriverDescriptor; 2] {
+    fn descriptors() -> [d2b_resource_types::DriverDescriptor; 2] {
         usbip_descriptors(UsbipDriverArgs {
             zone: "dev".to_owned(),
             controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
                 .expect("generation"),
-            effects,
+            facets: crate::test_support::recording_facets(Arc::new(
+                crate::test_support::RecordingRuntime::default(),
+            )),
         })
     }
 
@@ -357,7 +359,7 @@ mod tests {
     /// over one factory the registry can register each type with.
     #[test]
     fn descriptors_declare_the_usb_types() {
-        let descriptors = descriptors(Arc::new(RecordingEffects::default()));
+        let descriptors = descriptors();
         let types = descriptors
             .iter()
             .map(|descriptor| descriptor.resource_type.to_resource_type_name().as_str().to_owned())
