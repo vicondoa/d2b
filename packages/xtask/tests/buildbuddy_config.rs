@@ -989,6 +989,12 @@ fn concurrent_facades_isolate_warning_evidence() {
             break;
         }
         if let Ok(Some(status)) = warning.try_wait() {
+            // The facade exited before reaching the barrier. Release the
+            // bazel wrapper it spawned (the same marker the normal path
+            // publishes) and reap the child so nothing lingers in the
+            // release-wait loop after this test fails.
+            let _ = std::fs::write(&warning_release, "");
+            let _ = warning.wait();
             panic!(
                 "warning facade exited with {status} before reaching the barrier"
             );
