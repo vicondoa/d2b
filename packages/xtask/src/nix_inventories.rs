@@ -14,6 +14,12 @@
 //!   registries.
 //! - `nixos-modules/host-users.nix` - the host accounts the committed
 //!   principal allocation names.
+//! - `nixos-modules/generated/process-role-providers.nix` and
+//!   `packages/d2b-core/src/generated/process_roles.rs` - the process
+//!   family's declared role-to-provider map and `ProcessRole` vocabulary
+//!   (U4), rendered from the per-crate `resource-types.json` declarations by
+//!   the resource-type authority and emitted here too so the standalone
+//!   command and the layout check stay byte-identical.
 //!
 //! Every list is either projected from a committed authority (the standard
 //! resource registry in `d2b-contracts`, the Role/RoleBinding contracts, the
@@ -694,7 +700,12 @@ fn host_users_module(
 /// Write every Nix inventory the generator owns.
 pub fn gen_nix_inventories(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let allocation = principal_allocation(repo_root)?;
-    let written = vec![
+    // The provider-facts role artifacts (U4) are declaration-driven; the
+    // resource-type authority renders them so the standalone command and the
+    // layout check's --fix path emit identical bytes.
+    let role_artifacts = crate::resource_type_authority::render_role_artifacts(repo_root)
+        .map_err(|error| render_error(format!("role-artifact render failed: {error}")))?;
+    let mut written = vec![
         write(
             repo_root,
             PROVIDER_PROJECTIONS_OUT,
@@ -717,6 +728,9 @@ pub fn gen_nix_inventories(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std
             host_users_module(&allocation)?,
         )?,
     ];
+    for (relative, rendered) in role_artifacts {
+        written.push(write(repo_root, &relative, rendered)?);
+    }
     if written.is_empty() {
         return Err(render_error(
             "gen-nix-inventories wrote no artifact; refusing to report success",

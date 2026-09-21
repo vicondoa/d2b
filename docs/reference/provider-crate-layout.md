@@ -32,6 +32,8 @@ at its crate root:
   "roles": [
     {
       "name": "<RoleName>",
+      "description": "What the role means on the host.",
+      "providerRef": "Provider/<owning-provider>",
       "operations": [],
       "principals": [],
       "storageRoots": [],
@@ -49,10 +51,34 @@ types' verbs, execution classes (a list of `host`/`guest`), and the other
 resource kinds each type reads; the crate-level `provides` list names the
 provider and process references it realizes; and the crate-level `roles`
 (and their principals, storage roots, seccomp classes, device classes,
-and capability grants) name the vocation rows the crate declares. It does
+and capability grants) name the vocation rows the crate declares. A role
+row's optional `providerRef` names the Provider the role resolves to (the
+role-to-provider mapping; a role no Provider serves omits it), and its
+optional `description` is emitted as the generated role vocabulary's variant
+documentation. It does
 not name effects: the daemon keeps the production effect implementation behind
 the effect port each family crate declares, so the crate itself depends on no
 provider crate.
+
+The resource-type authority (U4) aggregates the declared role vocabulary into
+two committed consumers:
+
+- `packages/d2b-core/src/generated/process_roles.rs` - the `ProcessRole`
+  enum in `d2b-core`, `include!`d by `packages/d2b-core/src/processes.rs`,
+  rendered from the declaring crate's role names and descriptions in
+  declaration order.
+- `nixos-modules/generated/process-role-providers.nix` - the role-to-provider
+  map `nixos-modules/resources-zones-processes.nix` folds for the process
+  compiler, rendered from the declared `providerRef` rows.
+
+Both are drift-gated with the other authority artifacts. A declared role must
+be spelled in its crate's descriptor sources (`ProcessRole::<Name>`), and a
+declaration that widens an authority-bearing role fact - a role's operations,
+principals, storage roots, seccomp classes, device classes, or capability
+grants - beyond the crate's committed scope fails naming the widened fact
+(R12). The declared service facets one method carries (its required
+privileges, state cells, and descriptor-leg type/rights in `operations.json`)
+carry the same committed per-crate bound (U4).
 
 
 

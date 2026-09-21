@@ -128,6 +128,14 @@ pub(crate) struct Authz {
     audit_mode: String,
 }
 
+impl Authz {
+    /// The required privilege a declared method carries: the authz
+    /// subject/scope pair the authority bound names when it widens (U4).
+    pub(crate) fn privilege(&self) -> String {
+        format!("{}/{}", self.subject, self.scope)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Audit {
@@ -162,6 +170,18 @@ pub(crate) struct Fds {
     fd_kind: Option<String>,
 }
 
+impl Fds {
+    /// The descriptor-leg rights ceiling a declared method carries.
+    pub(crate) fn max_fds(&self) -> u32 {
+        self.max_fds
+    }
+
+    /// The descriptor-leg type a declared method carries (U4).
+    pub(crate) fn fd_kind(&self) -> Option<&str> {
+        self.fd_kind.as_deref()
+    }
+}
+
 /// The state-cell facet of one committed operation row (U3/KTD3).
 ///
 /// A row with no declared cell leaves both fields absent; a row that names a
@@ -175,6 +195,13 @@ pub(crate) struct StateCell {
     cell: Option<String>,
     #[serde(default)]
     durability: Option<String>,
+}
+
+impl StateCell {
+    /// The declared state-cell name one method lives on (U4).
+    pub(crate) fn cell(&self) -> Option<&str> {
+        self.cell.as_deref()
+    }
 }
 
 /// The deadline-tier facet of one committed operation row (U4/KTD4).

@@ -84,6 +84,7 @@ _SURFACES = {
         "cases": ["bundle-artifacts-compiler", "zone-control", "zone-link"],
         "package": "packages/d2b-provider-volume-local",
         "files": [
+            "nixos-modules/generated/process-role-providers.nix",
             "nixos-modules/generated/provider-catalog-shape.nix",
             "nixos-modules/generated/provider-projections.nix",
             "nixos-modules/generated/resource-inventories.nix",

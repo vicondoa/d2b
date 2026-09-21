@@ -1799,18 +1799,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: the broker is pinned provider-free; the privileged op and its audit surface stay in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
-        token: "activation_nixos",
-        family: "activation-nixos",
-        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
-        token: "nixos",
-        family: "activation-nixos",
-        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/catalog.rs",
         token: "sysctl",
         family: "activation-nixos",
@@ -2141,12 +2129,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
-        token: "gpu",
-        family: "device-gpu",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/device_worker.rs",
         token: "gpu",
         family: "device-gpu",
@@ -2283,12 +2265,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "security_key",
         family: "device-security-key",
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
-        token: "security_key",
-        family: "device-security-key",
-        retires_with: "U12 security-key step",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/catalog.rs",
@@ -2875,12 +2851,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (display-wayland)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
-        token: "wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/unsafe_local_wire.rs",
         token: "wayland",
         family: "display-wayland",
@@ -3181,12 +3151,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (observability-otel)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
-        token: "otel",
-        family: "observability-otel",
-        retires_with: "U10-U12 family rollout (observability-otel)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "otel",
         family: "observability-otel",
@@ -3248,12 +3212,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/test_support.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
@@ -3359,12 +3317,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "qemu_media",
         family: "runtime-qemu-media",
         retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/stays in the broker as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
-        token: "qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "permanent:trusted-bundle/manifest wire shapes across d2b-core/daemon;d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/catalog.rs",
@@ -3735,12 +3687,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
-        token: "virtiofs",
-        family: "volume-virtiofs",
-        retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core/src/processes.rs",
         token: "virtiofs",
         family: "volume-virtiofs",
         retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
@@ -6015,66 +5961,6 @@ const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption]
     SharedStructuralKnowledgeExemption {
         module: "nixos-modules/resources-zones-processes.nix",
         class: "provider-id",
-        symbol: "Provider/activation-nixos",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/audio-pipewire",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/device-gpu",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/device-security-key",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/device-tpm",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/device-usbip",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/display-wayland",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/observability-otel",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/runtime-cloud-hypervisor",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/runtime-qemu-media",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
         symbol: "Provider/system-minijail",
         retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
     },
@@ -6082,18 +5968,6 @@ const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption]
         module: "nixos-modules/resources-zones-processes.nix",
         class: "provider-id",
         symbol: "Provider/system-systemd",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/transport-vsock",
-        retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/resources-zones-processes.nix",
-        class: "provider-id",
-        symbol: "Provider/volume-virtiofs",
         retires_with: "U8/U13 (the hand per-provider Nix tables are generated from declarations)",
     },
     SharedStructuralKnowledgeExemption {
