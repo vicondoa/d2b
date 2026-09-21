@@ -14,12 +14,12 @@ pub(crate) struct ProviderRegistration {
 /// The registered provider families, in declaration order.
 pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
     ProviderRegistration {
-        provider_ref: "activation-nixos",
-        services: &["activation.d2bus.org/effects"],
+        provider_ref: "audio-binding",
+        services: &[],
     },
     ProviderRegistration {
-        provider_ref: "host",
-        services: &["host.d2bus.org/effects"],
+        provider_ref: "audio-service",
+        services: &[],
     },
     ProviderRegistration {
         provider_ref: "network-local",
@@ -28,5 +28,21 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
     ProviderRegistration {
         provider_ref: "process",
         services: &["process.d2bus.org/effects"],
+    },
+    ProviderRegistration {
+        provider_ref: "shell-pool",
+        services: &[],
+    },
+    ProviderRegistration {
+        provider_ref: "shell-session",
+        services: &[],
+    },
+    ProviderRegistration {
+        provider_ref: "wayland-policy",
+        services: &["interaction.d2bus.org/effects"],
+    },
+    ProviderRegistration {
+        provider_ref: "wayland-session",
+        services: &[],
     },
 ];

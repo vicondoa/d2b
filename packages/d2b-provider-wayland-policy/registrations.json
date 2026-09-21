@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-wayland-policy",
+  "provider": "wayland-policy",
+  "services": [
+    "interaction.d2bus.org/effects"
+  ]
+}

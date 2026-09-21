@@ -1,11 +1,23 @@
-//! Production effects for the U12 interaction and shell drivers.
+//! The provider-owned implementation of the interaction family's driver
+//! effects (U12): the family serves its effects from this crate instead of a
+//! daemon-built port.
 //!
-//! Every typed Provider effect the U9 driver family dispatches lives here:
-//! the display session admission against the committed interaction identity,
-//! the audio-pipewire controller registry, and the shell pool/session
-//! reference checks. The port is the dyn-erased [`InteractionDriverEffects`]
-//! boundary; the daemon owns every side effect behind it and the drivers own
-//! the child rows.
+//! Two surfaces share one implementation value:
+//!
+//! - the driver's typed seam, [`InteractionDriverEffects`], which the six
+//!   interaction drivers hold (the composition root builds one shared value
+//!   from the zone's facet set, so the family's per-zone controller state is
+//!   shared across the six types);
+//! - the declared zone-plane service [`INTERACTION_EFFECTS_SERVICE`], hosted
+//!   per zone by the daemon through [`InteractionEffectsServiceFactory`]. Its
+//!   one method (`audio-binding-statuses`) answers the zone's audio binding
+//!   statuses from the same shared registry the drivers reconcile.
+//!
+//! Everything the effects read crosses the provider boundary as declared
+//! facets ([`crate::facets`]): the committed interaction identity, the
+//! zone's manager-plane row reads, and the broker-backed audio mediator. The
+//! per-zone audio controller registry is this crate's own state, created by
+//! the facet set's constructor. Nothing here names a daemon state type.
 //!
 //! Live readiness is read through the manager view for converted rows (a
 //! converted row's actor status is the only status there is, R11) and through
@@ -16,59 +28,75 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, StoredResource, ZoneId};
-use d2b_provider_audio_pipewire::{AudioBindingPhase, AudioBindingSpec};
-use d2b_provider_display_wayland::WaylandSessionSpec;
+use d2b_provider_audio_pipewire::{AudioBindingController, AudioBindingPhase, AudioBindingSpec};
+use d2b_provider_display_wayland::{
+    WaylandSessionResourceStatus, WaylandSessionSpec, session_children,
+};
+use d2b_provider_toolkit::{
+    EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceInvocation,
+};
 use d2b_resource_runtime::identity::ResourceKey;
 use d2b_resource_runtime::manager::{ResourceSelector, ResourceView};
 use d2b_resource_runtime::ResourceStatus;
+use d2b_resource_types::{ServiceDecl, ServiceMethod};
 use serde_json::Value;
 
-use super::ZoneResourceRuntime;
-use crate::ServerState;
-use crate::audio_resource_runtime::{
-    AudioResourceRuntime, AudioResourceRuntimeError, audio_binding_projection,
+use crate::audio_registry::{
+    AudioBindingRuntimeStatus, AudioResourceRuntimeError, audio_binding_projection,
 };
-use d2b_provider_audio_binding::AUDIO_BINDING_TYPE;
-use d2b_provider_shell_pool::shell_pool_spec;
-use d2b_provider_shell_session::{shell_session_execution, shell_session_pool_ref};
-use d2b_provider_wayland_policy::{
+use crate::facets::InteractionEffectFacets;
+use crate::interaction::{
     InteractionDriverEffects, InteractionEffectError, InteractionEffectOutcome,
     InteractionEffectPhase, InteractionEffectRequest, InteractionFinalize, InteractionKind,
     key_ref,
 };
+use crate::vocabulary::{
+    AUDIO_BINDING_TYPE, shell_pool_spec, shell_session_execution, shell_session_pool_ref,
+};
 
-/// Production composition adapter for the closed interaction/shell family.
+/// The interaction family's declared effects service.
 ///
-/// The adapter performs the Provider-owned typed admission before any effect
-/// call. A missing live broker/resource binding is returned as a retryable
-/// refusal; it is never converted into generic convergence.
-pub(crate) struct ProductionInteractionDriverEffects {
-    state: Arc<ServerState>,
-    zone: ZoneId,
+/// One zone-plane method, `audio-binding-statuses`: it answers this zone's
+/// audio binding statuses from the family's per-zone controller registry -
+/// the same registry the AudioService and AudioBinding drivers reconcile
+/// through the shared effects port. The registry is infallible by
+/// construction: a mutex-guarded in-memory map with no I/O or channel, so
+/// no registry-unreachable refusal exists; the method's only error path is
+/// the response serialization guard.
+///
+/// The service is declared on the `WaylandPolicy` descriptor alone; the
+/// family's driver effects (the typed seam) stay the drivers' shared object,
+/// not a hosted method surface.
+pub const INTERACTION_EFFECTS_SERVICE: ServiceDecl = ServiceDecl {
+    id: "interaction.d2bus.org/effects",
+    methods: &[ServiceMethod::zone_plane("audio-binding-statuses")],
+    attach_kinds: &[],
+    streams: &[],
+    endpoint_policy: None,
+};
+
+/// The provider-owned interaction effects (U12), built from the
+/// daemon-supplied facets.
+///
+/// One value serves the six drivers' shared typed seam and the declared
+/// hosted service: the factory constructs it from the same
+/// [`InteractionEffectFacets`] the composition root supplies, so the hosted
+/// surface and the drivers observe the same per-zone controller state.
+pub struct InteractionEffectsService {
+    facets: InteractionEffectFacets,
 }
 
-impl ProductionInteractionDriverEffects {
-    pub(crate) fn new(state: Arc<ServerState>, zone: ZoneId) -> Self {
-        Self { state, zone }
+impl InteractionEffectsService {
+    /// Build the effects from one zone's daemon-supplied facet set (R2):
+    /// every daemon-structural read rides the facets, never a daemon handle.
+    pub fn new(facets: InteractionEffectFacets) -> Self {
+        Self { facets }
     }
 
-    fn runtime(&self) -> Result<Arc<ZoneResourceRuntime>, InteractionEffectError> {
-        // Synchronous caller: non-blocking `try_lock` per plan U4. A
-        // collision reports Unavailable (fail-closed), never a stall.
-        self.state
-            .resource_plane
-            .try_lock()
-            .ok()
-            .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&self.zone).ok()))
-            .ok_or(InteractionEffectError::Unavailable)
-    }
-
-    fn plane(
-        &self,
-    ) -> Result<Arc<crate::resource_plane_v3::ResourcePlaneV3>, InteractionEffectError> {
-        self.runtime()?
-            .v3_plane()
-            .map_err(|_| InteractionEffectError::Unavailable)
+    /// The zone's manager-plane row reads (the generic resource-state
+    /// surface the effects reach through the declared facet).
+    fn plane(&self) -> &Arc<dyn crate::facets::InteractionPlaneRead> {
+        self.facets.plane()
     }
 
     /// The manager view of one row.
@@ -76,15 +104,13 @@ impl ProductionInteractionDriverEffects {
         &self,
         target: &ResourceRef,
     ) -> Result<Option<ResourceView>, InteractionEffectError> {
-        let plane = self.plane()?;
         let key = ResourceKey::new(
-            self.zone.as_str(),
+            self.facets.zone().as_str(),
             target.resource_type().as_str(),
             target.name().as_str(),
         );
-        plane
-            .client()
-            .get(key)
+        self.plane()
+            .get(&key)
             .await
             .map_err(|_| InteractionEffectError::Unavailable)
     }
@@ -140,11 +166,10 @@ impl ProductionInteractionDriverEffects {
         &self,
         resource_type: &str,
     ) -> Result<Vec<Value>, InteractionEffectError> {
-        let plane = self.plane()?;
-        let views = plane
-            .client()
-            .list(ResourceSelector {
-                zone: Some(self.zone.as_str().to_owned()),
+        let views = self
+            .plane()
+            .list(&ResourceSelector {
+                zone: Some(self.facets.zone().as_str().to_owned()),
                 type_name: Some(resource_type.to_owned()),
                 owner: None,
             })
@@ -170,7 +195,7 @@ impl ProductionInteractionDriverEffects {
         &self,
         target: &ResourceRef,
     ) -> Result<Option<StoredResource>, InteractionEffectError> {
-        audio_dependency_row(self.live_stored(target).await?, target, &self.zone)
+        audio_dependency_row(self.live_stored(target).await?, target, self.facets.zone())
     }
 
     async fn reconcile_display_session(
@@ -179,16 +204,18 @@ impl ProductionInteractionDriverEffects {
     ) -> Result<InteractionEffectOutcome, InteractionEffectError> {
         let spec: WaylandSessionSpec = serde_json::from_value(request.spec.clone())
             .map_err(|_| InteractionEffectError::InvalidResource)?;
-        let runtime = self.runtime()?;
-        let identity = runtime
-            .interaction_identity()
+        let identity = self
+            .facets
+            .identity()
+            .identity()
+            .await
             .ok_or(InteractionEffectError::Unavailable)?;
         let session_ref = key_ref(&request.target);
-        if identity.wayland_session_ref() != &session_ref
-            || identity.wayland_session_uid() != &request.uid
-            || identity.subject_ref() != spec.guest_ref()
-            || identity.host_execution_ref() != spec.host_ref()
-            || identity.user_ref() != spec.user_ref()
+        if identity.wayland_session_ref != session_ref
+            || identity.wayland_session_uid != request.uid
+            || identity.subject_ref != *spec.guest_ref()
+            || identity.host_execution_ref != *spec.host_ref()
+            || identity.user_ref != *spec.user_ref()
         {
             return Err(InteractionEffectError::InvalidResource);
         }
@@ -204,13 +231,12 @@ impl ProductionInteractionDriverEffects {
                 ));
             }
         }
-        let intents = crate::interaction_composition::display_owned_child_intents(
-            &self.zone,
+        let intents = session_children::display_owned_child_intents(
+            self.facets.zone(),
             &session_ref,
             &request.uid,
             &spec,
             request.generation,
-            request.controller_generation,
         )
         .map_err(|_| InteractionEffectError::InvalidResource)?;
         let expected = intents
@@ -235,16 +261,10 @@ impl ProductionInteractionDriverEffects {
         let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
             return Err(InteractionEffectError::Unavailable);
         };
-        let runtime = self.runtime()?;
-        let mut audio = runtime
-            .audio_runtime
-            .lock()
-            .await;
-        let registry = audio.get_or_insert_with(|| {
-            AudioResourceRuntime::new(self.zone.clone(), Arc::clone(&self.state))
-        });
-        registry
-            .reconcile_service_resource(&target)
+        self.facets
+            .audio_registry()
+            .reconcile_service(&target)
+            .await
             .map_err(map_audio_effect_error)?;
         Ok(InteractionEffectOutcome::phase(InteractionEffectPhase::Ready))
     }
@@ -281,23 +301,17 @@ impl ProductionInteractionDriverEffects {
                 InteractionEffectPhase::Pending,
             ));
         }
-        let status = {
-            let runtime = self.runtime()?;
-            let mut audio = runtime
-                .audio_runtime
-                .lock()
-                .await;
-            let registry = audio.get_or_insert_with(|| {
-                AudioResourceRuntime::new(self.zone.clone(), Arc::clone(&self.state))
-            });
-            registry
-                .reconcile_binding_resource(&target, &service, &guest)
-                .map_err(map_audio_effect_error)?
-                .ok_or(InteractionEffectError::InvalidResource)?
-        };
-        let children = d2b_provider_audio_pipewire::AudioBindingController::<
-            crate::audio_dispatch::DaemonAudioMediator,
-        >::child_resources(&key_ref(&request.target), &spec)
+        let status = self
+            .facets
+            .audio_registry()
+            .reconcile_binding(&target, &service, &guest)
+            .await
+            .map_err(map_audio_effect_error)?
+            .ok_or(InteractionEffectError::InvalidResource)?;
+        let children = AudioBindingController::<Box<dyn d2b_provider_audio_pipewire::AudioMediator>>::child_resources(
+            &key_ref(&request.target),
+            &spec,
+        )
         .map_err(|_| InteractionEffectError::InvalidResource)?;
         let expected = children
             .iter()
@@ -386,7 +400,7 @@ impl ProductionInteractionDriverEffects {
 }
 
 #[async_trait]
-impl InteractionDriverEffects for ProductionInteractionDriverEffects {
+impl InteractionDriverEffects for InteractionEffectsService {
     async fn reconcile(
         &self,
         kind: InteractionKind,
@@ -438,16 +452,10 @@ impl InteractionDriverEffects for ProductionInteractionDriverEffects {
                 let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
                     return Ok(InteractionFinalize::Complete);
                 };
-                let runtime = self.runtime()?;
-                let mut audio = runtime
-                    .audio_runtime
-                    .lock()
-                    .await;
-                let registry = audio.get_or_insert_with(|| {
-                    AudioResourceRuntime::new(self.zone.clone(), Arc::clone(&self.state))
-                });
-                registry
-                    .finalize_binding_resource(&target)
+                self.facets
+                    .audio_registry()
+                    .finalize_binding(&target)
+                    .await
                     .map_err(map_audio_effect_error)?;
                 Ok(InteractionFinalize::Complete)
             }
@@ -470,6 +478,74 @@ impl InteractionDriverEffects for ProductionInteractionDriverEffects {
                 })
             }
         }
+    }
+}
+
+/// Serve the `audio-binding-statuses` method: the zone's audio binding
+/// statuses from the family's shared per-zone registry.
+async fn serve_audio_binding_statuses(
+    service: &InteractionEffectsService,
+) -> Result<EffectResponse, EffectServiceError> {
+    let declined = |reason: &'static str| EffectServiceError::Declined {
+        service: INTERACTION_EFFECTS_SERVICE.id.to_owned(),
+        reason: reason.to_owned(),
+    };
+    let statuses = service.facets.audio_registry().statuses().await;
+    let bindings = statuses
+        .into_iter()
+        .map(binding_status_value)
+        .collect::<Vec<_>>();
+    let payload = serde_json::from_value(serde_json::json!({
+        "family": "interaction",
+        "bindings": bindings,
+    }))
+    .map_err(|_| declined("audio-binding-statuses-response-invalid"))?;
+    Ok(EffectResponse::new(payload))
+}
+
+/// The wire shape of one binding status row the hosted method answers.
+fn binding_status_value(status: AudioBindingRuntimeStatus) -> serde_json::Value {
+    let typed = crate::audio_registry::audio_binding_status_value(status.status);
+    serde_json::json!({
+        "resource": status.resource.to_canonical_string(),
+        "phase": typed["phase"],
+        "hostReadiness": typed["hostReadiness"],
+        "guestReadiness": typed["guestReadiness"],
+        "channels": typed["channels"],
+        "enforcementPosture": typed["enforcementPosture"],
+        "lastSetApplied": typed["lastSetApplied"],
+    })
+}
+
+#[async_trait]
+impl EffectService for InteractionEffectsService {
+    async fn handle(
+        &self,
+        _invocation: ServiceInvocation<'_>,
+    ) -> Result<EffectResponse, EffectServiceError> {
+        // The service declares one method; the hosting machinery dispatches
+        // by method name before the service answers.
+        serve_audio_binding_statuses(self).await
+    }
+}
+
+/// Rebuilds the family's effects service from the zone's facet set; a
+/// respawn calls `build` again, exactly like `ResourceManager` re-creates
+/// its drivers from the committed spec row.
+pub struct InteractionEffectsServiceFactory {
+    facets: InteractionEffectFacets,
+}
+
+impl InteractionEffectsServiceFactory {
+    /// Build the factory from one zone's daemon-supplied facet set.
+    pub fn new(facets: InteractionEffectFacets) -> Self {
+        Self { facets }
+    }
+}
+
+impl EffectServiceFactory for InteractionEffectsServiceFactory {
+    fn build(&self) -> Arc<dyn EffectService> {
+        Arc::new(InteractionEffectsService::new(self.facets.clone()))
     }
 }
 
@@ -635,7 +711,7 @@ fn display_projection(
             .find(|child| child.resource_ref == *target)
             .map(|child| child.generation)
     });
-    let resource = d2b_provider_display_wayland::WaylandSessionResourceStatus {
+    let resource = WaylandSessionResourceStatus {
         proxy_process_ref: process_refs
             .first()
             .and_then(|reference| ResourceRef::parse(reference).ok()),
@@ -646,7 +722,7 @@ fn display_projection(
         wayland_endpoint_generation: endpoint_generation,
         policy_digest: String::new(),
     };
-    crate::interaction_composition::wayland_session_resource_projection(&resource)
+    session_children::wayland_session_resource_projection(&resource)
 }
 
 #[cfg(test)]
@@ -783,4 +859,3 @@ mod tests {
         }
     }
 }
-

@@ -99,7 +99,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "48223616626768d5a2fba1da7848f96669d9d8541f99218038aacc1253b253ff",
+  "lock_sha256": "3c58cab278737307bd1c3c94e89fb5bf08e587ce6a271a0ad65f53270022e9de",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -4885,12 +4885,6 @@
     },
     {
       "from": "d2b-provider-activation-nixos@0.0.0-bootstrap#path",
-      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-activation-nixos@0.0.0-bootstrap#path",
       "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -5869,6 +5863,18 @@
     },
     {
       "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
+      "to": "d2b-core-controller@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
+      "to": "d2b-provider-endpoint@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
       "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -6361,12 +6367,6 @@
     },
     {
       "from": "d2b-provider-host@0.0.0-bootstrap#path",
-      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-host@0.0.0-bootstrap#path",
       "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -6374,12 +6374,6 @@
     {
       "from": "d2b-provider-host@0.0.0-bootstrap#path",
       "to": "d2b-resource-types@0.0.0-bootstrap#path",
-      "kind": "normal",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-host@0.0.0-bootstrap#path",
-      "to": "nix@0.29.0#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -7213,12 +7207,6 @@
     },
     {
       "from": "d2b-provider-system-core@0.0.0-bootstrap#path",
-      "to": "async-trait@0.1.92#registry+https://github.com/rust-lang/crates.io-index",
-      "kind": "proc-macro",
-      "target": null
-    },
-    {
-      "from": "d2b-provider-system-core@0.0.0-bootstrap#path",
       "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -7969,7 +7957,25 @@
     },
     {
       "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
+      "to": "d2b-provider-audio-pipewire@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
       "to": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
+      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
+      "to": "d2b-resource-api@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -7994,6 +8000,12 @@
     {
       "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
       "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
+      "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },

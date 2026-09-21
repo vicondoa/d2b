@@ -18,7 +18,6 @@ use std::{
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
 
-use crate::audio_resource_runtime::{AudioBindingRuntimeStatus, AudioResourceRuntime};
 use crate::credential_effects::{
     AgentReadyFuture, ProductionCredentialDriverEffects,
 };
@@ -145,7 +144,6 @@ use sha2::{Digest, Sha256};
 
 mod volume_effect_adapter;
 pub(crate) mod plane_controller_bridge;
-pub(crate) mod interaction_effects;
 use plane_controller_bridge::{
     ChildMutationFailure, ChildMutationRoute, ControllerPlaneView, LiveControllerSessionEvidence,
     ManagerControllerPlaneView, PlaneChildMutations, PublishedPlaneControllerView,
@@ -155,15 +153,14 @@ use d2b_resource_runtime::manager::ResourceView;
 pub use volume_effect_adapter::{
     AnchoredVolumeEffectAdapter, FdRootResolver, ResolvedVolumeRoot, VolumeRootResolver,
 };
-pub(crate) use interaction_effects::ProductionInteractionDriverEffects;
 
 /// The interaction family's ResourceTypes, as each type's own crate declares
 /// them.
 const INTERACTION_TYPES: [&str; 6] = [
     d2b_provider_wayland_policy::WAYLAND_POLICY_TYPE,
     d2b_provider_wayland_session::WAYLAND_SESSION_TYPE,
-    d2b_provider_audio_service::AUDIO_SERVICE_TYPE,
-    d2b_provider_audio_binding::AUDIO_BINDING_TYPE,
+    d2b_provider_wayland_policy::AUDIO_SERVICE_TYPE,
+    d2b_provider_wayland_policy::AUDIO_BINDING_TYPE,
     d2b_provider_shell_pool::SHELL_POOL_TYPE,
     d2b_provider_shell_session::SHELL_SESSION_TYPE,
 ];
@@ -3065,7 +3062,6 @@ pub struct ZoneResourceRuntime {
     authority_ledger: Arc<ZoneAuthorityLedger>,
     authority_recovery: Arc<AuthorityRecoveryCoordinator>,
     zone_status: tokio::sync::Mutex<ZoneStatusResource>,
-    audio_runtime: Arc<tokio::sync::Mutex<Option<AudioResourceRuntime>>>,
     guest_setup_descriptors: BTreeMap<String, Vec<u8>>,
     guest_setup_descriptor_catalog_keys: BTreeMap<String, String>,
     closed_guest_sessions: Arc<tokio::sync::Mutex<BTreeSet<crate::GuestComponentSessionKey>>>,
@@ -3250,7 +3246,6 @@ impl ZoneResourceRuntime {
             authority_ledger,
             authority_recovery,
             zone_status: tokio::sync::Mutex::new(zone_status),
-            audio_runtime: Arc::new(tokio::sync::Mutex::new(None)),
             guest_setup_descriptors: BTreeMap::new(),
             guest_setup_descriptor_catalog_keys: BTreeMap::new(),
             closed_guest_sessions: Arc::new(tokio::sync::Mutex::new(BTreeSet::new())),
@@ -8259,20 +8254,6 @@ impl ZoneResourceRuntime {
         Ok(())
     }
 
-    /// Return the current daemon-owned AudioBinding projections.
-    pub(crate) fn audio_binding_statuses(
-        &self,
-    ) -> Result<Vec<AudioBindingRuntimeStatus>, ResourceRuntimeError> {
-        // Synchronous surface: non-blocking `try_lock` per plan U4; a
-        // collision fails closed as CapabilityUnavailable.
-        self.audio_runtime
-            .try_lock()
-            .map_err(|_| ResourceRuntimeError::CapabilityUnavailable)?
-            .as_ref()
-            .map(AudioResourceRuntime::statuses)
-            .ok_or(ResourceRuntimeError::CapabilityUnavailable)
-    }
-
     /// Reserve a Host-global claim in the Zone's authority ledger. The ledger
     /// is process-local since U14: the reservation is fenced for this
     /// daemon's lifetime, and a restart re-derives owners through the
@@ -8896,7 +8877,6 @@ impl ZoneResourceRuntime {
             service_task,
             authority_recovery,
             process_status_client,
-            audio_runtime,
             controller_sessions,
             controller_session_reconcile_task,
             controller_session_reconcile_shutdown,
@@ -8909,7 +8889,6 @@ impl ZoneResourceRuntime {
             task.abort();
             let _ = task.await;
         }
-        drop(audio_runtime);
         let controller_session_task = controller_session_reconcile_task
             .lock()
             .await

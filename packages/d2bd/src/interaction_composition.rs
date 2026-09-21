@@ -58,7 +58,7 @@ use d2b_provider_display_wayland::{
     AuthenticatedDisplaySession, CleanupState, DependencyState, DisplayController,
     DisplayDependencyProof, DisplayLaunchBinding, DisplayProcessEffectPort, DisplayProcessRole,
     DisplayRuntime, DisplayRuntimeError, FilterInput, LaunchGrants, VolumeState,
-    WaylandPolicySnapshot, WaylandSessionResourceStatus, WaylandSessionSpec, WorkerEffectError,
+    WaylandPolicySnapshot, WaylandSessionSpec, WorkerEffectError,
     WorkerLaunchReceipt, WorkerRestartEvidence, WorkerState,
 };
 #[cfg(test)]
@@ -69,7 +69,6 @@ use d2b_provider_notification_desktop::{
     NotificationProcessEffectPort, NotificationRequest, NotificationSourceIdentity,
     SourceProcessEffectPort, SourceProcessEffectReceipt, SourceReconcileResult,
 };
-use d2b_core_controller::OwnedChildIntent;
 use d2b_resource_api::authz::{
     ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
     NativeAuthorizer, PolicyRule, PolicySet, SessionVerb,
@@ -4538,52 +4537,6 @@ where
 
 /// Build the two display Process and Endpoint intents owned by one
 /// WaylandSession. The intents contain only signed template metadata; actual
-/// attachment grants remain ComponentSession/ProviderSupervisor state.
-pub(crate) fn display_owned_child_intents(
-    zone: &ZoneId,
-    session_ref: &ResourceRef,
-    session_uid: &ResourceUid,
-    spec: &WaylandSessionSpec,
-    process_generation: u64,
-    controller_generation: u64,
-) -> Result<Vec<OwnedChildIntent>, WorkerEffectError> {
-    let mut effects = DisplaySupervisorEffects::new_base(NonLaunchingProcessEffectPort);
-    effects.resource_zone = Some(zone.clone());
-    effects.wayland_session_ref = Some(session_ref.clone());
-    effects.wayland_session_uid = Some(session_uid.clone());
-    effects.guest_subject = Some(spec.guest_ref().clone());
-    effects.host_execution_ref = Some(spec.host_ref().clone());
-    effects.session_digest = spec.session_digest(controller_generation);
-    effects.policy_generation = process_generation.max(1);
-    effects.teardown_generation = 1;
-
-    let mut intents = Vec::with_capacity(4);
-    for role in [
-        DisplayProcessRole::HostProxy,
-        DisplayProcessRole::GuestFrontend,
-    ] {
-        let process_ref = effects.durable_process_ref(role)?;
-        let process = effects.durable_process_payload_for_generation(role, process_generation)?;
-        let process_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &process);
-        intents.push(
-            OwnedChildIntent::new(process_ref.clone(), process, process_digest)
-                .map_err(|_| WorkerEffectError::LaunchRejected)?
-                .with_dependencies([session_ref.clone()])
-                .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        );
-        let endpoint_ref = effects.durable_endpoint_ref(role)?;
-        let endpoint = effects.durable_endpoint_payload(role, &process_ref, process_generation)?;
-        let endpoint_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &endpoint);
-        intents.push(
-            OwnedChildIntent::new(endpoint_ref, endpoint, endpoint_digest)
-                .map_err(|_| WorkerEffectError::LaunchRejected)?
-                .with_dependencies([process_ref])
-                .map_err(|_| WorkerEffectError::LaunchRejected)?,
-        );
-    }
-    Ok(intents)
-}
-
 /// Daemon-owned bounded drain state for clipboard and notification services.
 #[derive(Default)]
 pub struct InteractionDrainEffects {
@@ -5961,43 +5914,6 @@ fn resource_get_request(
     request
 }
 
-pub(crate) fn wayland_session_resource_projection(
-    resource: &WaylandSessionResourceStatus,
-) -> serde_json::Value {
-    let mut projection = serde_json::Map::new();
-    if let Some(reference) = resource.proxy_process_ref.as_ref() {
-        projection.insert(
-            "proxyProcessRef".to_owned(),
-            serde_json::Value::String(reference.to_canonical_string()),
-        );
-    }
-    if let Some(reference) = resource.guest_frontend_process_ref.as_ref() {
-        projection.insert(
-            "guestFrontendProcessRef".to_owned(),
-            serde_json::Value::String(reference.to_canonical_string()),
-        );
-    }
-    if let Some(reference) = resource.wayland_endpoint_ref.as_ref() {
-        projection.insert(
-            "waylandEndpointRef".to_owned(),
-            serde_json::Value::String(reference.to_canonical_string()),
-        );
-    }
-    if let Some(generation) = resource.wayland_endpoint_generation {
-        projection.insert(
-            "waylandEndpointGeneration".to_owned(),
-            serde_json::Value::Number(generation.into()),
-        );
-    }
-    if !resource.policy_digest.is_empty() {
-        projection.insert(
-            "policyDigest".to_owned(),
-            serde_json::Value::String(resource.policy_digest.clone()),
-        );
-    }
-    serde_json::Value::Object(projection)
-}
-
 fn resource_operation_id(operation: &str, zone: &ZoneId, resource_ref: &ResourceRef) -> String {
     let scope = format!("{}:{}", zone.as_str(), resource_ref.to_canonical_string());
     let digest = Sha256::digest(scope.as_bytes());
@@ -6561,68 +6477,6 @@ mod tests {
             durable_display_suffix(&owner_uid, DisplayProcessRole::GuestFrontend)
         );
         assert_ne!(host, guest);
-    }
-
-    #[test]
-    fn display_runner_child_intents_keep_stream_authority_out_of_resources() {
-        let zone = ZoneId::parse("work").expect("zone");
-        let session_ref =
-            ResourceRef::parse("display-wayland.d2bus.org.WaylandSession/display-wayland")
-                .expect("session ref");
-        let session_uid =
-            ResourceUid::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").expect("session uid");
-        let spec = WaylandSessionSpec::new(
-            ResourceRef::parse("Guest/work").expect("guest"),
-            ResourceRef::parse("Host/host-system").expect("host"),
-            ResourceRef::parse("User/alice").expect("user"),
-            ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/default")
-                .expect("policy"),
-            d2b_provider_display_wayland::DisplayIdentity::new(
-                "work",
-                "#112233",
-                "#223344",
-                "#334455",
-            )
-            .expect("identity"),
-            true,
-        )
-        .expect("session spec");
-        let intents = display_owned_child_intents(
-            &zone,
-            &session_ref,
-            &session_uid,
-            &spec,
-            4,
-            3,
-        );
-        let intents = intents.expect("display child intents");
-        assert_eq!(intents.len(), 4);
-        assert_eq!(
-            intents
-                .iter()
-                .filter(|intent| intent.target().resource_type().as_str() == "Process")
-                .count(),
-            2
-        );
-        assert_eq!(
-            intents
-                .iter()
-                .filter(|intent| intent.target().resource_type().as_str() == "Endpoint")
-                .count(),
-            2
-        );
-        for intent in intents {
-            let value: serde_json::Value =
-                serde_json::from_slice(intent.canonical_resource()).expect("child resource");
-            assert_eq!(
-                value["metadata"]["ownerRef"],
-                session_ref.to_canonical_string()
-            );
-            assert!(
-                !value.to_string().contains("WAYLAND_DISPLAY")
-                    && !value.to_string().contains("NIRI_SOCKET")
-            );
-        }
     }
 
     #[test]

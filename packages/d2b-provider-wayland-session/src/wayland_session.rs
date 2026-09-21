@@ -5,17 +5,19 @@
 //! and guest frontend worker children (each with its private endpoint), and
 //! drives the display Provider's admission through the family effect port.
 //!
-//! The session's children are the display supervisor's realization, so the
-//! crate asks for them through [`DisplayChildSource`]: the daemon authors the
-//! child intents with the launch material only it holds, and this crate turns
-//! them into manager child rows.
+//! The session's children are the display Provider's realization: the crate
+//! authors them through its own [`DisplayChildSource`] implementation over
+//! the display crate's durable child derivation, and turns them into manager
+//! child rows. The daemon authors no child intents for this type.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, ZoneId};
 use d2b_core_controller::OwnedChildIntent;
-use d2b_provider_display_wayland::{DISPLAY_REPAIR_INTERVAL_SECS, WaylandSessionSpec};
+use d2b_provider_display_wayland::{
+    DISPLAY_REPAIR_INTERVAL_SECS, WaylandSessionSpec, session_children,
+};
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
 use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 
@@ -51,11 +53,12 @@ pub struct DisplayChildRequest<'a> {
     pub controller_generation: u64,
 }
 
-/// The daemon-owned source of one session's child intents.
+/// The source of one session's child intents.
 ///
-/// The display supervisor owns the worker launch material, so the intents are
-/// authored on the daemon side of the port and this crate owns the manager
-/// child shape they materialize into.
+/// The display Provider owns the worker launch material, so the intents are
+/// authored by this crate's own implementation over the display crate's
+/// durable child derivation; a caller that needs a different source may
+/// supply one through [`WaylandSession::new`].
 pub trait DisplayChildSource: Send + Sync + 'static {
     /// The Process and Endpoint intents one session owns, in the family's
     /// preserved order (host proxy, guest frontend; each with its endpoint).
@@ -65,6 +68,28 @@ pub trait DisplayChildSource: Send + Sync + 'static {
     ) -> Result<Vec<OwnedChildIntent>, InteractionEffectError>;
 }
 
+/// The crate's own child-intent source: the display crate's durable
+/// derivation, which builds the two worker Process rows and their private
+/// Endpoints from the session's row identity and spec.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SessionChildSource;
+
+impl DisplayChildSource for SessionChildSource {
+    fn display_children(
+        &self,
+        request: &DisplayChildRequest<'_>,
+    ) -> Result<Vec<OwnedChildIntent>, InteractionEffectError> {
+        session_children::display_owned_child_intents(
+            request.zone,
+            request.session_ref,
+            request.session_uid,
+            request.spec,
+            request.process_generation,
+        )
+        .map_err(|_| InteractionEffectError::InvalidResource)
+    }
+}
+
 /// The `WaylandSession` driver behavior and declaration.
 #[derive(Clone)]
 pub struct WaylandSession {
@@ -72,9 +97,15 @@ pub struct WaylandSession {
 }
 
 impl WaylandSession {
-    /// Build the behavior over the daemon's child-intent source.
+    /// Build the behavior over a child-intent source.
     pub fn new(children: Arc<dyn DisplayChildSource>) -> Self {
         Self { children }
+    }
+}
+
+impl Default for WaylandSession {
+    fn default() -> Self {
+        Self::new(Arc::new(SessionChildSource))
     }
 }
 

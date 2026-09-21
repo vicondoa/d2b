@@ -58,3 +58,17 @@
   construction site, and the daemon-side verifier wiring are deleted in the
   same change; the preserved fail-closed application verifier is now built
   by the family's factory itself.
+- The interaction family's driver effects ended their daemon-built arm too:
+  the family now serves them from its own crate (`d2b-provider-wayland-policy`)
+  through its declared `interaction.d2bus.org/effects` service, hosted per
+  zone by the daemon from the family's registered factory over the
+  composition root's facet set. The display-session admission, the audio
+  controller registry, and the shell pool/session reference checks run inside
+  the crate; the committed interaction identity, the zone's manager-plane
+  reads, and the broker-backed audio mediator cross the boundary as
+  daemon-supplied facets, never derived from caller input. The daemon's
+  `interaction_effects.rs`, `audio_resource_runtime.rs`, and
+  `interaction_child_sources.rs` modules retire in the same change, the
+  display child derivation moves into `d2b-provider-display-wayland`, and
+  each of the six interaction types registers through the generated
+  registration table.

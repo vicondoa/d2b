@@ -83,7 +83,7 @@ use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::manager::{
     DesiredResource, ManagerActorEndpoint, ResourceManager, ResourceManagerArgs,
-    ResourceManagerClient, ResourceManagerMsg, ResourceSelector,
+    ResourceManagerClient, ResourceManagerMsg, ResourceSelector, ResourceView,
 };
 use d2b_resource_runtime::revision::RuntimeRevision;
 use d2b_resource_runtime::spec_store::{SpecSelector, SpecStore, StoredDesiredResource};
@@ -138,25 +138,26 @@ use d2b_provider_role_binding::role_binding_descriptor;
 use d2b_provider_seccomp_profile::seccomp_profile_descriptor;
 use d2b_provider_zone::zone_descriptor;
 use d2b_provider_zone_link::zone_link_descriptor;
-use crate::interaction_child_sources::{
-    ProductionAudioBindingChildSource, ProductionDisplayChildSource,
-};
-use crate::resource_runtime::ProductionInteractionDriverEffects;
 use d2b_provider_audio_binding::{
     AudioBinding, audio_binding_descriptor,
 };
 use d2b_provider_audio_service::{AudioService, audio_service_descriptor};
 use d2b_provider_shell_pool::{ShellPool, shell_pool_descriptor};
 use d2b_provider_shell_session::{ShellSession, shell_session_descriptor};
+use d2b_provider_audio_pipewire::AudioMediator;
 use d2b_provider_wayland_policy::{
-    InteractionDriverArgs, InteractionDriverEffects, WaylandPolicy, wayland_policy_descriptor,
+    AudioMediatorSource, InteractionDriverArgs, InteractionEffectFacets, InteractionEffectsService,
+    InteractionIdentitySource, InteractionPlaneRead, WaylandPolicy, wayland_policy_descriptor,
 };
 use d2b_provider_wayland_session::{WaylandSession, wayland_session_descriptor};
 
 /// The construction arguments every interaction driver of this plane shares.
 ///
 /// Construction is infallible by contract: the zone was validated at plane
-/// construction and the effect port is the daemon's production adapter.
+/// construction and the effects are the family's own implementation built
+/// from the plane's facet set (U12) - the same shared value every type of the
+/// family drives, so the family's per-zone controller state is shared across
+/// the six types.
 fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
     inputs: &ConstructionInputs,
     behavior: T,
@@ -164,7 +165,9 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
     InteractionDriverArgs {
         zone: inputs.zone.as_str().to_owned(),
         controller_generation: inputs.authority.controller_generation,
-        effects: Arc::clone(&inputs.interaction_effects),
+        effects: Arc::new(InteractionEffectsService::new(
+            inputs.interaction_facets.clone(),
+        )),
         behavior,
     }
 }
@@ -1816,7 +1819,12 @@ pub struct ConstructionInputs {
     pub credential_effects: Arc<dyn CredentialDriverEffects>,
     pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
     pub guest_effects: Arc<dyn GuestDriverEffects>,
-    pub interaction_effects: Arc<dyn InteractionDriverEffects>,
+    /// The daemon-supplied facet set the interaction family's effects
+    /// implementation is built from (U12): the committed interaction
+    /// identity, the zone's manager-plane reads, and the broker-backed audio
+    /// mediator source, supplied through the composition root. The family
+    /// never receives a daemon-built effect port (R2).
+    pub interaction_facets: InteractionEffectFacets,
     /// The origination-leg publication binding for this Zone's
     /// trusted-context values: the broker socket, the daemon's caller role,
     /// and the generations the Zone serves. The production constructor
@@ -1958,6 +1966,25 @@ impl ConstructionInputs {
                 state: Arc::clone(state),
             }),
         };
+        // U12: the interaction family's effects ride the declared facets
+        // too: the committed identity, the zone's manager-plane reads, and
+        // the broker-backed audio mediator source all cross the provider
+        // boundary as daemon-supplied facets, never as a daemon-built port
+        // (R2).
+        let interaction_facets = InteractionEffectFacets::new(
+            zone.clone(),
+            Arc::new(ProductionInteractionIdentitySource {
+                state: Arc::clone(state),
+                zone: zone.clone(),
+            }),
+            Arc::new(ProductionInteractionPlaneRead {
+                state: Arc::clone(state),
+                zone: zone.clone(),
+            }),
+            Arc::new(DaemonAudioMediatorSource {
+                state: Arc::clone(state),
+            }),
+        );
         Ok(Self {
             zone: zone.clone(),
             zone_token,
@@ -2076,10 +2103,7 @@ Box::pin(async move {
                 zone.clone(),
                 controller_generation,
             )),
-            interaction_effects: Arc::new(ProductionInteractionDriverEffects::new(
-                Arc::clone(state),
-                zone.clone(),
-            )),
+            interaction_facets: interaction_facets.clone(),
             trusted_context_publication: Some(
                 crate::provider_lifecycle::TrustedContextPublication::production(
                     process_providers.mode(),
@@ -2096,6 +2120,7 @@ Box::pin(async move {
                 &network_facets,
                 &host_facets,
                 &activation_facets,
+                &interaction_facets,
             ),
             foundation: None,
         })
@@ -2112,6 +2137,7 @@ fn registered_service_factories(
     network_facets: &NetworkEffectFacets,
     host_facets: &HostEffectFacets,
     activation_facets: &ActivationEffectFacets,
+    interaction_facets: &InteractionEffectFacets,
 ) -> BTreeMap<&'static str, Arc<dyn EffectServiceFactory>> {
     let mut factories = BTreeMap::new();
     for registration in PROVIDER_REGISTRATIONS {
@@ -2127,6 +2153,12 @@ fn registered_service_factories(
             } else if service == ACTIVATION_EFFECTS_SERVICE.id {
                 Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone()))
                     as Arc<dyn EffectServiceFactory>
+            } else if service == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id {
+                Arc::new(
+                    d2b_provider_wayland_policy::InteractionEffectsServiceFactory::new(
+                        interaction_facets.clone(),
+                    ),
+                ) as Arc<dyn EffectServiceFactory>
             } else {
                 continue;
             };
@@ -2165,6 +2197,108 @@ impl d2b_provider_activation_nixos::ActivationBrokerDispatch
             }
             Err(error) => Err(format!("{}: {}", error.kind(), error.message())),
         }
+    }
+}
+/// Production `InteractionIdentitySource` (U12): the daemon's committed
+/// interaction identity, resolved through the old plane's Zone runtime at
+/// call time exactly as the retired effects resolved it.
+struct ProductionInteractionIdentitySource {
+    state: Arc<crate::ServerState>,
+    zone: ZoneId,
+}
+
+#[async_trait::async_trait]
+impl InteractionIdentitySource for ProductionInteractionIdentitySource {
+    async fn identity(&self) -> Option<d2b_provider_wayland_policy::InteractionEffectIdentity> {
+        let runtime = self
+            .state
+            .resource_plane
+            .try_lock()
+            .ok()?
+            .as_ref()?
+            .zone(&self.zone)
+            .ok()?;
+        let identity = runtime.interaction_identity()?;
+        Some(d2b_provider_wayland_policy::InteractionEffectIdentity {
+            wayland_session_ref: identity.wayland_session_ref().clone(),
+            wayland_session_uid: identity.wayland_session_uid().clone(),
+            subject_ref: identity.subject_ref().clone(),
+            host_execution_ref: identity.host_execution_ref().clone(),
+            user_ref: identity.user_ref().clone(),
+        })
+    }
+}
+
+/// Production `InteractionPlaneRead` (U12): the zone's v3 manager-plane row
+/// reads, reached through the old plane's Zone runtime exactly as the
+/// retired effects reached them.
+struct ProductionInteractionPlaneRead {
+    state: Arc<crate::ServerState>,
+    zone: ZoneId,
+}
+
+impl ProductionInteractionPlaneRead {
+    fn plane(&self) -> Result<Arc<crate::resource_plane_v3::ResourcePlaneV3>, ()> {
+        self.state
+            .resource_plane
+            .try_lock()
+            .map_err(|_| ())?
+            .as_ref()
+            .ok_or(())?
+            .zone(&self.zone)
+            .map_err(|_| ())?
+            .v3_plane()
+            .map_err(|_| ())
+    }
+}
+
+#[async_trait::async_trait]
+impl InteractionPlaneRead for ProductionInteractionPlaneRead {
+    async fn get(
+        &self,
+        key: &ResourceKey,
+    ) -> Result<Option<ResourceView>, ()> {
+        self.plane()?.client().get(key.clone()).await.map_err(|_| ())
+    }
+
+    async fn list(&self, selector: &ResourceSelector) -> Result<Vec<ResourceView>, ()> {
+        self.plane()?
+            .client()
+            .list(selector.clone())
+            .await
+            .map_err(|_| ())
+    }
+}
+
+/// Production `AudioMediatorSource` (U12): the daemon's broker-backed audio
+/// mediator, built from the target's capability row exactly as the retired
+/// registry built it.
+struct DaemonAudioMediatorSource {
+    state: Arc<crate::ServerState>,
+}
+
+impl AudioMediatorSource for DaemonAudioMediatorSource {
+    fn build(&self, vm_name: &str, projection: bool) -> Option<Box<dyn AudioMediator>> {
+        let manifest = crate::load_json::<d2b_core::manifest_v04::ManifestV04>(
+            &self.state.config.artifacts.public_manifest_path,
+        )
+        .ok()?;
+        let mut capability = manifest
+            .vms
+            .get(vm_name)
+            .and_then(crate::audio_dispatch::audio_capability_for_vm)?;
+        if projection {
+            capability.host_enforcement =
+                d2b_core::provider_capabilities::AudioHostEnforcementKind::None;
+        }
+        Some(Box::new(crate::audio_dispatch::DaemonAudioMediator::new(
+            &self.state,
+            vm_name,
+            capability,
+            d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid {
+                uid: self.state.daemon_uid,
+            },
+        )))
     }
 }
 
@@ -2549,51 +2683,11 @@ impl ResourcePlaneV3 {
             family_declaration("seccomp-profile"),
             vec![seccomp_profile_descriptor()],
         );
-        // The six interaction types start through their driver declarations:
-        // the registry serves each type's decoder and factory from its own
-        // crate's descriptor, and no daemon table names them.
-        set = set.with(
-            family_declaration("wayland-policy"),
-            vec![wayland_policy_descriptor(interaction_driver_args(
-                inputs,
-                WaylandPolicy,
-            ))],
-        );
-        set = set.with(
-            family_declaration("wayland-session"),
-            vec![wayland_session_descriptor(interaction_driver_args(
-                inputs,
-                WaylandSession::new(Arc::new(ProductionDisplayChildSource)),
-            ))],
-        );
-        set = set.with(
-            family_declaration("audio-service"),
-            vec![audio_service_descriptor(interaction_driver_args(
-                inputs,
-                AudioService,
-            ))],
-        );
-        set = set.with(
-            family_declaration("audio-binding"),
-            vec![audio_binding_descriptor(interaction_driver_args(
-                inputs,
-                AudioBinding::new(Arc::new(ProductionAudioBindingChildSource)),
-            ))],
-        );
-        set = set.with(
-            family_declaration("shell-pool"),
-            vec![shell_pool_descriptor(interaction_driver_args(
-                inputs,
-                ShellPool,
-            ))],
-        );
-        set.with(
-            family_declaration("shell-session"),
-            vec![shell_session_descriptor(interaction_driver_args(
-                inputs,
-                ShellSession,
-            ))],
-        )
+        // The six interaction types start through the generated registration
+        // table (U12): each type's row names its provider identity, and the
+        // drivers are wired in `registered_drivers` from the family's own
+        // descriptor construction. No daemon table names the family.
+        set
     }
 
     /// The drivers the daemon wires for one registered family: the family's
@@ -2638,6 +2732,39 @@ impl ResourcePlaneV3 {
                 zone: inputs.zone.as_str().to_owned(),
                 facets: inputs.activation_facets.clone(),
             })],
+            // The six interaction types (U12): each type's driver is built
+            // over the family's shared effects value (the family's own
+            // implementation from the declared facets), so the six types
+            // reconcile one per-zone controller state. The session and
+            // binding behaviors are the crates' own child-intent sources.
+            "wayland-policy" => vec![wayland_policy_descriptor(interaction_driver_args(
+                inputs,
+                WaylandPolicy,
+            ))],
+            "wayland-session" => {
+                vec![wayland_session_descriptor(interaction_driver_args(
+                    inputs,
+                    WaylandSession::default(),
+                ))]
+            }
+            "audio-service" => vec![audio_service_descriptor(interaction_driver_args(
+                inputs,
+                AudioService,
+            ))],
+            "audio-binding" => {
+                vec![audio_binding_descriptor(interaction_driver_args(
+                    inputs,
+                    AudioBinding::default(),
+                ))]
+            }
+            "shell-pool" => vec![shell_pool_descriptor(interaction_driver_args(
+                inputs,
+                ShellPool,
+            ))],
+            "shell-session" => vec![shell_session_descriptor(interaction_driver_args(
+                inputs,
+                ShellSession,
+            ))],
             _ => Vec::new(),
         }
     }
@@ -3400,6 +3527,11 @@ use d2b_provider_system_core::MinijailPlatformGate;
             d2b_provider_host::test_support::RecordingMinijailGate::new(
                 MinijailPlatformGate::new(6, 9, true),
             ),
+        // U12: the plane tests build the interaction family's facet set from
+        // the scripted sources, exactly as the production composition root
+        // builds it from the daemon's.
+        let interaction_facets = d2b_provider_wayland_policy::test_support::scripted_facets(
+            ZoneId::parse("test").unwrap(),
         );
         // The plane tests build the Activation family's facet set from the
         // scripted broker dispatch double, exactly as the production
@@ -3480,7 +3612,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
                     effects.set_phase(d2b_provider_guest::GuestEffectPhase::Pending);
                     effects
                 },
-                interaction_effects: d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
+                interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
                 // U1/U14/U5: the plane hosts the Process, Network, Host,
                 // and Activation families' declared effects services from
@@ -3502,6 +3634,12 @@ use d2b_provider_system_core::MinijailPlatformGate;
                         HOST_EFFECTS_SERVICE.id,
                         Arc::new(HostEffectsServiceFactory::new(host_facets))
                             as Arc<dyn EffectServiceFactory>,
+                        d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id,
+                        Arc::new(
+                            d2b_provider_wayland_policy::InteractionEffectsServiceFactory::new(
+                                interaction_facets,
+                            ),
+                        ) as Arc<dyn EffectServiceFactory>,
                     ),
                     (
                         ACTIVATION_EFFECTS_SERVICE.id,

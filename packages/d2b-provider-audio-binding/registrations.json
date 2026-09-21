@@ -1,0 +1,5 @@
+{
+  "crate": "d2b-provider-audio-binding",
+  "provider": "audio-binding",
+  "services": []
+}

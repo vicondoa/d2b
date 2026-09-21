@@ -1,0 +1,5 @@
+{
+  "crate": "d2b-provider-shell-session",
+  "provider": "shell-session",
+  "services": []
+}

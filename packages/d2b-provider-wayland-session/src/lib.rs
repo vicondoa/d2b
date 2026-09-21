@@ -14,7 +14,7 @@ mod wayland_session;
 
 pub use wayland_session::{
     DisplayChildRequest, DisplayChildSource, WAYLAND_SESSION_PROVIDER_REF,
-    WAYLAND_SESSION_RESYNC, WAYLAND_SESSION_TYPE, WaylandSession,
+    WAYLAND_SESSION_RESYNC, WAYLAND_SESSION_TYPE, SessionChildSource, WaylandSession,
     WaylandSessionDriver, WaylandSessionFactory, wayland_session_descriptor,
     wayland_session_spec_decoder,
 };
