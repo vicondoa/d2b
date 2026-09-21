@@ -128,8 +128,7 @@ use d2b_provider_device_security_key::{
 use d2b_provider_device_usbip::{
     USBIP_EFFECTS_SERVICE, UsbipDriverArgs, usbip_descriptors,
 };
-use d2b_provider_device_tpm::effects_service::TPM_EFFECTS_SERVICE;
-use d2b_provider_device_gpu::effects_service::GPU_EFFECTS_SERVICE;
+
 use d2b_provider_network_local::{
     NETWORK_EFFECTS_SERVICE, NetworkDriverArgs, NetworkEffectFacets, NetworkEffectsServiceFactory,
     network_descriptor,
@@ -2216,8 +2215,6 @@ Arc::new(DaemonAudioMediatorSource {
                 &usbip_facets,
                 &security_key_facets,
                 &device_facets,
-                &tpm_facets,
-                &gpu_facets,
                 &credential_facets,
                 &volume_facets,
             ),
@@ -2244,8 +2241,6 @@ fn registered_service_factories(
     usbip_facets: &d2b_provider_device_usbip::facets::UsbipEffectFacets,
     security_key_facets: &d2b_provider_device_security_key::facets::SecurityKeyEffectFacets,
     device_facets: &d2b_provider_device::facets::DeviceEffectFacets,
-    tpm_facets: &d2b_provider_device_tpm::facets::TpmEffectFacets,
-    gpu_facets: &d2b_provider_device_gpu::facets::GpuEffectFacets,
     credential_facets: &CredentialEffectFacets,
     volume_facets: &VolumeEffectFacets,
 ) -> BTreeMap<&'static str, Arc<dyn EffectServiceFactory>> {
@@ -2276,14 +2271,6 @@ as Arc<dyn EffectServiceFactory>
             } else if service == DEVICE_EFFECTS_SERVICE.id {
                 Arc::new(d2b_provider_device::effects_service::
                     DeviceEffectsServiceFactory::new(device_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == TPM_EFFECTS_SERVICE.id {
-                Arc::new(d2b_provider_device_tpm::effects_service::
-                    TpmEffectsServiceFactory::new(tpm_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == GPU_EFFECTS_SERVICE.id {
-                Arc::new(d2b_provider_device_gpu::effects_service::
-                    GpuEffectsServiceFactory::new(gpu_facets.clone()))
                     as Arc<dyn EffectServiceFactory>
             } else if service == CREDENTIAL_EFFECTS_SERVICE.id {
                 Arc::new(CredentialEffectsServiceFactory::new(credential_facets.clone()))
@@ -3807,8 +3794,6 @@ use d2b_provider_system_core::MinijailPlatformGate;
         let device_facets = d2b_provider_device::test_support::recording_facets(
             Arc::new(d2b_provider_device::test_support::RecordingRuntime::default()),
         );
-        let tpm_facets = d2b_provider_device_tpm::test_support::recording_facets();
-        let gpu_facets = d2b_provider_device_gpu::test_support::recording_facets();
         // U6: the plane tests build the VolumeBinding and Endpoint families'
         // facet sets from the scripted doubles, exactly as the production
         // composition root builds them from the daemon's registry, plane
@@ -3974,18 +3959,6 @@ HOST_EFFECTS_SERVICE.id,
                         DEVICE_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device::effects_service::
                             DeviceEffectsServiceFactory::new(device_facets))
-                            as Arc<dyn EffectServiceFactory>,
-                    ),
-                    (
-                        TPM_EFFECTS_SERVICE.id,
-                        Arc::new(d2b_provider_device_tpm::effects_service::
-                            TpmEffectsServiceFactory::new(tpm_facets))
-                            as Arc<dyn EffectServiceFactory>,
-                    ),
-                    (
-                        GPU_EFFECTS_SERVICE.id,
-                        Arc::new(d2b_provider_device_gpu::effects_service::
-                            GpuEffectsServiceFactory::new(gpu_facets))
                             as Arc<dyn EffectServiceFactory>,
                     ),
                     (

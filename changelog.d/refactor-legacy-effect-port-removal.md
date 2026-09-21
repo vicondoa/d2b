@@ -70,7 +70,6 @@
   `UserDiscoveryEffectPort` surface became an async-trait port so the probe
   can ride the hosted service. The probe's family-knowledge row the layout
   check reported for the daemon module is retired.
-  registration table.
 - The guest family's driver effects ended their daemon-built arm: the family
   now serves them from its own crate through its declared
   `guest.d2bus.org/effects` service, hosted per zone by the daemon from the
@@ -124,7 +123,8 @@
   `interaction_child_sources.rs` modules retire in the same change, the
   display child derivation moves into `d2b-provider-display-wayland`, and
   each of the six interaction types registers through the generated
-  registration table.- The endpoint family's driver effects ended their daemon-built arm: the
+  registration table.
+- The endpoint family's driver effects ended their daemon-built arm: the
   family now serves them from its own crate through its declared
   `endpoint.d2bus.org/effects` service, hosted per zone by the daemon from the
   family's registered factory over the composition root's facet set. The
@@ -142,7 +142,6 @@
   observation cross the boundary as daemon-supplied facets. The daemon's
   `binding_effects.rs` module and its port-shaped injection at the driver
   construction site are deleted in the same change.
-  registration table.
 - The credential family's driver effects ended their daemon-built arm too:
   the family now serves them from its own crate through its declared
   `credential.d2bus.org/effects` service, hosted per zone by the daemon from
