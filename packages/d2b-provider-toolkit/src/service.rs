@@ -140,6 +140,13 @@ pub enum EffectServiceError {
 pub struct ServiceInvocation<'a> {
     /// The zone the invocation runs in.
     pub zone: &'a str,
+    /// The declared method being served, by its declared name.
+    ///
+    /// The actor builds the capability object from the call's declared
+    /// method facets, so the method identity rides with the invocation:
+    /// a service that serves several methods distinguishes them here rather
+    /// than guessing from the payload.
+    pub method: &'a str,
     /// The invocation identifier the audit record carries.
     pub invocation_id: &'a str,
     /// The canonical request payload the envelope validated (R8).

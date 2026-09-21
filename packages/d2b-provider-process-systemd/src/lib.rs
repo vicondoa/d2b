@@ -22,10 +22,12 @@
 pub mod audit;
 pub mod controller;
 pub mod drain;
+pub mod effects_service;
 pub mod error;
 pub mod launch;
 pub mod lifecycle;
 pub mod metrics;
+pub mod operations;
 pub mod sandbox;
 
 pub use lifecycle::{

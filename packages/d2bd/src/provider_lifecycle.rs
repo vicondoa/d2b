@@ -33,10 +33,14 @@ use d2b_contracts_broker::broker_wire::{
 use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
 use d2bd_runtime::broker_transport::ModeBoundBrokerAdapter;
 use d2bd_runtime::target_runtime::DaemonMode;
+use d2b_provider_network_local::NETWORK_EFFECTS_SERVICE;
+use d2b_provider_process::PROCESS_EFFECTS_SERVICE;
+use d2b_provider_process_systemd::effects_service::PROCESS_SYSTEMD_EFFECTS_SERVICE;
 use d2b_provider_toolkit::{
     AttachError, Cardinality, DEFAULT_DRAIN_BUDGET_MS, DrainDeadline, DrainError,
     DriverDescriptor, IsolationPosture, Lifecycle, OperationEnvelope, OperationFailure,
-    OperationResult, ProviderAgentAuditLog, ProviderBase, ProviderDeclaration, ZonePlaneHandle,
+    OperationResult, ProviderAgentAuditLog, ProviderBase, ProviderDeclaration, ServiceDecl,
+    ZonePlaneHandle,
 };
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use ractor::{Actor, ActorRef};
@@ -48,6 +52,22 @@ use crate::effect_service_actors::{
 use d2b_provider_toolkit::{EffectServiceError, EffectServiceFactory};
 use crate::forward_rendezvous::ForwardRendezvous;
 use crate::plane_port::{PlaneRefusal, ProductionPlanePort};
+
+/// The declared service one registered service id names, when the daemon
+/// hosts it (U15). The registration table carries only ids; the hosting
+/// pass resolves the crate-owned declaration so the row can be published
+/// with its methods and facets.
+fn registered_service_decl(service: &str) -> Option<&'static ServiceDecl> {
+    if service == PROCESS_EFFECTS_SERVICE.id {
+        Some(&PROCESS_EFFECTS_SERVICE)
+    } else if service == NETWORK_EFFECTS_SERVICE.id {
+        Some(&NETWORK_EFFECTS_SERVICE)
+    } else if service == PROCESS_SYSTEMD_EFFECTS_SERVICE.id {
+        Some(&PROCESS_SYSTEMD_EFFECTS_SERVICE)
+    } else {
+        None
+    }
+}
 
 /// The declaration one driver family makes about its zone plane.
 ///
@@ -643,6 +663,54 @@ impl ProviderSet {
                             Arc::clone(factory),
                         ));
                     }
+                }
+            }
+            // U15: a registered family whose service no driver declares
+            // (the process-systemd family hosts no plane resource type of
+            // its own) still publishes its registered service: the
+            // registration table carries the row, and the composition
+            // point hosts it from the declared factory over the
+            // registered service identity - the daemon names no family
+            // string, only the crate's declared service id.
+            for registration in crate::resource_plane_v3::PROVIDER_REGISTRATIONS {
+                for &service in registration.services {
+                    if owners.contains_key(service) {
+                        continue;
+                    }
+                    let Some(decl) = registered_service_decl(service) else {
+                        continue;
+                    };
+                    owners.insert(service, registration.provider_ref);
+                    for method in decl.methods {
+                        let facet = if !method.privileges.is_empty() {
+                            Some("privileges")
+                        } else if method.payload_schema.is_some() {
+                            Some("payload-schema")
+                        } else if method.deadline_tier.is_some() {
+                            Some("deadline-tier")
+                        } else {
+                            None
+                        };
+                        if let Some(facet) = facet {
+                            return Err(ProviderStartupError::EffectServiceFacetUnenforced {
+                                provider_ref: registration.provider_ref,
+                                service: decl.id,
+                                method: method.name,
+                                facet,
+                            });
+                        }
+                    }
+                    let Some(factory) = effect_service_factories.get(service) else {
+                        return Err(ProviderStartupError::EffectServiceFactoryMissing {
+                            provider_ref: registration.provider_ref,
+                            service,
+                        });
+                    };
+                    effect_services.push(EffectServiceRow::declared(
+                        zone.as_str(),
+                        decl,
+                        Arc::clone(factory),
+                    ));
                 }
             }
         }

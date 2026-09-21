@@ -913,11 +913,10 @@ impl ProductionProcessProviders {
         minijail_backend.set_launched_observer(std::sync::Arc::new(PidfdTableLaunchedObserver {
             pidfd_table: pidfd_table.clone(),
         }));
-        let systemd_owner = BrokerSystemdEffectOwner::with_socket_profile_and_role(
+        let systemd_owner = BrokerSystemdEffectOwner::with_socket_and_role(
             resolver,
             broker_socket,
             Duration::from_secs(10),
-            mode.broker_profile(),
             caller_role,
         );
         let fixed_effect = FixedEffectAdapter::for_mode(mode, fixed_socket, daemon_uid);

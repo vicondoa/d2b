@@ -6,9 +6,12 @@ use std::os::fd::OwnedFd;
 use std::sync::Mutex;
 
 use d2b_contracts_broker::broker_wire::{
-    BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerResponse, GuestExecutionBinding,
-    OpenUnitPidfdRequest, StopUnitRequest, UnitStopClass, UnitDomain,
-    UnitIdentity, UnitRequest,
+    BrokerCallerRole, GuestExecutionBinding, ObserveUnitResponse, OpenUnitPidfdRequest,
+    OpenUnitPidfdResponse, StartTransientUnitResponse, StopUnitRequest, StopUnitResponse,
+    UnitStopClass, UnitDomain, UnitIdentity, UnitRequest,
+};
+use d2b_contracts_broker::kernel_client::{
+    KernelInvocation, KernelInvokeError, KernelReply, envelope_invoke_kernel,
 };
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 use d2b_provider_process::{
@@ -19,8 +22,7 @@ use sha2::{Digest, Sha256};
 use tracing::{error, warn};
 
 use crate::broker::{
-    BrokerFrame, BrokerLaunchIntent, BrokerLaunchResolver, BundleBackedLaunchResolver,
-    broker_round_trip, wait_pidfd_observer,
+    BrokerLaunchIntent, BrokerLaunchResolver, BundleBackedLaunchResolver, wait_pidfd_observer,
 };
 
 const MAX_PENDING_OBSERVATIONS: usize = 1024;
@@ -449,49 +451,77 @@ impl<O: SystemdEffectOwner> ProcessEffectBackend for SystemdProcessBackend<O> {
 
 /// Broker-backed systemd effect owner used by the daemon's fixed supervisor.
 ///
-/// The owner translates only typed systemd lifecycle requests to the broker.
-/// Unit names, manager connections, cgroup paths, and process descriptors
-/// remain on the broker side; the returned handle is retained here solely for
-/// exact stop authority.
+/// The owner translates only typed systemd lifecycle requests to the broker's
+/// envelope carrier: each call names the committed process-systemd family row
+/// and carries the typed unit request as the envelope payload, exactly as the
+/// family's forward seam serves it (U15). Unit names, manager connections,
+/// cgroup paths, and process descriptors remain on the broker side; the
+/// returned handle is retained here solely for exact stop authority.
 pub struct BrokerSystemdEffectOwner {
     resolver: BundleBackedLaunchResolver,
     socket_path: std::path::PathBuf,
     io_timeout: std::time::Duration,
-    profile: BrokerProfile,
     caller_role: BrokerCallerRole,
-    requests: Mutex<BTreeMap<ProcessIdentityDigest, UnitRequest>>,
+    /// Unit-request ledger keyed by identity digest, each entry carrying the
+    /// authoritative Zone label the launch ran under (the envelope's per-Zone
+    /// resolution needs it for reopen/stop legs).
+    requests: Mutex<BTreeMap<ProcessIdentityDigest, (UnitRequest, String)>>,
 }
 
 impl BrokerSystemdEffectOwner {
-    /// Build an owner bound to one fixed broker profile and caller identity.
-    pub fn with_socket_profile_and_role(
+    /// Build an owner bound to one fixed caller identity.
+    pub fn with_socket_and_role(
         resolver: BundleBackedLaunchResolver,
         socket_path: impl Into<std::path::PathBuf>,
         io_timeout: std::time::Duration,
-        profile: BrokerProfile,
         caller_role: BrokerCallerRole,
     ) -> Self {
         Self {
             resolver,
             socket_path: socket_path.into(),
             io_timeout,
-            profile,
             caller_role,
             requests: Mutex::new(BTreeMap::new()),
         }
     }
 
-    fn request(&self, request: BrokerRequest) -> Result<BrokerFrame, ProcessEffectError> {
-        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized)
-            || !request.allowed_by_profile(self.profile)
-        {
-            return Err(ProcessEffectError::LaunchFailed);
+    /// Invoke one committed process-systemd family row over the broker's
+    /// origination socket as an envelope frame.
+    ///
+    /// The family rows are served by the declaring provider (the daemon's
+    /// process-systemd handlers) through the forward seam, so the call names
+    /// the committed row exactly as the catalog declares it and carries the
+    /// canonical typed payload the row's schema admits. The rows admit no
+    /// request descriptors (`max_fds: 0`), so no fds are attached and every
+    /// leg is a root call.
+    fn envelope_call(
+        &self,
+        operation: &str,
+        zone: &str,
+        payload: serde_json::Value,
+    ) -> Result<KernelReply, KernelInvokeError> {
+        if matches!(self.caller_role, BrokerCallerRole::NotAuthorized) {
+            warn!(
+                provider = "supervisor",
+                "broker request refused: caller not authorized for the broker profile"
+            );
+            return Err(KernelInvokeError::Refused {
+                code: "not-authorized".to_owned(),
+                detail: None,
+            });
         }
-        broker_round_trip(
+        envelope_invoke_kernel(
             &self.socket_path,
             self.io_timeout,
-            request,
             self.caller_role.clone(),
+            KernelInvocation {
+                operation,
+                zone,
+                payload,
+                fds: &[],
+                chain_root_invocation_id: None,
+                chain_identities: None,
+            },
         )
     }
 
@@ -532,6 +562,7 @@ fn remember(
         &self,
         identity: &SystemdInvocationIdentity,
         request: UnitRequest,
+        zone: String,
     ) -> Result<(), ProcessEffectError> {
         self.requests
             .lock()
@@ -542,7 +573,7 @@ fn remember(
                 );
                 ProcessEffectError::ObserveFailed
             })?
-            .insert(identity.digest(), request);
+            .insert(identity.digest(), (request, zone));
         Ok(())
     }
 
@@ -552,7 +583,7 @@ fn remember(
 fn request_for(
         &self,
         identity: &SystemdInvocationIdentity,
-    ) -> Result<UnitRequest, ProcessEffectError> {
+    ) -> Result<(UnitRequest, String), ProcessEffectError> {
         self.requests
             .lock()
             .map_err(|_| {
@@ -573,7 +604,7 @@ fn request_for(
 fn take_request(
         &self,
         identity: &SystemdInvocationIdentity,
-    ) -> Result<UnitRequest, ProcessEffectError> {
+    ) -> Result<(UnitRequest, String), ProcessEffectError> {
         self.requests
             .lock()
             .map_err(|_| {
@@ -617,10 +648,18 @@ fn take_request(
         retain: bool,
     ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError> {
         let (intent, unit) = self.intent(&request)?;
-        let frame = self.request(BrokerRequest::ObserveSystemdUnit(unit.clone()))?;
-        let BrokerResponse::ObserveSystemdUnit(response) = frame.response else {
-            return Err(response_error(&frame.response));
-        };
+        let payload = serde_json::to_value(&unit).map_err(|_| ProcessEffectError::ObserveFailed)?;
+        let reply = self
+            .envelope_call("ObserveSystemdUnit", &intent.zone, payload)
+            .map_err(|error| response_error(&error))?;
+        let response: ObserveUnitResponse = serde_json::from_value(
+            reply
+                .response
+                .result
+                .clone()
+                .ok_or(ProcessEffectError::ObserveFailed)?,
+        )
+        .map_err(|_| ProcessEffectError::ObserveFailed)?;
         if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
             warn!(
                 provider = "supervisor",
@@ -633,7 +672,7 @@ fn take_request(
         };
         let identity = self.identity(&wire, &intent)?;
         if retain {
-            self.remember(&identity, unit)?;
+            self.remember(&identity, unit, intent.zone)?;
         }
         Ok(Some(identity))
     }
@@ -650,6 +689,9 @@ pub struct BrokerSystemdPidfdHandle {
     pidfd: OwnedFd,
     request: UnitRequest,
     identity: SystemdInvocationIdentity,
+    /// The Zone the unit's launch ran under (the stop leg's envelope
+    /// carrier names it).
+    zone: String,
 }
 
 impl std::fmt::Debug for BrokerSystemdPidfdHandle {
@@ -666,10 +708,18 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
         request: ProcessRequest,
     ) -> Result<SystemdEffectLaunch<Self::Handle>, ProcessEffectError> {
         let (intent, unit) = self.intent(&request)?;
-        let frame = self.request(BrokerRequest::StartSystemdUnit(unit.clone()))?;
-        let BrokerResponse::StartSystemdUnit(ref response) = frame.response else {
-            return Err(response_error(&frame.response));
-        };
+        let payload = serde_json::to_value(&unit).map_err(|_| ProcessEffectError::LaunchFailed)?;
+        let mut reply = self
+            .envelope_call("StartSystemdUnit", &intent.zone, payload)
+            .map_err(|error| response_error(&error))?;
+        let response: StartTransientUnitResponse = serde_json::from_value(
+            reply
+                .response
+                .result
+                .clone()
+                .ok_or(ProcessEffectError::LaunchFailed)?,
+        )
+        .map_err(|_| ProcessEffectError::LaunchFailed)?;
         if response.vm_id != unit.vm_id || response.role_id != unit.role_id {
             warn!(
                 provider = "supervisor",
@@ -678,14 +728,15 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             return Err(ProcessEffectError::IdentityChanged);
         }
         let identity = self.identity(&response.identity, &intent)?;
-        let pidfd = frame.take_fd(response.pidfd_index)?;
-        self.remember(&identity, unit.clone())?;
+        let pidfd = crate::broker::reply_take_fd(&mut reply, response.pidfd_index)?;
+        self.remember(&identity, unit.clone(), intent.zone.clone())?;
         Ok(SystemdEffectLaunch::new(
             identity.clone(),
             BrokerSystemdPidfdHandle {
                 pidfd,
                 request: unit,
                 identity,
+                zone: intent.zone,
             },
         ))
     }
@@ -708,16 +759,24 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
         &self,
         expected: &SystemdInvocationIdentity,
     ) -> Result<SystemdEffectLaunch<Self::Handle>, ProcessEffectError> {
-        let unit = self.request_for(expected)?;
-        let frame = self.request(BrokerRequest::OpenSystemdUnitPidfd(
-            OpenUnitPidfdRequest {
+        let (unit, zone) = self.request_for(expected)?;
+        let payload =
+            serde_json::to_value(OpenUnitPidfdRequest {
                 unit: unit.clone(),
                 expected: expected.wire_identity(),
-            },
-        ))?;
-        let BrokerResponse::OpenSystemdUnitPidfd(ref response) = frame.response else {
-            return Err(response_error(&frame.response));
-        };
+            })
+            .map_err(|_| ProcessEffectError::IdentityChanged)?;
+        let mut reply = self
+            .envelope_call("OpenSystemdUnitPidfd", &zone, payload)
+            .map_err(|error| response_error(&error))?;
+        let response: OpenUnitPidfdResponse = serde_json::from_value(
+            reply
+                .response
+                .result
+                .clone()
+                .ok_or(ProcessEffectError::IdentityChanged)?,
+        )
+        .map_err(|_| ProcessEffectError::IdentityChanged)?;
         let actual = SystemdInvocationIdentity::new(&response.identity)?;
         if actual != *expected || response.vm_id != unit.vm_id || response.role_id != unit.role_id {
             warn!(
@@ -726,13 +785,14 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             );
             return Err(ProcessEffectError::IdentityChanged);
         }
-        let pidfd = frame.take_fd(response.pidfd_index)?;
+        let pidfd = crate::broker::reply_take_fd(&mut reply, response.pidfd_index)?;
         Ok(SystemdEffectLaunch::new(
             actual.clone(),
             BrokerSystemdPidfdHandle {
                 pidfd,
                 request: unit,
                 identity: actual,
+                zone,
             },
         ))
     }
@@ -750,17 +810,26 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
         handle: &Self::Handle,
         class: ProcessStopClass,
     ) -> Result<(), ProcessEffectError> {
-        let frame = self.request(BrokerRequest::StopSystemdUnit(StopUnitRequest {
+        let payload = serde_json::to_value(StopUnitRequest {
             unit: handle.request.clone(),
             expected: handle.identity.wire_identity(),
             class: match class {
                 ProcessStopClass::Drain => UnitStopClass::Drain,
                 ProcessStopClass::Terminate => UnitStopClass::Terminate,
             },
-        }))?;
-        let BrokerResponse::StopSystemdUnit(response) = frame.response else {
-            return Err(response_error(&frame.response));
-        };
+        })
+        .map_err(|_| ProcessEffectError::StopFailed)?;
+        let reply = self
+            .envelope_call("StopSystemdUnit", &handle.zone, payload)
+            .map_err(|error| response_error(&error))?;
+        let response: StopUnitResponse = serde_json::from_value(
+            reply
+                .response
+                .result
+                .clone()
+                .ok_or(ProcessEffectError::StopFailed)?,
+        )
+        .map_err(|_| ProcessEffectError::StopFailed)?;
         if !response.stopped {
             warn!(
                 provider = "supervisor",
@@ -781,13 +850,11 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
     }
 }
 
-fn response_error(response: &BrokerResponse) -> ProcessEffectError {
+fn response_error(error: &KernelInvokeError) -> ProcessEffectError {
     warn!(
         provider = "supervisor",
-        "broker returned an unexpected response for a systemd unit request"
+        error = ?error,
+        "broker refused a systemd unit request"
     );
-    match response {
-        BrokerResponse::Error(_) => ProcessEffectError::LaunchFailed,
-        _ => ProcessEffectError::ObserveFailed,
-    }
+    ProcessEffectError::LaunchFailed
 }

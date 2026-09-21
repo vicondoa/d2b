@@ -774,6 +774,7 @@ mod tests {
     ) -> ServiceInvocation<'a> {
         ServiceInvocation {
             zone: "work",
+            method: "has-active",
             invocation_id,
             payload,
             resources,

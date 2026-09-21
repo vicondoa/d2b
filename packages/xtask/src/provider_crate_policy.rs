@@ -1525,12 +1525,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (system-minijail)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
-        token: "process_minijail",
-        family: "system-minijail",
-        retires_with: "U10-U12 family rollout (system-minijail)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
         token: "process_minijail",
         family: "system-minijail",
@@ -1556,12 +1550,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
-        token: "process_systemd",
-        family: "system-systemd",
-        retires_with: "U12 systemd step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
         token: "process_systemd",
         family: "system-systemd",
         retires_with: "U12 systemd step",
@@ -2048,12 +2036,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: trusted-bundle/manifest wire shapes; d2b-core may not depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
-        token: "gpu",
-        family: "device-gpu",
-        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/manifest_v04.rs",
         token: "gpu",
         family: "device-gpu",
@@ -2344,12 +2326,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 tpm/device step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
-        token: "swtpm",
-        family: "device-tpm",
-        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/cli_output.rs",
         token: "tpm",
         family: "device-tpm",
@@ -2578,12 +2554,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 usbip step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
-        token: "usbip",
-        family: "device-usbip",
-        retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/host.rs",
         token: "usbip",
         family: "device-usbip",
@@ -2717,12 +2687,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-control/src/public_wire.rs",
-        token: "wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
         token: "wayland",
         family: "display-wayland",
         retires_with: "U10-U12 family rollout (display-wayland)",
@@ -3040,12 +3004,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (observability-otel)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
-        token: "otel",
-        family: "observability-otel",
-        retires_with: "U10-U12 family rollout (observability-otel)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "otel",
         family: "observability-otel",
@@ -3095,12 +3053,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
@@ -3206,12 +3158,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "qemu_media",
         family: "runtime-qemu-media",
         retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
-        token: "qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/catalog.rs",
@@ -3353,12 +3299,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 systemd step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
-        token: "systemd",
-        family: "system-systemd",
-        retires_with: "U12 systemd step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
         token: "systemd",
         family: "system-systemd",
@@ -3390,12 +3330,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/workload.rs",
-        token: "systemd",
-        family: "system-systemd",
-        retires_with: "U12 systemd step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/mod.rs",
         token: "systemd",
         family: "system-systemd",
         retires_with: "U12 systemd step",
@@ -3456,12 +3390,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/manifest_v04.rs",
-        token: "vsock",
-        family: "transport-vsock",
-        retires_with: "U10-U12 family rollout (transport-vsock)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
         token: "vsock",
         family: "transport-vsock",
         retires_with: "U10-U12 family rollout (transport-vsock)",
@@ -3610,6 +3538,37 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "volume-virtiofs",
         retires_with: "U12 volume/store step",
     },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/provider_lifecycle.rs",
+        token: "network_local",
+        family: "network-local",
+        retires_with: "permanent: the daemon's composition root hosts the registered network-local effects service from the crate-owned declaration over the registered service identity",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/provider_lifecycle.rs",
+        token: "process_systemd",
+        family: "system-systemd",
+        retires_with: "permanent: the daemon's composition root hosts the registered process-systemd effects service from the crate-owned declaration over the registered service identity",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/provider_lifecycle.rs",
+        token: "systemd",
+        family: "system-systemd",
+        retires_with: "permanent: the daemon's composition root hosts the registered process-systemd effects service from the crate-owned declaration over the registered service identity",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "process_systemd",
+        family: "system-systemd",
+        retires_with: "permanent: the daemon's composition root hosts the registered process-systemd effects service from the crate-owned factory over the registered service identity",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "systemd",
+        family: "system-systemd",
+        retires_with: "permanent: the daemon's composition root hosts the registered process-systemd effects service from the crate-owned factory over the registered service identity",
+    },
+
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/runtime.rs",
         token: "virtiofs",
@@ -5497,24 +5456,6 @@ const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption]
         module: "packages/d2b-broker/src/kernel_ops.rs",
         class: "per-family-branch",
         symbol: "RunnerRole::ProviderController",
-        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
-        class: "per-family-branch",
-        symbol: "ProcessRole::Audio",
-        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
-        class: "per-family-branch",
-        symbol: "ProcessRole::Video",
-        retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "packages/d2b-broker/src/ops/systemd.rs",
-        class: "per-family-branch",
-        symbol: "ProcessRole::Virtiofsd",
         retires_with: "U13 structural residue (the per-provider role vocabulary unifies into declared Role rows)",
     },
     SharedStructuralKnowledgeExemption {

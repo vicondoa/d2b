@@ -18,18 +18,13 @@ no resource family.
 - `transport-excluded` - the name is a transport-layer concern the
 operation envelope does not carry.
 
-Counts: 65 family-owned, 33 broker-generic, 0 transport-excluded (46 rows carry a wire discriminant, 52 rows do not).
+Counts: 65 family-owned, 33 broker-generic, 0 transport-excluded (41 rows carry a wire discriminant, 57 rows do not).
 
 | Operation | Owner | Family | Declaring provider | Service | Method | Profiles | Disposition | Target | Justification |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Hello | broker-generic | - | - | - | - | host, guest | callable-read-only | live read-only callable | transport handshake: the first frame on the private socket, answered from the broker's own capability table, with no host effect and no resource family behind it |
 | PublishTrustedContext | broker-generic | - | - | - | - | host, guest | promoted-live | live in production broker | broker-held attestation cache: the daemon publishes the Zone's daemon-owned provider-set revision and controller/guest generations over the origination leg, and the broker caches them as durable, monotonically increasing state from which it mints; no resource family holds the store |
 | ExportBrokerAudit | broker-generic | - | - | - | - | host, guest | callable-read-only | live read-only callable | broker self-audit: the broker reads its own append-only audit log, so the effect is the broker's record keeping rather than a family effect |
-| StartSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | start-systemd-unit | host, guest | promoted-live | live in production broker | - |
-| CheckSystemdUserManager | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | check-systemd-user-manager | host, guest | promoted-live | live in production broker | - |
-| ObserveSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | observe-systemd-unit | host, guest | promoted-live | live in production broker | - |
-| OpenSystemdUnitPidfd | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | open-systemd-unit-pidfd | host, guest | promoted-live | live in production broker | - |
-| StopSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | stop-systemd-unit | host, guest | promoted-live | live in production broker | - |
 | ApplyHostGenerationHandoff | broker-generic | - | - | - | - | host | promoted-live | live in production broker | broker-owned host effect: the handoff runs in the broker against the broker's own helper path and state dir, the activation family requests it through its effect port, so no declaring crate holds the handler |
 | CreateOrReconcileUsersGroups | family | user | d2b-provider-user | d2b.user | create-or-reconcile-users-groups | host | stubbed-unimplemented | bootstrap-only | - |
 | DelegateCgroupV2 | family | process | d2b-provider-process | d2b.process | delegate-cgroup-v2 | host | promoted-live | live in production broker | - |
@@ -120,3 +115,8 @@ Counts: 65 family-owned, 33 broker-generic, 0 transport-excluded (46 rows carry 
 | DeregisterRunnerPidfd | family | process | d2b-provider-process | d2b.process | deregister-runner-pidfd | host, guest | promoted-live | live in production broker | - |
 | SpawnRunner | family | process | d2b-provider-process | d2b.process | spawn-runner | host, guest | promoted-live | live in production broker | - |
 | inspect-process-family | family | process | d2b-provider-process | d2b.process | inspect-process-family | host | callable-read-only | live read-only callable | - |
+| StartSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | start-systemd-unit | host, guest | promoted-live | live in production broker | - |
+| CheckSystemdUserManager | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | check-systemd-user-manager | host, guest | promoted-live | live in production broker | - |
+| ObserveSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | observe-systemd-unit | host, guest | promoted-live | live in production broker | - |
+| OpenSystemdUnitPidfd | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | open-systemd-unit-pidfd | host, guest | promoted-live | live in production broker | - |
+| StopSystemdUnit | family | process-systemd | d2b-provider-process-systemd | d2b.process-systemd | stop-systemd-unit | host, guest | promoted-live | live in production broker | - |

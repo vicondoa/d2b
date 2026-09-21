@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-process-systemd",
+  "provider": "process-systemd",
+  "services": [
+    "process-systemd.d2bus.org/effects"
+  ]
+}

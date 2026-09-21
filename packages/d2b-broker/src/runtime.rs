@@ -1650,12 +1650,6 @@ async fn answer_request(
         );
         return Ok(RequestOutcome::Reply(error.into_response(), Vec::new()));
     }
-    #[cfg(not(feature = "layer1-bootstrap"))]
-    if config.profile == BrokerProfile::Guest
-        && let Err(error) = validate_guest_process_binding(&request).await
-    {
-        return Ok(RequestOutcome::Reply(error.into_response(), Vec::new()));
-    }
     let (rate_role, rate_operation) = if effective_uid == config.d2bd_uid {
         (envelope.caller_role.for_display(), operation)
     } else {
@@ -3111,7 +3105,6 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             request,
             RealBrokerRequest::Hello(_)
                 | RealBrokerRequest::EnvelopeInvoke(_)
-                | RealBrokerRequest::StopSystemdUnit(_)
         )
     {
         return Err(BrokerError::HostShutdownRestricted);
@@ -3701,178 +3694,6 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 response,
             )))
         }
-        RealBrokerRequest::StartSystemdUnit(req) => {
-            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            let (identity, pidfd) = backend.start_systemd_unit(resolver, &req).await?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "StartSystemdUnit",
-                req.role_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm_id.as_str(),
-                req.role_id.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::SystemdUnit {
-                    vm_id: req.vm_id.as_str().to_owned(),
-                    role_id: req.role_id.as_str().to_owned(),
-                    role: req.role.as_str().to_owned(),
-                    bundle_runner_intent_ref: req.bundle_runner_intent_ref.as_str().to_owned(),
-                    domain: systemd_domain_name(req.domain).to_owned(),
-                    action: "start".to_owned(),
-                    stopped: None,
-                },
-            )?;
-            Ok(DispatchResult::with_fd(
-                BrokerResponse::StartSystemdUnit(
-                    d2b_contracts_broker::broker_wire::StartTransientUnitResponse {
-                        vm_id: req.vm_id,
-                        role_id: req.role_id,
-                        identity,
-                        pidfd_index: 0,
-                    },
-                ),
-                pidfd,
-            ))
-        }
-        RealBrokerRequest::CheckSystemdUserManager(req) => {
-            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            let available = backend.check_systemd_user_manager(resolver, &req).await?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "CheckSystemdUserManager",
-                req.role_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm_id.as_str(),
-                req.role_id.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::SystemdUnit {
-                    vm_id: req.vm_id.as_str().to_owned(),
-                    role_id: req.role_id.as_str().to_owned(),
-                    role: req.role.as_str().to_owned(),
-                    bundle_runner_intent_ref: req.bundle_runner_intent_ref.as_str().to_owned(),
-                    domain: systemd_domain_name(req.domain).to_owned(),
-                    action: "check-user-manager".to_owned(),
-                    stopped: None,
-                },
-            )?;
-            Ok(DispatchResult::no_fds(
-                BrokerResponse::CheckSystemdUserManager(
-                    d2b_contracts_broker::broker_wire::CheckUserManagerResponse {
-                        vm_id: req.vm_id,
-                        role_id: req.role_id,
-                        available,
-                    },
-                ),
-            ))
-        }
-        RealBrokerRequest::ObserveSystemdUnit(req) => {
-            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            let identity = backend.observe_systemd_unit(resolver, &req).await?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "ObserveSystemdUnit",
-                req.role_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.vm_id.as_str(),
-                req.role_id.as_str(),
-                tracing_span_id_str(req.tracing_span_id.as_ref()),
-                OperationFields::SystemdUnit {
-                    vm_id: req.vm_id.as_str().to_owned(),
-                    role_id: req.role_id.as_str().to_owned(),
-                    role: req.role.as_str().to_owned(),
-                    bundle_runner_intent_ref: req.bundle_runner_intent_ref.as_str().to_owned(),
-                    domain: systemd_domain_name(req.domain).to_owned(),
-                    action: "observe".to_owned(),
-                    stopped: None,
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::ObserveSystemdUnit(
-                d2b_contracts_broker::broker_wire::ObserveUnitResponse {
-                    vm_id: req.vm_id,
-                    role_id: req.role_id,
-                    present: identity.is_some(),
-                    identity,
-                },
-            )))
-        }
-        RealBrokerRequest::OpenSystemdUnitPidfd(req) => {
-            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            let (identity, pidfd) = backend.reopen_systemd_unit(resolver, &req).await?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "OpenSystemdUnitPidfd",
-                req.unit.role_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.unit.vm_id.as_str(),
-                req.unit.role_id.as_str(),
-                tracing_span_id_str(req.unit.tracing_span_id.as_ref()),
-                OperationFields::SystemdUnit {
-                    vm_id: req.unit.vm_id.as_str().to_owned(),
-                    role_id: req.unit.role_id.as_str().to_owned(),
-                    role: req.unit.role.as_str().to_owned(),
-                    bundle_runner_intent_ref: req.unit.bundle_runner_intent_ref.as_str().to_owned(),
-                    domain: systemd_domain_name(req.unit.domain).to_owned(),
-                    action: "reopen".to_owned(),
-                    stopped: None,
-                },
-            )?;
-            Ok(DispatchResult::with_fd(
-                BrokerResponse::OpenSystemdUnitPidfd(
-                    d2b_contracts_broker::broker_wire::OpenUnitPidfdResponse {
-                        vm_id: req.unit.vm_id,
-                        role_id: req.unit.role_id,
-                        identity,
-                        pidfd_index: 0,
-                    },
-                ),
-                pidfd,
-            ))
-        }
-        RealBrokerRequest::StopSystemdUnit(req) => {
-            let resolver = require_resolver_ref(resolver.map(std::sync::Arc::as_ref))?;
-            backend.stop_systemd_unit(resolver, &req).await?;
-            write_success_op_record!(
-                audit_log,
-                bundle_metadata,
-                "StopSystemdUnit",
-                req.unit.role_id.as_str(),
-                caller_uid,
-                caller_gid,
-                &caller_role,
-                req.unit.vm_id.as_str(),
-                req.unit.role_id.as_str(),
-                tracing_span_id_str(req.unit.tracing_span_id.as_ref()),
-                OperationFields::SystemdUnit {
-                    vm_id: req.unit.vm_id.as_str().to_owned(),
-                    role_id: req.unit.role_id.as_str().to_owned(),
-                    role: req.unit.role.as_str().to_owned(),
-                    bundle_runner_intent_ref: req.unit.bundle_runner_intent_ref.as_str().to_owned(),
-                    domain: systemd_domain_name(req.unit.domain).to_owned(),
-                    action: "stop".to_owned(),
-                    stopped: Some(true),
-                },
-            )?;
-            Ok(DispatchResult::no_fds(BrokerResponse::StopSystemdUnit(
-                d2b_contracts_broker::broker_wire::StopUnitResponse {
-                    vm_id: req.unit.vm_id,
-                    role_id: req.unit.role_id,
-                    stopped: true,
-                },
-            )))
-        }
-
         RealBrokerRequest::DelegateCgroupV2(req) => {
             let resolver = require_resolver(resolver)?;
             let exec = live_exec(config);
@@ -5256,16 +5077,6 @@ fn runner_signal_name(signal: d2b_contracts_broker::broker_wire::RunnerSignal) -
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-fn systemd_domain_name(
-    domain: d2b_contracts_broker::broker_wire::UnitDomain,
-) -> &'static str {
-    match domain {
-        d2b_contracts_broker::broker_wire::UnitDomain::System => "system",
-        d2b_contracts_broker::broker_wire::UnitDomain::User => "user",
-    }
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 fn runner_signal_number(signal: d2b_contracts_broker::broker_wire::RunnerSignal) -> i32 {
     match signal {
         d2b_contracts_broker::broker_wire::RunnerSignal::Term => libc::SIGTERM,
@@ -6376,11 +6187,6 @@ fn store_sync_error_kind(stage: crate::ops::store_sync_audit::ErrorStage) -> &'s
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-type SystemdUnitHandleFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<(d2b_contracts_broker::broker_wire::UnitIdentity, OwnedFd), BrokerError>> + Send + 'a>,
->;
-
-#[cfg(not(feature = "layer1-bootstrap"))]
 trait DispatchBackend {
     /// The committed-operation envelope this process serves.
     ///
@@ -6442,42 +6248,6 @@ trait DispatchBackend {
         pid: i32,
         expected_start_time_ticks: u64,
     ) -> Pin<Box<dyn Future<Output = Result<crate::live_handlers::OpenPidfdResult, BrokerError>> + Send + 'a>>;
-
-    fn start_systemd_unit<'a>(
-        &'a self,
-        resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
-    ) -> SystemdUnitHandleFuture<'a>;
-
-    fn check_systemd_user_manager<'a>(
-        &'a self,
-        resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::CheckUserManagerRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, BrokerError>> + Send + 'a>>;
-
-    fn observe_systemd_unit<'a>(
-        &'a self,
-        resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::ObserveUnitRequest,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::UnitIdentity>, BrokerError>>
-                + Send
-                + 'a,
-        >,
-    >;
-
-    fn reopen_systemd_unit<'a>(
-        &'a self,
-        resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::OpenUnitPidfdRequest,
-    ) -> SystemdUnitHandleFuture<'a>;
-
-    fn stop_systemd_unit<'a>(
-        &'a self,
-        resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::StopUnitRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>>;
 
     fn signal_runner<'a>(
         &'a self,
@@ -6941,98 +6711,6 @@ impl DispatchBackend for LiveDispatchBackend {
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             register_runner_pidfd(runner_id, &outcome.pidfd)?;
             Ok(outcome)
-        })
-    }
-
-    fn start_systemd_unit<'a>(
-        &'a self,
-        resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        (
-                            d2b_contracts_broker::broker_wire::UnitIdentity,
-                            OwnedFd,
-                        ),
-                        BrokerError,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            crate::ops::systemd::start(resolver, request)
-                .await
-                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
-        })
-    }
-
-    fn check_systemd_user_manager<'a>(
-        &'a self,
-        resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::CheckUserManagerRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, BrokerError>> + Send + 'a>> {
-        Box::pin(async move {
-            crate::ops::systemd::check_user_manager(resolver, request)
-                .await
-                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
-        })
-    }
-
-    fn observe_systemd_unit<'a>(
-        &'a self,
-        resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::ObserveUnitRequest,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::UnitIdentity>, BrokerError>>
-                + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            crate::ops::systemd::observe(resolver, request)
-                .await
-                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
-        })
-    }
-
-    fn reopen_systemd_unit<'a>(
-        &'a self,
-        resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::OpenUnitPidfdRequest,
-    ) -> Pin<
-        Box<
-            dyn Future<
-                    Output = Result<
-                        (
-                            d2b_contracts_broker::broker_wire::UnitIdentity,
-                            OwnedFd,
-                        ),
-                        BrokerError,
-                    >,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            crate::ops::systemd::reopen(resolver, request)
-                .await
-                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
-        })
-    }
-
-    fn stop_systemd_unit<'a>(
-        &'a self,
-        resolver: &'a BundleResolver,
-        request: &'a d2b_contracts_broker::broker_wire::StopUnitRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
-        Box::pin(async move {
-            crate::ops::systemd::stop(resolver, request)
-                .await
-                .map_err(|error| BrokerError::LiveHandler(error.to_string()))
         })
     }
 
@@ -9041,51 +8719,6 @@ fn wire_role_id_for_intent(intent: &d2b_core::bundle_resolver::ResolvedRunnerInt
         d2b_core::processes::ProcessRole::CloudHypervisorRunner => "ch-runner",
         _ => intent.role_id.as_str(),
     }
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-async fn validate_guest_process_binding(
-    request: &d2b_contracts_broker::broker_wire::BrokerRequest,
-) -> Result<(), BrokerError> {
-    use d2b_contracts_broker::broker_wire::BrokerRequest;
-
-    let binding = match request {
-        BrokerRequest::StartSystemdUnit(request)
-        | BrokerRequest::ObserveSystemdUnit(request)
-        | BrokerRequest::CheckSystemdUserManager(request) => request.guest_execution.as_ref(),
-        BrokerRequest::OpenSystemdUnitPidfd(request) => request.unit.guest_execution.as_ref(),
-        BrokerRequest::StopSystemdUnit(request) => request.unit.guest_execution.as_ref(),
-        _ => None,
-    };
-    let Some(binding) = binding else {
-        return Ok(());
-    };
-    if !binding.is_valid() {
-        return Err(BrokerError::SpawnRunnerIntentMismatch {
-            field: "guest_execution",
-            requested: "invalid".to_owned(),
-            resolved: "nonzero-target-session-boot-assignment-generations".to_owned(),
-        });
-    }
-    let boot_id = tokio::fs::read_to_string("/proc/sys/kernel/random/boot_id").await.map_err(|_| {
-        BrokerError::SpawnRunnerIntentMismatch {
-            field: "guest_execution.boot_identity_digest",
-            requested: "present".to_owned(),
-            resolved: "kernel-boot-identity-unavailable".to_owned(),
-        }
-    })?;
-    let mut digest = Sha256::new();
-    digest.update(b"d2b-kernel-boot-id-v1\0");
-    digest.update(boot_id.trim().as_bytes());
-    let expected: [u8; 32] = digest.finalize().into();
-    if binding.boot_identity_digest != expected {
-        return Err(BrokerError::SpawnRunnerIntentMismatch {
-            field: "guest_execution.boot_identity_digest",
-            requested: "mismatch".to_owned(),
-            resolved: "kernel-boot-identity".to_owned(),
-        });
-    }
-    Ok(())
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -12797,20 +12430,17 @@ mod tests {
         #[cfg(not(feature = "layer1-bootstrap"))]
         const DISPATCHED: &[&str] = &[
             "ApplyHostGenerationHandoff",
-            "CheckSystemdUserManager",
             "DelegateCgroupV2",
             "DiskInit",
             "EnvelopeInvoke",
             "ExportBrokerAudit",
             "Hello",
             "ModprobeIfAllowed",
-            "ObserveSystemdUnit",
             "OpenCgroupDir",
             "OpenDevice",
             "OpenFuse",
             "OpenHidrawSecurityKey",
             "OpenKvm",
-            "OpenSystemdUnitPidfd",
             "OpenVhostNet",
             "OwnershipMatrixCheck",
             "PipeWireAudio",
@@ -12831,8 +12461,6 @@ mod tests {
             // U12 retired the network-fds family arms (ApplyNftables,
             // CreateTapFd, SeedDnsmasqLease among them) the same way: the
             // thirteen network kernels serve through the EnvelopeInvoke arm.
-            "StartSystemdUnit",
-            "StopSystemdUnit",
             "StoreSync",
             "UsbipBind",
             "UsbipBindFirewallRule",
@@ -14561,88 +14189,6 @@ mod tests {
                 pidfd: dummy_fd(),
                 pid,
                 verified_start_time_ticks: expected_start_time_ticks,
-            })
-        
-            })
-        }
-
-        fn start_systemd_unit<'a>(
-            &'a self,
-            _resolver: &'a BundleResolver,
-            _request: &'a d2b_contracts_broker::broker_wire::StartTransientUnitRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<
-            (
-                d2b_contracts_broker::broker_wire::UnitIdentity,
-                OwnedFd,
-            ),
-            BrokerError,
-        >> + Send + 'a>> {
-            Box::pin(async move {
-            Err(BrokerError::Unimplemented {
-                operation: "StartSystemdUnit",
-                target_wave: "W6",
-            })
-        
-            })
-        }
-
-        fn check_systemd_user_manager<'a>(
-            &'a self,
-            _resolver: &'a BundleResolver,
-            _request: &'a d2b_contracts_broker::broker_wire::CheckUserManagerRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<bool, BrokerError>> + Send + 'a>> {
-            Box::pin(async move {
-            Err(BrokerError::Unimplemented {
-                operation: "CheckSystemdUserManager",
-                target_wave: "W6",
-            })
-        
-            })
-        }
-
-        fn observe_systemd_unit<'a>(
-            &'a self,
-            _resolver: &'a BundleResolver,
-            _request: &'a d2b_contracts_broker::broker_wire::ObserveUnitRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<Option<d2b_contracts_broker::broker_wire::UnitIdentity>, BrokerError>> + Send + 'a>> {
-            Box::pin(async move {
-            Err(BrokerError::Unimplemented {
-                operation: "ObserveSystemdUnit",
-                target_wave: "W6",
-            })
-        
-            })
-        }
-
-        fn reopen_systemd_unit<'a>(
-            &'a self,
-            _resolver: &'a BundleResolver,
-            _request: &'a d2b_contracts_broker::broker_wire::OpenUnitPidfdRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<
-            (
-                d2b_contracts_broker::broker_wire::UnitIdentity,
-                OwnedFd,
-            ),
-            BrokerError,
-        >> + Send + 'a>> {
-            Box::pin(async move {
-            Err(BrokerError::Unimplemented {
-                operation: "OpenSystemdUnitPidfd",
-                target_wave: "W6",
-            })
-        
-            })
-        }
-
-        fn stop_systemd_unit<'a>(
-            &'a self,
-            _resolver: &'a BundleResolver,
-            _request: &'a d2b_contracts_broker::broker_wire::StopUnitRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<(), BrokerError>> + Send + 'a>> {
-            Box::pin(async move {
-            Err(BrokerError::Unimplemented {
-                operation: "StopSystemdUnit",
-                target_wave: "W6",
             })
         
             })

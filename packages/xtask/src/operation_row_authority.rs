@@ -151,10 +151,21 @@ fn parity_errors(repo_root: &Path) -> Result<Vec<String>, String> {
             text.push('\n');
         }
         let registered_types = resource_type_authority::descriptor_type_idents(&text);
-        let families: BTreeSet<String> = registered_types
+        let mut families: BTreeSet<String> = registered_types
             .iter()
             .map(|ident| ident.to_ascii_lowercase())
             .collect();
+        // The provider-registration authority already hard-validates the
+        // crate's own family (the crate name minus the provider prefix); a
+        // family that declares no converted resource type of its own (the
+        // process-systemd lane) still declares rows for its own family,so
+        // the parity surface accepts it beside the registered type names.
+        families.insert(
+            crate_name
+                .strip_prefix("d2b-provider-")
+                .unwrap_or(crate_name)
+                .to_ascii_lowercase(),
+        );
         // The descriptor tables register operations by their lower-kebab
         // `Operation/<method>` reference (the method the session layer
         // addresses), while a declaration states the PascalCase wire
@@ -618,6 +629,30 @@ mod tests {
                     && error.contains("AlphaOp")
             }),
             "expected the family violation naming both: {errors:?}"
+        );
+    }
+
+    /// A declaration whose family is the crate's own family (the provider
+    /// name the registration authority hard-validates) passes even when
+    /// no registered descriptor type names that family: a family that
+    /// declares no converted resource type of its own still declares its
+    /// own rows.
+    #[test]
+    fn the_family_may_be_the_crate_its_own_family_beside_the_registered_descriptor_types() {
+        let fixture = Fixture::new("own-family");
+        fixture.write_descriptor("d2b-provider-fixture-extra", &["AlphaOp"]);
+        fixture.write_declaration("d2b-provider-fixture-extra", &["AlphaOp"]);
+        let path = fixture.root.join("packages/d2b-provider-fixture-extra/operations.json");
+        let text = fs::read_to_string(&path).expect("declaration");
+        fs::write(
+            &path,
+            text.replace("\"family\": \"fixture\"", "\"family\": \"fixture-extra\""),
+        )
+        .expect("mutate");
+        let errors = parity_errors(&fixture.root).expect("parity loads");
+        assert!(
+            errors.is_empty(),
+            "expected the own-family declaration to pass: {errors:?}"
         );
     }
 

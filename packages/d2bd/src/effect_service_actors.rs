@@ -315,6 +315,7 @@ impl Actor for EffectServiceActor {
                 let mut resources = call.resources;
                 let invocation = ServiceInvocation {
                     zone: &call.zone,
+                    method: call.method.name,
                     invocation_id: &call.invocation_id,
                     payload: &call.payload,
                     resources: &mut resources,

@@ -107,20 +107,6 @@ pub enum BrokerRequest {
     /// the signed runner intent; the daemon supplies only opaque identities
     /// and a closed action.
     PipeWireAudio(PipeWireAudioRequest),
-    /// Start one trusted non-forking transient systemd unit. The broker
-    /// resolves executable, argv, uid/gid, environment, and cgroup
-    /// placement from the bundle runner intent.
-    StartSystemdUnit(StartSystemdUnitRequest),
-    /// Check whether the exact user manager selected by the trusted runner
-    /// intent is reachable. The manager connection never crosses the broker
-    /// boundary.
-    CheckSystemdUserManager(CheckUserManagerRequest),
-    /// Observe one trusted transient systemd unit without opening a pidfd.
-    ObserveSystemdUnit(ObserveUnitRequest),
-    /// Re-open a pidfd after re-verifying a trusted transient unit identity.
-    OpenSystemdUnitPidfd(OpenUnitPidfdRequest),
-    /// Stop one exact transient systemd unit identity.
-    StopSystemdUnit(StopUnitRequest),
     OpenVhostNet(OpenVhostNetRequest),
     ReconcileStorageScope(ReconcileStorageScopeRequest),
     ValidateLockSpec(ValidateLockSpecRequest),
@@ -586,11 +572,6 @@ impl BrokerRequest {
             Self::QemuMediaAttach(_) => "QemuMediaAttach",
             Self::QemuMediaDetach(_) => "QemuMediaDetach",
             Self::PipeWireAudio(_) => "PipeWireAudio",
-            Self::StartSystemdUnit(_) => "StartSystemdUnit",
-            Self::CheckSystemdUserManager(_) => "CheckSystemdUserManager",
-            Self::ObserveSystemdUnit(_) => "ObserveSystemdUnit",
-            Self::OpenSystemdUnitPidfd(_) => "OpenSystemdUnitPidfd",
-            Self::StopSystemdUnit(_) => "StopSystemdUnit",
             Self::OpenVhostNet(_) => "OpenVhostNet",
             Self::ReconcileStorageScope(_) => "ReconcileStorageScope",
             Self::ValidateLockSpec(_) => "ValidateLockSpec",
@@ -739,36 +720,6 @@ impl BrokerRequest {
             Self::PipeWireAudio(request) => (
                 request.vm_id.to_string(),
                 format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::StartSystemdUnit(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::CheckSystemdUserManager(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::ObserveSystemdUnit(request) => (
-                request.vm_id.to_string(),
-                format!("{}:{}:{}", self.op_name(), request.vm_id, request.role_id),
-            ),
-            Self::OpenSystemdUnitPidfd(request) => (
-                request.unit.vm_id.to_string(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.unit.vm_id,
-                    request.unit.role_id
-                ),
-            ),
-            Self::StopSystemdUnit(request) => (
-                request.unit.vm_id.to_string(),
-                format!(
-                    "{}:{}:{}",
-                    self.op_name(),
-                    request.unit.vm_id,
-                    request.unit.role_id
-                ),
             ),
             Self::ReconcileStorageScope(request) => (
                 request.storage_ref.to_string(),
@@ -931,84 +882,12 @@ impl BrokerProfile {
         self.operations().contains(&operation)
     }
 
-    /// Check both the closed catalog and profile-specific target constraints.
+    /// Check the request against the closed profile catalog. The typed
+    /// systemd unit variants that once carried profile-specific target
+    /// constraints retired with the wire-variant sweep (U15); every
+    /// remaining request is admitted exactly when its operation row is.
     pub fn allows_request(self, request: &BrokerRequest) -> bool {
-        if !self.allows_operation(request.op_name()) {
-            return false;
-        }
-        match self {
-            Self::Host => !Self::request_targets_guest(request),
-            Self::Guest => match request {
-                BrokerRequest::StartSystemdUnit(request)
-                | BrokerRequest::ObserveSystemdUnit(request)
-                | BrokerRequest::CheckSystemdUserManager(request) => {
-                    request
-                        .execution_ref
-                        .as_ref()
-                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                        && request
-                            .guest_execution
-                            .as_ref()
-                            .is_some_and(GuestExecutionBinding::is_valid)
-                }
-                BrokerRequest::OpenSystemdUnitPidfd(request) => {
-                    request
-                        .unit
-                        .execution_ref
-                        .as_ref()
-                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                        && request
-                            .unit
-                            .guest_execution
-                            .as_ref()
-                            .is_some_and(GuestExecutionBinding::is_valid)
-                }
-                BrokerRequest::StopSystemdUnit(request) => {
-                    request
-                        .unit
-                        .execution_ref
-                        .as_ref()
-                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                        && request
-                            .unit
-                            .guest_execution
-                            .as_ref()
-                            .is_some_and(GuestExecutionBinding::is_valid)
-                }
-                _ => true,
-            },
-        }
-    }
-
-    fn request_targets_guest(request: &BrokerRequest) -> bool {
-        match request {
-            BrokerRequest::StartSystemdUnit(request)
-            | BrokerRequest::ObserveSystemdUnit(request)
-            | BrokerRequest::CheckSystemdUserManager(request) => {
-                request
-                    .execution_ref
-                    .as_ref()
-                    .is_some_and(|target| target.resource_type().as_str() == "Guest")
-                    || request.guest_execution.is_some()
-            }
-            BrokerRequest::OpenSystemdUnitPidfd(request) => {
-                request.unit.guest_execution.is_some()
-                    || request
-                        .unit
-                        .execution_ref
-                        .as_ref()
-                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
-            }
-            BrokerRequest::StopSystemdUnit(request) => {
-                request.unit.guest_execution.is_some()
-                    || request
-                        .unit
-                        .execution_ref
-                        .as_ref()
-                        .is_some_and(|target| target.resource_type().as_str() == "Guest")
-            }
-            _ => false,
-        }
+        self.allows_operation(request.op_name())
     }
 }
 
@@ -1067,18 +946,6 @@ pub enum BrokerResponse {
     /// Result of one broker-owned PipeWire effect. Raw node identifiers and
     /// runtime paths never cross the wire.
     PipeWireAudio(PipeWireAudioResponse),
-    /// StartSystemdUnit response. The exact-main pidfd is returned via
-    /// SCM_RIGHTS alongside this identity envelope.
-    StartSystemdUnit(StartSystemdUnitResponse),
-    /// Result of a same-UID user-manager reachability check.
-    CheckSystemdUserManager(CheckUserManagerResponse),
-    /// Observation of a transient systemd unit. `None` is represented by
-    /// `present = false` and a zero identity.
-    ObserveSystemdUnit(ObserveUnitResponse),
-    /// Re-open response for a previously verified transient unit.
-    OpenSystemdUnitPidfd(OpenUnitPidfdResponse),
-    /// Stop response for an exact transient unit identity.
-    StopSystemdUnit(StopUnitResponse),
     ReconcileStorageScope(ReconcileStorageScopeResponse),
     /// Typed response carrying the activated generation (collision-free
     /// `generation_id` plus the u32 `generation_token`), the resolved
@@ -4307,9 +4174,13 @@ mod tests {
 
     #[test]
     fn user_manager_check_round_trips() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "CheckSystemdUserManager",
-            "payload": {
+        // U15: the typed CheckSystemdUserManager frame retired with the
+        // wire-variant sweep; the daemon's caller sends the typed unit
+        // request as the envelope carrier's payload, exactly as the
+        // process-systemd family's forward seam serves it.
+        let frame = encode_frame(&envelope_invoke_json(
+            "CheckSystemdUserManager",
+            serde_json::json!({
                 "vmId": "guest-vm",
                 "roleId": "audio",
                 "role": "audio",
@@ -4319,15 +4190,17 @@ mod tests {
                 "templateIdentity": vec![2_u8; 32],
                 "generation": 3,
                 "domain": "user"
-            }
-        }))
+            }),
+        ))
         .expect("encodes");
         let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        assert!(matches!(
-            decoded,
-            BrokerRequest::CheckSystemdUserManager(request)
-                if request.domain == UnitDomain::User
-        ));
+        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
+            panic!("expected EnvelopeInvoke");
+        };
+        assert_eq!(invoke.operation, "CheckSystemdUserManager");
+        let request: UnitRequest =
+            serde_json::from_value(invoke.payload).expect("typed unit payload decodes");
+        assert_eq!(request.domain, UnitDomain::User);
     }
 
     #[test]
