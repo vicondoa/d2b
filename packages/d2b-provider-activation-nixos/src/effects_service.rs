@@ -327,6 +327,7 @@ mod tests {
         let response = service
             .handle(ServiceInvocation {
                 zone: "test",
+                method: "inspect-activation",
                 invocation_id: "invocation-inspect-activation",
                 payload: &serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({}))
                     .expect("canonical payload"),
@@ -336,6 +337,7 @@ mod tests {
                 request_fds: &[],
                 response_fds: d2b_resource_types::MethodFdContract::NONE,
                 payload_schema: None,
+                chain_identities: &[],
             })
             .await
             .expect("the report serves");
