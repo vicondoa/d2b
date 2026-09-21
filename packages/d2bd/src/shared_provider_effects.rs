@@ -3276,6 +3276,16 @@ mod tests {
                 d2b_provider_system_core::MinijailPlatformGate::new(6, 9, true),
             ),
         );
+        // The plane tests build the Activation and interaction family facet
+        // sets from the scripted doubles, exactly as the production
+        // composition root builds them from the daemon's dispatch and
+        // sources.
+        let activation_facets = d2b_provider_activation_nixos::test_support::recording_facets(
+            d2b_provider_activation_nixos::test_support::RecordingBrokerDispatch::new(),
+        );
+        let interaction_facets = d2b_provider_wayland_policy::test_support::scripted_facets(
+            zone.clone(),
+        );
         (
             dir,
             crate::resource_plane_v3::ConstructionInputs {
@@ -3316,10 +3326,7 @@ mod tests {
                     effects.make_present();
                     effects
                 },
-                activation_effects: d2b_provider_activation_nixos::test_support::
-                    FakeActivationEffects::new(
-                        d2b_provider_activation_nixos::HostHandoffResult::Incomplete,
-                    ),
+                activation_facets: activation_facets.clone(),
                 credential_effects: {
                     let effects = d2b_provider_credential::test_support::FakeEffects::new(
                         d2b_provider_credential::test_support::log(),
@@ -3356,13 +3363,14 @@ mod tests {
                     effects.set_phase(d2b_provider_guest::GuestEffectPhase::Pending);
                     effects
                 },
-                interaction_effects:
-                    d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
+                interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
-                // U1/U14: the plane hosts the Process and Network families'
-                // declared effects services from the same facet sets their
-                // driver factories are built from, exactly as the production
-                // composition root does.
+                // U1/U14/U5/U12/U15: the plane hosts the Process, Network, Host,
+                // interaction, Activation, and systemd families' declared
+                // effects services from the same facet sets their driver
+                // factories are built from, exactly as the production
+                // composition root does (the systemd service carries no
+                // facet set, R2).
                 effect_service_factories: BTreeMap::from([
                     (
                         d2b_provider_process::PROCESS_EFFECTS_SERVICE.id,
@@ -3381,6 +3389,27 @@ mod tests {
                         Arc::new(d2b_provider_host::HostEffectsServiceFactory::new(
                             host_facets,
                         )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id,
+                        Arc::new(
+                            d2b_provider_wayland_policy::InteractionEffectsServiceFactory::new(
+                                interaction_facets,
+                            ),
+                        ) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_activation_nixos::ACTIVATION_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_activation_nixos::ActivationEffectsServiceFactory::new(
+                            activation_facets,
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_process_systemd::effects_service::PROCESS_SYSTEMD_EFFECTS_SERVICE
+                            .id,
+                        Arc::new(
+                            d2b_provider_process_systemd::effects_service::SystemdEffectsServiceFactory::new(),
+                        ) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
                 ]),
                 foundation: None,
