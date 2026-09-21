@@ -3276,13 +3276,68 @@ mod tests {
                 d2b_provider_system_core::MinijailPlatformGate::new(6, 9, true),
             ),
         );
-        // The plane tests build the Activation and interaction family facet
-        // sets from the scripted doubles, exactly as the production
-        // composition root builds them from the daemon's dispatch and
-        // sources.
+        let volume_facets = d2b_provider_volume::test_support::recording_facets(
+            d2b_provider_volume::test_support::RecordingRuntime::new(),
+        );
+        // The plane tests build the Activation family's facet set from the
+        // scripted broker dispatch double, exactly as the production
+        // composition root builds it from the daemon's dispatch.
         let activation_facets = d2b_provider_activation_nixos::test_support::recording_facets(
             d2b_provider_activation_nixos::test_support::RecordingBrokerDispatch::new(),
         );
+        let user_facets = d2b_provider_user::test_support::recording_facets(
+            d2b_provider_user::test_support::ScriptedProbe::new(),
+        );
+        // U10: the plane tests build the Guest family's facet set from the
+        // scripted facets double, exactly as the production composition
+        // root builds it from the daemon's runtime.
+        let guest_facets = d2b_provider_guest::test_support::ScriptedFacets::new().facet_set();
+        // U12 (device families): the plane tests build each device
+        // family's facet set from the recording runtime, exactly as
+        // the production composition root builds it from the
+        // daemon's runtime.
+        let usbip_facets = d2b_provider_device_usbip::test_support::recording_facets(
+            Arc::new(d2b_provider_device_usbip::test_support::RecordingRuntime::default()),
+        );
+        let security_key_facets = d2b_provider_device_security_key::test_support::recording_facets(
+            Arc::new(d2b_provider_device_security_key::test_support::RecordingRuntime::default()),
+        );
+        let device_facets = d2b_provider_device::test_support::recording_facets(
+            Arc::new(d2b_provider_device::test_support::RecordingRuntime::default()),
+        );
+        // U6: the plane tests build the VolumeBinding and Endpoint families'
+        // facet sets from the scripted doubles, exactly as the production
+        // composition root builds them from the daemon's registry, plane
+        // table, and target directory.
+        let binding_facets = {
+            let effects = d2b_provider_volume_binding::test_support::FakeServingEffects::new();
+            // The old plane fake reported the serving socket present
+            // (socket_ready true); the shared double starts absent.
+            effects.make_ready();
+            effects.facet_set()
+        };
+        let endpoint_facets = {
+            let effects = d2b_provider_endpoint::test_support::FakeSocketEffects::new();
+            // The old plane fake reported the socket present
+            // (socket_present true); the shared double starts absent.
+            effects.make_present();
+            effects.facet_set()
+        };
+        let credential_facets = {
+            let runtime = d2b_provider_credential::test_support::RecordingRuntime::new(
+                d2b_provider_credential::test_support::log(),
+            );
+            // The old plane fake answered no provider/execution facts, no
+            // live agent, and no bound session; the shared double's defaults
+            // differ, so script them back.
+            runtime.set_facts(None);
+            runtime.set_agent_ready(false);
+            runtime.set_session(None);
+            d2b_provider_credential::test_support::recording_facets(runtime)
+        };
+        // U12: the plane tests build the interaction family's facet set from
+        // the scripted sources, exactly as the production composition root
+        // builds it from the daemon's.
         let interaction_facets = d2b_provider_wayland_policy::test_support::scripted_facets(
             zone.clone(),
         );
@@ -3310,67 +3365,33 @@ mod tests {
                 provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
                 process_facets: process_facets.clone(),
                 host_facets: host_facets.clone(),
-                volume_effects: d2b_provider_volume::test_support::FakeLayoutEffects::new(),
-                binding_effects: {
-                    let effects =
-                        d2b_provider_volume_binding::test_support::FakeServingEffects::new();
-                    // The old plane fake reported the serving socket present
-                    // (socket_ready true); the shared double starts absent.
-                    effects.make_ready();
-                    effects
-                },
-                endpoint_effects: {
-                    let effects = d2b_provider_endpoint::test_support::FakeSocketEffects::new();
-                    // The old plane fake reported the socket present
-                    // (socket_present true); the shared double starts absent.
-                    effects.make_present();
-                    effects
-                },
+                // U7: the plane tests build the Volume family's facet set
+                // from the recording runtime, exactly as the production
+                // composition root builds it from the daemon's runtime.
+                volume_facets: volume_facets.clone(),
+                binding_facets: binding_facets.clone(),
+                endpoint_facets: endpoint_facets.clone(),
                 activation_facets: activation_facets.clone(),
-                credential_effects: {
-                    let effects = d2b_provider_credential::test_support::FakeEffects::new(
-                        d2b_provider_credential::test_support::log(),
-                    );
-                    // The old plane fake answered no provider/execution
-                    // facts, no live agent, and no bound session; the shared
-                    // double's defaults differ, so script them back.
-                    effects.set_facts(None);
-                    effects.set_agent_ready(false);
-                    effects.set_session(None);
-                    effects
-                },
-                shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects {
-                    usbip: Arc::new(
-                        d2b_provider_device_usbip::test_support::RecordingEffects::default(),
-                    ),
-                    security_key: Arc::new(
-                        d2b_provider_device_security_key::test_support::RecordingEffects::default(),
-                    ),
-                    device: Arc::new(
-                        d2b_provider_device::test_support::RecordingEffects::default(),
-                    ),
-                },
+                usbip_facets: usbip_facets.clone(),
+                security_key_facets: security_key_facets.clone(),
+                device_facets: device_facets.clone(),
+                // U8: the plane tests build the Credential family's facet set
+                // from the recording runtime, exactly as the production
+                // composition root builds it from the daemon's runtime.
+                credential_facets: credential_facets.clone(),
                 // U14: the plane tests build the Network family's facet set
                 // from the recording runtime, exactly as the production
                 // composition root builds it from the daemon's runtime.
                 network_facets: network_facets.clone(),
-                guest_effects: {
-                    let effects = d2b_provider_guest::test_support::ScriptedEffects::new();
-                    // The old plane fake reported Pending (the plane tests
-                    // only need the Guest driver registered, never a Guest
-                    // reaching Ready); the shared double starts Ready, so
-                    // script it back.
-                    effects.set_phase(d2b_provider_guest::GuestEffectPhase::Pending);
-                    effects
-                },
+                user_facets: user_facets.clone(),
+                guest_facets: guest_facets.clone(),
                 interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
-                // U1/U14/U5/U12/U15: the plane hosts the Process, Network, Host,
-                // interaction, Activation, and systemd families' declared
-                // effects services from the same facet sets their driver
-                // factories are built from, exactly as the production
-                // composition root does (the systemd service carries no
-                // facet set, R2).
+                // U1/U14/U5/U7/U8/U6/U10/U12/U15: the plane hosts every converted
+                // family's declared effects services from the same facet
+                // sets their driver factories are built from, exactly as the
+                // production composition root does (the systemd service
+                // carries no facet set, R2).
                 effect_service_factories: BTreeMap::from([
                     (
                         d2b_provider_process::PROCESS_EFFECTS_SERVICE.id,
@@ -3391,6 +3412,12 @@ mod tests {
                         )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
                     (
+                        d2b_provider_volume::VOLUME_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_volume::VolumeEffectsServiceFactory::new(
+                            volume_facets.clone(),
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
                         d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id,
                         Arc::new(
                             d2b_provider_wayland_policy::InteractionEffectsServiceFactory::new(
@@ -3404,12 +3431,66 @@ mod tests {
                             activation_facets,
                         )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
+                    // U15: the family's service carries no facet set (R2),
+                    // so the plane tests host its factory from crate-owned
+                    // constants alone, exactly as the production composition
+                    // root does.
                     (
                         d2b_provider_process_systemd::effects_service::PROCESS_SYSTEMD_EFFECTS_SERVICE
                             .id,
                         Arc::new(
                             d2b_provider_process_systemd::effects_service::SystemdEffectsServiceFactory::new(),
                         ) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_user::USER_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_user::UserEffectsServiceFactory::new(
+                            user_facets.clone(),
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_guest::GUEST_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_guest::GuestEffectsServiceFactory::new(
+                            guest_facets,
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_device_usbip::USBIP_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_device_usbip::effects_service::
+                            UsbipEffectsServiceFactory::new(
+                                usbip_facets,
+                            )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_device_security_key::SECURITY_KEY_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_device_security_key::effects_service::
+                            SecurityKeyEffectsServiceFactory::new(
+                                security_key_facets,
+                            )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_device::DEVICE_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_device::effects_service::
+                            DeviceEffectsServiceFactory::new(device_facets))
+                            as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_volume_binding::BINDING_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_volume_binding::BindingEffectsServiceFactory::new(
+                            binding_facets.clone(),
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_endpoint::ENDPOINT_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_endpoint::EndpointEffectsServiceFactory::new(
+                            endpoint_facets.clone(),
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_credential::CREDENTIAL_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_credential::CredentialEffectsServiceFactory::new(
+                            credential_facets.clone(),
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
                 ]),
                 foundation: None,
