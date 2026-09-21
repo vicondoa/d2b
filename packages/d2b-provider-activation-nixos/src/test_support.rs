@@ -5,8 +5,10 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_broker::broker_wire::{BrokerRequest, BrokerResponse};
-use d2b_contracts_broker::host_generation::HostGenerationHandoffIntent;
+use d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse;
+use d2b_contracts_broker::host_generation::{
+    ApplyHostGenerationHandoff, HostGenerationHandoffIntent,
+};
 use d2b_contracts_resource::v3::ResourceRef;
 
 use crate::driver::{ActivationDriverEffects, HostHandoffResult};
@@ -55,11 +57,13 @@ impl ActivationDriverEffects for FakeActivationEffects {
 
 // ── RecordingBrokerDispatch ─────────────────────────────────────────────────
 
-/// Scripted broker dispatch double: records each dispatched request and
+/// Scripted handoff dispatch double: records each dispatched handoff and
 /// returns the next scripted response, first scripted first.
 pub struct RecordingBrokerDispatch {
-    requests: parking_lot::Mutex<Vec<BrokerRequest>>,
-    results: parking_lot::Mutex<std::collections::VecDeque<Result<BrokerResponse, String>>>,
+    requests: parking_lot::Mutex<Vec<ApplyHostGenerationHandoff>>,
+    results: parking_lot::Mutex<
+        std::collections::VecDeque<Result<ApplyHostGenerationHandoffResponse, String>>,
+    >,
 }
 
 impl RecordingBrokerDispatch {
@@ -76,21 +80,26 @@ impl RecordingBrokerDispatch {
     /// Create a double whose dispatches return the given scripted responses
     /// in order (the first scripted response answers the first dispatch);
     /// once the queue is exhausted, a dispatch fails.
-    pub fn with_responses(responses: Vec<Result<BrokerResponse, String>>) -> Arc<Self> {
+    pub fn with_responses(
+        responses: Vec<Result<ApplyHostGenerationHandoffResponse, String>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             requests: parking_lot::Mutex::new(Vec::new()),
             results: parking_lot::Mutex::new(responses.into()),
         })
     }
 
-    /// The broker requests dispatched so far, in call order.
-    pub fn requests(&self) -> Vec<BrokerRequest> {
+    /// The host-generation handoffs dispatched so far, in call order.
+    pub fn requests(&self) -> Vec<ApplyHostGenerationHandoff> {
         self.requests.lock().clone()
     }
 }
 
 impl ActivationBrokerDispatch for RecordingBrokerDispatch {
-    fn dispatch(&self, request: BrokerRequest) -> Result<BrokerResponse, String> {
+    fn dispatch_handoff(
+        &self,
+        request: ApplyHostGenerationHandoff,
+    ) -> Result<ApplyHostGenerationHandoffResponse, String> {
         self.requests.lock().push(request);
         self.results
             .lock()

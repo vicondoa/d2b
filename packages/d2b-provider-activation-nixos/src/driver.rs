@@ -957,9 +957,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use d2b_contracts_broker::broker_wire::{
-        ApplyHostGenerationHandoffResponse, BrokerRequest, BrokerResponse,
-    };
+    use d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse;
     use d2b_contracts_broker::host_generation::{
         HandoffState, SourceGenerationCompatibilityFloorV1, target_fingerprint,
     };
@@ -1344,14 +1342,14 @@ mod tests {
     #[tokio::test]
     async fn the_factory_wires_the_facets_into_the_created_driver_end_to_end() {
         let broker = crate::test_support::RecordingBrokerDispatch::with_responses(vec![Ok(
-            BrokerResponse::ApplyHostGenerationHandoff(ApplyHostGenerationHandoffResponse {
+            ApplyHostGenerationHandoffResponse {
                 target: ResourceRef::parse("Host/host-system").expect("ref"),
                 state: HandoffState::Completed,
                 source_generation: 1,
                 target_generation: 2,
                 source_remains_usable: false,
                 summary: "scripted".to_owned(),
-            }),
+            },
         )]);
         let factory = ActivationDriverFactory::with_verifier(
             ActivationDriverArgs {
@@ -1392,14 +1390,10 @@ mod tests {
             1,
             "the factory-created driver dispatches through the facets"
         );
-        match &requests[0] {
-            BrokerRequest::ApplyHostGenerationHandoff(handoff) => {
-                assert_eq!(handoff.target.to_canonical_string(), "Host/host-system");
-                assert_eq!(handoff.intent.source_generation, 1);
-                assert_eq!(handoff.intent.target_generation, 2);
-            }
-            other => panic!("wrong request: {other:?}"),
-        }
+        let handoff = &requests[0];
+        assert_eq!(handoff.target.to_canonical_string(), "Host/host-system");
+        assert_eq!(handoff.intent.source_generation, 1);
+        assert_eq!(handoff.intent.target_generation, 2);
         let projected = status(&f.ctx);
         assert_eq!(projected.phase(), ResourcePhase::Ready);
         assert_eq!(projected.detail(), ActivationDetail::Applied);

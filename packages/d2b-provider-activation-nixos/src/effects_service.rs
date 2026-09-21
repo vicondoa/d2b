@@ -26,9 +26,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use d2b_contracts_broker::broker_wire::{
-    ApplyHostGenerationHandoffResponse, BrokerRequest, BrokerResponse,
-};
+use d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse;
 use d2b_contracts_broker::host_generation::{
     ApplyHostGenerationHandoff, HandoffCallerRole, HandoffState, HostGenerationHandoffIntent,
 };
@@ -131,16 +129,14 @@ impl ActivationDriverEffects for ActivationEffectsService {
         target: ResourceRef,
         intent: HostGenerationHandoffIntent,
     ) -> HostHandoffResult {
-        let request = BrokerRequest::ApplyHostGenerationHandoff(ApplyHostGenerationHandoff {
+        let request = ApplyHostGenerationHandoff {
             caller_role: HandoffCallerRole::Lifecycle,
             target,
             intent,
-        });
-        match self.broker.dispatch(request) {
-            Ok(BrokerResponse::ApplyHostGenerationHandoff(response)) => {
-                host_handoff_result(&response)
-            }
-            Ok(BrokerResponse::Error(_)) | Ok(_) | Err(_) => HostHandoffResult::Incomplete,
+        };
+        match self.broker.dispatch_handoff(request) {
+            Ok(response) => host_handoff_result(&response),
+            Err(_) => HostHandoffResult::Incomplete,
         }
     }
 }
@@ -197,7 +193,6 @@ impl EffectServiceFactory for ActivationEffectsServiceFactory {
 mod tests {
     use super::*;
 
-    use d2b_contracts_broker::broker_wire::BrokerErrorResponse;
     use d2b_contracts_broker::host_generation::SourceGenerationCompatibilityFloorV1;
     use d2b_contracts_resource::v3::{ActivationMode, ArtifactId, CanonicalJsonObject};
 
@@ -218,25 +213,15 @@ mod tests {
         state: HandoffState,
         source_generation: u64,
         target_generation: u64,
-    ) -> BrokerResponse {
-        BrokerResponse::ApplyHostGenerationHandoff(ApplyHostGenerationHandoffResponse {
+    ) -> ApplyHostGenerationHandoffResponse {
+        ApplyHostGenerationHandoffResponse {
             target: ResourceRef::parse("Host/host-system").expect("ref"),
             state,
             source_generation,
             target_generation,
             source_remains_usable: false,
             summary: "scripted".to_owned(),
-        })
-    }
-
-    fn error_response() -> BrokerResponse {
-        BrokerResponse::Error(BrokerErrorResponse {
-            kind: "scripted".to_owned(),
-            operation: "ApplyHostGenerationHandoff".to_owned(),
-            target_wave: None,
-            message: "scripted refusal".to_owned(),
-            action: "none".to_owned(),
-        })
+        }
     }
 
     #[tokio::test]
@@ -300,7 +285,6 @@ mod tests {
     async fn a_non_terminal_or_failed_dispatch_projects_incomplete() {
         for scripted in [
             Ok(handoff_response(HandoffState::Recorded, 0, 0)),
-            Ok(error_response()),
             Err("dispatch-failed".to_owned()),
         ] {
             let broker = RecordingBrokerDispatch::with_responses(vec![scripted]);
@@ -326,14 +310,10 @@ mod tests {
             .await;
         let requests = broker.requests();
         assert_eq!(requests.len(), 1);
-        match &requests[0] {
-            BrokerRequest::ApplyHostGenerationHandoff(handoff) => {
-                assert_eq!(handoff.caller_role, HandoffCallerRole::Lifecycle);
-                assert_eq!(handoff.target, target);
-                assert_eq!(handoff.intent, intent);
-            }
-            other => panic!("wrong request: {other:?}"),
-        }
+        let handoff = &requests[0];
+        assert_eq!(handoff.caller_role, HandoffCallerRole::Lifecycle);
+        assert_eq!(handoff.target, target);
+        assert_eq!(handoff.intent, intent);
     }
 
     /// The hosted surface serves the family's committed surface: the plane

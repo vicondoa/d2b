@@ -2148,18 +2148,23 @@ struct ProductionActivationBrokerDispatch {
 impl d2b_provider_activation_nixos::ActivationBrokerDispatch
     for ProductionActivationBrokerDispatch
 {
-    fn dispatch(
+    fn dispatch_handoff(
         &self,
-        request: BrokerRequest,
-    ) -> Result<BrokerResponse, String> {
-        crate::dispatch_broker_request_as(
+        request: d2b_contracts_broker::host_generation::ApplyHostGenerationHandoff,
+    ) -> Result<d2b_contracts_broker::broker_wire::ApplyHostGenerationHandoffResponse, String> {
+        match crate::dispatch_broker_request_as(
             &self.state,
-            request,
+            BrokerRequest::ApplyHostGenerationHandoff(request),
             BrokerCallerRole::AdminUid {
                 uid: self.state.daemon_uid,
             },
-        )
-        .map_err(|error| format!("{}: {}", error.kind(), error.message()))
+        ) {
+            Ok(BrokerResponse::ApplyHostGenerationHandoff(response)) => Ok(response),
+            Ok(BrokerResponse::Error(_)) | Ok(_) => {
+                Err("activation-handoff-unexpected-response".to_owned())
+            }
+            Err(error) => Err(format!("{}: {}", error.kind(), error.message())),
+        }
     }
 }
 
@@ -3395,6 +3400,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             d2b_provider_host::test_support::RecordingMinijailGate::new(
                 MinijailPlatformGate::new(6, 9, true),
             ),
+        );
         // The plane tests build the Activation family's facet set from the
         // scripted broker dispatch double, exactly as the production
         // composition root builds it from the daemon's dispatch.
@@ -3476,7 +3482,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 },
                 interaction_effects: d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
                 trusted_context_publication: None,
-// U1/U14/U5: the plane hosts the Process, Network, Host,
+                // U1/U14/U5: the plane hosts the Process, Network, Host,
                 // and Activation families' declared effects services from
                 // the same facet sets their driver factories are built
                 // from, exactly as the production composition root does.
@@ -3495,6 +3501,9 @@ use d2b_provider_system_core::MinijailPlatformGate;
                     (
                         HOST_EFFECTS_SERVICE.id,
                         Arc::new(HostEffectsServiceFactory::new(host_facets))
+                            as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
                         ACTIVATION_EFFECTS_SERVICE.id,
                         Arc::new(ActivationEffectsServiceFactory::new(activation_facets))
                             as Arc<dyn EffectServiceFactory>,
@@ -3947,6 +3956,9 @@ use d2b_provider_system_core::MinijailPlatformGate;
         assert_eq!(
             after_fields, before_fields,
             "the adopted generation answers the same bounded observations (the volatile process count normalized out)"
+        );
+    }
+
     /// The composition root hosts the Activation family's declared effects
     /// service from the family's own factory over the plane's facet set, and
     /// the hosted service answers `inspect-activation` through the real

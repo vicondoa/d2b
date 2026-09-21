@@ -18,6 +18,10 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &["activation.d2bus.org/effects"],
     },
     ProviderRegistration {
+        provider_ref: "host",
+        services: &["host.d2bus.org/effects"],
+    },
+    ProviderRegistration {
         provider_ref: "network-local",
         services: &["network.d2bus.org/effects"],
     },
