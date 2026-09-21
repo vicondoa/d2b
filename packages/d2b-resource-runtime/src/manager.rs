@@ -2906,8 +2906,8 @@ mod tests {
     }
 
     /// Spec section 32: the delete path cancels the pending requeue timer -
-    /// after cleanup, no further reconcile is ever delivered.
-    #[tokio::test]
+    /// after cleanup, no further reconcile pass runs.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete_cancels_pending_requeue_timer() {
         let h = harness_with(&["Test"], Duration::from_millis(300)).await;
@@ -2930,20 +2930,31 @@ mod tests {
         // Reconcile would be processed by the live deleting actor instead of
         // being dropped at stop.
         shared.delete_terminal_failure.store(true, AtomicOrdering::SeqCst);
-        h.client.remove(subject(), k.clone()).await.expect("remove");
+        // Drive the delete through the actor's own `Delete` message. The
+        // whole test runs on the paused clock, whose auto-advance fires
+        // pending timers whenever the runtime is idle; the manager's `remove`
+        // RPC awaits a store write, and that idle window would let the
+        // requeue fire - and re-arm - before the delete cancels it. A direct
+        // send keeps the actor busy until the timer is cancelled, so the
+        // 300ms requeue armed during setup (only tens of milliseconds of
+        // virtual time ago) cannot fire pre-cancel.
+        handle.actor.send_message(ResourceMsg::Delete).expect("delete");
         until(|| shared.delete_calls.load(AtomicOrdering::SeqCst) == 1).await;
 
-        // Freeze the clock and pass well past the 300ms requeue deadline.
-        // Whether the stale timer (if the delete failed to cancel it) fires
-        // before the freeze or during the frozen advance, its Reconcile is
-        // delivered to the live deleting actor and the settled state below
-        // is the deterministic signal - no wall-clock window is read.
-        tokio::time::pause();
+        // Passing well past the requeue deadline is a deterministic frozen
+        // advance: a stale timer (if the delete failed to cancel it) fires
+        // during it and its Reconcile is delivered to the live deleting
+        // actor - no wall-clock window is read.
         pass_virtual(Duration::from_millis(700)).await;
+        // The delete path never runs a reconcile pass. This asserts the
+        // deleting-actor contract, not timer cancellation: while the actor
+        // is deleting, every Reconcile is answered as a deletion retry, so
+        // this counter cannot move whether or not the timer was cancelled -
+        // the exact delete-count assertion below is the stale-timer signal.
         assert_eq!(
             shared.reconcile_calls.load(AtomicOrdering::SeqCst),
             1,
-            "the cancelled requeue timer must never deliver a reconcile"
+            "the delete path never runs a reconcile pass"
         );
         assert_eq!(
             shared.delete_calls.load(AtomicOrdering::SeqCst),
@@ -2951,19 +2962,17 @@ mod tests {
             "a stale requeue must not re-drive the delete while it is in flight"
         );
 
-        // Let the delete complete: the next pass succeeds and the row goes.
-        // The send may miss if the manager respawned the actor for the
-        // durable deleting row (the termination event can race ahead of
-        // DeletionComplete); the respawned actor's start pass runs the same
-        // idempotent delete, so the row goes either way.
+        // Let the delete complete through the manager: `remove` commits the
+        // durable deleting mark and re-sends `Delete`, the live deleting
+        // actor's pass succeeds, and the row goes. The mark matters because
+        // the actor's stop races DeletionComplete in the manager mailbox
+        // (supervision events are delivered first): a respawn from the
+        // marked row resumes cleanup, never a reconcile. The requeue is
+        // already cancelled, so this RPC's store-await idle window has no
+        // timer to fire.
         shared.delete_terminal_failure.store(false, AtomicOrdering::SeqCst);
-        let _ = handle.actor.send_message(ResourceMsg::Reconcile);
+        h.client.remove(subject(), k.clone()).await.expect("remove");
         wait_row_gone(&h.client, &k).await;
-        assert_eq!(
-            shared.reconcile_calls.load(AtomicOrdering::SeqCst),
-            1,
-            "the cancelled requeue never delivers a reconcile, only the delete pass"
-        );
     }
 
     /// R13/spec section 32: a long effect that reports a *retryable failure*

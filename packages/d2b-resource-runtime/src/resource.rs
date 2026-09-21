@@ -1562,12 +1562,13 @@ pub(crate) mod test_support {
     /// fires - and the mailbox work those timers deliver - settle before
     /// returning.
     ///
-    /// Only valid under `#[tokio::test(start_paused = true)]`: with the clock
-    /// frozen, awaiting `tokio::time::sleep` is a deterministic virtual
-    /// advance. Auto-advance steps the frozen clock to each pending deadline
-    /// and processes the fired timers' downstream work while the runtime is
-    /// idle, so the call never reads wall-clock time and cannot stretch under
-    /// load.
+    /// Only valid while the clock is paused - under
+    /// `#[tokio::test(start_paused = true)]` or after a mid-test
+    /// `tokio::time::pause()`: with the clock frozen, awaiting
+    /// `tokio::time::sleep` is a deterministic virtual advance. Auto-advance
+    /// steps the frozen clock to each pending deadline and processes the
+    /// fired timers' downstream work while the runtime is idle, so the call
+    /// never reads wall-clock time and cannot stretch under load.
     pub(crate) async fn pass_virtual(duration: Duration) {
         tokio::time::sleep(duration).await;
     }
