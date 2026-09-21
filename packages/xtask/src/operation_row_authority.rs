@@ -9,6 +9,11 @@
 //!   must be declared, the declared family must be one of the crate's
 //!   registered resource types (lowercased), and the declared provider must
 //!   be the crate itself - a disagreement fails naming both;
+//! - owns the committed per-crate authority bound for the declared service
+//!   facets a method carries (R12/U4): a method's required privileges (its
+//!   authz subject/scope), its state cells, and its descriptor-leg type and
+//!   rights ceiling are validated against [`COMMITTED_SERVICE_FACET_SCOPES`],
+//!   so widening one fails naming the widened fact;
 //! - owns the drift gate over the generated catalog artifacts (the
 //!   committed rows document and its five derived views): a hand edit fails
 //!   and regeneration is idempotent.
@@ -43,6 +48,13 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
             errors.join("\n- ")
         ));
     }
+    let bound_errors = service_facet_bound_errors(repo_root)?;
+    if !bound_errors.is_empty() {
+        return Err(format!(
+            "operation-row-authority authority-bound violations:\n- {}",
+            bound_errors.join("\n- ")
+        ));
+    }
     let artifacts = gen_broker_operations::render_artifacts(repo_root)
         .map_err(|error| format!("operation-row generation failed: {error}"))?;
     for (relative, rendered) in &artifacts {
@@ -65,6 +77,13 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
         return Err(format!(
             "refusing to regenerate the broker operation catalog while the parity gate fails:\n- {}",
             errors.join("\n- ")
+        ));
+    }
+    let bound_errors = service_facet_bound_errors(repo_root)?;
+    if !bound_errors.is_empty() {
+        return Err(format!(
+            "refusing to regenerate the broker operation catalog while the authority bound fails:\n- {}",
+            bound_errors.join("\n- ")
         ));
     }
     let artifacts = gen_broker_operations::render_artifacts(repo_root)
@@ -187,6 +206,106 @@ fn parity_errors(repo_root: &Path) -> Result<Vec<String>, String> {
             }
         }
     }
+    Ok(errors)
+}
+
+/// The committed per-crate scope for the declared service facets one method
+/// carries (R12/U4).
+struct CommittedServiceFacetScope {
+    /// The required privileges a declared method may carry: the authz
+    /// subject/scope pairs, `"subject/scope"`.
+    privileges: &'static [&'static str],
+    /// The state cells a declared method may live on.
+    state_cells: &'static [&'static str],
+    /// The descriptor-leg types a declared method may attach.
+    fd_kinds: &'static [&'static str],
+    /// The descriptor-leg rights ceiling (max descriptors) a declared method
+    /// may declare.
+    max_fds: u32,
+}
+
+/// The committed per-crate service-facet scopes.
+///
+/// The process family pilot's methods declare the `runner-pidfd-registry`
+/// state cell, `Any` descriptor carriage at three fds, and the nine
+/// subject/scope privilege pairs below; a declaration widening any of them
+/// fails as a gated change rather than regenerating silently. A later lane
+/// that proves a facet widens extends this table in the same change.
+const COMMITTED_SERVICE_FACET_SCOPES: &[(&str, CommittedServiceFacetScope)] = &[(
+    "d2b-provider-process",
+    CommittedServiceFacetScope {
+        privileges: &[
+            "pidfd/per-VM/role",
+            "pidfd/accepted Unix socket",
+            "runner/per-VM/role",
+            "runner/global",
+            "fs/global/per-VM",
+            "cgroup/per-VM/role leaf",
+            "runner/per-VM",
+            "vm-runner/per-VM/role",
+            "process/per-type",
+        ],
+        state_cells: &["runner-pidfd-registry"],
+        fd_kinds: &["Any"],
+        max_fds: 3,
+    },
+)];
+
+/// The service-facet authority-bound violations: a declared method's
+/// privileges, state cells, or descriptor-leg type/rights beyond its crate's
+/// committed scope, naming the widened fact.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn service_facet_bound_errors(repo_root: &Path) -> Result<Vec<String>, String> {
+    let declarations = gen_broker_operations::load_declarations(repo_root)
+        .map_err(|error| format!("load operation declarations: {error}"))?;
+    let mut errors = Vec::new();
+    for (scope_crate, scope) in COMMITTED_SERVICE_FACET_SCOPES {
+        for (crate_name, rows) in &declarations {
+            if crate_name != scope_crate {
+                continue;
+            }
+            for row in rows {
+                if let Some(state_cell) = &row.state_cell {
+                    let cell = state_cell
+                        .cell()
+                        .expect("the row validator pairs cell and durability");
+                    if !scope.state_cells.contains(&cell) {
+                        errors.push(format!(
+                            "authority-bound: crate {crate_name} method {} widens state cells with {cell} beyond the committed scope",
+                            row.operation
+                        ));
+                    }
+                }
+                if let Some(fds) = &row.fds {
+                    if fds.max_fds() > scope.max_fds {
+                        errors.push(format!(
+                            "authority-bound: crate {crate_name} method {} raises descriptor-leg rights to {} fds beyond the committed ceiling of {}",
+                            row.operation,
+                            fds.max_fds(),
+                            scope.max_fds
+                        ));
+                    }
+                    if let Some(kind) = fds.fd_kind()
+                        && !scope.fd_kinds.contains(&kind)
+                    {
+                        errors.push(format!(
+                            "authority-bound: crate {crate_name} method {} widens descriptor-leg types with {kind} beyond the committed scope",
+                            row.operation
+                        ));
+                    }
+                }
+                let privilege = row.authz.privilege();
+                if !scope.privileges.contains(&privilege.as_str()) {
+                    errors.push(format!(
+                        "authority-bound: crate {crate_name} method {} requires privilege {privilege} beyond the committed scope",
+                        row.operation
+                    ));
+                }
+            }
+        }
+    }
+    errors.sort();
+    errors.dedup();
     Ok(errors)
 }
 
@@ -535,6 +654,140 @@ mod tests {
         assert!(
             error.contains("drift"),
             "expected a drift violation naming the gate: {error}"
+        );
+    }
+
+    /// A fixture process declaration row within the committed service-facet
+    /// scope passes the bound, and a row widening the state cell, the
+    /// descriptor-leg type, the descriptor-leg rights, or the required
+    /// privilege fails naming the widened fact.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn the_service_facet_bound_fails_on_each_widened_method_facet() {
+        let fixture = Fixture::new("service-facet-bound");
+        let within_scope = "    {\n\
+             \x20     \"operation\": \"WithinScope\",\n\
+             \x20     \"family\": \"process\",\n\
+             \x20     \"declaringProvider\": \"d2b-provider-process\",\n\
+             \x20     \"service\": \"d2b.process\",\n\
+             \x20     \"method\": \"within-scope\",\n\
+             \x20     \"profiles\": [\"host\"],\n\
+             \x20     \"w3\": false,\n\
+             \x20     \"capabilities\": false,\n\
+             \x20     \"disposition\": \"promoted-live\",\n\
+             \x20     \"dispositionTarget\": \"live in production broker\",\n\
+             \x20     \"authz\": {\n\
+             \x20       \"subject\": \"pidfd\",\n\
+             \x20       \"scope\": \"per-VM/role\",\n\
+             \x20       \"allowedGroups\": [\"d2bd\"],\n\
+             \x20       \"destructive\": false,\n\
+             \x20       \"secretAccess\": \"None\",\n\
+             \x20       \"brokerRequired\": \"Yes\",\n\
+             \x20       \"auditMode\": \"Yes\"\n\
+             \x20     },\n\
+             \x20     \"audit\": {\n\
+             \x20       \"fields\": [\"WithinScope\"],\n\
+             \x20       \"required\": true,\n\
+             \x20       \"mode\": \"yes\"\n\
+             \x20     },\n\
+             \x20     \"payload\": {\n\
+             \x20       \"provenance\": \"wire\",\n\
+             \x20       \"schema\": null\n\
+             \x20     },\n\
+             \x20     \"deadline\": {\n\
+             \x20       \"tier\": \"standard\"\n\
+             \x20     },\n\
+             \x20     \"stateCell\": {\n\
+             \x20       \"cell\": \"runner-pidfd-registry\",\n\
+             \x20       \"durability\": \"ephemeral\"\n\
+             \x20     },\n\
+             \x20     \"fds\": {\n\
+             \x20       \"maxFds\": 3,\n\
+             \x20       \"fdKind\": \"Any\"\n\
+             \x20     }\n\
+             \x20   }";
+        let widened = "    {\n\
+             \x20     \"operation\": \"WidenedFacets\",\n\
+             \x20     \"family\": \"process\",\n\
+             \x20     \"declaringProvider\": \"d2b-provider-process\",\n\
+             \x20     \"service\": \"d2b.process\",\n\
+             \x20     \"method\": \"widened-facets\",\n\
+             \x20     \"profiles\": [\"host\"],\n\
+             \x20     \"w3\": false,\n\
+             \x20     \"capabilities\": false,\n\
+             \x20     \"disposition\": \"promoted-live\",\n\
+             \x20     \"dispositionTarget\": \"live in production broker\",\n\
+             \x20     \"authz\": {\n\
+             \x20       \"subject\": \"root\",\n\
+             \x20       \"scope\": \"global\",\n\
+             \x20       \"allowedGroups\": [\"d2bd\"],\n\
+             \x20       \"destructive\": false,\n\
+             \x20       \"secretAccess\": \"None\",\n\
+             \x20       \"brokerRequired\": \"Yes\",\n\
+             \x20       \"auditMode\": \"Yes\"\n\
+             \x20     },\n\
+             \x20     \"audit\": {\n\
+             \x20       \"fields\": [\"WidenedFacets\"],\n\
+             \x20       \"required\": true,\n\
+             \x20       \"mode\": \"yes\"\n\
+             \x20     },\n\
+             \x20     \"payload\": {\n\
+             \x20       \"provenance\": \"wire\",\n\
+             \x20       \"schema\": null\n\
+             \x20     },\n\
+             \x20     \"deadline\": {\n\
+             \x20       \"tier\": \"standard\"\n\
+             \x20     },\n\
+             \x20     \"stateCell\": {\n\
+             \x20       \"cell\": \"other-cell\",\n\
+             \x20       \"durability\": \"ephemeral\"\n\
+             \x20     },\n\
+             \x20     \"fds\": {\n\
+             \x20       \"maxFds\": 5,\n\
+             \x20       \"fdKind\": \"Pidfd\"\n\
+             \x20     }\n\
+             \x20   }";
+        fixture.write(
+            "packages/d2b-provider-process/operations.json",
+            &format!(
+                "{{\n  \"crate\": \"d2b-provider-process\",\n  \"operations\": [\n{within_scope},\n{widened}\n  ]\n}}\n"
+            ),
+        );
+
+        let errors = service_facet_bound_errors(&fixture.root).expect("bound loads");
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("state cells") && error.contains("other-cell")
+                    && error.contains("d2b-provider-process") && error.contains("WidenedFacets")
+            }),
+            "expected the widened state cell to fail naming the fact: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("descriptor-leg types") && error.contains("Pidfd")
+                    && error.contains("d2b-provider-process") && error.contains("WidenedFacets")
+            }),
+            "expected the widened descriptor-leg type to fail naming the fact: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("descriptor-leg rights") && error.contains("5")
+                    && error.contains("d2b-provider-process") && error.contains("WidenedFacets")
+            }),
+            "expected the raised descriptor-leg rights to fail naming the fact: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("privilege") && error.contains("root/global")
+                    && error.contains("d2b-provider-process") && error.contains("WidenedFacets")
+            }),
+            "expected the widened privilege to fail naming the fact: {errors:?}"
+        );
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("WithinScope")),
+            "a row within the committed scope passes the bound: {errors:?}"
         );
     }
 }

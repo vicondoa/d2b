@@ -476,7 +476,9 @@ filegroup(
     srcs = [
         "nixos-modules/generated/provider-projections.nix",
         "nixos-modules/generated/resource-inventories.nix",
+        "nixos-modules/generated/process-role-providers.nix",
         "nixos-modules/host-users.nix",
+        "//packages/d2b-core:generated_process_roles",
     ],
     visibility = ["//visibility:public"],
 )

@@ -18,6 +18,9 @@ exports_files(
         # The operation-row declaration the broker-operation generator and
         # its drift target read (U2/KTD3).
         "operations.json",
+        # The provider-facts declaration the resource-type authority and the
+        # Nix inventory drift target read (U4).
+        "resource-types.json",
     ],
     visibility = ["//visibility:public"],
 )

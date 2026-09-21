@@ -3,22 +3,273 @@
   "types": [
     {
       "resourceType": "Process",
-      "allowedSources": ["builtin", "startup"],
-      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
-      "execution": ["host", "guest"],
+      "allowedSources": [
+        "builtin",
+        "startup"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update-spec",
+        "update-status",
+        "update-metadata",
+        "update-finalizers",
+        "delete"
+      ],
+      "execution": [
+        "host",
+        "guest"
+      ],
       "exportable": false,
-      "reads": ["VolumeBinding", "Volume", "Device", "Guest", "Provider"]
+      "reads": [
+        "VolumeBinding",
+        "Volume",
+        "Device",
+        "Guest",
+        "Provider"
+      ]
     },
     {
       "resourceType": "EphemeralProcess",
-      "allowedSources": ["builtin", "startup"],
-      "verbs": ["get", "list", "watch", "create", "update-spec", "update-status", "update-metadata", "update-finalizers", "delete"],
-      "execution": ["host", "guest"],
+      "allowedSources": [
+        "builtin",
+        "startup"
+      ],
+      "verbs": [
+        "get",
+        "list",
+        "watch",
+        "create",
+        "update-spec",
+        "update-status",
+        "update-metadata",
+        "update-finalizers",
+        "delete"
+      ],
+      "execution": [
+        "host",
+        "guest"
+      ],
       "exportable": false,
-      "reads": ["VolumeBinding", "Volume", "Device", "Guest", "Provider"]
+      "reads": [
+        "VolumeBinding",
+        "Volume",
+        "Device",
+        "Guest",
+        "Provider"
+      ]
     }
   ],
   "provides": [],
-  "roles": [],
+  "roles": [
+    {
+      "name": "HostReconcile",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "description": "Host reconciliation before VM-specific startup."
+    },
+    {
+      "name": "ProviderController",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "description": "A static Provider controller launched from a signed Process template."
+    },
+    {
+      "name": "StoreVirtiofsPreflight",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/volume-virtiofs",
+      "description": "Store and virtiofs preflight validation."
+    },
+    {
+      "name": "SwtpmPreStartFlush",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/device-tpm",
+      "description": "swtpm pre-start flush step."
+    },
+    {
+      "name": "Swtpm",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/device-tpm",
+      "description": "swtpm sidecar."
+    },
+    {
+      "name": "Virtiofsd",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/volume-virtiofs",
+      "description": "virtiofsd sidecar."
+    },
+    {
+      "name": "Video",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/device-gpu",
+      "description": "Optional video sidecar."
+    },
+    {
+      "name": "Gpu",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/device-gpu",
+      "description": "Optional GPU/graphics sidecar."
+    },
+    {
+      "name": "GpuRenderNode",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/device-gpu",
+      "description": "Optional GPU/graphics sidecar - render-node-only mode (fd-passing, no device bind-mounts).\nSelected when `graphics.renderNodeOnly = true`; uses broker-pre-NS pattern (ADR 0021)."
+    },
+    {
+      "name": "Audio",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/audio-pipewire",
+      "description": "Optional audio sidecar."
+    },
+    {
+      "name": "CloudHypervisorRunner",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/runtime-cloud-hypervisor",
+      "description": "Cloud Hypervisor runner."
+    },
+    {
+      "name": "QemuMediaRunner",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/runtime-qemu-media",
+      "description": "QEMU media runner."
+    },
+    {
+      "name": "ActivationNixosRunner",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/activation-nixos",
+      "description": "Target-local one-shot NixOS activation runner.\n\nThis role is emitted only for the Guest execution target. The\nactivation Provider creates an EphemeralProcess resource and the\ntarget-local process Provider resolves this role from the trusted\nbundle."
+    },
+    {
+      "name": "VsockRelay",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/transport-vsock",
+      "description": "vsock relay sidecar."
+    },
+    {
+      "name": "OtelHostBridge",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/observability-otel",
+      "description": "Host-to-observability-VM OTLP bridge."
+    },
+    {
+      "name": "ComponentSessionHealth",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "description": "Authenticated ComponentSession Health readiness probe.\n\nReadiness is a full authenticated ComponentSession identity exchange\nand Health check over the enrolled vsock, not a raw TCP-22 probe.\nIt fails closed."
+    },
+    {
+      "name": "Usbip",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/device-usbip",
+      "description": "USBIP proxy or attach helper."
+    },
+    {
+      "name": "SecurityKeyFrontend",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/device-security-key",
+      "description": "Guest-side CTAPHID relay frontend via UHID virtual HID device and\nAF_VSOCK transport. Runs inside the guest VM and visible to the host\nDAG as a component-specific role node that gates the broker vsock\nendpoint readiness."
+    },
+    {
+      "name": "WaylandProxy",
+      "operations": [],
+      "principals": [],
+      "storageRoots": [],
+      "seccompClasses": [],
+      "deviceClasses": [],
+      "capabilityGrants": [],
+      "providerRef": "Provider/display-wayland",
+      "description": "Host-jailed Wayland proxy. Runs as `d2b-<vm>-wlproxy`\nwith the real host compositor socket bound read/write at a fixed\nin-jail upstream path and the per-VM proxy socket at\n`/run/d2b-wlproxy/<vm>`. Empty host capabilities; mandatory\n`seccompPolicyRef`; no PipeWire/Pulse socket access."
+    }
+  ],
   "principals": []
 }

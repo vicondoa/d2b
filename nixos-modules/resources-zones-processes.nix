@@ -364,24 +364,10 @@ let
     ++ durationChecks
     ++ lib.concatLists (lib.imap0 (checkMount row) mounts);
 
-  roleProviderMap = {
-    StoreVirtiofsPreflight = "Provider/volume-virtiofs";
-    SwtpmPreStartFlush = "Provider/device-tpm";
-    Swtpm = "Provider/device-tpm";
-    Virtiofsd = "Provider/volume-virtiofs";
-    Video = "Provider/device-gpu";
-    Gpu = "Provider/device-gpu";
-    GpuRenderNode = "Provider/device-gpu";
-    Audio = "Provider/audio-pipewire";
-    CloudHypervisorRunner = "Provider/runtime-cloud-hypervisor";
-    QemuMediaRunner = "Provider/runtime-qemu-media";
-    ActivationNixosRunner = "Provider/activation-nixos";
-    VsockRelay = "Provider/transport-vsock";
-    OtelHostBridge = "Provider/observability-otel";
-    Usbip = "Provider/device-usbip";
-    SecurityKeyFrontend = "Provider/device-security-key";
-    WaylandProxy = "Provider/display-wayland";
-  };
+  # The ProcessRole -> owning Provider map is generated from the process
+  # family's `resource-types.json` declaration (U4), so renaming an owning
+  # provider reference needs no hand edit here.
+  roleProviderMap = import ./generated/process-role-providers.nix;
 
   # Provider packages publish their Process intents through one fixed,
   # owner-keyed compiler table. This is an internal merge seam, not a public
