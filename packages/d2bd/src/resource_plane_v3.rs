@@ -3806,6 +3806,22 @@ mod tests {
         let kernel_release = string_field("kernelRelease");
         assert!(!kernel_release.is_empty());
         assert!(kernel_release.len() <= 64, "the observation is bounded");
+        // Non-degenerate guard, not a value check: `activeProcessCount`
+        // comes from the real probe's live `/proc` enumeration, so a
+        // regression that degenerates the count to a constant zero would
+        // otherwise pass this binding test. Every running machine has at
+        // least one process - the daemon under test is one of them - so a
+        // genuine count is never below 1 and the assertion cannot flake;
+        // no exact or machine-tied range is asserted, since that would
+        // trade this blind spot for a flake.
+        let active_process_count = match response.payload.get("activeProcessCount") {
+            Some(d2b_contracts_resource::v3::CanonicalJsonValue::Integer(count)) => *count,
+            other => panic!("activeProcessCount is not a canonical integer: {other:?}"),
+        };
+        assert!(
+            active_process_count >= 1,
+            "process count is degenerate: {active_process_count}"
+        );
     }
 
     /// KTD8 restart adoption for the rows this lane moves: an
