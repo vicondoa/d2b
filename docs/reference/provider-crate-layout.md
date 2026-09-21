@@ -233,3 +233,75 @@ byte-for-byte and (the host-contract golden digest case), which pins the
 contract digest the host module derives from the allocation, the zone model,
 and the bundle framing. A lane that moves a row in one of those documents
 regenerates the consumers and re-pins its digest in the same change.
+
+## The converted family's crate
+
+The family's crate is the thing a conversion ships: `src/` carries the driver
+surface the plane registers and the seam the daemon realizes.
+
+- the effect port - the `pub trait <Family>Effects: Send + Sync + 'static`
+  everything the driver needs arrives through. The production implementation
+  lives in the daemon behind the port, so the crate depends on no daemon
+  runtime;
+- the service - one concrete struct (`<Family>Driver`) holding
+  `Arc<dyn <Family>Effects>`, built by the one public constructor over the
+  facet-carried port and by nothing else;
+- the registration surface - the spec decoder, the factory
+  (`<Family>DriverFactory`), and the declaration (`<Family>Descriptor`) the
+  plane registers the type by, carrying the declared verbs, execution
+  domains, exportability, reads, and allowed sources; and
+- the scripting double - `pub mod test_support`, gated
+  `#[cfg(any(test, feature = "test-support"))]`, so this crate's unit tests
+  and other crates' tests (the daemon's plane tests, the integration crates)
+  opt in through the `test-support` feature. The double scripts the port
+  hermetically: it records calls order-preservingly and can script outcomes
+  and refusals.
+
+Composition and scripting cross one seam. The production effects the daemon
+passes and the recorded double tests pass are the same
+`Arc<dyn <Family>Effects>` through the same constructor and descriptor, and
+the daemon realizes the port at the family's registered row - composition
+happens through the generated registration table, never a hand-named family
+branch. A family that serves effect services spells their ids in
+`registrations.json` and in its descriptor sources, and nowhere else.
+
+A reviewer rejects:
+
+- a generic service with a second test-only constructor - a service generic
+  over the port that grows a `cfg`-gated constructor for scripting. The
+  production and test shapes diverge: composition builds one surface, tests
+  exercise another, and nothing proves the tested shape is what runs;
+- a discarded facet boundary - a constructor that accepts the facets and
+  drops them (`let _ = facets;`). The declared seam exists on paper only;
+  composition and scripting stop sharing a surface, and the next test
+  author builds a private seam instead of using the declared one.
+  Construction consumes the port it names;
+- a scripting double that is not release-gated - a crate-private
+  `#[cfg(test)]` module. Only the crate's own unit tests can reach it; the
+  daemon's plane tests and the integration tests are other crates, so they
+  cannot script the probe hermetically and fall back to the real machine.
+  The double is `pub` behind `#[cfg(any(test, feature = "test-support"))]`;
+- a registration or binding test that reads the real machine - an NSS
+  lookup, a `/dev/kvm` probe, a proc scan in a registry test. It fails for
+  environmental reasons, or worse passes without asserting anything when the
+  environment degrades, and can never prove the registration contract.
+  Registration tests script the port through the double and assert the
+  registry behavior: the declared type is served, a second registration is
+  refused, registration after the plane opens is refused;
+- prose left describing the old shape - a README or doc comment the move
+  falsified (a README claiming the daemon implements the effects while the
+  crate now opens NSS itself, a sibling README naming a deleted adapter as
+  the sole implementor, a doc comment describing the deleted adapter as the
+  seam). A conversion is not complete while shipped prose contradicts the
+  code.
+
+A conversion completes when, beyond the steps above:
+
+- the generated views are produced through the authority (the aggregate or
+  `xtask check-provider-crate-layout --fix`) and committed in the same
+  change - a hand edit of a generated file fails the drift gates;
+- the change carries a changelog entry or a `changelog.d/` fragment, its
+  first line a bullet on its own line;
+- every README and doc comment the move invalidated is updated in the same
+  change; and
+- every added or touched file ends in a trailing newline.
