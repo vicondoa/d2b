@@ -3888,8 +3888,8 @@ mod tests {
         let before_count = volatile_count(&before.payload);
         let after_count = volatile_count(&after.payload);
         assert!(
-            before_count >= 0 && after_count >= 0,
-            "the process count is a non-negative observation"
+            before_count >= 1 && after_count >= 1,
+            "the process count is a non-degenerate observation (at least one process)"
         );
         let mut before_fields = before.payload.clone().into_inner();
         let mut after_fields = after.payload.clone().into_inner();

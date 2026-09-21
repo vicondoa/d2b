@@ -273,6 +273,18 @@ mod tests {
         assert!(!metadata.kernel_release.is_empty());
         assert!(metadata.kernel_release.len() <= 64);
         assert!(metadata.os_name.len() <= 128);
+        // Non-degenerate guard, not a value check:the same live `/proc`
+        // enumeration the daemon binding test guards; a regression that
+        // degenerates the count to a constant zero would otherwise pass this
+        // crate's own suite. Any running machine has at least one process -
+        // this probe runs inside one - so a genuine count is never below 1
+        // and this cannot flake; no machine-tied range is asserted.
+
+        assert!(
+            metadata.active_process_count >= 1,
+            "process count is degenerate: {}",
+            metadata.active_process_count
+        );
         let platform = probe
             .platform()
             .await
