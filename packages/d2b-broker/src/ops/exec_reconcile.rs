@@ -1926,11 +1926,17 @@ exit 7
 "#,
         );
 
+// The deadline is a last-resort guard against a wedged helper or a
+        // broken stderr drain, not the assertion: the subject is that the
+        // large stderr is drained to EOF (the pipe would otherwise fill and
+        // block the child) and bounded at the stderr limit. A 30 s guard
+        // cannot be tripped by wall-clock load, and a genuinely broken
+        // drain still fails it.
         let err = run_usbip_helper_once_retry_text_busy(
             &helper,
             UsbipSubcommand::Unbind,
             "1-2",
-            tokio::time::Instant::now() + Duration::from_secs(2),
+            tokio::time::Instant::now() + Duration::from_secs(30),
         )
         .await
         .expect_err("large stderr should drain and preserve helper exit status");

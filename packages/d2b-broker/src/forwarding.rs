@@ -665,25 +665,81 @@ mod tests {
         // exchange with no deadline would hold the caller forever; the
         // round trip is bounded in async time instead, so the call returns
         // inside its budget with the fail-closed refusal.
+        //
+        // Virtual time makes the assertion exact instead of wall-clock:
+        // the exchange's `tokio::time::timeout` runs on a paused clock, so
+        // the refusal must land at the 150 ms budget (within the time
+        // driver's one-millisecond timer-wheel granularity). The peer
+        // holds its end until the test releases it, so the refusal
+        // provably cannot be the peer's close - the budget fired while the
+        // peer was still silent. Wall-clock load cannot stretch or shrink
+        // either side of the proof.
+        const BUDGET: Duration = Duration::from_millis(150);
         let dir = tempfile::tempdir().expect("dir");
         let path = dir.path().join("silent.sock");
         let listener = bind_seqpacket(&path).expect("bind silent peer socket");
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let held = std::thread::spawn(move || {
             let accepted = accept(&listener).expect("accept the dial");
-            // Hold the connection open past the caller's budget.
-            std::thread::sleep(Duration::from_millis(750));
+            // Hold the connection open until the test has observed the
+            // budget refusal; the refusal cannot then be the peer's close.
+            // The bounded wait only lets the peer thread end if the test
+            // itself failed before releasing it.
+            let _ = release_rx.recv_timeout(Duration::from_secs(30));
             drop(accepted);
         });
-        let forwarder = SocketForwarder::with_timeout(path, Duration::from_millis(150));
-        let started = std::time::Instant::now();
-        let failure = forward(&forwarder, "UsbipBind", "invocation-12", &payload())
-            .expect_err("a peer that never answers serves nothing");
-        let elapsed = started.elapsed();
+        let forwarder = SocketForwarder::with_timeout(path, BUDGET);
+        let chain = d2b_audit::evidence_chain::EvidenceChain::root("invocation-12", "daemon");
+        let payload = payload();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("budget test runtime");
+        let (failure, elapsed) = runtime.block_on(async {
+            tokio::time::pause();
+            let started = tokio::time::Instant::now();
+            let exchange = forwarder.forward(ForwardedOperation {
+                operation: "UsbipBind",
+                zone: "work",
+                invocation_id: "invocation-12",
+                chain: &chain,
+                nested: false,
+                payload: &payload,
+                fds: &[],
+                fd_kind: None,
+                context: None,
+            });
+            tokio::pin!(exchange);
+            // The select polls the exchange directly on every step, so the
+            // budget timer is armed and observed without any scheduler
+            // dependence. With the clock paused, the runtime auto-advances
+            // to the one-millisecond sleep, stepping the clock toward the
+            // exchange's budget timer; the exchange wins the select the
+            // moment its budget fires. If the budget is not binding, the
+            // exchange never completes - fail rather than hang.
+            let result = loop {
+                tokio::select! {
+                    result = &mut exchange => break result,
+                    _ = tokio::time::sleep(Duration::from_millis(1)) => {
+                        // The budget fires within one millisecond of its
+                        // deadline (timer-wheel granularity); past that,
+                        // the budget is not binding - fail rather than hang.
+                        assert!(
+                            started.elapsed() <= BUDGET + Duration::from_millis(2),
+                            "the exchange must end at its budget; a peer that never answers cannot hold it"
+                        );
+                    }
+                }
+            };
+            (result, started.elapsed())
+        });
+        let failure = failure.expect_err("a peer that never answers serves nothing");
         assert_eq!(failure.code, crate::envelope::UNREGISTERED_HANDLER);
         assert!(
-            elapsed < Duration::from_millis(700),
-            "the round trip must end on its own budget, not on the peer: {elapsed:?}"
+            elapsed >= BUDGET && elapsed <= BUDGET + Duration::from_millis(1),
+            "the refusal is the round-trip budget's, not the peer's: the exchange must end at its {BUDGET:?} budget (within the driver's 1 ms timer-wheel granularity), not at the peer's close; elapsed {elapsed:?}"
         );
+        release_tx.send(()).expect("release the silent peer");
         held.join().expect("silent peer thread");
     }
 
