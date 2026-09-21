@@ -35,9 +35,11 @@ Process. This crate ships the reconciliation logic as a library: the
 local User discovery over an injected effect port. It ships no binary.
 
 The `Host` and `User` resource drivers live in `d2b-provider-host` and
-`d2b-provider-user`; the daemon implements their effect ports over the
-reconcilers here, so the resource plane reaches a Host or User row through
-those declarations and this crate keeps the realizer.
+`d2b-provider-user`. The daemon implements the Host driver's effect port
+over the `HostReconciler` here; the User provider crate implements its own
+discovery port over the `UserReconciler` here, so the resource plane
+reaches a Host or User row through those declarations and this crate keeps
+the realizer.
 
 ## Placement and dependencies
 
@@ -54,12 +56,12 @@ an ordinary RBAC subject.
 
 ## Security posture
 
-The standing Provider rules apply unchanged: no privileged mutation, host
-state reached only through an injected typed effect port, and the broker
-remains the sole privileged executor and audit owner. In particular this
-crate calls no NSS interface and reads no local account database; User
-discovery is an effect, and the fixed core effect adapter is the sole
-implementor of `UserDiscoveryEffectPort`.
+The standing Provider rules apply unchanged: no privileged mutation, and
+the broker remains the sole privileged executor and audit owner. This crate
+calls no NSS interface and reads no local account database; User discovery
+runs through the `UserDiscoveryEffectPort`, whose production implementor is
+the User provider crate's own bounded probe, over the preserved
+`UserReconciler`.
 
 The user-only Host posture is non-negotiable. `isolationPosture` and
 `isolationPostureMessage` are derived from the spec alone, and a submitted

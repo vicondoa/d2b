@@ -1,8 +1,20 @@
-//! Test-support recording double for the [`UserDriverEffects`] port.
+//! Test-support doubles for the User family's two seams.
 //!
-//! The scripted effect fake for the User family: records every discovery call
-//! order-preservingly and can script the reported phase or a probe refusal.
-
+//! - [`RecordingEffects`], the scripted double for the driver's typed
+//!   [`UserDriverEffects`] seam: records every discovery call
+//!   order-preservingly and can script the reported phase or a probe
+//!   refusal.
+//! - [`ScriptedProbe`], the scripted double for the
+//!   [`UserDiscoveryEffectPort`] seam the crate's production probe
+//!   implements: resolves every declared identity with a fixed digest and
+//!   verified bindings, records the requested usernames, and can script an
+//!   absent account or a discovery refusal.
+//!
+//! [`recording_facets`] builds the declared facet set over a scripted
+//! probe, exactly as the production composition root builds it over the
+//! crate's own probe, so the plane tests script the same boundary
+//! production composes.
+//!
 //! Gated behind the `test-support` Cargo feature (available automatically
 //! under `cargo test`), so production consumers never pull it in. The plane
 //! tests in `d2bd` reach it through the same public surface.
@@ -11,17 +23,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use d2b_contracts_resource::v3::{ResourcePhase, ResourceRef};
-use d2b_contracts_resource::v3::user::UserSpec;
-use d2b_provider_system_core::{UserDiscoveryCondition, UserStatusReport};
+use d2b_contracts_resource::v3::user::{OsUsername, UserSpec};
+use d2b_provider_system_core::{
+    DiscoveredUser, SystemCoreError, UserBinding, UserDiscoveryCondition, UserDiscoveryEffectPort,
+    UserIdentityDigest, UserObservation, UserStatusReport,
+};
 
 use crate::{UserDriverEffects, UserEffectFacets};
 
-/// Build the user family's declared facet set, exactly as the production
-/// composition root builds it: the family reads no daemon state, so the set
-/// is empty.
-pub fn recording_facets() -> UserEffectFacets {
-    UserEffectFacets {}
-}
+// -- the driver seam ---------------------------------------------------------
 
 /// Scripted discovery port: records every call order-preservingly and can
 /// fail discovery.
@@ -73,4 +83,91 @@ impl UserDriverEffects for RecordingEffects {
             identity: None,
         })
     }
+}
+
+// -- the discovery-port seam -------------------------------------------------
+
+/// Scripted [`UserDiscoveryEffectPort`]: resolves every declared identity
+/// as discovered with a fixed opaque digest and the fully verified
+/// bindings, records every requested username order-preservingly, and can
+/// script an absent account or a discovery refusal. The scripted state
+/// lives behind an `Arc`, so a test can keep a handle and script the
+/// service-held probe.
+pub struct ScriptedProbe {
+    core: Arc<ScriptedCore>,
+}
+
+struct ScriptedCore {
+    /// The usernames discovery was requested for, in arrival order.
+    calls: parking_lot::Mutex<Vec<OsUsername>>,
+    /// Whether the next discovery resolves no local record.
+    absent: AtomicBool,
+    /// Whether the next discovery refuses.
+    failing: AtomicBool,
+    /// The opaque identity every resolved discovery reports.
+    identity: UserIdentityDigest,
+}
+
+impl ScriptedProbe {
+    /// Construct a fresh double that resolves every declared identity as
+    /// discovered.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            core: Arc::new(ScriptedCore {
+                calls: parking_lot::Mutex::new(Vec::new()),
+                absent: AtomicBool::new(false),
+                failing: AtomicBool::new(false),
+                identity: UserIdentityDigest::from_bytes([0x5a; 32]),
+            }),
+        })
+    }
+
+    /// The usernames discovery was requested for, in arrival order.
+    pub fn discovered_names(&self) -> Vec<OsUsername> {
+        self.core.calls.lock().clone()
+    }
+
+    /// Script whether the next discovery resolves no local record.
+    pub fn set_absent(&self, absent: bool) {
+        self.core.absent.store(absent, Ordering::SeqCst);
+    }
+
+    /// Script whether the next discovery refuses.
+    pub fn set_failing(&self, failing: bool) {
+        self.core.failing.store(failing, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl UserDiscoveryEffectPort for ScriptedProbe {
+    async fn discover(
+        &self,
+        _user_ref: &ResourceRef,
+        spec: &UserSpec,
+    ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
+        self.core.calls.lock().push(spec.os_username().clone());
+        if self.core.failing.load(Ordering::SeqCst) {
+            return Err(SystemCoreError::DiscoveryUnavailable);
+        }
+        if self.core.absent.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        Ok(Some(DiscoveredUser {
+            identity: self.core.identity,
+            observed: UserObservation::from_verified([
+                UserBinding::NssRecord,
+                UserBinding::PrimaryGroup,
+            ]),
+        }))
+    }
+}
+
+// -- the declared facet seam -------------------------------------------------
+
+/// Build the user family's declared facet set over one scripted probe,
+/// exactly as the production composition root builds it over the crate's
+/// own probe: composition and scripting cross the same
+/// [`UserDiscoveryEffectPort`] boundary.
+pub fn recording_facets(probe: Arc<ScriptedProbe>) -> UserEffectFacets {
+    UserEffectFacets { probe }
 }

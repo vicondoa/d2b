@@ -1993,6 +1993,15 @@ impl ConstructionInputs {
         // The User family's effects build from an empty declared facet set:
         // the probe reads host state the crate reads itself (U5).
         let user_facets = UserEffectFacets {};
+||||||| rpv3.c2.base
+        // The User family's effects build from an empty declared facet set:
+        // the probe reads host state the crate reads itself (U5).
+        let user_facets = UserEffectFacets {};
+        // The User family's effects build from the facet set carrying the
+        // crate's own probe: the probe reads host state the crate reads
+        // itself (U5), so the composition root supplies no externally built
+        // port.
+        let user_facets = UserEffectFacets::production();
         Ok(Self {
             zone: zone.clone(),
             zone_token,
@@ -3562,7 +3571,9 @@ use d2b_provider_system_core::MinijailPlatformGate;
         let activation_facets = d2b_provider_activation_nixos::test_support::recording_facets(
             d2b_provider_activation_nixos::test_support::RecordingBrokerDispatch::new(),
         );
-        let user_facets = d2b_provider_user::test_support::recording_facets();
+        let user_facets = d2b_provider_user::test_support::recording_facets(
+            d2b_provider_user::test_support::ScriptedProbe::new(),
+        );
         (
             dir,
             ConstructionInputs {

@@ -32,8 +32,9 @@
 //! yet realized re-checks itself ([`USER_REDISCOVER`]).
 //!
 //! KTD13: the driver has no spawn surface at all. It discovers the local
-//! identity through the family's own probe over the declared effects service
-//! (U5) and owns no Process.
+//! identity through the family's own probe behind the driver effects seam
+//! (U5) - the same implementation value that serves the declared effects
+//! service - and owns no Process.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -167,11 +168,11 @@ pub fn user_spec_decoder() -> Arc<dyn SpecDecoder> {
 // Provider effect port
 // ---------------------------------------------------------------------------
 
-/// The discovery surface the User driver needs: the preserved `system-core`
-/// Provider behavior (local NSS discovery over the fixed core adapter)
-/// behind the erased seam driver tests script. The production implementation
-/// is this crate's own [`crate::effects_service::UserEffectsService`] (U5),
-/// built from the daemon-supplied facet set.
+/// The discovery surface the User driver needs, served by this crate's own
+/// [`crate::effects_service::UserEffectsService`] (U5): bounded local NSS
+/// discovery over the facet-carried probe, reconciled through the preserved
+/// `system-core` `UserReconciler`. The erased seam is what driver tests
+/// script.
 #[async_trait]
 pub trait UserDriverEffects: Send + Sync + 'static {
     /// Discover one declared User and compute its public status, or report
@@ -464,7 +465,7 @@ mod tests {
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
-    use crate::test_support::RecordingEffects;
+    use crate::test_support::{RecordingEffects, ScriptedProbe, recording_facets};
 
     use super::{
         USER_REDISCOVER, UserDriver, UserDriverFactory, UserDriverStatus, user_descriptor,
@@ -652,10 +653,9 @@ mod tests {
     }
 
     /// The facet set the factory and declaration tests build over: the
-    /// daemon-supplied facet double (the family reads no daemon state, so
-    /// the set is empty).
+    /// scripted probe double, exactly as the plane's test inputs build it.
     fn facets() -> UserEffectFacets {
-        crate::test_support::recording_facets()
+        recording_facets(ScriptedProbe::new())
     }
 
     async fn user_fixture() -> (
@@ -690,34 +690,24 @@ mod tests {
     /// declared factory, so a User row reaches its driver through the
     /// registry alone; the driver's effects come from the crate's own
     /// implementation over the facet set (U5), so no externally built port
-    /// appears at the construction site. The row names the machine's
-    /// current account, which the family's own probe resolves.
+    /// appears at the construction site. The facets carry the scripted
+    /// probe, so the reconciled outcome is unconditional: the declared
+    /// identity resolves as discovered and the driver publishes Ready on
+    /// any host.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_registry_serves_the_declared_factory_for_a_user_row() {
-        let current = nix::unistd::User::from_uid(nix::unistd::Uid::current())
-            .expect("the current uid resolves")
-            .expect("the current process's account resolves");
-        let username = current.name.as_str();
-        // A username the ResourceName grammar excludes cannot name a row
-        // (the row identity is the resource name), so that case skips only
-        // the reconciled-row assertion; the registry plumbing itself is
-        // exercised either way, and the discovery surface has its own
-        // tests.
-        let Ok(name) = d2b_contracts_resource::v3::ResourceName::parse(username) else {
-            return;
-        };
-
-        let spec = UserSpec::minimal(OsUsername::parse(username).expect("username"));
+        let probe = ScriptedProbe::new();
+        let spec = UserSpec::minimal(OsUsername::parse("alice").expect("username"));
         let base = to_base_object(&spec).expect("user base");
         let envelope =
             ResourceSpec::new(None, None, base, None).expect("admitted resource spec");
         let mut providers = ProviderDirectory::new();
         providers
-            .register_driver(&user_descriptor(facets()))
+            .register_driver(&user_descriptor(recording_facets(probe)))
             .expect("the declaration registers");
 
-        let key = ResourceKey::new("work", "User", name.as_str());
+        let key = ResourceKey::new("work", "User", "alice");
         let mut driver = providers.create_driver(&key).await.expect("the registry serves User");
         let mut ctx = fixture(
             row(envelope.canonical_bytes().expect("canonical spec bytes")),
@@ -727,10 +717,11 @@ mod tests {
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied,
-            "the crate's own probe resolves the machine's current account as Ready"
+            "the facet-carried probe resolves the declared identity as discovered"
         );
         let status = ctx.status::<UserDriverStatus>().expect("status published");
         assert_eq!(status.report().phase, ResourcePhase::Ready);
+        assert_eq!(status.report().discovery, UserDiscoveryCondition::Discovered);
     }
 
     // -- validate ------------------------------------------------------------

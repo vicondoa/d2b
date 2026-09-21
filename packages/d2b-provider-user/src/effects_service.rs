@@ -35,7 +35,6 @@ use d2b_resource_types::{ServiceDecl, ServiceMethod};
 
 use crate::driver::UserDriverEffects;
 use crate::facets::UserEffectFacets;
-use crate::probe::UserProbe;
 
 /// The User family's declared effects service.
 ///
@@ -127,8 +126,8 @@ impl InspectUserRequest {
 /// cannot complete refuses with its own closed code instead of answering a
 /// half-built report; the driver seam keeps the same refusal mapping it
 /// always had (the row's own reconcile classifies it).
-async fn serve_inspect_user<P: UserDiscoveryEffectPort>(
-    reconciler: &UserReconciler<P>,
+async fn serve_inspect_user(
+    reconciler: &UserReconciler<Arc<dyn UserDiscoveryEffectPort>>,
     payload: &CanonicalJsonObject,
 ) -> Result<EffectResponse, EffectServiceError> {
     let declined = |reason: &'static str| EffectServiceError::Declined {
@@ -150,45 +149,28 @@ async fn serve_inspect_user<P: UserDiscoveryEffectPort>(
 /// One value serves both the driver's typed seam and the declared hosted
 /// service: the factory constructs it from the same [`UserEffectFacets`]
 /// the composition root supplies, so the hosted surface and the driver
-/// observe the same probe. The preserved `UserReconciler` is the report
-/// and classification authority both surfaces reconcile over.
-///
-/// The probe is generic over the [`UserDiscoveryEffectPort`] surface the
-/// crate's production `UserProbe` implements; tests script the same
-/// surface.
-pub struct UserEffectsService<P: UserDiscoveryEffectPort> {
-    reconciler: UserReconciler<P>,
+/// observe the same probe. The preserved `UserReconciler` over the
+/// facet-carried [`UserDiscoveryEffectPort`] is the report and
+/// classification authority both surfaces reconcile over; the crate's
+/// production probe implements that port, and the scripted probe scripts
+/// it, so composition and scripting cross the same boundary.
+pub struct UserEffectsService {
+    reconciler: UserReconciler<Arc<dyn UserDiscoveryEffectPort>>,
 }
 
-impl UserEffectsService<UserProbe> {
-    /// Build the effects over the crate's own probe from one zone's
-    /// daemon-supplied facet set (R2): every daemon-structural read rides
-    /// the facets, never a daemon handle.
+impl UserEffectsService {
+    /// Build the effects over one zone's daemon-supplied facet set (R2):
+    /// the facet-carried probe rides the seam the composition root
+    /// supplies, never a daemon handle.
     pub fn new(facets: UserEffectFacets) -> Self {
-        let _ = facets;
         Self {
-            reconciler: UserReconciler::new(UserProbe),
-        }
-    }
-}
-
-impl<P: UserDiscoveryEffectPort> UserEffectsService<P> {
-    /// Build the effects over a scripted probe (test-support only): the
-    /// same [`UserDiscoveryEffectPort`] surface the crate's production
-    /// probe implements, so the happy and absent-user observation paths are
-    /// testable hermetically.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_probe(probe: P) -> Self {
-        Self {
-            reconciler: UserReconciler::new(probe),
+            reconciler: UserReconciler::new(facets.probe),
         }
     }
 }
 
 #[async_trait]
-impl<P: UserDiscoveryEffectPort + Send + Sync + 'static> UserDriverEffects
-    for UserEffectsService<P>
-{
+impl UserDriverEffects for UserEffectsService {
     async fn observe_user(
         &self,
         user_ref: &d2b_contracts_resource::v3::ResourceRef,
@@ -202,9 +184,7 @@ impl<P: UserDiscoveryEffectPort + Send + Sync + 'static> UserDriverEffects
 }
 
 #[async_trait]
-impl<P: UserDiscoveryEffectPort + Send + Sync + 'static> EffectService
-    for UserEffectsService<P>
-{
+impl EffectService for UserEffectsService {
     async fn handle(
         &self,
         invocation: ServiceInvocation<'_>,
@@ -232,7 +212,7 @@ impl UserEffectsServiceFactory {
 
 impl EffectServiceFactory for UserEffectsServiceFactory {
     fn build(&self) -> Arc<dyn EffectService> {
-        Arc::new(UserEffectsService::new(self.facets))
+        Arc::new(UserEffectsService::new(self.facets.clone()))
     }
 }
 
@@ -247,91 +227,9 @@ mod tests {
         user::{OsUsername, UserSpec},
     };
     use d2b_provider_system_core::{
-        DiscoveredUser, SystemCoreError, UserBinding, UserDiscoveryCondition, UserIdentityDigest,
-        UserObservation,
+        SystemCoreError, UserDiscoveryCondition, UserIdentityDigest,
     };
-
-    // -- scripted probe ------------------------------------------------------
-
-    /// The scripted probe surface the service's observation paths run over:
-    /// records the discovered identities and can script an absent account
-    /// or a discovery refusal. The scripted state lives behind an `Arc`
-    /// (the probe is `Clone`), so a test can keep a handle and script the
-    /// service-held probe.
-    #[derive(Clone)]
-    struct ScriptedProbe {
-        core: Arc<ScriptedCore>,
-    }
-
-    struct ScriptedCore {
-        calls: tokio::sync::Mutex<Vec<OsUsername>>,
-        /// Whether the next discovery resolves no local record.
-        absent: std::sync::atomic::AtomicBool,
-        /// Whether the next discovery refuses.
-        fail: std::sync::atomic::AtomicBool,
-        identity: UserIdentityDigest,
-    }
-
-    impl ScriptedProbe {
-        fn new() -> Self {
-            Self {
-                core: Arc::new(ScriptedCore {
-                    calls: tokio::sync::Mutex::new(Vec::new()),
-                    absent: std::sync::atomic::AtomicBool::new(false),
-                    fail: std::sync::atomic::AtomicBool::new(false),
-                    identity: UserIdentityDigest::from_bytes([0x5a; 32]),
-                }),
-            }
-        }
-
-        fn discovered_names(&self) -> Vec<OsUsername> {
-            self.core
-                .calls
-                .try_lock()
-                .expect("uncontended test mutex")
-                .clone()
-        }
-
-        fn set_absent(&self, absent: bool) {
-            self.core
-                .absent
-                .store(absent, std::sync::atomic::Ordering::SeqCst);
-        }
-
-        fn set_failing(&self, failing: bool) {
-            self.core
-                .fail
-                .store(failing, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl UserDiscoveryEffectPort for ScriptedProbe {
-        async fn discover(
-            &self,
-            _user_ref: &ResourceRef,
-            spec: &UserSpec,
-        ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
-            self.core
-                .calls
-                .lock()
-                .await
-                .push(spec.os_username().clone());
-            if self.core.fail.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(SystemCoreError::DiscoveryUnavailable);
-            }
-            if self.core.absent.load(std::sync::atomic::Ordering::SeqCst) {
-                return Ok(None);
-            }
-            Ok(Some(DiscoveredUser {
-                identity: self.core.identity,
-                observed: UserObservation::from_verified([
-                    UserBinding::NssRecord,
-                    UserBinding::PrimaryGroup,
-                ]),
-            }))
-        }
-    }
+    use crate::test_support::{ScriptedProbe, recording_facets};
 
     fn user_ref() -> ResourceRef {
         ResourceRef::parse("User/alice").expect("user ref")
@@ -342,9 +240,10 @@ mod tests {
     }
 
     /// The service over a scripted probe: the same `UserDiscoveryEffectPort`
-    /// surface production's `UserProbe` implements.
-    fn service(probe: ScriptedProbe) -> UserEffectsService<ScriptedProbe> {
-        UserEffectsService::with_probe(probe)
+    /// boundary the production composition root composes crosses, scripted
+    /// through the declared facet set.
+    fn service(probe: Arc<ScriptedProbe>) -> UserEffectsService {
+        UserEffectsService::new(recording_facets(probe))
     }
 
     // -- driver seam: observation parity -------------------------------------
@@ -405,7 +304,12 @@ mod tests {
             .observe_user(&user_ref(), &minimal_spec())
             .await
             .expect_err("the discovery failure surfaces");
-        assert!(!error.is_empty(), "the failure is named");
+        assert_eq!(
+            error,
+            SystemCoreError::DiscoveryUnavailable.to_string(),
+            "the failure is the discovery classification the driver maps to the retryable \
+             `system-core-user-discovery-failed` kind"
+        );
     }
 
     // -- hosted surface: inspect-user ----------------------------------------
@@ -439,8 +343,8 @@ mod tests {
     }
 
     /// The hosted `inspect-user` method answers the family's bounded
-    /// discovery observation for the declared identity from the crate's own
-    /// probe.
+    /// discovery observation for the declared identity over the
+    /// facet-carried probe.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn inspect_user_answers_the_bounded_discovery_observation() {
@@ -552,20 +456,37 @@ mod tests {
 
     /// The composition-root factory rebuilds the same implementation value
     /// from the facet set the driver factory is built from: the built
-    /// service answers through the crate's probe over the supplied facets.
+    /// service answers `inspect-user` over the supplied facet-carried
+    /// probe, with the scripted discovery observation and the requested
+    /// username.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_factory_builds_the_service_over_the_facets() {
-        let factory = UserEffectsServiceFactory::new(crate::test_support::recording_facets());
+        let probe = ScriptedProbe::new();
+        let factory = UserEffectsServiceFactory::new(recording_facets(probe.clone()));
         let service = factory.build();
         let payload = canonical(serde_json::json!({
             "userRef": "User/alice",
             "osUsername": "alice",
         }));
         let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
-        assert!(
-            service.handle(invocation(&payload, &mut resources)).await.is_ok(),
-            "the factory-built service serves the declared method"
+        let response = service
+            .handle(invocation(&payload, &mut resources))
+            .await
+            .expect("served");
+        assert_eq!(string_field(&response.payload, "family"), "user");
+        assert_eq!(string_field(&response.payload, "resourceType"), "User");
+        assert_eq!(string_field(&response.payload, "username"), "alice");
+        assert_eq!(string_field(&response.payload, "phase"), "Ready");
+        assert_eq!(string_field(&response.payload, "discovery"), "discovered");
+        assert_eq!(
+            string_field(&response.payload, "identity"),
+            UserIdentityDigest::from_bytes([0x5a; 32]).to_hex()
+        );
+        assert_eq!(
+            probe.discovered_names(),
+            vec![OsUsername::parse("alice").expect("username")],
+            "the factory-built service reconciles over the supplied facets"
         );
     }
 }

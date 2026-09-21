@@ -23,8 +23,10 @@
 //! single matching property as identity.
 
 use std::collections::BTreeSet;
-use tracing::{debug, warn};
 use std::fmt;
+use std::sync::Arc;
+
+use tracing::{debug, warn};
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::resource_status::ResourcePhase;
@@ -144,6 +146,21 @@ pub trait UserDiscoveryEffectPort: Send + Sync {
         user_ref: &ResourceRef,
         spec: &UserSpec,
     ) -> Result<Option<DiscoveredUser>, SystemCoreError>;
+}
+
+/// The arc'd port is itself a port, so the provider-owned User effects
+/// service (U5) can hold one erased probe behind its hosted service and
+/// driver seams: the reconciler's generic port is the same erased surface
+/// the facet set carries.
+#[async_trait::async_trait]
+impl UserDiscoveryEffectPort for Arc<dyn UserDiscoveryEffectPort> {
+    async fn discover(
+        &self,
+        user_ref: &ResourceRef,
+        spec: &UserSpec,
+    ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
+        self.as_ref().discover(user_ref, spec).await
+    }
 }
 
 /// How discovery resolved a declared User.
