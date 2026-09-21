@@ -1,9 +1,12 @@
-//! Production anchored-fd Volume effect adapter.
+//! Production anchored-fd Volume effect adapter (U7).
 //!
-//! The adapter is deliberately downstream of the pure controller. A trusted
-//! root resolver supplies an already anchored directory descriptor; this
-//! module never accepts a caller path. All mutations are single-entry,
-//! marker-checked, OFD-locked, and fd-relative.
+//! The volume family's anchored filesystem implementation lives in the crate
+//! that owns the effect ports it implements: a trusted root resolver
+//! ([`VolumeRootResolver`]) supplies an already anchored directory
+//! descriptor; this module never accepts a caller path. All mutations are
+//! single-entry, marker-checked, OFD-locked, and fd-relative. The daemon
+//! supplies the resolver and the durable layout probe as declared facets
+//! through the composition root; no daemon state type appears here.
 
 use std::{
     collections::BTreeSet,
@@ -37,7 +40,7 @@ use d2b_contracts_resource::v3::{
     volume::{EntryType, RepairPolicy, SourceKind},
 };
 
-use d2b_provider_volume_local::{
+use crate::{
     AnchoredRoot, ContentFile, ContentMaterializationEvidence, ContentProjection, DriftClass,
     EntryRequest, MarkerState, NetworkConfigContentProjection, NetworkConfigMaterializationEvidence,
     ObservedContentFile, ObservedEntry, OwnerProof, QuotaCapability, StoreViewMarkerEvidence,
@@ -168,6 +171,35 @@ pub trait VolumeRootResolver: Send + Sync {
     /// Resolve one typed User reference to its host GID.
     fn resolve_group(&self, reference: &ResourceRef) -> Result<u32, VolumeLocalError> {
         self.resolve_principal(reference)
+    }
+}
+
+/// The erased resolver the family's effects service receives as a declared
+/// facet (U7): the daemon supplies its zone resolver behind the trait, and
+/// the anchored adapter is generic over the trait, so the erasure delegates
+/// one level.
+impl VolumeRootResolver for Arc<dyn VolumeRootResolver> {
+    fn resolve_root(
+        &self,
+        volume_uid: &ResourceUid,
+        source_policy_id: Option<&BoundedToken>,
+        system_artifact_id: Option<&BoundedToken>,
+        kind: SourceKind,
+    ) -> Result<ResolvedVolumeRoot, VolumeLocalError> {
+        (**self).resolve_root(
+            volume_uid,
+            source_policy_id,
+            system_artifact_id,
+            kind,
+        )
+    }
+
+    fn resolve_principal(&self, reference: &ResourceRef) -> Result<u32, VolumeLocalError> {
+        (**self).resolve_principal(reference)
+    }
+
+    fn resolve_group(&self, reference: &ResourceRef) -> Result<u32, VolumeLocalError> {
+        (**self).resolve_group(reference)
     }
 }
 
@@ -1021,7 +1053,7 @@ impl<R: VolumeRootResolver> AnchoredVolumeEffectAdapter<R> {
         let spec = LockSpec::new(
             LockId::parse(format!(
                 "{}{}",
-                d2b_provider_volume_local::lock::VOLUME_LOCK_PREFIX,
+                crate::lock::VOLUME_LOCK_PREFIX,
                 root_uid(root)?.as_str()
             ))
                 .map_err(|_| VolumeLocalError::EffectFailed)?,
@@ -1479,7 +1511,7 @@ impl MarkerStore for FdMarkerStore<'_> {
     fn read_marker(
         &mut self,
         volume_uid: &ResourceUid,
-    ) -> Result<Option<d2b_provider_volume_local::marker::VerifiedMarkerFile>, MarkerError> {
+    ) -> Result<Option<crate::marker::VerifiedMarkerFile>, MarkerError> {
         let fd = match openat2(
             self.root,
             self.name,
@@ -1513,7 +1545,7 @@ impl MarkerStore for FdMarkerStore<'_> {
         }
         let _ = volume_uid;
         Ok(Some(
-            d2b_provider_volume_local::marker::VerifiedMarkerFile::from_verified_regular_file(
+            crate::marker::VerifiedMarkerFile::from_verified_regular_file(
                 bytes,
             ),
         ))
@@ -1769,10 +1801,10 @@ fn inspect_content_file(
     }
     let file = File::from(target);
     let mut bytes = Vec::new();
-    file.take((d2b_provider_volume_local::MAX_CONTENT_BYTES + 1) as u64)
+    file.take((crate::MAX_CONTENT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| VolumeLocalError::EffectFailed)?;
-    if bytes.len() > d2b_provider_volume_local::MAX_CONTENT_BYTES {
+    if bytes.len() > crate::MAX_CONTENT_BYTES {
         return Err(VolumeLocalError::EffectFailed);
     }
     Ok(Some(ObservedContentFile::new(
@@ -1928,7 +1960,7 @@ mod tests {
             ]),
         };
         let adapter = AnchoredVolumeEffectAdapter::new(resolver);
-        let handle = d2b_provider_volume_local::testing::block_on(adapter.resolve_root_for(
+        let handle = crate::testing::block_on(adapter.resolve_root_for(
             &volume_uid,
             None,
             None,
@@ -1936,7 +1968,7 @@ mod tests {
         ))
         .expect("root handle");
         let entry = EntryRequest::resolve(&volume_uid, &acl_layout_entry()).expect("entry");
-        d2b_provider_volume_local::testing::block_on(adapter.apply_acl(&handle, &entry))
+        crate::testing::block_on(adapter.apply_acl(&handle, &entry))
             .expect("acl applied");
 
         let expected_access = acl_entries(
@@ -2001,7 +2033,7 @@ mod tests {
             uids: std::collections::BTreeMap::from([("owner".to_owned(), Uid::current().as_raw())]),
         };
         let adapter = AnchoredVolumeEffectAdapter::new(resolver);
-        let handle = d2b_provider_volume_local::testing::block_on(adapter.resolve_root_for(
+        let handle = crate::testing::block_on(adapter.resolve_root_for(
             &volume_uid,
             None,
             None,
@@ -2017,7 +2049,7 @@ mod tests {
         )
         .expect("entry");
         assert!(
-            d2b_provider_volume_local::testing::block_on(adapter.apply_acl(&handle, &entry))
+            crate::testing::block_on(adapter.apply_acl(&handle, &entry))
                 .is_err()
         );
     }

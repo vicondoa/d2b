@@ -157,3 +157,17 @@
   driver construction site, and the dead Guest-local backend supervisor
   surface (`credential_backend_runtime.rs`, retained only by its module-level
   dead-code allowance) are deleted in the same change.
+- The volume family's driver effects ended their daemon-built arm: the
+  family now serves them from its own crate through its declared
+  `volume.d2bus.org/effects` service, hosted per zone by the daemon from the
+  family's registered factory over the composition root's facet set. The
+  anchored-fd filesystem implementation moved into the crate that owns the
+  ports it implements (`AnchoredVolumeEffectAdapter` and its trusted root
+  resolver in `d2b-provider-volume-local`), and the daemon supplies its zone
+  resolver and durable layout probe as declared facets, never derived from
+  caller input. The daemon's `volume_effects.rs` module and its
+  `resource_runtime/volume_effect_adapter.rs` adapter are deleted in the
+  same change, along with the declared-but-unbuilt neutral `VolumeEffectPort`
+  contract in `d2b-contracts` and its host wrapper in `d2b-host`; the
+  single-entry, marker-checked, OFD-locked, fd-relative storage discipline
+  and the `file-record` lease ownership verification are unchanged.

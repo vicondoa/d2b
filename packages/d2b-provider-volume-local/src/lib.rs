@@ -37,6 +37,7 @@ mod status;
 mod store_view;
 mod views;
 
+pub mod adapter;
 pub mod atomic;
 pub mod diagnostics;
 pub mod effect_port;
@@ -44,6 +45,9 @@ pub mod lock;
 pub mod marker;
 pub mod testing;
 
+pub use adapter::{
+    AnchoredVolumeEffectAdapter, FdRootResolver, ResolvedVolumeRoot, VolumeRootResolver,
+};
 pub use acl::{AclBinding, AclGrantSummary};
 pub use content::{
     ContentFile, ContentFileEvidence, ContentMaterializationEvidence, ContentProjection,

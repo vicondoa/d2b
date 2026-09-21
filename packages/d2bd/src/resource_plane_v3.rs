@@ -75,13 +75,16 @@ use d2b_provider_telemetry_service::telemetry_service_descriptor;
 // root composes the table instead of naming families).
 include!("generated/provider_registrations.rs");
 use d2b_provider_volume::{
-    VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
+    VOLUME_EFFECTS_SERVICE, VolumeDriverArgs, VolumeEffectFacets, VolumeEffectsServiceFactory,
+    VolumeRuntime, volume_descriptor,
 };
 use d2b_provider_volume_binding::{
     BINDING_EFFECTS_SERVICE, BindingDriverArgs, BindingEffectFacets, BindingEffectsServiceFactory,
     GuestMountSource, SocketReadySource, SocketRemoveSource, binding_descriptor,
 };
-use d2b_provider_volume_local::{VolumeLocalController, VolumeLocalProfile};
+use d2b_provider_volume_local::{
+    AnchoredVolumeEffectAdapter, VolumeLocalController, VolumeLocalProfile,
+};
 use d2b_provider_volume_virtiofs::{MAX_SOCKET_PATH_BYTES, SocketIdentity, StoredBinding};
 use d2b_resource_api::manager_backend::nix_bundle_subject;
 use d2b_resource_runtime::context::{ManagerEndpoint, SpecDecoder};
@@ -111,7 +114,6 @@ use d2b_provider_credential::{
     CredentialEffectsServiceFactory, CredentialRuntime, credential_descriptor,
 };
 use crate::process_provider_runtime::PlaneCommittedProviderIdentitySource;
-use crate::volume_effects::ProductionVolumeDriverEffects;
 use crate::provider_lifecycle::{
     ProviderRuntime, ProviderSet, ProviderStartupError, TrustedContextPublication,
     family_declaration,
@@ -1460,7 +1462,7 @@ impl ZoneVolumeRootResolver {
         volume_uid: &ResourceUid,
         anchor: &VolumeAnchor,
         system_artifact_id: &BoundedToken,
-    ) -> Result<crate::resource_runtime::ResolvedVolumeRoot, d2b_provider_volume_local::VolumeLocalError> {
+    ) -> Result<d2b_provider_volume_local::ResolvedVolumeRoot, d2b_provider_volume_local::VolumeLocalError> {
         let Some(guest_ref) = anchor.guest_ref.as_ref() else {
             return Err(self.source_unresolved("guest-reference", &anchor.volume_name));
         };
@@ -1509,20 +1511,20 @@ impl ZoneVolumeRootResolver {
         let marker_root = open_anchored_directory(&self.marker_root).map_err(|error| {
             self.source_open_failed("marker-root", &anchor.volume_name, &self.marker_root, &error)
         })?;
-        Ok(crate::resource_runtime::ResolvedVolumeRoot::new(file, volume_uid.clone())?
+        Ok(d2b_provider_volume_local::ResolvedVolumeRoot::new(file, volume_uid.clone())?
            .with_marker_root(marker_root)?
            .with_preexisting_state())
     }
 }
 
-impl crate::resource_runtime::VolumeRootResolver for ZoneVolumeRootResolver {
+impl d2b_provider_volume_local::VolumeRootResolver for ZoneVolumeRootResolver {
     fn resolve_root(
         &self,
         volume_uid: &ResourceUid,
         source_policy_id: Option<&BoundedToken>,
         system_artifact_id: Option<&BoundedToken>,
         kind: SourceKind,
-    ) -> Result<crate::resource_runtime::ResolvedVolumeRoot, d2b_provider_volume_local::VolumeLocalError> {
+    ) -> Result<d2b_provider_volume_local::ResolvedVolumeRoot, d2b_provider_volume_local::VolumeLocalError> {
         let Some(anchor) = self.registry.lookup_anchor(volume_uid) else {
             return Err(self.source_unresolved("volume-anchor", "?"));
         };
@@ -1580,7 +1582,7 @@ impl crate::resource_runtime::VolumeRootResolver for ZoneVolumeRootResolver {
        .map_err(|_| self.source_unresolved("storage-subdir-open", &anchor.volume_name))?;
         let marker_file = open_anchored_directory(&self.marker_root)
            .map_err(|_| self.source_unresolved("marker-root", &anchor.volume_name))?;
-        crate::resource_runtime::ResolvedVolumeRoot::new(file, volume_uid.clone())?
+        d2b_provider_volume_local::ResolvedVolumeRoot::new(file, volume_uid.clone())?
            .with_marker_root(marker_file)
     }
 
@@ -1666,48 +1668,96 @@ fn resolve_beneath() -> ResolveFlags {
         | ResolveFlags::NO_XDEV
 }
 
-/// The production volume effects: the controller closure rebuilds the
-/// preserved `VolumeLocalController` over anchored adapters per call
-/// (exactly the old `reconcile_volume` construction) over the per-zone
-/// resolver; the state closure probes the volume-local marker as the
-/// durable layout evidence (old recover probe).
-pub(crate) fn production_volume_effects(
+/// The daemon-hosted Volume runtime (U7): the reconcile and cleanup
+/// orchestration the family's effects service delegates to, over the
+/// anchored adapters ([`AnchoredVolumeEffectAdapter`]) and the daemon's own
+/// trusted root resolver, plus the durable layout probe recover reads. The
+/// controller is rebuilt over the anchored adapters per call (exactly the
+/// old `reconcile_volume` construction); the anchored-fd implementation
+/// itself lives in the declaring crate, so the daemon holds no volume-local
+/// mutation code.
+struct PlaneVolumeRuntime {
+    resolver: ZoneVolumeRootResolver,
+    marker_root: PathBuf,
+}
+
+impl PlaneVolumeRuntime {
+    /// Rebuild the preserved `VolumeLocalController` over the anchored
+    /// adapters for one call.
+    fn controller(
+        &self,
+    ) -> VolumeLocalController<
+        AnchoredVolumeEffectAdapter<ZoneVolumeRootResolver>,
+        AnchoredVolumeEffectAdapter<ZoneVolumeRootResolver>,
+    > {
+        let source = AnchoredVolumeEffectAdapter::new(self.resolver.clone());
+        let layout = AnchoredVolumeEffectAdapter::new(self.resolver.clone());
+        VolumeLocalController::new(VolumeLocalProfile::shipped(), source, layout)
+    }
+}
+
+#[async_trait::async_trait]
+impl VolumeRuntime for PlaneVolumeRuntime {
+    async fn reconcile_volume(
+        &self,
+        volume_uid: &ResourceUid,
+        spec: &VolumeSpec,
+        provider: Option<&serde_json::Value>,
+        owner_ref: Option<&ResourceRef>,
+    ) -> Result<bool, String> {
+        let report = self
+            .controller()
+            .reconcile(volume_uid, spec, provider, owner_ref)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(report.layout_phase == d2b_provider_volume_local::LayoutPhase::Ready)
+    }
+
+    async fn cleanup_volume(
+        &self,
+        volume_uid: &ResourceUid,
+        spec: &VolumeSpec,
+    ) -> Result<(), String> {
+        self.controller()
+            .cleanup(volume_uid, spec)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    fn has_layout(&self, volume_uid: &ResourceUid) -> bool {
+        // Layout-state probe (old recover): the volume-local marker is the
+        // durable evidence an initialized layout left behind.
+        self.marker_root.join(volume_uid.as_str()).exists()
+    }
+}
+
+/// The production volume facet set: the daemon-hosted [`PlaneVolumeRuntime`]
+/// over the per-zone resolver and marker root, supplied to the family's
+/// effects service and driver factories through the composition root (U7).
+pub(crate) fn production_volume_facets(
     state: &Arc<crate::ServerState>,
     zone: ZoneId,
     resolver: BundleResolver,
     registry: Arc<PlaneResourceRegistry>,
-) -> ProductionVolumeDriverEffects<
-    crate::resource_runtime::AnchoredVolumeEffectAdapter<ZoneVolumeRootResolver>,
-    crate::resource_runtime::AnchoredVolumeEffectAdapter<ZoneVolumeRootResolver>,
-> {
+) -> VolumeEffectFacets {
     let marker_root = state
        .daemon_state_dir
        .parent()
        .unwrap_or(state.daemon_state_dir.as_path())
        .join("volume-local-markers");
-    let closure_resolver = ZoneVolumeRootResolver {
-        state: Arc::clone(state),
-        resolver: resolver.clone(),
-        zone: zone.clone(),
-        marker_root: marker_root.clone(),
-        registry,
-    };
-    ProductionVolumeDriverEffects::new(
-        Arc::new(move || {
-            let source = crate::resource_runtime::AnchoredVolumeEffectAdapter::new(
-                closure_resolver.clone(),
-            );
-            let layout = crate::resource_runtime::AnchoredVolumeEffectAdapter::new(
-                closure_resolver.clone(),
-            );
-            VolumeLocalController::new(VolumeLocalProfile::shipped(), source, layout)
+    VolumeEffectFacets {
+        runtime: Arc::new(PlaneVolumeRuntime {
+            resolver: ZoneVolumeRootResolver {
+                state: Arc::clone(state),
+                resolver,
+                zone,
+                marker_root: marker_root.clone(),
+                registry,
+            },
+            marker_root,
         }),
-        Arc::new(move |volume_uid: &ResourceUid| {
-            // Layout-state probe (old recover): the volume-local marker is
-            // the durable evidence an initialized layout left behind.
-            marker_root.join(volume_uid.as_str()).exists()
-        }),
-    )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1780,7 +1830,7 @@ pub struct ConstructionInputs {
     /// the resolved bundle intents, supplied through the composition root.
     /// The family never receives a daemon-built effect port (R2).
     pub network_facets: NetworkEffectFacets,
-    /// The daemon-supplied facet set the Activation family's effects
+/// The daemon-supplied facet set the Activation family's effects
     /// implementation is built from: the broker dispatch source (the
     /// daemon's own dispatch over its authenticated origination socket,
     /// presented as the daemon's admin-uid caller authority), supplied
@@ -1812,6 +1862,12 @@ pub struct ConstructionInputs {
     /// Provider session handoff registry),supplied through the composition
     /// root. The family never receives a daemon-built effect port (R2).
     pub credential_facets: CredentialEffectFacets,
+    /// The daemon-supplied facet set the Volume family's effects
+    /// implementation is built from (U7): the daemon's Volume runtime over
+    /// the per-zone trusted root resolver and durable layout state,
+    /// supplied through the composition root. The family never receives a
+    /// daemon-built effect port (R2).
+    pub volume_facets: VolumeEffectFacets,
     pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
     /// The daemon-supplied facet set the Guest family's effects
     /// implementation is built from (U10):the zone's manager view (live
@@ -2048,7 +2104,7 @@ impl ConstructionInputs {
                 state: Arc::clone(state),
                 zone: zone.clone(),
             }),
-            Arc::new(DaemonAudioMediatorSource {
+Arc::new(DaemonAudioMediatorSource {
                 state: Arc::clone(state),
             }),
 );
@@ -2098,6 +2154,17 @@ impl ConstructionInputs {
         // family's declared effects service from the same facet set the
         // driver factories are built from.
         let credential_facets = CredentialEffectFacets { runtime: credential_runtime };
+        // U7:the Volume family's effects ride the declared facets
+        // composition root hosts the family's declared effects service from
+        // the same facet set the driver factories are built from. The
+        // daemon's Volume runtime is the reconcile/cleanup orchestration
+        // over the anchored adapters and the per-zone trusted root resolver.
+        let volume_facets = production_volume_facets(
+            state,
+            zone.clone(),
+            resolver,
+            Arc::clone(&registry),
+        );
         Ok(Self {
             zone: zone.clone(),
             zone_token,
@@ -2121,6 +2188,7 @@ impl ConstructionInputs {
             volume_effects: Arc::new(production_volume_effects(state, zone.clone(), resolver, Arc::clone(&registry))),
 binding_facets: binding_facets.clone(),
             endpoint_facets: endpoint_facets.clone(),
+            volume_facets: volume_facets.clone(),
             activation_facets: activation_facets.clone(),
             credential_facets: credential_facets.clone(),
             shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects::production(
@@ -2158,6 +2226,7 @@ binding_facets: binding_facets.clone(),
                 &tpm_facets,
                 &gpu_facets,
                 &credential_facets,
+                &volume_facets,
             ),
             foundation: None,
         })
@@ -2185,6 +2254,7 @@ fn registered_service_factories(
     tpm_facets: &d2b_provider_device_tpm::facets::TpmEffectFacets,
     gpu_facets: &d2b_provider_device_gpu::facets::GpuEffectFacets,
     credential_facets: &CredentialEffectFacets,
+    volume_facets: &VolumeEffectFacets,
 ) -> BTreeMap<&'static str, Arc<dyn EffectServiceFactory>> {
     let mut factories = BTreeMap::new();
     for registration in PROVIDER_REGISTRATIONS {
@@ -2197,6 +2267,7 @@ fn registered_service_factories(
                     as Arc<dyn EffectServiceFactory>
 } else if service == HOST_EFFECTS_SERVICE.id {
                 Arc::new(HostEffectsServiceFactory::new(host_facets.clone()))
+as Arc<dyn EffectServiceFactory>
             } else if service == ACTIVATION_EFFECTS_SERVICE.id {
                 Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone()))
             } else if service == USER_EFFECTS_SERVICE.id {
@@ -2223,6 +2294,9 @@ fn registered_service_factories(
                     as Arc<dyn EffectServiceFactory>
             } else if service == CREDENTIAL_EFFECTS_SERVICE.id {
                 Arc::new(CredentialEffectsServiceFactory::new(credential_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
+            } else if service == VOLUME_EFFECTS_SERVICE.id {
+                Arc::new(VolumeEffectsServiceFactory::new(volume_facets.clone()))
                     as Arc<dyn EffectServiceFactory>
             } else if service == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id {
                 Arc::new(
@@ -2713,19 +2787,7 @@ impl ResourcePlaneV3 {
                 Self::registered_drivers(registration, inputs),
             );
         }
-        // The Volume family states its own declaration (the VolumeBinding family
-        // starts through the generated registration table above). The
-        // registry serves each type's decoder and factory from its driver
-        // declaration, and the declaration carries the family's verbs,
-        // execution domains, exportability, reads, and the children it may
-        // create.
-        set = set.with(
-            d2b_provider_volume::volume_provider_declaration(),
-            vec![volume_descriptor(VolumeDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                effects: Arc::clone(&inputs.volume_effects),
-            })],
-        );
+
         // The trusted-context publication rides the set: when production
         // bound one, the rendezvous publishes this Zone's attestation
         // values over the origination leg the moment the set is published.
@@ -2838,7 +2900,7 @@ impl ResourcePlaneV3 {
             // daemon-supplied facet set; no externally built port appears at
             // this construction site (R2).
             "host" => vec![host_descriptor(inputs.host_facets.clone())],
-            // The Activation family: the driver builds its effects from the
+// The Activation family: the driver builds its effects from the
             // daemon-supplied facet set; no externally built port appears at
             // this construction site (R2).
             "activation-nixos" => vec![activation_descriptor(ActivationDriverArgs {
@@ -2931,6 +2993,12 @@ impl ResourcePlaneV3 {
                 zone: inputs.zone.as_str().to_owned(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.credential_facets.clone(),
+            })],
+            // The Volume family (U7): the driver builds its effects from the
+            // declared facets; no externally built port appears here (R2).
+            "volume" => vec![volume_descriptor(VolumeDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                facets: inputs.volume_facets.clone(),
             })],
             _ => Vec::new(),
         }
@@ -3712,6 +3780,9 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 MinijailPlatformGate::new(6, 9, true),
             ),
         );
+        let volume_facets = d2b_provider_volume::test_support::recording_facets(
+            d2b_provider_volume::test_support::RecordingRuntime::new(),
+        );
         // The plane tests build the Activation family's facet set from the
         // scripted broker dispatch double, exactly as the production
         // composition root builds it from the daemon's dispatch.
@@ -3793,8 +3864,11 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 registry: Arc::new(PlaneResourceRegistry::new()),
                 provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
                 process_facets: process_facets.clone(),
-                host_facets: host_facets.clone(),
-                volume_effects: d2b_provider_volume::test_support::FakeLayoutEffects::new(),
+host_facets: host_facets.clone(),
+                // U7: the plane tests build the Volume family's facet set
+                // from the recording runtime, exactly as the production
+                // composition root builds it from the daemon's runtime.
+                volume_facets: volume_facets.clone(),
                 binding_facets: binding_facets.clone(),
                 endpoint_facets: endpoint_facets.clone(),
                 activation_facets: activation_facets.clone(),
@@ -3825,6 +3899,8 @@ user_facets: user_facets.clone(),
                 guest_facets: guest_facets.clone(),
                 interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
+// U1/U14/U5/U7: the plane hosts the Process, Network, Host,
+                // Activation, and Volume families' declared effects services
 // U1/U14/U5/U8: the plane hosts the Process, Network, Host,
                 // Activation, and Credential families' declared effects
                 // services from the same facet sets their driver factories
@@ -3858,6 +3934,12 @@ user_facets: user_facets.clone(),
 HOST_EFFECTS_SERVICE.id,
                         Arc::new(HostEffectsServiceFactory::new(host_facets))
                             as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        VOLUME_EFFECTS_SERVICE.id,
+                        Arc::new(VolumeEffectsServiceFactory::new(
+                            volume_facets.clone(),
+                        )) as Arc<dyn EffectServiceFactory>,
                     ),
                     (
                         d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id,
@@ -4396,6 +4478,49 @@ HOST_EFFECTS_SERVICE.id,
         assert_eq!(
             after_fields, before_fields,
             "the adopted generation answers the same bounded observations (the volatile process count normalized out)"
+        );
+    }
+
+    /// U7: the composition root hosts the Volume family's declared effects
+    /// service from the family's own factory over the plane's facet set, and
+    /// the hosted service answers `has-layout` through the real invocation
+    /// capability object carrying the real envelope payload - the same
+    /// implementation value the driver factory is built from. The answer is
+    /// served from the daemon-supplied runtime facet (the durable layout
+    /// probe), so the daemon's layout state crosses the provider boundary as
+    /// a declared facet.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_volume_effects_service_answers_has_layout_through_the_binding() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let runtime = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts the declared volume service");
+        let binding = runtime
+            .resolve_effect_service(VOLUME_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-u7-has-layout".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({
+                "volumeUid": "6f9619ff-8b86-4d01-b42d-00cf4fc964ff",
+            }))
+            .expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: VOLUME_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let response = binding.call(call).await.expect("call");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({
+                "hasLayout": false,
+            }))
+            .expect("canonical payload"),
+            "the hosted service answers the durable layout probe from the runtime facet"
         );
     }
 

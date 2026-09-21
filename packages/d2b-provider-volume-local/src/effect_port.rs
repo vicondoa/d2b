@@ -1,20 +1,16 @@
 //! Provider-side opaque bindings for Volume state effects.
 //!
 //! No type in this module carries a host path, numeric identity, descriptor,
-//! command, or broker operation. The core adapter resolves opaque IDs and
-//! routes named view descriptors out-of-band to the target supervisor.
+//! command, or broker operation. The anchored adapter ([`crate::adapter`])
+//! resolves opaque IDs and routes named view descriptors out-of-band to the
+//! target supervisor. The neutral `VolumeEffectPort` contract and its host
+//! wrapper retired with the daemon-side adapter (U7): the family's effects
+//! run through the declared `volume.d2bus.org/effects` service over the
+//! anchored ports this crate owns.
 
 use std::fmt;
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-
-/// Neutral core/broker Volume effect boundary.
-pub use d2b_contracts::v3::effect_port::{
-    AccessClass, CleanupTrigger, EffectError, LayoutEntryId, ProvisionOutcome, QuotaCapacityStatus,
-    QuotaUsage, RepairOutcome, RotateSealingKeyDisposition, RotateSealingKeyRequest,
-    RotateSealingKeyResult, SealingPolicyId, SourcePolicyId, StoreSyncOutcome, UserId, ViewId,
-    VolumeEffectIdError, VolumeEffectPort, VolumeId, VolumeMountToken,
-};
 
 /// The execution domain in which a volume-local controller runs.
 #[derive(Debug, Clone, PartialEq, Eq)]

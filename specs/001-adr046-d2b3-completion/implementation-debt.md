@@ -1518,13 +1518,16 @@ than adding privileged or runtime code to files they did not own.
 | Work item | Verified state | Owner / closing condition |
 | --- | --- | --- |
 | `ADR046-network-002` | The five Provider modules and their hermetic bridge-port, nftables, route and IPv6 tests landed. `ApplyNftablesProjection`, `CreateBridge`, `DeleteBridge` and `DeletePersistentTap` now have live production broker handlers, generation fencing and audit fields. The production `NetworkEffectPort` still does not exist in `d2b-contracts` or `d2b-core`, and `integration/host_fabric.rs` remains a declaration-only Rust test routed by no repository lane. | `ADR046-nl-001` owns the remaining neutral trait and core adapter. The live-handler half formerly assigned to `ADR046-nl-002` is complete; its executable `host_fabric` scenario remains owed. `ADR046-network-005` cannot reach the live broker operations until the adapter exists. |
-| `ADR046-pstate-003` | Marker, quota and domain policy landed, but `integration/volume_local.rs` is declaration-only. The exact Volume effect surface is not merely one of the four Network stubs: the neutral `VolumeEffectPort`, its host-runtime adapter and required closed Volume operations are absent. Existing legacy storage and swtpm broker handlers do not constitute that adapter. | `ADR046-vl-012` owns the concrete core/broker `VolumeEffectPort` adapter and its full provision/sealing scenarios in W6. `ADR046-pstate-009` owns the later W4 end-to-end provider-state and audit fixtures, but those cannot prove the real filesystem boundary until the adapter exists. The current `integration/README.md` statement that ProviderSupervisor owns this adapter is stale; the retained task record assigns it to `ADR046-vl-012`. |
+| `ADR046-pstate-003` | Marker, quota and domain policy landed, but `integration/volume_local.rs` is declaration-only. The exact Volume effect surface is not merely one of the four Network stubs: the neutral `VolumeEffectPort`, its host-runtime adapter and required closed Volume operations were declared-but-unbuilt and retired with the daemon-side adapter (U7): the anchored-fd implementation landed in `packages/d2b-provider-volume-local/src/adapter.rs` and the family's effects run through the declared `volume.d2bus.org/effects` service. Existing legacy storage and swtpm broker handlers do not constitute that adapter. | `ADR046-vl-012` is retired (T469): the planned core/broker `VolumeEffectPort` adapter was declared-but-unbuilt, and the anchored-fd implementation landed in `packages/d2b-provider-volume-local/src/adapter.rs` (U7). `ADR046-pstate-009` owns the later W4 end-to-end provider-state and audit fixtures, but those cannot prove the real filesystem boundary without the U7 anchored-fd adapter. The current `integration/README.md` statement that ProviderSupervisor owns this adapter is stale; the retained task record assigns it to `ADR046-vl-012`. |
 
 The distinction in the second row matters. The Network deferral is no longer
 blocked by typed-unimplemented broker operations; it is narrowed to the absent
 neutral contract, core adapter and executable lifecycle scenario. The Volume
-deferral remains blocked by an absent neutral contract and adapter plus
-operations assigned to a later item. Both still require out-of-destination
+deferral closed with U7: the neutral contract and host adapter were
+declared-but-unbuilt surfaces, and retired with the family's own crate, which
+serves the effects through the declared service over the anchored-fd adapter in
+`packages/d2b-provider-volume-local`; its remaining state is the
+declaration-only `integration/volume_local.rs` surface. Both still require out-of-destination
 writes, but they are not the same broker state.
 
 The current tree corrects one ownership assumption in that table:

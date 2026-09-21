@@ -19,6 +19,7 @@ test-support = []
 [dependencies]
 async-trait = "0.1"
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
 d2b-provider-volume-virtiofs = { path = "../d2b-provider-volume-virtiofs", version = "0.0.0-bootstrap" }
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
@@ -26,3 +27,8 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 parking_lot = "0.12"
 serde_json.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[[test]]
+name = "registration"
+path = "tests/registration.rs"
+required-features = ["test-support"]

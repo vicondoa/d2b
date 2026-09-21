@@ -1,6 +1,6 @@
 #![allow(clippy::result_large_err)]
 
-pub(crate) mod volume_effects;
+
 pub(crate) mod shared_provider_effects;
 
 

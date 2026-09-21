@@ -1561,12 +1561,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "transport-vsock",
         retires_with: "U10-U12 family rollout (transport-vsock)",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/volume_effect_adapter.rs",
-        token: "volume_local",
-        family: "volume-local",
-        retires_with: "U12 volume/store step",
-    },
 
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/ops/modprobe.rs",
@@ -2862,18 +2856,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 network-fds step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/volume_effect_adapter.rs",
-        token: "dnsmasq",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/volume_effect_adapter.rs",
-        token: "nftables",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/device.rs",
         token: "nftables",
         family: "network-local",
@@ -3368,12 +3350,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/resource_plane_v3.rs",
-        token: "volume_local",
-        family: "volume-local",
-        retires_with: "U12 volume/store step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/volume_effects.rs",
         token: "volume_local",
         family: "volume-local",
         retires_with: "U12 volume/store step",

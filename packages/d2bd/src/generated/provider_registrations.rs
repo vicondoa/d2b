@@ -78,6 +78,10 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &["user.d2bus.org/effects"],
     },
     ProviderRegistration {
+        provider_ref: "volume",
+        services: &["volume.d2bus.org/effects"],
+    },
+    ProviderRegistration {
         provider_ref: "volume-binding",
         services: &["volume-binding.d2bus.org/effects"],
     },
