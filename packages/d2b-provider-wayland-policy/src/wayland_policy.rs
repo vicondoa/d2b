@@ -14,6 +14,7 @@ use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
 use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 use serde_json::Value;
 
+use crate::effects_service::INTERACTION_EFFECTS_SERVICE;
 use crate::interaction::{
     InteractionChildContext, InteractionDriver, InteractionDriverArgs, InteractionDriverFactory,
     InteractionEffectError, InteractionKind, InteractionSpecEnvelope, InteractionType,
@@ -102,7 +103,12 @@ pub fn wayland_policy_descriptor(
         operations: &[],
         creations: &[],
         startup: &[],
-        services: &[],
+        // The family's declared effects service rides this descriptor alone
+        // (U12): the six interaction types share one effect port, and the
+        // service is the family's declared surface. The registration table
+        // carries it, so the daemon hosts it per zone from the family's
+        // factory.
+        services: &[INTERACTION_EFFECTS_SERVICE],
         decoder: wayland_policy_spec_decoder(),
         factory: Arc::new(WaylandPolicyFactory::new(args)),
     }

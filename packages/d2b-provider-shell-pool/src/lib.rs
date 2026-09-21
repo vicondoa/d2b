@@ -13,6 +13,6 @@ mod shell_pool;
 
 pub use shell_pool::{
     SHELL_POOL_PROVIDER_REF, SHELL_POOL_RESYNC, SHELL_POOL_TYPE,
-    ShellPool, ShellPoolDriver, ShellPoolFactory, shell_pool_descriptor, shell_pool_spec,
+    ShellPool, ShellPoolDriver, ShellPoolFactory, shell_pool_descriptor,
     shell_pool_spec_decoder,
 };

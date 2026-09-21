@@ -1,11 +1,17 @@
 //! Durable Zone-owned reconciliation for AudioService and AudioBinding rows.
 //!
-//! Audio policy resources are durable store objects.  This module is the
-//! daemon-side owner that reconciles fresh per-resource snapshots, validates
+//! Audio policy resources are durable store objects. This module is the
+//! family's owner that reconciles fresh per-resource snapshots, validates
 //! their relationships, and keeps one controller per binding until
-//! finalization.
-//! Host effects still flow through the broker-backed mediator in
-//! `audio_dispatch`; this registry owns policy state, not privileged handles.
+//! finalization. It is the moved daemon-side registry
+//! (`audio_resource_runtime.rs`), now served by the family's effects: host
+//! effects still flow through the broker-backed mediator behind the
+//! [`crate::facets::AudioMediatorSource`] facet; the registry owns policy
+//! state, not privileged handles.
+//!
+//! One registry lives per Zone behind the declared facet set, so every
+//! effects value built from the same facets - the six drivers' shared port
+//! and the hosted service - reconciles the same controller state.
 
 use std::collections::BTreeMap;
 #[cfg(test)]
@@ -14,22 +20,19 @@ use std::sync::Arc;
 
 #[cfg(test)]
 use d2b_contracts_resource::v3::ZoneRevision;
-use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, ZoneId};
+use d2b_contracts_resource::v3::{ResourceEnvelope, ResourceRef, StoredResource, ZoneId};
 use d2b_provider_audio_pipewire::{
     AudioArbitrationState, AudioBindingController, AudioBindingPhase, AudioBindingSpec,
-    AudioBindingStatus, AudioControllerError, AudioEnforcementPosture, AudioLastSetApplied,
-    AudioMediator, AudioServiceRole, AudioServiceSpec, GuestAudioReadiness, HostAudioReadiness,
-    MicDecision, resource_type::PROVIDER_REF, shared_microphone_arbiter,
+    AudioBindingStatus, AudioControllerError, AudioEnforcementPosture, AudioGrant,
+    AudioLastSetApplied, AudioMediator, AudioServiceRole, AudioServiceSpec, GuestAudioReadiness,
+    HostAudioReadiness, MicDecision, resource_type::PROVIDER_REF, shared_microphone_arbiter,
     validate_audio_binding_in_zone, validate_audio_service,
 };
-use d2b_contracts_resource::v3::StoredResource;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 
-use crate::ServerState;
-use crate::audio_dispatch::{DaemonAudioMediator, audio_capability_for_vm};
-use d2b_provider_audio_binding::AUDIO_BINDING_TYPE;
-use d2b_provider_audio_service::AUDIO_SERVICE_TYPE;
+use crate::facets::AudioMediatorSource;
+use crate::vocabulary::{AUDIO_BINDING_TYPE, AUDIO_SERVICE_TYPE};
 
 const GUEST_TYPE: &str = "Guest";
 
@@ -59,9 +62,9 @@ impl core::fmt::Display for AudioResourceRuntimeError {
 
 impl std::error::Error for AudioResourceRuntimeError {}
 
-/// Daemon-owned status for one durable AudioBinding.
+/// Family-owned status for one durable AudioBinding.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AudioBindingRuntimeStatus {
+pub struct AudioBindingRuntimeStatus {
     pub resource: ResourceRef,
     pub status: AudioBindingStatus,
 }
@@ -123,14 +126,14 @@ pub(crate) fn audio_binding_status_value(status: AudioBindingStatus) -> serde_js
 struct AudioBindingRecord {
     spec: AudioBindingSpec,
     lease: d2b_provider_audio_pipewire::AudioLeaseId,
-    controller: Option<AudioBindingController<DaemonAudioMediator>>,
+    controller: Option<AudioBindingController<Box<dyn AudioMediator>>>,
     status: AudioBindingStatus,
 }
 
 /// One Zone's durable audio controller registry.
 pub(crate) struct AudioResourceRuntime {
     zone: ZoneId,
-    state: Arc<ServerState>,
+    audio: Arc<dyn AudioMediatorSource>,
     services: BTreeMap<String, AudioServiceSpec>,
     service_microphones: BTreeMap<String, d2b_provider_audio_pipewire::SharedMicrophoneArbiter>,
     bindings: BTreeMap<String, AudioBindingRecord>,
@@ -149,10 +152,10 @@ impl core::fmt::Debug for AudioResourceRuntime {
 }
 
 impl AudioResourceRuntime {
-    pub(crate) fn new(zone: ZoneId, state: Arc<ServerState>) -> Self {
+    pub(crate) fn new(zone: ZoneId, audio: Arc<dyn AudioMediatorSource>) -> Self {
         Self {
             zone,
-            state,
+            audio,
             services: BTreeMap::new(),
             service_microphones: BTreeMap::new(),
             bindings: BTreeMap::new(),
@@ -276,15 +279,17 @@ impl AudioResourceRuntime {
         self.bindings.remove(&key);
 
         let lease = lease_for(&resource.resource_ref);
-        let manifest = crate::load_json::<d2b_core::manifest_v04::ManifestV04>(
-            &self.state.config.artifacts.public_manifest_path,
-        )
-        .ok();
-        let capability = manifest
-            .as_ref()
-            .and_then(|manifest| manifest.vms.get(spec.target_ref.name().as_str()))
-            .and_then(audio_capability_for_vm);
-        let (controller, status) = match capability {
+        // The mediator source is the daemon's broker-backed construction: the
+        // target capability row and the host enforcement paths live behind the
+        // declared facet, so the family carries no manifest or daemon state
+        // (U12). A target with no audio capability publishes the degraded,
+        // host-and-guest unavailable status exactly as the daemon registry
+        // did.
+        let projection = service_spec.service_role == AudioServiceRole::Projection;
+        let (controller, status) = match self
+            .audio
+            .build(spec.target_ref.name().as_str(), projection)
+        {
             None => (
                 None,
                 unavailable_status(
@@ -293,24 +298,7 @@ impl AudioResourceRuntime {
                     GuestAudioReadiness::Unavailable,
                 ),
             ),
-            Some(capability) => {
-                let capability = if service_spec.service_role == AudioServiceRole::Projection {
-                    d2b_core::provider_capabilities::AudioProviderCapability {
-                        host_enforcement:
-                            d2b_core::provider_capabilities::AudioHostEnforcementKind::None,
-                        ..capability
-                    }
-                } else {
-                    capability
-                };
-                let mediator = DaemonAudioMediator::new(
-                    self.state.as_ref(),
-                    spec.target_ref.name().as_str(),
-                    capability,
-                    d2b_contracts_broker::broker_wire::BrokerCallerRole::AdminUid {
-                        uid: self.state.daemon_uid,
-                    },
-                );
+            Some(mediator) => {
                 let microphone = self
                     .service_microphones
                     .entry(spec.service_ref.to_canonical_string())
@@ -417,7 +405,51 @@ impl AudioResourceRuntime {
             })
             .collect()
     }
+}
 
+/// The per-zone shared handle the effects lock to reconcile the family's
+/// audio policy state.
+pub(crate) struct AudioEffectRegistry {
+    inner: tokio::sync::Mutex<AudioResourceRuntime>,
+}
+
+impl AudioEffectRegistry {
+    pub(crate) fn new(zone: ZoneId, audio: Arc<dyn AudioMediatorSource>) -> Self {
+        Self {
+            inner: tokio::sync::Mutex::new(AudioResourceRuntime::new(zone, audio)),
+        }
+    }
+
+    pub(crate) async fn reconcile_service(
+        &self,
+        resource: &StoredResource,
+    ) -> Result<(), AudioResourceRuntimeError> {
+        self.inner.lock().await.reconcile_service_resource(resource)
+    }
+
+    pub(crate) async fn reconcile_binding(
+        &self,
+        resource: &StoredResource,
+        service: &StoredResource,
+        guest: &StoredResource,
+    ) -> Result<Option<AudioBindingRuntimeStatus>, AudioResourceRuntimeError> {
+        self.inner
+            .lock()
+            .await
+            .reconcile_binding_resource(resource, service, guest)
+    }
+
+    pub(crate) async fn finalize_binding(
+        &self,
+        resource: &StoredResource,
+    ) -> Result<(), AudioResourceRuntimeError> {
+        self.inner.lock().await.finalize_binding_resource(resource)
+    }
+
+    /// The zone's current binding statuses, for the hosted service surface.
+    pub(crate) async fn statuses(&self) -> Vec<AudioBindingRuntimeStatus> {
+        self.inner.lock().await.statuses()
+    }
 }
 
 fn unavailable_status(
@@ -432,12 +464,12 @@ fn unavailable_status(
         microphone: None::<MicDecision>,
         channels: d2b_provider_audio_pipewire::AudioBindingChannels {
             speaker: d2b_provider_audio_pipewire::AudioSpeakerStatus {
-                grant: d2b_provider_audio_pipewire::AudioGrant::Off,
+                grant: AudioGrant::Off,
                 level: None,
                 live_enforced: false,
             },
             mic: d2b_provider_audio_pipewire::AudioMicrophoneStatus {
-                grant: d2b_provider_audio_pipewire::AudioGrant::Off,
+                grant: AudioGrant::Off,
                 gain: None,
                 live_enforced: false,
                 arbitration_state: AudioArbitrationState::Inactive,
@@ -462,28 +494,6 @@ fn deletion_requested(resource: &StoredResource) -> bool {
         .is_some_and(|value| !value.is_null())
 }
 
-#[cfg(test)]
-fn decode_services(
-    zone: &ZoneId,
-    resources: &[StoredResource],
-) -> Result<BTreeMap<String, AudioServiceSpec>, AudioResourceRuntimeError> {
-    let mut services = BTreeMap::new();
-    for resource in resources {
-        if !is_audio_resource(resource, zone)? {
-            continue;
-        }
-        let spec: AudioServiceSpec = decode_spec(resource)?;
-        if validate_audio_service(&spec).is_err() {
-            return Err(AudioResourceRuntimeError::InvalidResource);
-        }
-        let key = resource.resource_ref.to_canonical_string();
-        if services.insert(key, spec).is_some() {
-            return Err(AudioResourceRuntimeError::InvalidResource);
-        }
-    }
-    Ok(services)
-}
-
 fn is_audio_resource(
     resource: &StoredResource,
     zone: &ZoneId,
@@ -502,24 +512,6 @@ fn is_audio_resource(
         .spec()
         .provider_ref()
         .is_some_and(|provider| provider.to_canonical_string() == PROVIDER_REF))
-}
-
-#[cfg(test)]
-fn validate_relationships(
-    services: &BTreeMap<String, AudioServiceSpec>,
-    bindings: &[(String, (StoredResource, AudioBindingSpec))],
-    guests: &BTreeSet<String>,
-) -> Result<(), AudioResourceRuntimeError> {
-    for (_, (resource, spec)) in bindings {
-        if (!deletion_requested(resource)
-            && (!services.contains_key(&spec.service_ref.to_canonical_string())
-                || !guests.contains(&spec.target_ref.to_canonical_string())))
-            || resource.resource_ref.resource_type().as_str() != AUDIO_BINDING_TYPE
-        {
-            return Err(AudioResourceRuntimeError::InvalidRelationship);
-        }
-    }
-    Ok(())
 }
 
 fn decode_spec<T: DeserializeOwned>(
@@ -630,6 +622,46 @@ mod tests {
             canonical_json: canonical,
             payload_digest: "sha256:test".to_owned(),
         }
+    }
+
+    #[cfg(test)]
+    fn validate_relationships(
+        services: &BTreeMap<String, AudioServiceSpec>,
+        bindings: &[(String, (StoredResource, AudioBindingSpec))],
+        guests: &BTreeSet<String>,
+    ) -> Result<(), AudioResourceRuntimeError> {
+        for (_, (resource, spec)) in bindings {
+            if (!deletion_requested(resource)
+                && (!services.contains_key(&spec.service_ref.to_canonical_string())
+                    || !guests.contains(&spec.target_ref.to_canonical_string())))
+                || resource.resource_ref.resource_type().as_str() != AUDIO_BINDING_TYPE
+            {
+                return Err(AudioResourceRuntimeError::InvalidRelationship);
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn decode_services(
+        zone: &ZoneId,
+        resources: &[StoredResource],
+    ) -> Result<BTreeMap<String, AudioServiceSpec>, AudioResourceRuntimeError> {
+        let mut services = BTreeMap::new();
+        for resource in resources {
+            if !is_audio_resource(resource, zone)? {
+                continue;
+            }
+            let spec: AudioServiceSpec = decode_spec(resource)?;
+            if validate_audio_service(&spec).is_err() {
+                return Err(AudioResourceRuntimeError::InvalidResource);
+            }
+            let key = resource.resource_ref.to_canonical_string();
+            if services.insert(key, spec).is_some() {
+                return Err(AudioResourceRuntimeError::InvalidResource);
+            }
+        }
+        Ok(services)
     }
 
     #[test]

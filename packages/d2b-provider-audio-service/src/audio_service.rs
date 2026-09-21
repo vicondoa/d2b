@@ -15,14 +15,14 @@ use d2b_provider_audio_pipewire::{AUDIO_REPAIR_INTERVAL_SECS, AudioServiceSpec};
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
 use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 
-use d2b_provider_wayland_policy::interaction::{
-    InteractionChildContext, InteractionDriver, InteractionDriverArgs, InteractionDriverFactory,
-    InteractionEffectError, InteractionKind, InteractionSpecEnvelope, InteractionType,
-    spec_decoder,
+use d2b_provider_wayland_policy::{
+    AUDIO_SERVICE_TYPE,
+    interaction::{
+        InteractionChildContext, InteractionDriver, InteractionDriverArgs,
+        InteractionDriverFactory, InteractionEffectError, InteractionKind,
+        InteractionSpecEnvelope, InteractionType, spec_decoder,
+    },
 };
-
-/// The canonical ResourceType name of an audio service.
-pub const AUDIO_SERVICE_TYPE: &str = "audio.d2bus.org.AudioService";
 
 /// The Provider reference the type's rows select.
 pub const AUDIO_SERVICE_PROVIDER_REF: &str = d2b_provider_audio_pipewire::PROVIDER_REF;

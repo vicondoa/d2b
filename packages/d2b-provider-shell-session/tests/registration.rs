@@ -6,14 +6,13 @@ use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
 use d2b_provider_shell_session::{
-    SHELL_SESSION_TYPE, ShellSession, shell_session_descriptor, shell_session_execution,
-    shell_session_pool_ref, shell_session_spec_decoder,
+    SHELL_SESSION_TYPE, ShellSession, shell_session_descriptor, shell_session_spec_decoder,
 };
 use d2b_provider_wayland_policy::{
     InteractionChildContext, InteractionDriverArgs, InteractionDriverEffects,
     InteractionEffectError, InteractionEffectOutcome, InteractionEffectPhase,
     InteractionEffectRequest, InteractionFinalize, InteractionKind, InteractionSpecEnvelope,
-    InteractionType,
+    InteractionType, shell_session_execution, shell_session_pool_ref,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};

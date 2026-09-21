@@ -71,7 +71,12 @@ impl core::fmt::Display for AudioMediatorError {
 impl std::error::Error for AudioMediatorError {}
 
 /// Effect-port contract used by the AudioBinding controller.
-pub trait AudioMediator {
+///
+/// The supertraits keep the trait object usable across the family's
+/// async service boundaries: the effects service holds the mediator behind
+/// a trait object and its futures must be `Send`, so a boxed mediator must
+/// be `Send + Sync` with the concrete mediators.
+pub trait AudioMediator: Send + Sync {
     /// Apply an on/off grant through the owner mediator.
     fn set_grant(&mut self, grant: AudioGrant) -> Result<(), AudioMediatorError>;
     /// Apply an on/off grant to one stream direction.
@@ -232,5 +237,47 @@ impl AudioMediator for FakeAudioMediator {
 
     fn guest_readiness(&self) -> GuestAudioReadiness {
         self.guest
+    }
+}
+
+/// A boxed mediator is a mediator: the family's facet boundary hands the
+/// controller a `Box<dyn AudioMediator>` (the daemon's broker-backed
+/// mediator behind the declared facet), so the controller's `M: AudioMediator`
+/// bound is satisfied by the trait object the owner crate builds.
+impl AudioMediator for Box<dyn AudioMediator + '_> {
+    fn set_grant(&mut self, grant: AudioGrant) -> Result<(), AudioMediatorError> {
+        self.as_mut().set_grant(grant)
+    }
+
+    fn set_channel_grant(
+        &mut self,
+        channel: AudioChannel,
+        grant: AudioGrant,
+    ) -> Result<(), AudioMediatorError> {
+        self.as_mut().set_channel_grant(channel, grant)
+    }
+
+    fn set_level(&mut self, level: LevelPercent) -> Result<(), AudioMediatorError> {
+        self.as_mut().set_level(level)
+    }
+
+    fn set_channel_level(
+        &mut self,
+        channel: AudioChannel,
+        level: LevelPercent,
+    ) -> Result<(), AudioMediatorError> {
+        self.as_mut().set_channel_level(channel, level)
+    }
+
+    fn readiness(&self) -> AudioReadiness {
+        self.as_ref().readiness()
+    }
+
+    fn host_readiness(&self) -> HostAudioReadiness {
+        self.as_ref().host_readiness()
+    }
+
+    fn guest_readiness(&self) -> GuestAudioReadiness {
+        self.as_ref().guest_readiness()
     }
 }

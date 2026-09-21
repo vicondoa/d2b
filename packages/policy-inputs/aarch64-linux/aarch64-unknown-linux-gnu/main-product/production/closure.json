@@ -99,7 +99,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "48223616626768d5a2fba1da7848f96669d9d8541f99218038aacc1253b253ff",
+  "lock_sha256": "ad2fb88ef000bd0a7cf5f75d4d5228123e883614bf2397222e949c9fe0b0e0e7",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -5869,6 +5869,18 @@
     },
     {
       "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
+      "to": "d2b-core-controller@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
+      "to": "d2b-provider-endpoint@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
       "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -7969,7 +7981,25 @@
     },
     {
       "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
+      "to": "d2b-provider-audio-pipewire@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
       "to": "d2b-provider-display-wayland@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
+      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
+      "to": "d2b-resource-api@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -7994,6 +8024,12 @@
     {
       "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
       "to": "serde_json@1.0.151#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-wayland-policy@0.0.0-bootstrap#path",
+      "to": "sha2@0.10.9#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },

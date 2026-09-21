@@ -4,27 +4,29 @@
 //! to, owns the audio worker and endpoint children the Provider derives from
 //! the binding, and drives the Provider's lease lifecycle through the family
 //! effect port. The children are the audio Provider's realization
-//! (`AudioBindingController::child_resources`), so this crate asks for them
-//! through [`AudioBindingChildSource`] and owns the manager child shape they
-//! materialize into.
+//! (`AudioBindingController::child_resources`), so this crate authors them
+//! through its own [`AudioBindingChildSource`] implementation and owns the
+//! manager child shape they materialize into.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildIntent;
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
-use d2b_provider_audio_pipewire::{AUDIO_REPAIR_INTERVAL_SECS, AudioBindingSpec};
+use d2b_provider_audio_pipewire::{
+    AUDIO_REPAIR_INTERVAL_SECS, AudioBindingController, AudioBindingSpec, FakeAudioMediator,
+};
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
 use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 
-use d2b_provider_wayland_policy::interaction::{
-    InteractionChildContext, InteractionDriver, InteractionDriverArgs, InteractionDriverFactory,
-    InteractionEffectError, InteractionKind, InteractionSpecEnvelope, InteractionType,
-    binding_child_ensure, spec_decoder,
+use d2b_provider_wayland_policy::{
+    AUDIO_BINDING_TYPE,
+    interaction::{
+        InteractionChildContext, InteractionDriver, InteractionDriverArgs,
+        InteractionDriverFactory, InteractionEffectError, InteractionKind,
+        InteractionSpecEnvelope, InteractionType, binding_child_ensure, spec_decoder,
+    },
 };
-
-/// The canonical ResourceType name of an audio binding.
-pub const AUDIO_BINDING_TYPE: &str = "audio.d2bus.org.AudioBinding";
 
 /// The Provider reference the type's rows select.
 pub const AUDIO_BINDING_PROVIDER_REF: &str = d2b_provider_audio_pipewire::PROVIDER_REF;
@@ -43,17 +45,41 @@ pub struct AudioBindingChildRequest<'a> {
     pub spec: &'a AudioBindingSpec,
 }
 
-/// The daemon-owned source of one binding's child intents.
+/// The source of one binding's child intents.
 ///
 /// The audio Provider's controller holds the realization, so the intents are
-/// authored on the daemon side of the port and this crate owns the manager
-/// child rows they materialize into.
+/// authored by this crate's own implementation over the controller's child
+/// synthesis; a caller that needs a different source may supply one through
+/// [`AudioBinding::new`].
 pub trait AudioBindingChildSource: Send + Sync + 'static {
     /// The Process and Endpoint intents one binding owns.
     fn binding_children(
         &self,
         request: &AudioBindingChildRequest<'_>,
     ) -> Result<Vec<BindingChildIntent>, InteractionEffectError>;
+}
+
+/// The crate's own child-intent source: the audio Provider controller's
+/// child synthesis.
+///
+/// Child synthesis is mediator-independent, so the controller's associated
+/// function is invoked over the crate's public fake mediator stand-in; the
+/// stand-in is never constructed on this path.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BindingChildSource;
+
+impl AudioBindingChildSource for BindingChildSource {
+    fn binding_children(
+        &self,
+        request: &AudioBindingChildRequest<'_>,
+    ) -> Result<Vec<BindingChildIntent>, InteractionEffectError> {
+        AudioBindingController::<FakeAudioMediator>::child_resources(
+            request.binding_ref,
+            request.spec,
+        )
+        .map(|set| set.iter().cloned().collect())
+        .map_err(|_| InteractionEffectError::InvalidResource)
+    }
 }
 
 /// The `AudioBinding` driver behavior and declaration.
@@ -63,9 +89,15 @@ pub struct AudioBinding {
 }
 
 impl AudioBinding {
-    /// Build the behavior over the daemon's child-intent source.
+    /// Build the behavior over a child-intent source.
     pub fn new(children: Arc<dyn AudioBindingChildSource>) -> Self {
         Self { children }
+    }
+}
+
+impl Default for AudioBinding {
+    fn default() -> Self {
+        Self::new(Arc::new(BindingChildSource))
     }
 }
 

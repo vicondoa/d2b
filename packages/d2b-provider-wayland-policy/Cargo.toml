@@ -18,20 +18,27 @@ async-trait = "0.1"
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
+d2b-provider-audio-pipewire = { path = "../d2b-provider-audio-pipewire", version = "0.0.0-bootstrap" }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap" }
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
+d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
 
-[features]
-test-support = []
-
 [dev-dependencies]
 async-trait = "0.1"
+d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
+d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
+
+[features]
+test-support = []
 
 [[test]]
 name = "engine"

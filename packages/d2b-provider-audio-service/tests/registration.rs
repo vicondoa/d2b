@@ -6,10 +6,10 @@ use std::sync::Arc;
 use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
 use d2b_provider_audio_pipewire::AudioServiceSpec;
 use d2b_provider_audio_service::{
-    AUDIO_SERVICE_TYPE, AudioService, audio_service_descriptor, audio_service_spec_decoder,
+    AudioService, audio_service_descriptor, audio_service_spec_decoder,
 };
 use d2b_provider_wayland_policy::{
-    InteractionDriverArgs, InteractionDriverEffects, InteractionEffectError,
+    AUDIO_SERVICE_TYPE, InteractionDriverArgs, InteractionDriverEffects, InteractionEffectError,
     InteractionEffectOutcome, InteractionEffectPhase, InteractionEffectRequest,
     InteractionFinalize, InteractionKind, InteractionSpecEnvelope, InteractionType,
 };

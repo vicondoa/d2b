@@ -393,7 +393,6 @@ use d2bd_runtime::admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRI
 // Provider selection and effect adapters remain local to this crate.
 mod audio_dispatch;
 mod audio_host_controller;
-mod audio_resource_runtime;
 mod credential_backend_runtime;
 mod credential_resource_runtime;
 pub mod interaction_composition;
@@ -14695,7 +14694,9 @@ async fn open_resource_plane(
         // small VM creates a store-read thundering herd that trips their
         // own startup deadlines.
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        let _ = runtime.audio_binding_statuses();
+        // U12: the audio controller registry lives inside the interaction
+        // family's effects service now, constructed with the zone's plane; a
+        // startup warm-up read of the daemon's registry no longer exists.
         if let Err(error) = runtime.require_ready() {
             if error != resource_runtime::ResourceRuntimeError::InteractionConfigurationUnavailable {
                 let _ = runtime.shutdown().await;

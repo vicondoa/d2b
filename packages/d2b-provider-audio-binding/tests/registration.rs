@@ -7,14 +7,14 @@ use std::sync::Arc;
 use d2b_contracts_provider::v3::semantic_services::child_resources::BindingChildIntent;
 use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
 use d2b_provider_audio_binding::{
-    AUDIO_BINDING_TYPE, AudioBinding, AudioBindingChildRequest, AudioBindingChildSource,
+    AudioBinding, AudioBindingChildRequest, AudioBindingChildSource,
     audio_binding_descriptor, audio_binding_spec_decoder,
 };
 use d2b_provider_audio_pipewire::{
     AudioBindingController, AudioBindingSpec, FakeAudioMediator,
 };
 use d2b_provider_wayland_policy::{
-    InteractionChildContext, InteractionDriverArgs, InteractionDriverEffects,
+    AUDIO_BINDING_TYPE, InteractionChildContext, InteractionDriverArgs, InteractionDriverEffects,
     InteractionEffectError, InteractionEffectOutcome, InteractionEffectPhase,
     InteractionEffectRequest, InteractionFinalize, InteractionKind, InteractionSpecEnvelope,
     InteractionType,

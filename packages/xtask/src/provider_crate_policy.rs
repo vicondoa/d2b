@@ -1039,18 +1039,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/interaction_effects.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/audio_resource_runtime.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/usbip_production.rs",
         token: "server_state",
         family: "d2bd-state",
@@ -1892,42 +1880,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent:the broker is pinned provider-free;the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/audio_resource_runtime.rs",
-        token: "audio_pipewire",
-        family: "audio-pipewire",
-        retires_with: "U12 audio step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/audio_resource_runtime.rs",
-        token: "pipewire",
-        family: "audio-pipewire",
-        retires_with: "U12 audio step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/interaction_child_sources.rs",
-        token: "audio_pipewire",
-        family: "audio-pipewire",
-        retires_with: "U12 audio step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/interaction_child_sources.rs",
-        token: "pipewire",
-        family: "audio-pipewire",
-        retires_with: "U12 audio step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/interaction_effects.rs",
-        token: "audio_pipewire",
-        family: "audio-pipewire",
-        retires_with: "U12 audio step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/interaction_effects.rs",
-        token: "pipewire",
-        family: "audio-pipewire",
-        retires_with: "U12 audio step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/audio_dispatch.rs",
         token: "audio_pipewire",
         family: "audio-pipewire",
@@ -1953,6 +1905,18 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/audio_host_controller.rs",
+        token: "pipewire",
+        family: "audio-pipewire",
+        retires_with: "U12 audio step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "audio_pipewire",
+        family: "audio-pipewire",
+        retires_with: "U12 audio step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
         token: "pipewire",
         family: "audio-pipewire",
         retires_with: "U12 audio step",
@@ -2728,12 +2692,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (display-wayland)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/interaction_child_sources.rs",
-        token: "wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
         token: "wayland",
         family: "display-wayland",
@@ -2752,20 +2710,8 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (display-wayland)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/interaction_effects.rs",
-        token: "wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
         token: "wayland",
-        family: "display-wayland",
-        retires_with: "U10-U12 family rollout (display-wayland)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/interaction_effects.rs",
-        token: "display_wayland",
         family: "display-wayland",
         retires_with: "U10-U12 family rollout (display-wayland)",
     },
@@ -3989,12 +3935,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "qemu_media",
         family: "runtime-qemu-media",
         retires_with: "permanent:the broker is pinned provider-free;the privileged qemu-media open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/interaction_effects.rs",
-        token: "shell_terminal",
-        family: "shell-terminal",
-        retires_with: "U10-U12 family rollout (shell-terminal)",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-resource-types/src/resource_type.rs",
@@ -8663,6 +8603,10 @@ const PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS: &[ProviderFamilyKnowledgeExemption] 
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-volume", module: "packages/d2b-provider-volume/src/driver.rs", token: "volume_local", family: "volume-local", reason: "the volume provider's own name const uses its sibling family's id" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/wayland_policy.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-policy provider's interface types name the display-wayland surface" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/interaction.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-policy provider's interface types name the display-wayland surface" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/effects_service.rs", token: "display_wayland", family: "display-wayland", reason: "the interaction effects dispatch the display-wayland kinds the family's interface declares" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/effects_service.rs", token: "shell_terminal", family: "shell-terminal", reason: "the shell pool finalize check names the shell-terminal session type it must find" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/test_support.rs", token: "display_wayland", family: "display-wayland", reason: "test-support fixture identity names the display-wayland session type" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/vocabulary.rs", token: "shell_terminal", family: "shell-terminal", reason: "family-qualified resource type names the shell-terminal family's type" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-session", module: "packages/d2b-provider-wayland-session/src/wayland_session.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-session provider's interface types name the display-wayland surface" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-zone", module: "packages/d2b-provider-zone/src/zone_status.rs", token: "system_core", family: "system-core", reason: "the zone status emitter names the system-core session phases" },
 ];

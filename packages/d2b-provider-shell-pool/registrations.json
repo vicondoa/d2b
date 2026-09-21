@@ -1,0 +1,5 @@
+{
+  "crate": "d2b-provider-shell-pool",
+  "provider": "shell-pool",
+  "services": []
+}
