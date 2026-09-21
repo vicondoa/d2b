@@ -1043,6 +1043,11 @@ pub(crate) mod test_support {
         pub(crate) gate_open: AtomicBool,
         pub(crate) gate: tokio::sync::Notify,
         pub(crate) delete_blocked: AtomicBool,
+        /// When set, `delete` fails with the terminal `Refused` verdict: the
+        /// deleting actor stays alive (a terminal verdict never requeues and
+        /// never stops it), which is what makes a stale requeue timer that
+        /// survives the delete observable instead of being dropped at stop.
+        pub(crate) delete_terminal_failure: AtomicBool,
         /// When set, every reconcile registers an internal watch on this
         /// target first (models a dependent resource).
         pub(crate) watch_target: Mutex<Option<ResourceKey>>,
@@ -1072,6 +1077,7 @@ pub(crate) mod test_support {
                 gate_open: AtomicBool::new(false),
                 gate: tokio::sync::Notify::new(),
                 delete_blocked: AtomicBool::new(false),
+                delete_terminal_failure: AtomicBool::new(false),
                 watch_target: Mutex::new(None),
                 view_targets: Mutex::new(Vec::new()),
                 view_reads: Mutex::new(Vec::new()),
@@ -1311,6 +1317,9 @@ pub(crate) mod test_support {
 
         async fn delete(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
             self.shared.delete_calls.fetch_add(1, Ordering::SeqCst);
+            if self.shared.delete_terminal_failure.load(Ordering::SeqCst) {
+                return Err(FakeDriverError::Refused);
+            }
             if self.shared.delete_blocked.load(Ordering::SeqCst) {
                 self.shared.wait_gate().await;
             }
@@ -1547,6 +1556,20 @@ pub(crate) mod test_support {
         fn execution_ref(&self, key: &ResourceKey, _spec: &[u8]) -> Option<String> {
             (key.name == "guest-worker").then(|| "Guest/test-vm".to_owned())
         }
+    }
+
+    /// Advance the paused runtime clock by `duration` and let every timer it
+    /// fires - and the mailbox work those timers deliver - settle before
+    /// returning.
+    ///
+    /// Only valid under `#[tokio::test(start_paused = true)]`: with the clock
+    /// frozen, awaiting `tokio::time::sleep` is a deterministic virtual
+    /// advance. Auto-advance steps the frozen clock to each pending deadline
+    /// and processes the fired timers' downstream work while the runtime is
+    /// idle, so the call never reads wall-clock time and cannot stretch under
+    /// load.
+    pub(crate) async fn pass_virtual(duration: Duration) {
+        tokio::time::sleep(duration).await;
     }
 
     /// Wait until `check` holds, polling on the test runtime.
