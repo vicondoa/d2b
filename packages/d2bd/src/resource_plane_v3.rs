@@ -3645,6 +3645,8 @@ use d2b_provider_system_core::MinijailPlatformGate;
                         HOST_EFFECTS_SERVICE.id,
                         Arc::new(HostEffectsServiceFactory::new(host_facets))
                             as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
                         d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id,
                         Arc::new(
                             d2b_provider_wayland_policy::InteractionEffectsServiceFactory::new(
@@ -4107,6 +4109,8 @@ use d2b_provider_system_core::MinijailPlatformGate;
             after_fields, before_fields,
             "the adopted generation answers the same bounded observations (the volatile process count normalized out)"
         );
+    }
+
     /// U12: the composition root hosts the interaction family's declared
     /// effects service from the family's own factory over the plane's facet
     /// set, and the hosted service answers `audio-binding-statuses` through
