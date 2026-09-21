@@ -1898,6 +1898,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts-resource",
+ "d2b-provider-toolkit",
  "d2b-provider-volume-local",
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
@@ -1928,13 +1929,16 @@ dependencies = [
 name = "d2b-provider-volume-local"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-core",
+ "d2b-host",
+ "nix 0.29.0",
+ "rustix 0.38.44",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tracing",
 ]
 

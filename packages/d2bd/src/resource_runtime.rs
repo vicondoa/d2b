@@ -142,7 +142,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-mod volume_effect_adapter;
 pub(crate) mod plane_controller_bridge;
 use plane_controller_bridge::{
     ChildMutationFailure, ChildMutationRoute, ControllerPlaneView, LiveControllerSessionEvidence,
@@ -150,9 +149,6 @@ use plane_controller_bridge::{
     child_mutation_route, child_type_route,
 };
 use d2b_resource_runtime::manager::ResourceView;
-pub use volume_effect_adapter::{
-    AnchoredVolumeEffectAdapter, FdRootResolver, ResolvedVolumeRoot, VolumeRootResolver,
-};
 
 /// The interaction family's ResourceTypes, as each type's own crate declares
 /// them.

@@ -2,49 +2,26 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use std::sync::Arc;
-
-use d2b_contracts_resource::v3::{ResourceRef, ResourceUid, volume::VolumeSpec};
 use d2b_provider_volume::{
-    VOLUME_CREATIONS, VOLUME_TYPE_NAME, VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
+    VOLUME_CREATIONS, VOLUME_TYPE_NAME, VolumeDriverArgs, volume_descriptor,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, ChildCustody, WellKnownType};
 
-/// The port instance the declaration carries; the registration boundary
-/// never runs an effect.
-struct UnusedEffects;
-
-#[async_trait::async_trait]
-impl VolumeDriverEffects for UnusedEffects {
-    async fn ensure_layout(
-        &self,
-        _volume_uid: &ResourceUid,
-        _spec: &VolumeSpec,
-        _provider: Option<&serde_json::Value>,
-        _owner_ref: Option<&ResourceRef>,
-    ) -> Result<bool, String> {
-        Err("registration boundary runs no layout effect".to_owned())
-    }
-
-    async fn remove_layout(
-        &self,
-        _volume_uid: &ResourceUid,
-        _spec: &VolumeSpec,
-    ) -> Result<(), String> {
-        Err("registration boundary runs no layout effect".to_owned())
-    }
-
-    fn has_layout(&self, _volume_uid: &ResourceUid) -> bool {
-        false
-    }
+/// The facet set the declaration carries; the registration boundary never
+/// runs an effect. The runtime double refuses every call, so a test that
+/// accidentally drives an effect fails loudly instead of passing silently.
+fn unused_facets() -> d2b_provider_volume::VolumeEffectFacets {
+    d2b_provider_volume::test_support::recording_facets(
+        d2b_provider_volume::test_support::RecordingRuntime::new(),
+    )
 }
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     volume_descriptor(VolumeDriverArgs {
         zone: "work".to_owned(),
-        effects: Arc::new(UnusedEffects),
+        facets: unused_facets(),
     })
 }
 

@@ -22,6 +22,7 @@ d2b_rust_library(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
         "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
@@ -37,6 +38,7 @@ d2b_rust_library(
     crate_name = "d2b_provider_volume",
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
         "//packages/d2b-provider-volume-local:d2b_provider_volume_local_test_support",
         "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
@@ -52,7 +54,7 @@ d2b_rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
         "//packages/d2b-resource-types:d2b_resource_types",
-        ":d2b_provider_volume",
+        ":d2b_provider_volume_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

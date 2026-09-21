@@ -46,6 +46,10 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &[],
     },
     ProviderRegistration {
+        provider_ref: "volume",
+        services: &["volume.d2bus.org/effects"],
+    },
+    ProviderRegistration {
         provider_ref: "wayland-policy",
         services: &["interaction.d2bus.org/effects"],
     },
