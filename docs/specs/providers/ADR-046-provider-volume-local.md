@@ -851,23 +851,25 @@ and must not contain host paths, secret content, process data, or terminal bytes
 
 ---
 
-## VolumeEffectPort - injected effect boundary
+## VolumeEffectPort - injected effect boundary (retired, U7)
 
 The `Provider/volume-local` controller process never opens host paths, calls
 `openat2` or any syscall that takes a raw host path, issues `setfacl`,
 `mount`/`umount`, or `fallocate`, receives numeric UIDs, or holds a direct
 connection to the Zone broker. All filesystem mutation, path resolution, and
-audit emission are performed by the injected `VolumeEffectPort` implementation -
-a core/broker adapter that runs outside the Provider process boundary.
+audit emission are performed by the anchored-fd adapter -
+`AnchoredVolumeEffectAdapter` in `packages/d2b-provider-volume-local/src/adapter.rs`
+(U7) - which lives in the crate that owns the effect ports it implements.
 
-### VolumeEffectPort trait
-
-Defined in `d2b-contracts/src/v3/effect_port.rs` (neutral contract crate
-shared by the Provider and the core/broker adapter). The core/broker adapter
-implements the trait; the Provider crate imports and uses it. The Provider crate
-must not define the trait, and core must not import any Provider-implementation
-crate. The Provider crate depends only on `d2b-contracts`, `d2b-provider`, and
-`d2b-provider-toolkit`.
+The neutral `VolumeEffectPort` contract (`d2b-contracts/src/v3/effect_port.rs`)
+and its host wrapper (`d2b-host/src/volume_effect_adapter.rs`) were
+declared-but-unbuilt surfaces and retired with the daemon-side adapter
+(U7): the family's driver effects now run through the declared
+`volume.d2bus.org/effects` service, hosted per zone by the daemon from the
+family's own implementation over the daemon-supplied declared facets. The
+Provider crate depends on `d2b-contracts-resource`, `d2b-provider-volume-local`,
+`d2b-provider-toolkit`, and the resource-runtime crates; core must not import
+any Provider-implementation crate.
 
 All opaque ID newtypes carry a custom redacted `Debug` implementation; they must
 not derive `Debug` or print internal content. The two IDs carried by
@@ -1900,9 +1902,11 @@ Cross-references to main `a1cc0b2d` symbols used by volume-local (per
 - `Fixture` / `FakeProvider` / `DeterministicClock` from
   `d2b-provider-toolkit/src/fixture.rs`: used by `tests/` as the fake Zone
   runtime; no live daemon required.
-- `VolumeEffectPort` trait from `d2b-contracts/src/v3/effect_port.rs`: imported
-  by the Provider crate; implemented by the core/broker adapter in the host
-  runtime crate.
+- The anchored-fd adapter (`AnchoredVolumeEffectAdapter`) from
+  `packages/d2b-provider-volume-local/src/adapter.rs`: the production
+  implementation of the `VolumeSourceEffectPort`/`VolumeLayoutEffectPort`
+  seams, moved into the crate that owns the ports (U7). The neutral
+  `VolumeEffectPort` contract and its host wrapper are retired.
 
 ---
 
@@ -2417,7 +2421,8 @@ Required modules:
 | `src/relocation.rs` | Relocation EphemeralProcess dispatch; source finalizer; anchored copy; commit/failure handling |
 | `src/store_view.rs` | Store-view Volume specifics: hardlink farm layout, private-NS sync, generation meta, gcroots, `sync.lock` |
 | `src/swtpm_volume.rs` | TPM Volume specifics: `create-if-never-provisioned`, fail-closed marker, ancestor traverse ACL |
-| `src/effect_port.rs` | Re-exports `VolumeEffectPort` trait from `d2b-contracts::v3::effect_port`; Provider-side opaque ID construction helpers and semantic binding glue; no adapter implementation (adapter lives in the host runtime crate, outside this Provider crate) |
+| `src/effect_port.rs` | Provider-side opaque bindings: `ExecutionDomain`, `VolumeEffectError`, `validate_domain`; the neutral `VolumeEffectPort` re-export retired with the contract (U7) |
+| `src/adapter.rs` | The production anchored-fd adapter (`AnchoredVolumeEffectAdapter`, `ResolvedVolumeRoot`, `VolumeRootResolver`, `FdRootResolver`), moved from the daemon (U7): single-entry, marker-checked, OFD-locked, fd-relative effects over an already anchored root descriptor; `file-record` lease ownership verified against the hardlink-farm sync-lock owner record |
 | `src/atomic.rs` | Adapted `AtomicFilesystem`, `CanonicalJson`, `StateEnvelope`, `QuarantineRecord` (from main `6faa5256`) |
 | `src/path.rs` | Copied `AnchoredDir`, `AnchoredResource`, `LeafName`, `RelativePath` (from main `6faa5256`) |
 | `src/lock.rs` | Adapted `LockGuard`, `LockSet`, `OfdTransfer` (from main `6faa5256`) |
@@ -2562,7 +2567,7 @@ Documents:
 | Depends on | `ADR046-pstate-001` (VolumeStateSchema/PersistenceClass/SensitivityClass/StateEnvelope in `d2b-contracts/src/v3/volume_state.rs`) |
 | Current source | `d2b-core/src/storage.rs` (`StoragePathSpec`, `StoragePathKind`, policy enums); `d2b-core/src/sync.rs` (`SyncJson`, `LockSpec`) |
 | Reuse action | adapt |
-| Destination | `d2b-contracts/src/v3/volume_layout.rs` (LayoutEntry, EntryType, all policy enums, AclGrant, Invariant, SensitivityClass); `d2b-contracts/src/v3/volume_spec.rs` (VolumeSpec, ViewSpec, Attachment, QuotaSpec, SourceKind, `SourcePolicyId` opaque newtype); `d2b-contracts/src/v3/effect_port.rs` (`VolumeEffectPort` trait, opaque ID newtypes `VolumeId`/`LayoutEntryId`/`UserId`/`ViewId`/`SealingPolicyId` each with custom redacted Debug, `VolumeId` and `SealingPolicyId` with the exact `Clone`/serde wire derives and bounded `TryFrom<String>` deserialization required by the canonical request, `VolumeMountToken`, and canonical `RotateSealingKeyRequest`/`Result`/`Error` types) |
+| Destination | `d2b-contracts/src/v3/volume_layout.rs` (LayoutEntry, EntryType, all policy enums, AclGrant, Invariant, SensitivityClass); `d2b-contracts/src/v3/volume_spec.rs` (VolumeSpec, ViewSpec, Attachment, QuotaSpec, SourceKind, `SourcePolicyId` opaque newtype). The planned `d2b-contracts/src/v3/effect_port.rs` neutral `VolumeEffectPort` contract was declared-but-unbuilt and retired with the daemon-side adapter (U7): the family's effects run through the declared `volume.d2bus.org/effects` service over the anchored ports in `d2b-provider-volume-local/src/adapter.rs` |
 | Detailed design | All LayoutEntry fields as documented in this dossier; enum value names preserved from `StoragePathKind`/policy enums with renames where noted; `User/<name>` ACL principal (no numeric UID); `sourcePolicyId` opaque newtype replaces raw `hostPath` in `SourceKind::LocalPath` and `SourceKind::BlockImage`; deny-unknown sealing-rotation request contains only opaque Volume/policy/operation IDs and generation/revision preconditions, with no key bytes/path/handle; its crate-private `VolumeId` and `SealingPolicyId` strings serialize canonically and deserialize only when non-empty, ASCII-graphic, and at most 128 bytes, while retaining manual redacted Debug Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Volume spec and status structs; Provider descriptor component stateNamespace; Nix resource compiler schema validation |
 | Data migration | Full v3 reset; no row-level import |
@@ -2581,8 +2586,8 @@ Documents:
 | Current source | `d2b-state/src/{atomic,path,lock}.rs` (main `6faa5256`); `d2b-priv-broker/src/ops/swtpm_dir.rs` (marker algorithm) |
 | Reuse action | adapt |
 | Destination | Full `packages/d2b-provider-volume-local/` scaffold per §Crate layout: `src/`, `tests/`, `integration/`, `README.md`; crate `Cargo.toml` depends only on `d2b-contracts`, `d2b-provider`, `d2b-provider-toolkit` |
-| Detailed design | `AnchoredDir`, `AnchoredResource`, `LeafName`, `RelativePath`; adapted `AtomicFilesystem`/`StateEnvelope`; adapted `LockGuard`/`LockSet`/`OfdTransfer`; marker write/verify/check; `src/effect_port.rs` re-exports `VolumeEffectPort` trait from `d2b-contracts::v3::effect_port` and provides Provider-side opaque ID construction helpers (no adapter implementation; adapter lives in host runtime); `sourcePolicyId` validation against declared policy list; no `openat2`/`setfacl`/`fallocate`/numeric-UID call sites in Provider crate Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged (`path.rs`); adapt (`atomic.rs`, `lock.rs`); adapt swtpm_dir marker algorithm. |
-| Integration | Controller binary receives `VolumeEffectPort` via ComponentSession injection; adapter calls `provision_marker` when a new Volume first appears in the `providerRef` reconcile queue (ProviderDeployment has already created the resource; volume-local provisions physical state) and `verify_marker` on restart relist |
+| Detailed design | `AnchoredDir`, `AnchoredResource`, `LeafName`, `RelativePath`; adapted `AtomicFilesystem`/`StateEnvelope`; adapted `LockGuard`/`LockSet`/`OfdTransfer`; marker write/verify/check; `src/effect_port.rs` provides Provider-side opaque bindings (`ExecutionDomain`, `VolumeEffectError`, `validate_domain`); `src/adapter.rs` hosts the production anchored-fd adapter (U7, moved from the daemon); `sourcePolicyId` validation against declared policy list; no `openat2`/`setfacl`/`fallocate`/numeric-UID call sites outside the adapter Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged (`path.rs`); adapt (`atomic.rs`, `lock.rs`); adapt swtpm_dir marker algorithm. |
+| Integration | The family's driver effects run through the declared `volume.d2bus.org/effects` service hosted per zone by the daemon over the daemon-supplied facets (the trusted root resolver and the durable layout probe); the adapter calls `provision_marker` when a new Volume first appears in the `providerRef` reconcile queue (ProviderDeployment has already created the resource; volume-local provisions physical state) and `verify_marker` on restart relist |
 | Data migration | New marker written for each Volume at v3 first-boot |
 | Validation | All `tests/marker.rs`, `tests/state.rs` scenarios; all `integration/provision.rs` scenarios; `cargo deny check` verifies no `d2b-priv-broker`/`d2bd` dependency |
 | Removal proof | `swtpm_dir.rs` marker implementation retired only after device-tpm Provider Volume is live and marker-check parity is confirmed |
@@ -2751,7 +2756,7 @@ Documents:
 | Depends on | `ADR046-pstate-003`; `ADR-046-provider-model-and-packaging` (generic effect-port injection contract) |
 | Current source | `d2b-priv-broker/src/ops/{state_dir,storage_contract,swtpm_dir,store_sync,store_view_posture}.rs`; `d2b-host/src/hardlink_farm.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-host/src/volume_effect_adapter.rs` (or the equivalent host-runtime crate designated by the Zone broker owner), implementing the `VolumeEffectPort` trait defined in `d2b-contracts`; planned `d2b-priv-broker/src/ops/rotate_sealing_key.rs` closed operation |
+| Destination | Retired (U7): the planned host-runtime `VolumeEffectPort` adapter was declared-but-unbuilt. The anchored-fd implementation landed in `packages/d2b-provider-volume-local/src/adapter.rs` (`AnchoredVolumeEffectAdapter` over `VolumeRootResolver`), the daemon supplies its zone resolver and durable layout probe as declared facets, and the family's driver effects run through the declared `volume.d2bus.org/effects` service hosted per zone. The planned `d2b-priv-broker/src/ops/rotate_sealing_key.rs` closed operation is unchanged |
 | Detailed design | Adapter holds trusted FD table keyed by `VolumeId`; resolves `SourcePolicyId` to host path prefix from private bundle; calls `openat2(RESOLVE_BENEATH)` anchored at retained FD for all FS ops; calls `setfacl`/`acl_set_fd`, `mount`/`umount`, `fallocate` from within adapter only; authorizes `volume.rotate-sealing-key`, verifies committed proof, recomputes the canonical idempotency key, and maps `rotate_sealing_key` one-to-one to the closed broker `RotateSealingKey` operation. Broker independently resolves opaque `VolumeId`/`SealingPolicyId`, checks policy/generation/preconditions, performs journaled atomic rewrap and roll-forward recovery, and durably emits exactly one success audit before returning. Neither boundary accepts key bytes, credential bytes, key handles, or paths. Other blocking filesystem calls run in the bounded blocking-thread pool Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt into adapter. |
 | Integration | Zone runtime creates the concrete adapter with the required FD table and bundle reference at Provider startup; the controller is generic over `P: VolumeEffectPort` and receives that implementation through ComponentSession bootstrap, with no trait object or `async-trait` dependency |
 | Data migration | None (adapter replaces direct broker-op call sites) |

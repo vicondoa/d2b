@@ -46,15 +46,21 @@ with the decoder, the type's verbs, execution domain, reads, and the
 ## Placement and dependencies
 
 `User` names no placement anchor: the row is reconciled on the machine whose
-local identity it names, so the plane drives it in the Host domain. Discovery
-reaches the local account database only through the `UserDriverEffects` port,
-which the daemon implements over the preserved `UserReconciler` and its fixed
-core adapter.
+local identity it names, so the plane drives it in the Host domain. The
+crate's own bounded NSS probe (`src/probe.rs`) reads the local account
+database through `nix`'s `getpwnam`/`getgrnam` surface, behind the
+`UserDriverEffects` seam, over the preserved `UserReconciler`. No daemon
+adapter implements discovery for this family, and the daemon supplies no
+externally built port: the composition root hands the family's effects the
+declared facet set, which carries the crate's own probe.
 
 The crate depends on `d2b-contracts-resource`, `d2b-provider-system-core`
-(the User reconciler the daemon's effect implementation drives),
-`d2b-resource-runtime`, and `d2b-resource-types`. It depends on no daemon
-runtime, so the driver cannot reach host state except through its port.
+(the User reconciler the family's effects drive), `d2b-provider-toolkit`,
+`d2b-resource-runtime`, `d2b-resource-types`, `nix` (the bounded account
+reads), `sha2` (the identity digest), `serde_json`, and `tracing`. It
+depends on no daemon runtime: every probe input is host state the crate
+reads itself, and daemon state crosses the boundary only as declared
+facets.
 
 ## RBAC requirements
 
@@ -65,10 +71,11 @@ manager with the plane's own caller identity. It serves no broker operations.
 ## Security posture
 
 The driver never resolves a uid, gid, home directory, shell, or username
-itself: the stored spec is decoded strictly, discovery happens behind the
-port, and only the opaque identity digest and the closed set of verified
-bindings cross back into the status. A spec that fails to decode is a
-terminal refusal, and the family owns no spawn surface at all.
+itself: the stored spec is decoded strictly, discovery happens in the
+crate's own bounded probe behind the effects seam, and only the opaque
+identity digest and the closed set of verified bindings cross back into the
+status. A spec that fails to decode is a terminal refusal, and the family
+owns no spawn surface at all.
 
 ## State and telemetry
 
@@ -87,7 +94,9 @@ cargo test -p d2b-provider-user
 ```
 
 The unit tests drive validate, recover, reconcile, finalize, and delete over
-a scripted effect port, and prove a User row reaches its driver through the
-registry alone; the `registration` suite proves the declaration registers the
-type with its decoder and factory, that a duplicate registration is refused,
-and that the declared mask cannot arrive after the plane opens.
+the scripted driver-effects double, script the family's probe through the
+declared facet set for the factory and registry paths, and prove a User row
+reaches its driver through the registry alone; the `registration` suite
+proves the declaration registers the type with its decoder and factory, that
+a duplicate registration is refused, and that the declared mask cannot
+arrive after the plane opens.

@@ -22,6 +22,8 @@
 #![deny(missing_docs)]
 
 pub mod driver;
+pub mod effects_service;
+pub mod facets;
 pub mod guest_spec;
 pub mod shutdown;
 pub mod target_control;
@@ -43,6 +45,12 @@ pub use driver::{
     GuestEffectPhase, GuestEffectRequest, GuestFinalizeStage, GuestKind, GuestRegistration,
     GuestStatusSink, declared_dependency_refs, decode_metadata, guest_descriptor,
     guest_spec_decoder, guest_status_sink, key_ref, resource_uid, view_phase,
+};
+pub use effects_service::{
+    GUEST_EFFECTS_SERVICE, GuestEffectsService, GuestEffectsServiceFactory,
+};
+pub use facets::{
+    CloudHypervisorGuestRuntime, GuestCloudHypervisorOutcome, GuestEffectFacets, GuestManagerView,
 };
 pub use guest_spec::{GUEST_RESOURCE_TYPE, GuestSpec};
 pub use shutdown::{

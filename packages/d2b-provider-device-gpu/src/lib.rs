@@ -8,13 +8,18 @@
 
 mod authority;
 mod controller;
+pub mod effects_service;
 mod effects;
+pub mod facets;
 pub mod gpu_argv;
 mod process;
 mod settings;
 pub mod video_argv;
 pub mod vocabulary;
 mod workers;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use authority::{
     GpuAuthorityAdmission, GpuAuthorityError, GpuAuthorityLease, GpuBackingToken, GpuClosureProof,

@@ -89,9 +89,7 @@ fn production_binary_contains_no_peer_override_surface() {
         "src/composition.rs",
         "src/resource_runtime.rs",
         "src/process_resource_runtime.rs",
-        "src/guest_effects.rs",
         "src/shared_provider_effects.rs",
-        "src/system_core_effects.rs",
         "src/provider_registry.rs",
     ]
     .into_iter()

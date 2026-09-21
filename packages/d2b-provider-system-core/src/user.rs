@@ -23,8 +23,10 @@
 //! single matching property as identity.
 
 use std::collections::BTreeSet;
-use tracing::{debug, warn};
 use std::fmt;
+use std::sync::Arc;
+
+use tracing::{debug, warn};
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::resource_status::ResourcePhase;
@@ -123,21 +125,42 @@ pub struct DiscoveredUser {
     pub observed: UserObservation,
 }
 
-/// The injected seam through which local User discovery reaches the host.
+/// The seam through which local User discovery reaches the host.
 ///
-/// The fixed core effect adapter is the sole implementor. A Provider never
-/// implements this itself, never opens an NSS handle, and never reads a
-/// local account database.
-pub trait UserDiscoveryEffectPort {
+/// The production implementor is the User provider crate's own bounded probe
+/// (U5): the family's probe opens the NSS handle and reads the local account
+/// database inside the owning crate, and the reconciler consumes the same
+/// seam. Tests script the seam for the reconciler's unit surface.
+///
+/// The async-trait surface keeps the seam dyn-compatible and `Send`, which
+/// the provider-owned User effects service (U5) needs to hold the probe
+/// behind its hosted service and driver seams.
+#[async_trait::async_trait]
+pub trait UserDiscoveryEffectPort: Send + Sync {
     /// Resolve one declared User locally.
     ///
     /// `Ok(None)` means the local machine resolves no such identity, which
     /// is an ordinary state rather than a failure.
-    fn discover(
+    async fn discover(
         &self,
         user_ref: &ResourceRef,
         spec: &UserSpec,
-    ) -> impl Future<Output = Result<Option<DiscoveredUser>, SystemCoreError>>;
+    ) -> Result<Option<DiscoveredUser>, SystemCoreError>;
+}
+
+/// The arc'd port is itself a port, so the provider-owned User effects
+/// service (U5) can hold one erased probe behind its hosted service and
+/// driver seams: the reconciler's generic port is the same erased surface
+/// the facet set carries.
+#[async_trait::async_trait]
+impl UserDiscoveryEffectPort for Arc<dyn UserDiscoveryEffectPort> {
+    async fn discover(
+        &self,
+        user_ref: &ResourceRef,
+        spec: &UserSpec,
+    ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
+        self.as_ref().discover(user_ref, spec).await
+    }
 }
 
 /// How discovery resolved a declared User.

@@ -10,7 +10,7 @@ use d2b_provider_volume_local::{
     ContentFile, ContentProjection, ContentProvenance, EntryRequest, VolumeLayoutEffectPort,
     VolumeLocalController, VolumeLocalError, VolumeLocalProfile, VolumeSourceEffectPort,
 };
-use d2bd::resource_runtime::{
+use d2b_provider_volume_local::adapter::{
     AnchoredVolumeEffectAdapter, FdRootResolver, ResolvedVolumeRoot, VolumeRootResolver,
 };
 

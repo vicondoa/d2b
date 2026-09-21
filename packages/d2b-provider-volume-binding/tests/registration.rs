@@ -2,36 +2,19 @@
 //! the plane registers, and the registry serves this type's decoder and
 //! factory from it.
 
-use std::sync::Arc;
-
 use d2b_provider_volume_binding::{
-    BINDING_CREATIONS, BINDING_TYPE_NAME, BindingDriverArgs, BindingDriverEffects,
+    BINDING_CREATIONS, BINDING_EFFECTS_SERVICE, BINDING_TYPE_NAME, BindingDriverArgs,
     binding_descriptor,
 };
-use d2b_provider_volume_virtiofs::SocketIdentity;
+use d2b_provider_volume_binding::test_support::FakeServingEffects;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, ChildCustody, WellKnownType};
 
-/// The port instance the declaration carries; the registration boundary
-/// never runs a serving effect.
-struct UnusedEffects;
-
-#[async_trait::async_trait]
-impl BindingDriverEffects for UnusedEffects {
-    async fn socket_ready(&self, _socket: &SocketIdentity) -> bool {
-        false
-    }
-
-    async fn remove_socket(&self, _socket: &SocketIdentity) -> Result<(), String> {
-        Err("registration boundary runs no serving effect".to_owned())
-    }
-}
-
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     binding_descriptor(BindingDriverArgs {
         zone: "work".to_owned(),
-        effects: Arc::new(UnusedEffects),
+        facets: FakeServingEffects::new().facet_set(),
         vcpu_count: 1,
     })
 }
@@ -80,6 +63,11 @@ async fn descriptor_declares_and_registers_the_binding_type() {
         ]
     );
     assert!(descriptor.operations.is_empty());
+    assert_eq!(
+        descriptor.services,
+        &[BINDING_EFFECTS_SERVICE],
+        "the family's declared effects service rides the declaration (U6)"
+    );
 
     let mut providers = ProviderDirectory::new();
     providers.register_driver(&descriptor).expect("register");

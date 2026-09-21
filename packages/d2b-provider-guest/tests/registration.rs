@@ -6,7 +6,7 @@ use d2b_contracts_resource::v3::ControllerGeneration;
 use d2b_provider_guest::{
     GUEST_TYPE_NAME, GuestDriverArgs, guest_descriptor,
 };
-use d2b_provider_guest::test_support::ScriptedEffects;
+use d2b_provider_guest::test_support::ScriptedFacets;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, ChildCustody, WellKnownType};
@@ -15,9 +15,9 @@ fn descriptor() -> d2b_resource_types::DriverDescriptor {
     guest_descriptor(GuestDriverArgs {
         zone: "work".to_owned(),
         controller_generation: ControllerGeneration::new(1).expect("generation"),
-        // The port instance the declaration carries; the registration
-        // boundary never runs an effect.
-        effects: ScriptedEffects::new(),
+        // The facet set the declaration's factory builds its effects from;
+        // the registration boundary never runs an effect.
+        facets: ScriptedFacets::new().facet_set(),
     })
 }
 

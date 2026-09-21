@@ -1038,26 +1038,9 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "d2bd-state",
         retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/usbip_production.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
+    
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/tpm_effect_port.rs",
         token: "server_state",
         family: "d2bd-state",
         retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
@@ -1267,22 +1250,10 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 tpm/device step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/tpm_effect_port.rs",
-        token: "swtpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/live_handlers.rs",
         token: "swtpm",
         family: "device-tpm",
         retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/tpm_effect_port.rs",
-        token: "tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/seccomp_compile_tests.rs",
@@ -1589,12 +1560,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "vsock",
         family: "transport-vsock",
         retires_with: "U10-U12 family rollout (transport-vsock)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/volume_effect_adapter.rs",
-        token: "volume_local",
-        family: "volume-local",
-        retires_with: "U12 volume/store step",
     },
 
     SharedFamilyKnowledgeExemption {
@@ -2398,12 +2363,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: the broker is pinned provider-free; the privileged open/kernel stays in the broker as a committed view of the provider-declared vocabulary",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/tpm_effect_port.rs",
-        token: "device_tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/process_provider_runtime.rs",
         token: "device_tpm",
         family: "device-tpm",
@@ -2452,18 +2411,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 tpm/device step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/endpoint_effects.rs",
-        token: "device_tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/endpoint_effects.rs",
-        token: "tpm",
-        family: "device-tpm",
-        retires_with: "U12 tpm/device step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
         token: "usbip",
         family: "device-usbip",
@@ -2494,6 +2441,30 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 usbip step",
     },
     SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "tpm",
+        family: "device-tpm",
+        retires_with: "U12 tpm/device step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "device_tpm",
+        family: "device-tpm",
+        retires_with: "U12 tpm/device step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "gpu",
+        family: "device-gpu",
+        retires_with: "U12 gpu/device step",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/resource_plane_v3.rs",
+        token: "device_gpu",
+        family: "device-gpu",
+        retires_with: "U12 gpu/device step",
+    },
+    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/authority.rs",
         token: "usbip",
         family: "device-usbip",
@@ -2510,12 +2481,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "usbip",
         family: "device-usbip",
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/usbip_production.rs",
-        token: "usbip",
-        family: "device-usbip",
-        retires_with: "U12 usbip step",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-broker/src/bootstrap.rs",
@@ -2547,12 +2512,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         family: "device-usbip",
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
     },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/usbip_production.rs",
-        token: "device_usbip",
-        family: "device-usbip",
-        retires_with: "U12 usbip step",
-    },
+    
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/host.rs",
         token: "usbip",
@@ -2896,18 +2856,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 network-fds step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/volume_effect_adapter.rs",
-        token: "dnsmasq",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/resource_runtime/volume_effect_adapter.rs",
-        token: "nftables",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-resource/src/v3/device.rs",
         token: "nftables",
         family: "network-local",
@@ -3040,12 +2988,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
@@ -3065,12 +3007,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/endpoint_effects.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
@@ -3104,12 +3040,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "qemu_media",
         family: "runtime-qemu-media",
         retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "permanent:the daemon's media effect and composition adapters spell the provider's own typed API (QemuMedia*);the daemon reads the media contract, runner identity, and runtime naming from the provider declarations",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
@@ -3208,12 +3138,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (system-core)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/lib.rs",
-        token: "system_core",
-        family: "system-core",
-        retires_with: "U10-U12 family rollout (system-core)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-zone-session/src/v3/zone.rs",
         token: "system_core",
         family: "system-core",
@@ -3221,12 +3145,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core-controller/src/main.rs",
-        token: "system_core",
-        family: "system-core",
-        retires_with: "U10-U12 family rollout (system-core)",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
         token: "system_core",
         family: "system-core",
         retires_with: "U10-U12 family rollout (system-core)",
@@ -3437,12 +3355,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U12 volume/store step",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/volume_effects.rs",
-        token: "volume_local",
-        family: "volume-local",
-        retires_with: "U12 volume/store step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
         token: "volume_local",
         family: "volume-local",
@@ -3477,18 +3389,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "virtiofs",
         family: "volume-virtiofs",
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/binding_effects.rs",
-        token: "virtiofs",
-        family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/binding_effects.rs",
-        token: "volume_virtiofs",
-        family: "volume-virtiofs",
-        retires_with: "U12 volume/store step",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/composition.rs",
@@ -8540,6 +8440,7 @@ const PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS: &[ProviderFamilyKnowledgeExemption] 
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "system_systemd", family: "system-systemd", reason: "the supervisor dispatches runner roles" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-system-core", module: "packages/d2b-provider-system-core/src/host.rs", token: "audio_pipewire", family: "audio-pipewire", reason: "the system-core host names the audio-pipewire workload kind" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/driver.rs", token: "system_core", family: "system-core", reason: "the user error-code strings keep the system-core prefix stable" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/probe.rs", token: "system_core", family: "system-core", reason: "the user probe implements the system-core-declared discovery port whose error type is system-core's" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/test_support.rs", token: "system_core", family: "system-core", reason: "test-support fixture provider names the system-core provider" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-volume", module: "packages/d2b-provider-volume/src/driver.rs", token: "volume_local", family: "volume-local", reason: "the volume provider's own name const uses its sibling family's id" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/wayland_policy.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-policy provider's interface types name the display-wayland surface" },

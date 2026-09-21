@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-guest",
+  "provider": "guest",
+  "services": [
+    "guest.d2bus.org/effects"
+  ]
+}

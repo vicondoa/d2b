@@ -18,9 +18,6 @@ use std::{
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
 
-use crate::credential_effects::{
-    AgentReadyFuture, ProductionCredentialDriverEffects,
-};
 use crate::credential_resource_runtime::{
     CredentialSessionRegistry, ComponentCredentialSession,
 };
@@ -69,8 +66,8 @@ use d2b_provider_zone::zone_status::{
 };
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
 use d2b_provider_credential::{
-    CredentialDependencyFacts, CredentialDriverEffects, CredentialSession,
-    is_credential_provider_ref,
+    AgentReadyFuture, CredentialDependencyFacts, CredentialLeaseFacts, CredentialRuntime,
+    CredentialSession, is_credential_provider_ref,
 };
 use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_provider_network_local::{
@@ -142,7 +139,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-mod volume_effect_adapter;
 pub(crate) mod plane_controller_bridge;
 use plane_controller_bridge::{
     ChildMutationFailure, ChildMutationRoute, ControllerPlaneView, LiveControllerSessionEvidence,
@@ -150,9 +146,6 @@ use plane_controller_bridge::{
     child_mutation_route, child_type_route,
 };
 use d2b_resource_runtime::manager::ResourceView;
-pub use volume_effect_adapter::{
-    AnchoredVolumeEffectAdapter, FdRootResolver, ResolvedVolumeRoot, VolumeRootResolver,
-};
 
 /// The interaction family's ResourceTypes, as each type's own crate declares
 /// them.
@@ -4560,7 +4553,9 @@ impl ZoneResourceRuntime {
             .ok_or(ResourceRuntimeError::AuthenticationUnavailable)
     }
 
-    /// The production effect port for the v3 `Credential` driver (U12 KTD3).
+    /// The production runtime facet for the v3 `Credential` driver (U8
+    /// KTD3): the daemon-supplied implementation the family's own effects
+    /// service delegates to.
     ///
     /// Provider and execution-target facts read the same durable rows the old
     /// U10 runner's dependency snapshots carried, so the driver's readiness
@@ -4569,16 +4564,16 @@ impl ZoneResourceRuntime {
     /// composition unit: the agent is a v3 manager row, so its live status
     /// belongs to the per-zone plane's manager (R11). Lease facts have no
     /// in-tree writer while the old status surface is being deleted, so the
-    /// port reports them absent - the old "no lease state" case, which skips
+    /// facet reports them absent - the old "no lease state" case, which skips
     /// revocation rather than guessing.
-    pub(crate) fn credential_driver_effects(
+    pub(crate) fn credential_runtime(
         &self,
         agent_ready: Arc<dyn for<'a> Fn(&'a ResourceRef) -> AgentReadyFuture<'a> + Send + Sync>,
-    ) -> Arc<dyn CredentialDriverEffects> {
+    ) -> Arc<dyn CredentialRuntime> {
         let facts_planes = Arc::clone(&self.v3_planes);
         let facts_zone = self.zone.clone();
-        Arc::new(ProductionCredentialDriverEffects::new(
-            Arc::new(move |provider_ref: &ResourceRef, execution_ref: &ResourceRef| {
+        Arc::new(ProductionCredentialRuntime {
+            facts: Arc::new(move |provider_ref: &ResourceRef, execution_ref: &ResourceRef| {
                 let planes = Arc::clone(&facts_planes);
                 let zone = facts_zone.clone();
                 let provider_ref = provider_ref.clone();
@@ -4588,10 +4583,10 @@ impl ZoneResourceRuntime {
                     credential_dependency_facts(plane.as_ref(), &provider_ref, &execution_ref).await
                 })
             }),
-            Arc::new(|_credential_ref: &ResourceRef| Box::pin(async { None })),
-            agent_ready,
-            self.credential_sessions.clone(),
-        ))
+            lease: Arc::new(|_credential_ref: &ResourceRef| Box::pin(async { None })),
+            agent: agent_ready,
+            sessions: self.credential_sessions.clone(),
+        })
     }
 
     /// Drive the complete Wave 6 acceptance sequence through the
@@ -6208,6 +6203,57 @@ impl ZoneResourceRuntime {
             .ok()
             .and_then(|coordinator| coordinator.clone())
             .expect("controller session coordinator initialized")
+    }
+}
+
+/// The production [`CredentialRuntime`] facet (U8): the daemon-supplied
+/// implementation the family's own effects service delegates to, over the
+/// preserved provider reads and the ProviderSupervisor session handoff
+/// registry. The closures are the inputs the old `start_u10_controller_runners`
+/// assembled; the family crate holds no daemon state type (R2).
+struct ProductionCredentialRuntime {
+    /// One Provider/target dependency-facts probe.
+    facts: Arc<
+        dyn for<'a> Fn(
+                &'a ResourceRef,
+                &'a ResourceRef,
+            )
+                -> d2b_provider_credential::DependencyFactsFuture<'a>
+            + Send
+            + Sync,
+    >,
+    /// One lease-fact read.
+    lease: Arc<
+        dyn for<'a> Fn(&'a ResourceRef) -> d2b_provider_credential::LeaseFactsFuture<'a>
+            + Send
+            + Sync,
+    >,
+    /// One agent-readiness probe.
+    agent: Arc<dyn for<'a> Fn(&'a ResourceRef) -> AgentReadyFuture<'a> + Send + Sync>,
+    /// The ProviderSupervisor handoff registry.
+    sessions: CredentialSessionRegistry,
+}
+
+#[async_trait]
+impl CredentialRuntime for ProductionCredentialRuntime {
+    async fn dependency_facts(
+        &self,
+        provider_ref: &ResourceRef,
+        execution_ref: &ResourceRef,
+    ) -> Option<CredentialDependencyFacts> {
+        (self.facts)(provider_ref, execution_ref).await
+    }
+
+    async fn lease_facts(&self, credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
+        (self.lease)(credential_ref).await
+    }
+
+    async fn agent_ready(&self, agent_ref: &ResourceRef) -> bool {
+        (self.agent)(agent_ref).await
+    }
+
+    fn session(&self, provider_ref: &ResourceRef) -> Option<Arc<dyn CredentialSession>> {
+        Some(self.sessions.for_provider(provider_ref.clone()))
     }
 }
 

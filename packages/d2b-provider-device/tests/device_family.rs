@@ -15,7 +15,7 @@ use d2b_provider_device::{
     DEVICE_REGISTRATIONS, DEVICE_RESYNC, DEVICE_TYPE_NAME, DeviceComponent, DeviceDriverArgs,
     device_descriptor,
 };
-use d2b_provider_device::test_support::RecordingEffects;
+use d2b_provider_device::test_support::RecordingRuntime;
 use d2b_resource_runtime::context::{
     ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
     WatchRegistration,
@@ -83,11 +83,11 @@ impl RequeueScheduler for RecordingRequeue {
     fn cancel(&self, _id: RequeueId) {}
 }
 
-fn descriptor(effects: Arc<RecordingEffects>) -> d2b_resource_types::DriverDescriptor {
+fn descriptor(runtime: Arc<RecordingRuntime>) -> d2b_resource_types::DriverDescriptor {
     device_descriptor(DeviceDriverArgs {
         zone: "dev".to_owned(),
         controller_generation: ControllerGeneration::new(1).expect("generation"),
-        effects,
+        facets: d2b_provider_device::test_support::recording_facets(runtime),
     })
 }
 
@@ -123,7 +123,7 @@ fn context(
 /// crates' exported Provider identities.
 #[test]
 fn descriptor_declares_the_device_type_over_four_providers() {
-    let descriptor = descriptor(Arc::new(RecordingEffects::default()));
+    let descriptor = descriptor(Arc::new(RecordingRuntime::default()));
     assert_eq!(
         descriptor.resource_type.to_resource_type_name().as_str(),
         DEVICE_TYPE_NAME
@@ -159,14 +159,14 @@ fn descriptor_declares_the_device_type_over_four_providers() {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn a_row_runs_the_effect_of_the_provider_its_spec_names() {
-    let effects = Arc::new(RecordingEffects::default());
-    let descriptor = descriptor(Arc::clone(&effects));
+    let runtime = Arc::new(RecordingRuntime::default());
+    let descriptor = descriptor(Arc::clone(&runtime));
     let mut ctx = context(&descriptor, d2b_provider_device_tpm::PROVIDER_REF);
     let mut driver = descriptor.factory.create(ctx.key()).await;
     driver.validate(&mut ctx).await.expect("tpm row validates");
     driver.reconcile(&mut ctx).await.expect("tpm row reconciles");
     assert_eq!(
-        *effects.reconciled.lock(),
+        *runtime.reconciled.lock(),
         vec![DeviceComponent::Tpm],
         "the tpm Provider reference selects the tpm component"
     );

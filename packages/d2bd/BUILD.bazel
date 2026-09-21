@@ -129,6 +129,7 @@ d2bd_test_support_deps = [
         "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key",
         "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm",
         "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip",
+        "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu",
         "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland",
         "//packages/d2b-provider-network-local:d2b_provider_network_local",
         "//packages/d2b-provider-volume-local:d2b_provider_volume_local",
@@ -188,6 +189,7 @@ d2bd_test_support_deps = [
     "//packages/d2b-provider-device-security-key:d2b_provider_device_security_key_test_support",
     "//packages/d2b-provider-device-tpm:d2b_provider_device_tpm_test_support",
     "//packages/d2b-provider-device-usbip:d2b_provider_device_usbip_test_support",
+    "//packages/d2b-provider-device-gpu:d2b_provider_device_gpu_test_support",
     "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland_test_support",
     "//packages/d2b-provider-network-local:d2b_provider_network_local_test_support",
     "//packages/d2b-provider-notification-desktop:d2b_provider_notification_desktop_test_support",
@@ -469,9 +471,7 @@ d2b_rust_test(
         "src/resource_runtime.rs",
         "src/process_resource_runtime.rs",
 
-        "src/guest_effects.rs",
         "src/shared_provider_effects.rs",
-        "src/system_core_effects.rs",
         "src/provider_registry.rs",
     ],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
@@ -552,20 +552,6 @@ d2b_rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
-    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
-)
-
-d2b_rust_test(
-    name = "volume_effect_adapter",
-    srcs = ["tests/volume_effect_adapter.rs"],
-    compile_data = ["Cargo.toml"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":d2bd_lib_test_support",
-        "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-host:d2b_host_test_support",
-        "//packages/d2b-provider-network-local:d2b_provider_network_local_test_support",
-        "//packages/d2b-provider-volume-local:d2b_provider_volume_local_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

@@ -1,4 +1,4 @@
-//! Scripted [`VolumeDriverEffects`](crate::VolumeDriverEffects) recording
+//! Scripted [`VolumeRuntime`](crate::facets::VolumeRuntime) recording
 //! double for downstream crates' unit tests.
 //!
 //! Gated behind the `test-support` Cargo feature so production consumers
@@ -9,24 +9,56 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use d2b_contracts_resource::v3::volume::VolumeSpec;
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 
-use crate::driver::VolumeDriverEffects;
+use crate::facets::{VolumeEffectFacets, VolumeRuntime};
 
-/// Scripted layout port: records every call in order.
-pub struct FakeLayoutEffects {
+/// A runtime double that refuses every call: the registration boundary never
+/// runs an effect, so a test that accidentally drives one fails loudly
+/// instead of passing silently.
+#[derive(Default)]
+pub struct RefusingRuntime;
+
+#[async_trait]
+impl VolumeRuntime for RefusingRuntime {
+    async fn reconcile_volume(
+        &self,
+        _volume_uid: &ResourceUid,
+        _spec: &VolumeSpec,
+        _provider: Option<&serde_json::Value>,
+        _owner_ref: Option<&ResourceRef>,
+    ) -> Result<bool, String> {
+        Err("refused: the registration boundary must never run an effect".to_owned())
+    }
+
+    async fn cleanup_volume(
+        &self,
+        _volume_uid: &ResourceUid,
+        _spec: &VolumeSpec,
+    ) -> Result<(), String> {
+        Err("refused: the registration boundary must never run an effect".to_owned())
+    }
+
+    fn has_layout(&self, _volume_uid: &ResourceUid) -> bool {
+        panic!("refused: the registration boundary must never run an effect")
+    }
+}
+
+/// Scripted layout runtime: records every call in order.
+pub struct RecordingRuntime {
     calls: parking_lot::Mutex<Vec<&'static str>>,
-    /// Whether the port currently reports a Ready layout
+    /// Whether the runtime currently reports a Ready layout
     /// (`has_layout` returns this).
     pub ready: AtomicBool,
     /// Report a Degraded/Pending layout instead of a Ready one
-    /// (`ensure_layout` returns `Ok(false)`).
+    /// (`reconcile_volume` returns `Ok(false)`).
     pub degraded: AtomicBool,
 }
 
-impl FakeLayoutEffects {
-    /// A fresh port: no layout yet, every call recorded.
+impl RecordingRuntime {
+    /// A fresh runtime: no layout yet, every call recorded.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             calls: parking_lot::Mutex::new(Vec::new()),
@@ -35,22 +67,29 @@ impl FakeLayoutEffects {
         })
     }
 
-    /// A port whose layout report stays Degraded/Pending (`Ok(false)`).
+    /// A runtime whose layout report stays Degraded/Pending (`Ok(false)`).
     pub fn degraded() -> Arc<Self> {
         let fake = Self::new();
         fake.degraded.store(true, std::sync::atomic::Ordering::SeqCst);
         fake
     }
 
-    /// The ordered log of layout-probe calls made through this port.
+    /// The ordered log of layout-probe calls made through this runtime.
     pub fn call_order(&self) -> Vec<&'static str> {
         self.calls.lock().clone()
     }
 }
 
-#[async_trait::async_trait]
-impl VolumeDriverEffects for FakeLayoutEffects {
-    async fn ensure_layout(
+/// The facet set the plane tests build the Volume family's effects from,
+/// exactly as the production composition root builds it from the daemon's
+/// runtime.
+pub fn recording_facets(runtime: Arc<RecordingRuntime>) -> VolumeEffectFacets {
+    VolumeEffectFacets { runtime }
+}
+
+#[async_trait]
+impl VolumeRuntime for RecordingRuntime {
+    async fn reconcile_volume(
         &self,
         _volume_uid: &ResourceUid,
         _spec: &VolumeSpec,
@@ -65,7 +104,7 @@ impl VolumeDriverEffects for FakeLayoutEffects {
         Ok(true)
     }
 
-    async fn remove_layout(
+    async fn cleanup_volume(
         &self,
         _volume_uid: &ResourceUid,
         _spec: &VolumeSpec,

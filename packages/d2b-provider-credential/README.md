@@ -64,16 +64,18 @@ carries it with the decoder, the type's verbs, execution domains, reads, the
 
 A Credential names a Host or a Guest execution target in its own scope; the
 driver reaches the Provider row, the target row, and its owned Process
-children through the daemon's effect port and the manager, never through its
-own placement.
+children through the family's own effects implementation and the manager,
+never through its own placement.
 
 The crate depends on `d2b-contracts-provider`, `d2b-contracts-resource`,
 `d2b-resource-runtime`, `d2b-resource-types`, and the three Credential
 realizer crates' exported vocabulary, plus the minijail Process Provider's
 exported reference. The daemon's runtime is deliberately not a dependency:
 the Provider facts, lease facts, agent probe, and session arrive through the
-ports this crate declares, and the production implementation lives in the
-daemon.
+declared facets this crate defines, the daemon supplies their
+implementations through the composition root, and the family serves its own
+effects over them (U8), hosted per zone as the declared
+`credential.d2bus.org/effects` service.
 
 ## RBAC requirements
 

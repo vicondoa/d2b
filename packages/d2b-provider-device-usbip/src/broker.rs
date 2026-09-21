@@ -1,9 +1,13 @@
-//! Daemon-owned USBIP Provider dispatcher.
+//! The provider-owned USBIP kernel dispatcher (U12 usbip step).
 //!
 //! This is the composition point between the typed USBIP supervisor and the
-//! existing daemon/broker control plane.  Admission is held in a bounded
-//! Host-global ledger, bind/unbind use opaque bundle references, and attach
-//! uses a typed Process-resource effect before the Provider observes it.
+//! daemon/broker control plane, moved into the declaring crate behind the
+//! declared facets: admission is held in a bounded zone-wide authority
+//! ledger, bind/unbind use opaque bundle references, and attach uses a typed
+//! Process-resource effect before the Provider observes it. The privileged
+//! typed dispatch itself stays daemon-hosted behind the
+//! [`crate::facets::UsbipBrokerDispatch`] facet, so this module holds no
+//! socket, path, or caller authority.
 
 use std::{
     collections::BTreeMap,
@@ -15,19 +19,19 @@ use std::{
 
 use d2b_contracts::types::BundleOpId;
 use d2b_contracts_broker::broker_wire::{
-    BrokerCallerRole, BrokerRequest, BrokerResponse, UsbipBindRequest, UsbipUnbindRequest,
+    BrokerRequest, UsbipBindRequest, UsbipUnbindRequest,
 };
 use d2b_contracts_resource::v3::ResourceUid;
-use d2b_provider_device_usbip::{
+use crate::{
     AttachProcessIdentity, AttachmentObservation, BindingIdentity, BindingLifecycleError,
     BindingProxyLease, BindingSlotLease, OwnedBusBinding, PhysicalAuthorityLease, ProductionPort,
     ServiceLifecycleError, ServiceRelayLease, UsbipBrokerDispatcher,
 };
 
-#[cfg(test)]
-use d2b_provider_device_usbip::core_adapter::UsbipCoreAdapter;
+use crate::facets::UsbipBrokerDispatch;
 
-use crate::{ServerState, dispatch_broker_request_as};
+#[cfg(test)]
+use crate::core_adapter::UsbipCoreAdapter;
 
 /// Trusted context resolved by Core for one Service/Binding pair.
 #[derive(Clone, PartialEq, Eq)]
@@ -101,8 +105,12 @@ impl UsbipBindingContext {
     }
 }
 
+/// The zone-wide USBIP authority ledger (old `usbip_ledger`): the bounded
+/// admission state shared by every Service and Binding dispatcher in one
+/// zone. The daemon owns one instance per zone and hands it to each
+/// dispatcher; the ledger itself is pure provider vocabulary.
 #[derive(Default)]
-pub(crate) struct AuthorityLedger {
+pub struct AuthorityLedger {
     next_token: AtomicU64,
     physical: BTreeMap<[u8; 32], (String, PhysicalAuthorityLease)>,
     relay: BTreeMap<String, (String, ServiceRelayLease)>,
@@ -119,13 +127,17 @@ impl AuthorityLedger {
     }
 }
 
-pub(crate) fn new_authority_ledger() -> Arc<tokio::sync::Mutex<AuthorityLedger>> {
+/// Construct one zone's shared authority ledger.
+pub fn new_authority_ledger() -> Arc<tokio::sync::Mutex<AuthorityLedger>> {
     Arc::new(tokio::sync::Mutex::new(AuthorityLedger::default()))
 }
 
-/// Daemon/broker-backed implementation of the Provider dispatcher.
-pub struct DaemonUsbipDispatcher<'a> {
-    state: &'a ServerState,
+/// The provider-owned implementation of the Provider dispatcher (U12 usbip
+/// step): the retired daemon dispatcher moved into the declaring crate,
+/// with the privileged typed dispatch supplied by the daemon through the
+/// [`UsbipBrokerDispatch`] facet.
+pub struct KernelUsbipDispatcher<'a> {
+    dispatch: &'a dyn UsbipBrokerDispatch,
     context: UsbipBindingContext,
     ledger: Arc<tokio::sync::Mutex<AuthorityLedger>>,
     attach_identity: Option<AttachProcessIdentity>,
@@ -136,15 +148,16 @@ pub struct DaemonUsbipDispatcher<'a> {
     relay_lease: Option<ServiceRelayLease>,
 }
 
-impl<'a> DaemonUsbipDispatcher<'a> {
-    /// Construct one dispatcher over the daemon's broker and authority ledger.
-    pub(crate) fn new(
-        state: &'a ServerState,
+impl<'a> KernelUsbipDispatcher<'a> {
+    /// Construct one dispatcher over the daemon-supplied dispatch facet and
+    /// the zone's shared authority ledger.
+    pub fn new(
+        dispatch: &'a dyn UsbipBrokerDispatch,
         context: UsbipBindingContext,
         ledger: Arc<tokio::sync::Mutex<AuthorityLedger>>,
     ) -> Self {
         Self {
-            state,
+            dispatch,
             context,
             ledger,
             attach_identity: None,
@@ -157,22 +170,12 @@ impl<'a> DaemonUsbipDispatcher<'a> {
     }
 
     /// Wrap this dispatcher in the typed Service/Binding ports.
-    pub(crate) fn into_port(self) -> ProductionPort<Self> {
+    pub fn into_port(self) -> ProductionPort<Self> {
         ProductionPort::new(self)
     }
 
-    fn broker_role(&self) -> BrokerCallerRole {
-        BrokerCallerRole::AdminUid {
-            uid: self.state.daemon_uid,
-        }
-    }
-
     fn ack(&self, request: BrokerRequest) -> Result<(), ServiceLifecycleError> {
-        match dispatch_broker_request_as(self.state, request, self.broker_role()) {
-            Ok(BrokerResponse::Ack(response)) if response.accepted => Ok(()),
-            Ok(BrokerResponse::Error(_)) | Ok(_) => Err(ServiceLifecycleError::Transient),
-            Err(_) => Err(ServiceLifecycleError::Transient),
-        }
+        self.dispatch.ack(request)
     }
 
     fn binding_key(binding: &BindingIdentity) -> String {
@@ -180,7 +183,7 @@ impl<'a> DaemonUsbipDispatcher<'a> {
     }
 }
 
-impl<'a> UsbipBrokerDispatcher for DaemonUsbipDispatcher<'a> {
+impl<'a> UsbipBrokerDispatcher for KernelUsbipDispatcher<'a> {
     fn reserve_physical(
         &mut self,
         service_uid: &ResourceUid,
