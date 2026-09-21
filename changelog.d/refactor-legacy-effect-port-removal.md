@@ -142,3 +142,18 @@
   observation cross the boundary as daemon-supplied facets. The daemon's
   `binding_effects.rs` module and its port-shaped injection at the driver
   construction site are deleted in the same change.
+  registration table.
+- The credential family's driver effects ended their daemon-built arm too:
+  the family now serves them from its own crate through its declared
+  `credential.d2bus.org/effects` service, hosted per zone by the daemon from
+  the family's registered factory over the composition root's facet set. The
+  preserved Provider and execution-target reads, the lease-facts read, the
+  managed-identity agent probe, and the authenticated Provider session
+  handoff registry cross the boundary as daemon-supplied facets, never
+  derived from caller input, and credential material never crosses the new
+  boundary: the runtime facet answers typed facts and hands back the same
+  session objects the daemon's ProviderSupervisor registry holds. The
+  daemon's `credential_effects.rs` module, the port-shaped injection at the
+  driver construction site, and the dead Guest-local backend supervisor
+  surface (`credential_backend_runtime.rs`, retained only by its module-level
+  dead-code allowance) are deleted in the same change.

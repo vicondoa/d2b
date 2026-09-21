@@ -107,7 +107,8 @@ use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
 use sha2::{Digest, Sha256};
 
 use d2b_provider_credential::{
-    CredentialDriverArgs, CredentialDriverEffects, credential_descriptor,
+    CREDENTIAL_EFFECTS_SERVICE, CredentialDriverArgs, CredentialEffectFacets,
+    CredentialEffectsServiceFactory, CredentialRuntime, credential_descriptor,
 };
 use crate::process_provider_runtime::PlaneCommittedProviderIdentitySource;
 use crate::volume_effects::ProductionVolumeDriverEffects;
@@ -1793,29 +1794,35 @@ pub struct ConstructionInputs {
     /// daemon-built effect port (R2).
     pub user_facets: UserEffectFacets,
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
-    /// The daemon-supplied facet set the VolumeBinding family's effects
-    /// implementation is built from (U6): the serving-socket probe, the
-    /// socket removal, and the guest-mount observation, supplied through the
+/// The daemon-supplied facet set the VolumeBinding family's effects
+    /// implementation is built from (U6):the serving-socket probe,the
+    /// socket removal,and the guest-mount observation,supplied through the
     /// composition root. The family never receives a daemon-built effect
     /// port (R2).
     pub binding_facets: BindingEffectFacets,
     /// The daemon-supplied facet set the Endpoint family's effects
-    /// implementation is built from (U6): the host socket surface and the
-    /// two row-evidence probes, supplied through the composition root. The
+    /// implementation is built from (U6):the host socket surface and the
+    /// two row-evidence probes,supplied through the composition root. The
     /// family never receives a daemon-built effect port (R2).
     pub endpoint_facets: EndpointEffectFacets,
-    pub credential_effects: Arc<dyn CredentialDriverEffects>,
-pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
+    /// The daemon-supplied facet set the Credential family's effects
+    /// implementation is built from (U8):the daemon's Credential runtime
+    /// (the preserved Provider and execution-target reads,the lease-facts
+    /// read,the managed-identity agent probe,and the authenticated
+    /// Provider session handoff registry),supplied through the composition
+    /// root. The family never receives a daemon-built effect port (R2).
+    pub credential_facets: CredentialEffectFacets,
+    pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
     /// The daemon-supplied facet set the Guest family's effects
     /// implementation is built from (U10):the zone's manager view (live
-    /// rows, committed Provider identities, and the controller-session
-    /// generation)and the Cloud Hypervisor controller session, supplied
+    /// rows, committed Provider identities,and the controller-session
+    /// generation)andthe Cloud Hypervisor controller session,supplied
     /// through the composition root. The family never receives a
     /// daemon-built effect port (R2).
     pub guest_facets: GuestEffectFacets,
     /// The daemon-supplied facet sets the device families' effects
     /// implementations are built from (U12): each family's driver never
-    /// receives a daemon-built effect port (R2); the family crates serve
+    /// receives a daemon-built effect port (R2);the family crates serve
     /// their own effects over these facets.
     pub usbip_facets: d2b_provider_device_usbip::facets::UsbipEffectFacets,
     pub security_key_facets: d2b_provider_device_security_key::facets::SecurityKeyEffectFacets,
@@ -1864,7 +1871,7 @@ impl ConstructionInputs {
         zone: ZoneId,
         authority: &d2bd_runtime::zone_authority::ZoneAuthorityIdentity,
         resolver: BundleResolver,
-        credential_effects: Arc<dyn CredentialDriverEffects>,
+        credential_runtime: Arc<dyn CredentialRuntime>,
         committed_provider_identities: BTreeMap<
             ResourceRef,
             (ResourceUid, d2b_contracts_resource::v3::ResourceGeneration),
@@ -2084,6 +2091,13 @@ impl ConstructionInputs {
                 zone.clone(),
             )),
         };
+        // U8: the Credential family's effects ride the declared facets too:
+        // the daemon's Credential runtime (the preserved provider reads and
+        // the ProviderSupervisor session handoff registry) is supplied
+        // through the composition root, and the composition root hosts the
+        // family's declared effects service from the same facet set the
+        // driver factories are built from.
+        let credential_facets = CredentialEffectFacets { runtime: credential_runtime };
         Ok(Self {
             zone: zone.clone(),
             zone_token,
@@ -2105,10 +2119,10 @@ impl ConstructionInputs {
             network_facets: network_facets.clone(),
             user_facets: user_facets.clone(),
             volume_effects: Arc::new(production_volume_effects(state, zone.clone(), resolver, Arc::clone(&registry))),
-            binding_facets: binding_facets.clone(),
+binding_facets: binding_facets.clone(),
             endpoint_facets: endpoint_facets.clone(),
             activation_facets: activation_facets.clone(),
-            credential_effects,
+            credential_facets: credential_facets.clone(),
             shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects::production(
                 shared_provider_effects,
             ),
@@ -2143,6 +2157,7 @@ impl ConstructionInputs {
                 &device_facets,
                 &tpm_facets,
                 &gpu_facets,
+                &credential_facets,
             ),
             foundation: None,
         })
@@ -2169,6 +2184,7 @@ fn registered_service_factories(
     device_facets: &d2b_provider_device::facets::DeviceEffectFacets,
     tpm_facets: &d2b_provider_device_tpm::facets::TpmEffectFacets,
     gpu_facets: &d2b_provider_device_gpu::facets::GpuEffectFacets,
+    credential_facets: &CredentialEffectFacets,
 ) -> BTreeMap<&'static str, Arc<dyn EffectServiceFactory>> {
     let mut factories = BTreeMap::new();
     for registration in PROVIDER_REGISTRATIONS {
@@ -2204,6 +2220,9 @@ fn registered_service_factories(
             } else if service == GPU_EFFECTS_SERVICE.id {
                 Arc::new(d2b_provider_device_gpu::effects_service::
                     GpuEffectsServiceFactory::new(gpu_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
+            } else if service == CREDENTIAL_EFFECTS_SERVICE.id {
+                Arc::new(CredentialEffectsServiceFactory::new(credential_facets.clone()))
                     as Arc<dyn EffectServiceFactory>
             } else if service == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id {
                 Arc::new(
@@ -2707,21 +2726,6 @@ impl ResourcePlaneV3 {
                 effects: Arc::clone(&inputs.volume_effects),
             })],
         );
-        // The VolumeBinding and Endpoint families start through the
-        // generated registration table above (each row carries the family's
-        // declared effects service). The Credential type starts through its
-        // driver declaration: the registry serves the type's decoder and
-        // factory from it, and the declaration carries the family's verbs,
-        // execution domains, exportability, reads, and the one declared
-        // agent Process child.
-        set = set.with(
-            family_declaration("credential"),
-            vec![credential_descriptor(CredentialDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                controller_generation: inputs.authority.controller_generation,
-                effects: Arc::clone(&inputs.credential_effects),
-            })],
-        );
         // The trusted-context publication rides the set: when production
         // bound one, the rendezvous publishes this Zone's attestation
         // values over the origination leg the moment the set is published.
@@ -2919,6 +2923,14 @@ impl ResourcePlaneV3 {
             "endpoint" => vec![endpoint_descriptor(EndpointDriverArgs {
                 zone: inputs.zone.as_str().to_owned(),
                 facets: inputs.endpoint_facets.clone(),
+            })],
+            // The Credential family (U8): the driver builds its effects from
+            // the daemon-supplied facet set; no externally built port
+            // appears at this construction site (R2).
+            "credential" => vec![credential_descriptor(CredentialDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                facets: inputs.credential_facets.clone(),
             })],
             _ => Vec::new(),
         }
@@ -3750,6 +3762,17 @@ use d2b_provider_system_core::MinijailPlatformGate;
             // (socket_present true); the shared double starts absent.
             effects.make_present();
             effects.facet_set()
+        let credential_facets = {
+            let runtime = d2b_provider_credential::test_support::RecordingRuntime::new(
+                d2b_provider_credential::test_support::log(),
+            );
+            // The old plane fake answered no provider/execution facts, no
+            // live agent, and no bound session; the shared double's defaults
+            // differ, so script them back.
+            runtime.set_facts(None);
+            runtime.set_agent_ready(false);
+            runtime.set_session(None);
+            d2b_provider_credential::test_support::recording_facets(runtime)
         };
         (
             dir,
@@ -3790,6 +3813,10 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 usbip_facets: usbip_facets.clone(),
                 security_key_facets: security_key_facets.clone(),
                 device_facets: device_facets.clone(),
+                // U8:the plane tests build the Credential family's facet set
+                // from the recording runtime, exactly as the production
+                // composition root builds it from the daemon's runtime.
+                credential_facets: credential_facets.clone(),
                 // U14: the plane tests build the Network family's facet set
                 // from the recording runtime, exactly as the production
                 // composition root builds it from the daemon's runtime.
@@ -3798,6 +3825,11 @@ user_facets: user_facets.clone(),
                 guest_facets: guest_facets.clone(),
                 interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
+// U1/U14/U5/U8: the plane hosts the Process, Network, Host,
+                // Activation, and Credential families' declared effects
+                // services from the same facet sets their driver factories
+                // are built from, exactly as the production composition
+                // root does.
                 // U1/U14/U5/U6: the plane hosts the Process, Network, Host,
                 // Activation, VolumeBinding, and Endpoint families'
                 // declared effects services from the same facet sets their
@@ -3901,6 +3933,12 @@ HOST_EFFECTS_SERVICE.id,
                         d2b_provider_endpoint::ENDPOINT_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_endpoint::EndpointEffectsServiceFactory::new(
                             endpoint_facets.clone(),
+                        )) as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        CREDENTIAL_EFFECTS_SERVICE.id,
+                        Arc::new(CredentialEffectsServiceFactory::new(
+                            credential_facets.clone(),
                         )) as Arc<dyn EffectServiceFactory>,
                     ),
                 ]),
@@ -5003,6 +5041,53 @@ HOST_EFFECTS_SERVICE.id,
             }
             other => panic!("serving is not a canonical array: {other:?}"),
         }
+    }
+
+    /// U8: the composition root hosts the Credential family's declared
+    /// effects service from the family's own factory over the plane's facet
+    /// set, and the hosted service answers `inspect-credential` through the
+    /// real invocation capability object carrying the real envelope payload
+    /// - the same implementation value the driver factory is built from.
+    /// The report is served from the crate's own committed identities, so
+    /// it proves the family's surface lives in the owning crate and answers
+    /// no credential material.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_credential_effects_service_answers_inspect_credential_through_the_binding() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let runtime = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts the declared credential service");
+        let binding = runtime
+            .resolve_effect_service(CREDENTIAL_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-u8-inspect-credential".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({})).expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: CREDENTIAL_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let response = binding.call(call).await.expect("call");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({
+                "family": "credential",
+                "resourceType": "Credential",
+                "providers": [
+                    "Provider/credential-secret-service",
+                    "Provider/credential-entra",
+                    "Provider/credential-managed-identity",
+                ],
+                "agentBinary": "d2b-managed-identity-agent",
+            }))
+            .expect("canonical payload"),
+            "the hosted service answers the committed family surface"
+        );
     }
 
     /// The providers the plane starts register exactly the converted-type

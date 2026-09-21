@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-credential",
+  "provider": "credential",
+  "services": [
+    "credential.d2bus.org/effects"
+  ]
+}
