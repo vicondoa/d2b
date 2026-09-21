@@ -208,6 +208,7 @@ pub mod fixtures {
         process_ref: ResourceRef,
         execution_ref: ResourceRef,
         domain: ExecutionDomain,
+        deadline_ms: u32,
         user_ref: Option<ResourceRef>,
         selected_provider: BoundedToken,
         expected_identity: BTreeSet<IdentityBinding>,
@@ -267,6 +268,13 @@ pub mod fixtures {
             self
         }
 
+        /// Override the operation deadline in milliseconds (fixture default:
+        /// thirty seconds).
+        pub fn with_operation_deadline(mut self, deadline_ms: u32) -> Self {
+            self.deadline_ms = deadline_ms;
+            self
+        }
+
         /// Build the ticket.
         pub fn build(self) -> Result<LaunchTicket, ProcessConformanceError> {
             let is_guest = self.execution_ref.resource_type().as_str() == "Guest";
@@ -283,7 +291,7 @@ pub mod fixtures {
                 self.user_ref,
                 self.selected_provider,
                 compiled_digests(),
-                OperationBinding::new(operation_uid(), 30_000)?,
+                OperationBinding::new(operation_uid(), self.deadline_ms)?,
                 self.expected_identity,
             )?
             .with_readiness(self.readiness);
@@ -310,6 +318,7 @@ pub mod fixtures {
             process_ref: ResourceRef::parse("Process/controller-main").expect("valid fixture ref"),
             execution_ref: ResourceRef::parse("Host/host-system").expect("valid fixture ref"),
             domain: ExecutionDomain::System,
+            deadline_ms: 30_000,
             user_ref: None,
             selected_provider: token("system-systemd"),
             expected_identity: BTreeSet::from([IdentityBinding::Cgroup]),

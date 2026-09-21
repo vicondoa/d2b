@@ -61,10 +61,12 @@ impl BlockingPool {
         // Bounded deadline queue: capacity is twice the blocking-pool limit, so a
         // registration can never outgrow the in-flight job set while the deadline
         // worker keeps draining. A full queue only means the worker is
-        // momentarily starved: the registration is deferred (the job still runs
-        // and `JobFuture::poll` enforces the deadline) instead of blocking the
-        // executor worker or spurious-failing a healthy launch. Only a
-        // disconnected queue - the worker is gone - refuses with launch-failed.
+        // momentarily starved: the registration is deferred to the unbounded
+        // overflow queue the worker drains on its next iteration (the job still
+        // runs and `JobFuture::poll` enforces the deadline on the wake) instead
+        // of blocking the executor worker or spurious-failing a healthy launch.
+        // Only a disconnected queue - the worker is gone - refuses with
+        // launch-failed.
         let (deadline_sender, deadline_receiver) = sync_channel::<Deadline>(limit * 2);
         let deadline_worker = std::thread::Builder::new()
             .name("d2b-process-deadlines".to_owned())
@@ -94,31 +96,39 @@ impl BlockingPool {
         let deadline = Instant::now() + timeout;
         let state = Arc::new(JobState::default());
         let worker_state = Arc::clone(&state);
-        let job = Box::new(move || worker_state.complete(operation(deadline)));
-        let deadline_state: Arc<dyn DeadlineState> = state.clone();
-        match self
+        let deadline_sender = self
             .deadline_sender
             .as_ref()
             .expect("deadline sender present")
-            .try_send(Deadline {
-                at: deadline,
-                state: Arc::downgrade(&deadline_state),
-            }) {
+            .clone();
+        let deadline_state: Arc<dyn DeadlineState> = state.clone();
+        // A wake-up registration accompanies every admitted job: the
+        // deadline worker wakes a pending future once its deadline passes,
+        // so an executor that only re-polls on a wake still resolves every
+        // effect bounded. A momentarily full queue (the deadline worker
+        // starved) must not spurious-fail a healthy launch: the
+        // registration rides the job instead and is re-attempted from the
+        // dedicated job worker before the effect runs (the `JobFuture::poll`
+        // path stays the deadline enforcement).
+        let mut deferred = None;
+        match deadline_sender.try_send(Deadline {
+            at: deadline,
+            state: Arc::downgrade(&deadline_state),
+        }) {
             Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                // The deadline registration is a wake-up optimization, not the
-                // enforcement: `JobFuture::poll` resolves the job once its
-                // deadline passes, and a late completion is quarantined by the
-                // caller's deadline arm. A full queue means the deadline worker
-                // has not drained yet (the host is momentarily starved), not
-                // that the effect failed - so the job still proceeds below and
-                // a healthy launch is never spurious-failed by load. Only a
-                // hung job loses its deadline wake; the poll path still bounds
-                // every caller that keeps polling.
+            Err(TrySendError::Full(registration)) => {
+                // A full queue means the deadline worker has not drained yet
+                // (the host is momentarily starved), not that the effect
+                // failed - so the job still proceeds below and a healthy launch
+                // is never spurious-failed by load. The registration rides
+                // the job and is re-attempted from the dedicated job worker
+                // before the effect runs, so a hung effect keeps its only wake
+                // source instead of awaiting past its deadline forever.
                 warn!(
                     provider = "supervisor",
-                    "deadline registration deferred; the deadline worker is momentarily starved"
+                    "deadline registration deferred; re-attempting from the job worker once the deadline worker drains"
                 );
+                deferred = Some(registration);
             }
             Err(TrySendError::Disconnected(_)) => {
                 // The deadline worker is gone: no wake source remains for a
@@ -133,6 +143,34 @@ impl BlockingPool {
                 return JobFuture { state, deadline };
             }
         }
+        // The registration rides the job only when the queue was full: the
+        // closure then re-attempts the send on the dedicated job worker (the
+        // sanctioned dedicated-worker boundary) once the deadline worker
+        // drains, so a hung effect keeps its only wake source. The sender is
+        // captured *only* in that case: a wedged worker closure must never
+        // keep the deadline channel open, or the pool Drop's deadline-worker
+        // join would block on a channel that never disconnects.
+        let deferred_sender: Option<SyncSender<Deadline>> = if deferred.is_some() {
+            Some(deadline_sender)
+        } else {
+            drop(deadline_sender);
+            None
+        };
+        let job = Box::new(move || {
+            if let Some(registration) = deferred {
+                let Some(sender) = deferred_sender else {
+                    // The queue disconnected between submit and re-attempt:
+                    // no wake source remains, so refuse before any effect runs.
+                    worker_state.complete(Err(ProcessEffectError::LaunchFailed));
+                    return;
+                };
+                if sender.send(registration).is_err() {
+                    worker_state.complete(Err(ProcessEffectError::LaunchFailed));
+                    return;
+                }
+            }
+            worker_state.complete(operation(deadline));
+        });
         let submit_error = match self
             .sender
             .as_ref()
@@ -161,7 +199,6 @@ impl BlockingPool {
         JobFuture { state, deadline }
     }
 }
-
 impl Drop for BlockingPool {
     // Worker teardown joins the deadline worker: Drop is synchronous by
     // construction (no executor is available), and the workers finish as
@@ -254,7 +291,7 @@ impl<T: Send> DeadlineState for JobState<T> {
 #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
 fn deadline_worker(receiver: Receiver<Deadline>) {
     let mut deadlines = Vec::<Deadline>::new();
-    loop {
+loop {
         deadlines.retain(|deadline| {
             deadline
                 .state
@@ -688,10 +725,18 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
     ) -> Result<Option<AdoptionCandidate>, ProcessConformanceError> {
         let request = ProcessRequest::new(ticket.clone());
         let timeout = Duration::from_millis(u64::from(ticket.operation().deadline_ms()));
+        // The readiness probe is the one effect whose failure the Provider
+        // must not project as `DeadlineExceeded`: the minijail consumer turns
+        // that code into the terminal identity-ambiguous quarantine reserved
+        // for "the probe ran and found no candidate". A probe that never
+        // produced a result - the pool was saturated or the blocking call
+        // overran the ticket deadline - says nothing about the candidate's
+        // identity, so it surfaces as the transient effect code the driver
+        // retries instead.
         let observation = self
             .blocking(timeout, move |backend| backend.probe(request))
             .await
-            .map_err(map_error)?;
+            .map_err(map_probe_error)?;
         Ok(observation.map(|observation| AdoptionCandidate {
             identity: observation.identity(),
             observed: observation.observed().clone(),
@@ -845,11 +890,33 @@ fn map_error(error: ProcessEffectError) -> ProcessConformanceError {
     }
 }
 
+/// Project one readiness-probe failure onto the conformance surface.
+///
+/// The probe is the readiness observation: `Ok(None)` means it ran and found
+/// no candidate, and the minijail consumer treats `DeadlineExceeded` as that
+/// terminal "identity no longer verifiable" verdict for a genuinely absent
+/// process. A probe that *never produced a result* - the bounded pool was
+/// saturated (`Busy`) or the blocking call overran the ticket deadline - is
+/// the opposite fact: it says nothing about the candidate, so it must not
+/// quarantine a healthy live identity. It surfaces as `LaunchFailed`, the
+/// closed transient effect code the broker transport arm already uses, and
+/// the driver retries it. Every other probe failure keeps the generic
+/// projection.
+fn map_probe_error(error: ProcessEffectError) -> ProcessConformanceError {
+    match error {
+        ProcessEffectError::Busy | ProcessEffectError::DeadlineExceeded => {
+            ProcessConformanceError::LaunchFailed
+        }
+        _ => map_error(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU8};
     use std::sync::mpsc::{Receiver, Sender, channel};
     use std::sync::{LazyLock, Mutex, MutexGuard};
+    use std::task::Wake;
 
     use d2b_process_conformance::testing::{block_on, fixtures};
     use d2b_provider_process::{IdentityBinding, ObservedIdentity, WaitReapOwner};
@@ -1317,5 +1384,186 @@ mod tests {
         assert_eq!(block_on(supervisor.probe(&ticket)).unwrap(), None);
         assert_eq!(probe_calls.load(Ordering::Relaxed), 1);
         assert_eq!(observe_calls.load(Ordering::Relaxed), 0);
+    }
+
+    /// A waker that unparks its polling thread, so a `Pending` future is only
+    /// re-polled on an explicit wake - the production-executor behaviour the
+    /// conformance harness's busy-wait `block_on` masks.
+    struct ParkWaker {
+        thread: std::thread::Thread,
+        fired: AtomicBool,
+    }
+
+    impl Wake for ParkWaker {
+        fn wake(self: Arc<Self>) {
+            self.fired.store(true, Ordering::Release);
+            self.thread.unpark();
+        }
+    }
+
+    /// A `DeadlineState` whose worker-side poll holds until the test releases
+    /// it: it wedges the deadline worker inside `retain` so the bounded
+    /// deadline queue can genuinely fill (the worker is provably not
+    /// consuming) instead of draining every registration as it arrives.
+    struct HoldDeadline {
+        entered: Arc<AtomicBool>,
+        release: Arc<AtomicBool>,
+    }
+
+    impl DeadlineState for HoldDeadline {
+        fn is_completed(&self) -> bool {
+            self.entered.store(true, Ordering::Release);
+            while !self.release.load(Ordering::Acquire) {
+                std::thread::park_timeout(Duration::from_millis(1));
+            }
+            true
+        }
+
+        fn wake_deadline(&self) {}
+    }
+
+    #[derive(Default)]
+    struct FillerDeadline {
+        completed: AtomicBool,
+    }
+
+    impl DeadlineState for FillerDeadline {
+        fn is_completed(&self) -> bool {
+            self.completed.load(Ordering::Acquire)
+        }
+
+        fn wake_deadline(&self) {}
+    }
+
+/// A registration the full deadline queue deferred must still bound a hung
+    /// effect: the deferred registration rides the job and is re-attempted from
+    /// the dedicated job worker once the deadline worker drains, and its
+    /// deadline wake still wakes the poller on time. Before this fix the
+    /// deferred registration was dropped,and a production executor only
+    /// re-polls a pending future on a wake, so the caller of a hung
+    /// effect awaited past its deadline forever - the pool's boundedness was
+    /// lost exactly when the deadline worker was starved.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn a_parked_deadline_registration_still_bounds_a_hung_effect() {
+        let _guard = PoolTestGuard::new();
+        let pool = BlockingPool::new(1);
+        let entered = Arc::new(AtomicBool::new(false));
+        let release = Arc::new(AtomicBool::new(false));
+        let hold: Arc<dyn DeadlineState> = Arc::new(HoldDeadline {
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        });
+        pool.deadline_sender
+            .as_ref()
+            .expect("deadline sender present")
+            .try_send(Deadline {
+                at: Instant::now() + Duration::from_secs(60),
+                state: Arc::downgrade(&hold),
+            })
+            .expect("deadline queue admits the hold registration");
+        wait_until(Duration::from_secs(5), || entered.load(Ordering::Acquire));
+        for _ in 0..2 {
+            let filler: Arc<dyn DeadlineState> = Arc::new(FillerDeadline::default());
+            pool.deadline_sender
+                .as_ref()
+                .expect("deadline sender present")
+                .try_send(Deadline {
+                    at: Instant::now() + Duration::from_secs(60),
+                    state: Arc::downgrade(&filler),
+                })
+                .expect("deadline queue admits a filler registration");
+        }
+        // The deadline queue is now full: submit a hung effect whose
+        // registration must be deferred (parked) rather than lost.
+        let (started_sender, started_receiver) = channel();
+        let (release_sender, release_receiver) = channel();
+        let mut future = pool.submit_with_deadline(Duration::from_millis(300), move |_| {
+            let _ = started_sender.send(());
+            let _ = release_receiver.recv();
+            Ok(7u32)
+        });
+        // Poll exactly once through a park-based waker, as a production
+        // executor would: the future is Pending and can only resolve when the
+        // deadline worker wakes it - never through a busy-wait spin.
+        let (result_sender, result_receiver) = channel();
+        let poller = std::thread::spawn(move || {
+            let parked = Arc::new(ParkWaker {
+                thread: std::thread::current(),
+                fired: AtomicBool::new(true),
+            });
+            let waker = Waker::from(Arc::clone(&parked));
+            let mut context = Context::from_waker(&waker);
+            loop {
+                if parked.fired.swap(false, Ordering::AcqRel)
+                    && let Poll::Ready(result) = Pin::new(&mut future).poll(&mut context)
+                {
+                    let _ = result_sender.send(result);
+                    return;
+                }
+                std::thread::park();
+            }
+        });
+// Let the deadline worker drain: the deferred registration is
+        // re-attempted from the dedicated job worker and the hung effect starts,
+        // then its deadline wake must resolve it bounded at 300ms.
+        release.store(true, Ordering::Release);
+        started_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the deferred registration lands and the hung effect starts");
+        assert_eq!(
+            result_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("a deferred deadline registration still bounds a hung effect"),
+            Err(ProcessEffectError::DeadlineExceeded)
+        );
+        let _ = poller.join();
+        // Release the hung effect so the job worker exits cleanly at teardown.
+        release_sender.send(()).unwrap();
+    }
+
+    /// A readiness probe that cannot run - the blocking pool is saturated -
+    /// must not surface as `DeadlineExceeded`, which the minijail consumer
+    /// terminally quarantines as "the probe ran and found no candidate": a
+    /// busy probe never observed the process, so a healthy live identity must
+    /// not be quarantined under startup load. It surfaces as the transient
+    /// `LaunchFailed` the driver retries, and a probe that does run and finds
+    /// nothing still yields the genuine absent-candidate `Ok(None)`.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn a_starved_probe_is_transient_and_never_quarantined() {
+        let _guard = PoolTestGuard::new();
+        let (backend, started, release, live) = controlled_backend(false);
+        let supervisor = ProviderSupervisor::with_limits(backend, 1, Duration::from_millis(10));
+        // The launch keeps the fixture's thirty-second deadline so it finishes
+        // on time once released; the probe gets a short deadline so the
+        // saturated-pool wait resolves fast and deterministically.
+        let launch_ticket = fixtures::ticket_builder().build().unwrap();
+        let probe_ticket = fixtures::ticket_builder()
+            .with_operation_deadline(500)
+            .build()
+            .unwrap();
+        let worker_supervisor = supervisor.clone();
+        let (launch_sender, launch_receiver) = channel();
+        std::thread::spawn(move || {
+            let _ = launch_sender.send(block_on(worker_supervisor.launch(&launch_ticket)));
+        });
+        // The single blocking worker is stuck inside the launch effect: the
+        // readiness probe on the same pool is saturated and never runs.
+        started.recv().unwrap();
+        assert!(live.load(Ordering::Acquire));
+        assert_eq!(
+            block_on(supervisor.probe(&probe_ticket)),
+            Err(ProcessConformanceError::LaunchFailed)
+        );
+        // Once the pool drains, a probe that runs and finds no candidate keeps
+        // the genuine absent-candidate result (the minijail's own quarantine
+        // translation is untouched).
+        release.send(()).unwrap();
+        launch_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("saturated launch completes after release")
+            .expect("saturated launch succeeds");
+        assert_eq!(block_on(supervisor.probe(&probe_ticket)).unwrap(), None);
     }
 }
