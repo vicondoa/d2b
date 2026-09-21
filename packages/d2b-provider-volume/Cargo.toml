@@ -27,3 +27,8 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 parking_lot = "0.12"
 serde_json.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[[test]]
+name = "registration"
+path = "tests/registration.rs"
+required-features = ["test-support"]

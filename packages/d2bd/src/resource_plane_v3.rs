@@ -2217,8 +2217,10 @@ fn registered_service_factories(
                     as Arc<dyn EffectServiceFactory>
             } else if service == HOST_EFFECTS_SERVICE.id {
                 Arc::new(HostEffectsServiceFactory::new(host_facets.clone()))
+as Arc<dyn EffectServiceFactory>
             } else if service == ACTIVATION_EFFECTS_SERVICE.id {
                 Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
             } else if service == VOLUME_EFFECTS_SERVICE.id {
                 Arc::new(VolumeEffectsServiceFactory::new(volume_facets.clone()))
                     as Arc<dyn EffectServiceFactory>
@@ -3613,6 +3615,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             d2b_provider_host::test_support::RecordingMinijailGate::new(
                 MinijailPlatformGate::new(6, 9, true),
             ),
+        );
         let volume_facets = d2b_provider_volume::test_support::recording_facets(
             d2b_provider_volume::test_support::RecordingRuntime::new(),
         );
@@ -3720,6 +3723,8 @@ host_facets: host_facets.clone(),
                         HOST_EFFECTS_SERVICE.id,
                         Arc::new(HostEffectsServiceFactory::new(host_facets))
                             as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
                         VOLUME_EFFECTS_SERVICE.id,
                         Arc::new(VolumeEffectsServiceFactory::new(
                             volume_facets.clone(),
@@ -4187,6 +4192,9 @@ host_facets: host_facets.clone(),
         assert_eq!(
             after_fields, before_fields,
             "the adopted generation answers the same bounded observations (the volatile process count normalized out)"
+        );
+    }
+
     /// U7: the composition root hosts the Volume family's declared effects
     /// service from the family's own factory over the plane's facet set, and
     /// the hosted service answers `has-layout` through the real invocation

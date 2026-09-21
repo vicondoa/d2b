@@ -29,5 +29,8 @@ sha2 = { workspace = true }
 tracing = "0.1"
 
 [dev-dependencies]
+# The moved adapter suite (U7) renders Network content through the
+# network-local controller helpers to pin the foreign-marker preserve path.
+d2b-provider-network-local = { path = "../d2b-provider-network-local", version = "0.0.0-bootstrap" }
 # The anchored adapter's in-module tests materialize roots in temp dirs.
 tempfile = "3"
