@@ -1842,9 +1842,8 @@ pub struct ConstructionInputs {
     /// supplied through the composition root. Every probe input is host
     /// state the crate reads itself, so the family never receives a
     /// daemon-built effect port (R2).
-    pub user_facets: UserEffectFacets,
-    pub volume_effects: Arc<dyn VolumeDriverEffects>,
-/// The daemon-supplied facet set the VolumeBinding family's effects
+pub user_facets: UserEffectFacets,
+    /// The daemon-supplied facet set the VolumeBinding family's effects
     /// implementation is built from (U6):the serving-socket probe,the
     /// socket removal,and the guest-mount observation,supplied through the
     /// composition root. The family never receives a daemon-built effect
@@ -1868,7 +1867,6 @@ pub struct ConstructionInputs {
     /// supplied through the composition root. The family never receives a
     /// daemon-built effect port (R2).
     pub volume_facets: VolumeEffectFacets,
-    pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
     /// The daemon-supplied facet set the Guest family's effects
     /// implementation is built from (U10):the zone's manager view (live
     /// rows, committed Provider identities,and the controller-session
@@ -2113,7 +2111,6 @@ Arc::new(DaemonAudioMediatorSource {
         // itself (U5), so the composition root supplies no externally built
         // port.
         let user_facets = UserEffectFacets::production();
-        );
         // U6: the VolumeBinding and Endpoint families' effects ride the
         // declared facets too: the daemon's socket-target registry, runtime
         // directory, plane table, and target directory answer the families'
@@ -2185,15 +2182,11 @@ Arc::new(DaemonAudioMediatorSource {
             host_facets: host_facets.clone(),
             network_facets: network_facets.clone(),
             user_facets: user_facets.clone(),
-            volume_effects: Arc::new(production_volume_effects(state, zone.clone(), resolver, Arc::clone(&registry))),
-binding_facets: binding_facets.clone(),
+            binding_facets: binding_facets.clone(),
             endpoint_facets: endpoint_facets.clone(),
             volume_facets: volume_facets.clone(),
             activation_facets: activation_facets.clone(),
             credential_facets: credential_facets.clone(),
-            shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects::production(
-                shared_provider_effects,
-            ),
             guest_facets: guest_facets.clone(),
             usbip_facets: usbip_facets.clone(),
             security_key_facets: security_key_facets.clone(),
@@ -2951,6 +2944,7 @@ impl ResourcePlaneV3 {
                 zone: inputs.zone.as_str().to_owned(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.guest_facets.clone(),
+            })],
             // U12 (device families): each device family's driver builds its
             // effects from the declared facets; no externally built port
             // appears here (R2). The Device and USBIP families serve the
@@ -3833,6 +3827,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             // (socket_present true); the shared double starts absent.
             effects.make_present();
             effects.facet_set()
+        };
         let credential_facets = {
             let runtime = d2b_provider_credential::test_support::RecordingRuntime::new(
                 d2b_provider_credential::test_support::log(),
@@ -3872,18 +3867,6 @@ host_facets: host_facets.clone(),
                 binding_facets: binding_facets.clone(),
                 endpoint_facets: endpoint_facets.clone(),
                 activation_facets: activation_facets.clone(),
-                credential_effects: {
-                    let effects = d2b_provider_credential::test_support::FakeEffects::new(
-                        d2b_provider_credential::test_support::log(),
-                    );
-                    // The old plane fake answered no provider/execution
-                    // facts, no live agent, and no bound session; the shared
-                    // double's defaults differ, so script them back.
-                    effects.set_facts(None);
-                    effects.set_agent_ready(false);
-                    effects.set_session(None);
-                    effects
-                },
                 usbip_facets: usbip_facets.clone(),
                 security_key_facets: security_key_facets.clone(),
                 device_facets: device_facets.clone(),
@@ -4512,6 +4495,7 @@ HOST_EFFECTS_SERVICE.id,
             method: VOLUME_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(
@@ -4906,6 +4890,7 @@ HOST_EFFECTS_SERVICE.id,
             method: USER_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         let string_field = |key: &str| -> String {
@@ -4970,6 +4955,7 @@ HOST_EFFECTS_SERVICE.id,
             method: USER_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let before = binding.call(call).await.expect("call before restart");
         drop(started);
@@ -4992,6 +4978,7 @@ HOST_EFFECTS_SERVICE.id,
             method: USER_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let after = adopted.call(call).await.expect("call after restart");
         assert_eq!(
@@ -5032,6 +5019,7 @@ HOST_EFFECTS_SERVICE.id,
             method: GUEST_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(
@@ -5044,7 +5032,6 @@ HOST_EFFECTS_SERVICE.id,
             }))
             .expect("canonical payload"),
             "the hosted service answers the manager view's honest absent report"
-        );
         );
     }
 
@@ -5075,6 +5062,7 @@ HOST_EFFECTS_SERVICE.id,
             method: d2b_provider_endpoint::ENDPOINT_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         let string_field = |key: &str| -> String {
@@ -5134,6 +5122,7 @@ HOST_EFFECTS_SERVICE.id,
             method: d2b_provider_volume_binding::BINDING_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         let string_field = |key: &str| -> String {
@@ -5196,6 +5185,7 @@ HOST_EFFECTS_SERVICE.id,
             method: CREDENTIAL_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(

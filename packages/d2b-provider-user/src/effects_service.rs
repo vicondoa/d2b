@@ -368,6 +368,7 @@ mod tests {
     ) -> ServiceInvocation<'a> {
         ServiceInvocation {
             zone: "work",
+            method: USER_EFFECTS_SERVICE.methods[0].name,
             invocation_id: "invocation-u5",
             payload,
             resources,
@@ -376,6 +377,7 @@ mod tests {
             request_fds: &[],
             response_fds: USER_EFFECTS_SERVICE.methods[0].response_fds,
             payload_schema: None,
+            chain_identities: &[],
         }
     }
 

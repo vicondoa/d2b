@@ -1711,6 +1711,7 @@ mod tests {
     ) -> d2b_provider_toolkit::ServiceInvocation<'a> {
         d2b_provider_toolkit::ServiceInvocation {
             zone: "work",
+            method: GUEST_EFFECTS_SERVICE.methods[0].name,
             invocation_id: "invocation-guest-phase-test",
             payload,
             resources,
@@ -1719,6 +1720,7 @@ mod tests {
             request_fds: &[],
             response_fds: d2b_resource_types::MethodFdContract::NONE,
             payload_schema: None,
+            chain_identities: &[],
         }
     }
 

@@ -217,6 +217,7 @@ mod tests {
     ) -> ServiceInvocation<'a> {
         ServiceInvocation {
             zone: "work",
+            method: CREDENTIAL_EFFECTS_SERVICE.methods[0].name,
             invocation_id,
             payload,
             resources,
@@ -225,6 +226,7 @@ mod tests {
             request_fds: &[],
             response_fds: CREDENTIAL_EFFECTS_SERVICE.methods[0].response_fds,
             payload_schema: None,
+            chain_identities: &[],
         }
     }
 
