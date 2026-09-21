@@ -3532,15 +3532,15 @@ mod tests {
 
         // 60s is a 12x headroom over that budget: wide enough that scheduling
         // delay cannot trip it on any normally-loaded machine, finite enough
-        // that inflation beyond ~12x (e.g., an ms-misread-as-seconds change, a
-        // 10x arithmetic inflation to 50s) fails on the measurement. A smaller
-        // inflation - e.g. a copy-paste to the 30s request lifetime - lands
-        // below the ceiling by design: catching it would require a ~20-25s
-        // bound, back in the load-tripable regime this headroom exists to
-        // avoid, and it still surfaces as a visibly slow test rather than a
-        // silent pass. (The server thread above proves the teardown cancel
-        // was actually sent, and a deadline that never fires would hang the
-        // test deterministically.)
+        // that inflation beyond ~12x (e.g., an ms-misread-as-seconds budget
+        // like 5000ms read as 500s) fails on the measurement. Smaller
+        // inflations - a 10x arithmetic error to 50s, or a copy-paste to the
+        // 30s request lifetime - land below the ceiling by design: catching
+        // them would require a ~20-25s bound, back in the load-tripable
+        // regime this headroom exists to avoid, and they still surface as
+        // visibly slow tests rather than silent passes. (The server thread
+        // above proves the teardown cancel was actually sent, and a deadline
+        // that never fires would hang the test deterministically.)
         let error = block_on(stream.receive()).unwrap_err();
         let elapsed = started.elapsed();
         assert_eq!(error, ClientError::DeadlineExpired);

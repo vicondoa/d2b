@@ -2148,16 +2148,18 @@ async fn outbound_cancel_fails_closed_before_a_queued_call_dispatch() {
     let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
 
     // Handoff contract (no wake-order assumptions; the flavor is spelled
-    // because single-threaded cooperation is required): each spawned command
-    // task signals an entry ack before calling the driver. A task's poll runs
-    // to its first suspension, so an ack cannot resolve before the task has
-    // handed its command to the bounded channel; the channel is FIFO and the
-    // single driver task consumes it in order, so commands below are ordered:
-    // SendTtrpc, then StartTtrpc, then Cancel. The writer task likewise
-    // consumes its batch channel FIFO, so the queued call's batch is never
-    // processed before the fence-holding first batch completes, and the entry
-    // ack plus that FIFO means the queued call is registered before the
-    // cancel is handled.
+    // because single-threaded cooperation is required): the entry ack is sent
+    // BEFORE the driver call, inside the spawned task's first poll. A task's
+    // poll runs to its first suspension, so the test cannot observe the ack
+    // until that poll has completed - and the command enqueue happens
+    // synchronously earlier in the same poll (or its waiter is registered),
+    // so by the time the ack resolves, the command is already ordered in the
+    // bounded channel. The channel is FIFO and the single driver task
+    // consumes it in order, so commands below are ordered: SendTtrpc, then
+    // StartTtrpc, then Cancel. The writer task likewise consumes its batch
+    // channel FIFO, so the queued call's batch is never processed before the
+    // fence-holding first batch completes, and the entry ack plus that FIFO
+    // means the queued call is registered before the cancel is handled.
     let (first_entered_tx, first_entered_rx) = tokio::sync::oneshot::channel();
     let first_send = {
         let initiator = Arc::clone(&initiator);
