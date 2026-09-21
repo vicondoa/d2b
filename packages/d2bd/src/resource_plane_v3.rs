@@ -1813,9 +1813,10 @@ pub struct ConstructionInputs {
     /// daemon-built effect port (R2).
     pub activation_facets: ActivationEffectFacets,
     /// The daemon-supplied facet set the User family's effects implementation
-    /// is built from (U5): an empty set today - the family's probe reads host
-    /// state the crate reads itself - supplied through the composition root,
-    /// so the family never receives a daemon-built effect port (R2).
+    /// is built from (U5): the crate's own bounded local-account probe,
+    /// supplied through the composition root. Every probe input is host
+    /// state the crate reads itself, so the family never receives a
+    /// daemon-built effect port (R2).
     pub user_facets: UserEffectFacets,
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
     pub binding_effects: Arc<dyn BindingDriverEffects>,
