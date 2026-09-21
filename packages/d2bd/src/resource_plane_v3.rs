@@ -2123,7 +2123,7 @@ Box::pin(async move {
             shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects::production(
                 shared_provider_effects,
             ),
-guest_facets: guest_facets.clone(),
+            guest_facets: guest_facets.clone(),
             interaction_facets: interaction_facets.clone(),
             trusted_context_publication: Some(
                 crate::provider_lifecycle::TrustedContextPublication::production(
@@ -2176,7 +2176,7 @@ fn registered_service_factories(
             } else if service == ACTIVATION_EFFECTS_SERVICE.id {
                 Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone()))
                     as Arc<dyn EffectServiceFactory>
-} else if service == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id {
+            } else if service == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id {
                 Arc::new(
                     d2b_provider_wayland_policy::InteractionEffectsServiceFactory::new(
                         interaction_facets.clone(),
@@ -2854,7 +2854,40 @@ impl ResourcePlaneV3 {
                 zone: inputs.zone.as_str().to_owned(),
                 facets: inputs.activation_facets.clone(),
             })],
-// The Guest family: the descriptor builds its effects from the
+            // The six interaction types (U12): each type's driver is built
+            // over the family's shared effects value (the family's own
+            // implementation from the declared facets), so the six types
+            // reconcile one per-zone controller state. The session and
+            // binding behaviors are the crates' own child-intent sources.
+            "wayland-policy" => vec![wayland_policy_descriptor(interaction_driver_args(
+                inputs,
+                WaylandPolicy,
+            ))],
+            "wayland-session" => {
+                vec![wayland_session_descriptor(interaction_driver_args(
+                    inputs,
+                    WaylandSession::default(),
+                ))]
+            }
+            "audio-service" => vec![audio_service_descriptor(interaction_driver_args(
+                inputs,
+                AudioService,
+            ))],
+            "audio-binding" => {
+                vec![audio_binding_descriptor(interaction_driver_args(
+                    inputs,
+                    AudioBinding::default(),
+                ))]
+            }
+            "shell-pool" => vec![shell_pool_descriptor(interaction_driver_args(
+                inputs,
+                ShellPool,
+            ))],
+            "shell-session" => vec![shell_session_descriptor(interaction_driver_args(
+                inputs,
+                ShellSession,
+            ))],
+            // The Guest family: the descriptor builds its effects from the
             // declared facets; no externally built port appears here (R2).
             "guest" => vec![guest_descriptor(GuestDriverArgs {
                 zone: inputs.zone.as_str().to_owned(),
@@ -3718,7 +3751,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 // from the recording runtime, exactly as the production
                 // composition root builds it from the daemon's runtime.
                 network_facets: network_facets.clone(),
-guest_facets: guest_facets.clone(),
+                guest_facets: guest_facets.clone(),
                 interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
                 // U1/U14/U5/U10: the plane hosts the Process, Network, Host,
