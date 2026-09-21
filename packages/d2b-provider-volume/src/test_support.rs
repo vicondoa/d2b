@@ -30,7 +30,7 @@ impl VolumeRuntime for RefusingRuntime {
         _provider: Option<&serde_json::Value>,
         _owner_ref: Option<&ResourceRef>,
     ) -> Result<bool, String> {
-        Err("refused:the registration boundary must never run an effect".to_owned())
+        Err("refused: the registration boundary must never run an effect".to_owned())
     }
 
     async fn cleanup_volume(
@@ -38,16 +38,15 @@ impl VolumeRuntime for RefusingRuntime {
         _volume_uid: &ResourceUid,
         _spec: &VolumeSpec,
     ) -> Result<(), String> {
-        Err("refused:the registration boundary must never run an effect".to_owned())
+        Err("refused: the registration boundary must never run an effect".to_owned())
     }
 
     fn has_layout(&self, _volume_uid: &ResourceUid) -> bool {
-        panic!("refused:the registration boundary must never run an effect")
+        panic!("refused: the registration boundary must never run an effect")
     }
 }
 
 /// Scripted layout runtime: records every call in order.
-
 pub struct RecordingRuntime {
     calls: parking_lot::Mutex<Vec<&'static str>>,
     /// Whether the runtime currently reports a Ready layout

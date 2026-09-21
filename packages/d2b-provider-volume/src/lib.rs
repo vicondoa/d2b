@@ -34,7 +34,7 @@ pub mod test_support;
 
 pub use driver::{
     VOLUME_CREATIONS, VOLUME_TYPE_NAME, VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
-    volume_provider_declaration, volume_spec_decoder,
+    volume_spec_decoder,
 };
 pub use effects_service::{
     VOLUME_EFFECTS_SERVICE, VolumeEffectsService, VolumeEffectsServiceFactory,
