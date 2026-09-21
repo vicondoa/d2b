@@ -567,6 +567,12 @@ pub async fn persist_persistent_tap_realization(
         .write(true)
         .create_new(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+        // Deliberately unpinned: 0640 is the open-time default and the
+        // ambient umask may narrow it to 0600. The row is
+        // broker-root-only - no declared consumer needs the group bit -
+        // so a post-open fchmod would WIDEN the file relative to what
+        // the operator's umask chose. Do not mirror the
+        // store_sync_export/audit pins onto this path.
         .mode(0o640)
         .open(&temp_path)
         .await
