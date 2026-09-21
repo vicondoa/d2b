@@ -12,6 +12,7 @@ use d2b_process_conformance::suite;
 use d2b_process_conformance::testing::{ScriptedEffectPort, block_on, fixtures};
 use d2b_process_conformance::{
     AdoptionOutcome, ProcessConformanceError, ProcessLaunchEffectPort, ProcessProvider,
+    ReadinessExpectation,
 };
 use d2b_provider_process::{
     AdoptionCandidate, BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity,
@@ -55,6 +56,10 @@ enum Mode {
     Vanished,
     Reused,
     WrongOwner,
+    /// The readiness probe envelope fails like a broker transport timeout.
+    ProbeTimeout,
+    /// The readiness probe runs and finds no candidate.
+    ProbeAbsent,
 }
 
 struct DeterministicBackend {
@@ -130,6 +135,21 @@ impl ProcessEffectBackend for DeterministicBackend {
             return Ok(None);
         }
         Ok(Some(self.observation()))
+    }
+
+    fn probe(
+        &self,
+        request: ProcessRequest,
+    ) -> Result<Option<BackendObservation>, ProcessEffectError> {
+        self.record("probe");
+        match self.mode {
+            // A broker transport timeout on the readiness-probe envelope:
+            // the candidate may be perfectly healthy.
+            Mode::ProbeTimeout => Err(ProcessEffectError::ObserveFailed),
+            // The probe ran and found no candidate.
+            Mode::ProbeAbsent => Ok(None),
+            _ => self.observe(request),
+        }
     }
 
     fn open_pidfd(
@@ -365,6 +385,52 @@ fn fault_matrix_fails_closed() {
         block_on(wrong_owner.launch(&ticket)).unwrap_err(),
         ProcessConformanceError::WaitOwnerMismatch
     );
+}
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[test]
+fn adopt_propagates_a_transient_probe_failure_instead_of_quarantining() {
+    // A broker transport timeout on the adopt path's readiness probe says
+    // nothing about the candidate's identity: it must be reported as a
+    // retryable error, never as the terminal identity-ambiguous quarantine
+    // (a healthy running process must survive one slow envelope call).
+    let ticket = fixtures::ticket_builder()
+        .selected_provider(MINIJAIL)
+        .expected_identity(minijail_bindings())
+        .with_readiness(ReadinessExpectation::condition(1000).expect("condition"))
+        .build()
+        .unwrap();
+    let timeout = minijail(
+        DeterministicBackend::new(minijail_bindings(), WaitReapOwner::Local)
+            .mode(Mode::ProbeTimeout),
+    );
+    assert_eq!(
+        block_on(timeout.adopt(&ticket)).unwrap_err(),
+        ProcessConformanceError::LaunchFailed,
+        "a probe transport failure must propagate for retry"
+    );
+}
+
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[test]
+fn adopt_still_quarantines_when_the_readiness_probe_finds_no_candidate() {
+    // The probe running and finding no candidate means the observed
+    // process can no longer be confirmed to exist: the identity is
+    // unverifiable and the terminal quarantine still applies.
+    let ticket = fixtures::ticket_builder()
+        .selected_provider(MINIJAIL)
+        .expected_identity(minijail_bindings())
+        .with_readiness(ReadinessExpectation::condition(1000).expect("condition"))
+        .build()
+        .unwrap();
+    let absent = minijail(
+        DeterministicBackend::new(minijail_bindings(), WaitReapOwner::Local)
+            .mode(Mode::ProbeAbsent),
+    );
+    assert!(matches!(
+        block_on(absent.adopt(&ticket)).unwrap(),
+        AdoptionOutcome::Quarantined(_)
+    ));
 }
 
 #[derive(Clone)]
