@@ -236,7 +236,17 @@ impl ProductionSharedProviderEffects {
         let intents: Arc<dyn d2b_provider_network_local::broker::NetworkIntentSource> =
             Arc::new(
                 d2b_provider_network_local::broker::LoaderNetworkIntentSource::new(move || {
-                    crate::load_bundle_resolver(&daemon_state).ok()
+                    match crate::load_bundle_resolver(&daemon_state) {
+                        Ok(resolver) => Some(resolver),
+                        Err(error) => {
+                            tracing::warn!(
+                                error = ?error,
+                                "Network intent resolution: the trusted bundle load failed; \
+                                 refusing closed without an intent",
+                            );
+                            None
+                        }
+                    }
                 }),
             );
         Self {
@@ -3352,6 +3362,105 @@ mod tests {
             replaced,
             "the kernel generation fence follows the replaced bundle"
         );
+    }
+
+    /// A bundle-problem refusal is fail-closed, but never silent:the
+    /// daemon-supplied loader collapses the trusted bundle load into no
+    /// intent, and the kernel broker maps that to its generic closed code,
+    /// so the typed error that distinguishes a tampered bundle from a missing
+    /// or unreadable one has to reach the journal at the point of collapse.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn intent_loader_logs_the_typed_error_when_the_bundle_is_tampered() {
+        let (state, _dir) = test_state_with_bundle("composed");
+        let effects = ProductionSharedProviderEffects::new(
+            Arc::new(state.clone()),
+            ZoneId::parse("test").unwrap(),
+            ControllerGeneration::new(1).unwrap(),
+            d2b_core::bundle_resolver::BundleResolver::load_with_policy(
+                &state.config.artifacts.bundle_path,
+                &d2b_core::bundle_resolver::BundleVerifyPolicy::for_tests(),
+            )
+            .expect("load the composed bundle"),
+        );
+
+        // Tamper the on-disk bundle after composition:the next intent
+        // resolution re-verifies it per invocation and refuses closed, and
+        // the tamper reason must be journaled at the point of collapse.
+
+        std::fs::write(
+            &state.config.artifacts.bundle_path,
+            br#"{ "schemaVersion": "v3" }"#,
+        )
+        .expect("tamper the bundle");
+
+        let output = capture_journal_output(|| {
+            let provenance = NetworkProvenance::new(
+                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+                ResourceGeneration::new(1).unwrap(),
+                ResourceGeneration::new(1).unwrap(),
+                d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(format!(
+                    "sha256:{}",
+                    "ab".repeat(32),
+                ))
+                .unwrap(),
+            );
+            let intent = effects.intents.resolve_bridge_intent("bridge-0", &provenance);
+            assert!(
+                intent.is_none(),
+                "a tampered bundle yields no intent:the effect refuses closed",
+            );
+        });
+        assert!(
+            output.contains("BundleTampered"),
+            "the typed tamper error must reach the journal: {output:?}",
+        );
+    }
+
+    /// Capture everything one action emits with the daemon's default filter
+    /// applied (`main.rs` initializes `info`): an event below that level never
+    /// reaches the host journal.
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn capture_journal_output(action: impl FnOnce()) -> String {
+        #[derive(Clone)]
+        struct Buffer(Arc<std::sync::Mutex<Vec<u8>>>);
+
+        // Synchronous by construction (the tracing writer surface is sync):
+        // stays a `std::sync::Mutex` test fake under the plan's sanctioned
+        // cfg(test)-helper survivor class.
+
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        impl std::io::Write for Buffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("journal buffer").extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buffer {
+            type Writer = Buffer;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let buffer = Buffer(Arc::new(std::sync::Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buffer.clone())
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(subscriber, action);
+        String::from_utf8(buffer.0.lock().expect("journal buffer").clone())
+            .expect("journal output is utf-8")
     }
 
     /// A daemon state whose trusted bundle path names a freshly written
