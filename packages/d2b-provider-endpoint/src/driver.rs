@@ -57,7 +57,12 @@ use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 use crate::effects_service::ENDPOINT_EFFECTS_SERVICE;
 
 /// The frozen purpose of the binding-owned virtiofsd socket.
-const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
+///
+/// The purpose is this family's own vocabulary: the shape check classifies
+/// against it, and the daemon's host socket facet refuses any purpose it
+/// does not realize through the same constant (the refusal is preserved
+/// from the pre-move port rather than weakened).
+pub const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
 
 /// The producer one guest-runtime control purpose is declared with, exactly
 /// as the Cloud Hypervisor provider's fixed child roles commit it: `ch-api`

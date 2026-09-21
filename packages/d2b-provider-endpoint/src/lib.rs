@@ -34,7 +34,8 @@ pub mod test_support;
 pub use driver::{
     EndpointDriver, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverError,
     EndpointDriverFactory, EndpointDriverStatus, EndpointPurposeVocabulary, EndpointRealization,
-    GuestControlProducer, endpoint_descriptor, endpoint_realization, endpoint_spec_decoder,
+    GuestControlProducer, VIRTIOFSD_PURPOSE, endpoint_descriptor, endpoint_realization,
+    endpoint_spec_decoder,
 };
 pub use effects_service::{
     ENDPOINT_EFFECTS_SERVICE, EndpointEffectsService, EndpointEffectsServiceFactory,
