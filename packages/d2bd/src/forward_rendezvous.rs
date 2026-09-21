@@ -4896,7 +4896,7 @@ assert_eq!(
             }
             panic!(
                 "the forwarded pidfd-minting call must answer with the pidfd, got {response:?} \
-                 (the test needs the test user's own systemd user manager at /run/user/{uid}/bus)"
+                 (the test needs the test user's own systemd user manager at /run/user/<uid>/bus)"
             );
         };
         assert_eq!(
