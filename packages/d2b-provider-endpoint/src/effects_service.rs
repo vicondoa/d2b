@@ -320,6 +320,7 @@ mod tests {
     /// The service's vocabulary answers equal the free derivations, and the
     /// socket dispatch routes the evidence purposes onto the evidence
     /// facets and everything else onto the host socket facet.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_service_dispatches_onto_the_facets_by_purpose() {
         let fake = FakeSocketEffects::new();

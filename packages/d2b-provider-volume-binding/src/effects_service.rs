@@ -158,11 +158,12 @@ mod tests {
 
     /// The service's typed seam delegates onto the facets, and the hosted
     /// report answers the family's committed serving contract.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_service_delegates_onto_the_facets() {
         use d2b_contracts_resource::v3::{
-            ResourceRef, ResourceUid, execution_policy::BoundedToken,
-            volume_binding::{AttachmentAccess, VolumeBindingSpec},
+            ResourceRef, ResourceUid, execution_policy::BoundedToken, volume::AttachmentAccess,
+            volume_binding::VolumeBindingSpec,
         };
 
         let fake = FakeServingEffects::new();
@@ -184,7 +185,7 @@ mod tests {
             .expect("binding spec"),
             ResourceUid::parse("00000000-0000-4000-8000-000000000000").expect("uid"),
             d2b_contracts_resource::v3::ResourceGeneration::new(1).expect("generation"),
-            d2b_contracts_resource::v3::ZoneRevision::new(1).expect("revision"),
+            d2b_contracts_resource::v3::ZoneRevision::new(1),
         );
 
         assert!(!service.socket_ready(&socket).await);

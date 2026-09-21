@@ -1261,10 +1261,18 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
                 ReconcileOutcome::InProgress { .. } => {}
                 other => panic!("expected InProgress, got {other:?}"),
             }
+            // The evidence family realizes through its evidence facet, not
+            // the host socket facet: script the evidence row Ready (the
+            // production probe reads the guest's committed VMM row), and the
+            // socket facet records no call for the evidence purposes.
+            fake.make_present();
             for _ in 0..16 {
                 tokio::task::yield_now().await;
             }
-            assert!(fake.call_order().contains(&"ensure-socket"));
+            assert!(
+                !fake.call_order().contains(&"ensure-socket"),
+                "an evidence purpose realizes through the evidence facet, never the host socket"
+            );
             assert_eq!(
                 d.reconcile(&mut ctx).await.expect("reconcile"),
                 ReconcileOutcome::Satisfied

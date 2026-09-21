@@ -49,13 +49,14 @@ impl FakeSocketEffects {
 
     /// The facet set the plane and this crate's tests build the driver and
     /// the effects service from: the scripted socket double behind the host
-    /// socket facet, and absent-evidence doubles for the two row-evidence
-    /// facets.
+    /// socket facet, and the same scripted presence behind the two
+    /// row-evidence facets (a realized evidence family answers the same
+    /// scripted flag the socket family answers).
     pub fn facet_set(self: &Arc<Self>) -> EndpointEffectFacets {
         EndpointEffectFacets {
             socket: Arc::new(ScriptedSocketSource(Arc::clone(self))),
-            guest_vmm: Arc::new(AbsentEvidence),
-            device_worker: Arc::new(AbsentEvidence),
+            guest_vmm: Arc::new(ScriptedEvidence(Arc::clone(self))),
+            device_worker: Arc::new(ScriptedEvidence(Arc::clone(self))),
         }
     }
 }
@@ -84,20 +85,22 @@ impl EndpointSocketSource for ScriptedSocketSource {
     }
 }
 
-/// The absent-evidence double: no guest VMM or device worker row is Ready.
-struct AbsentEvidence;
+/// The scripted row-evidence double: both evidence families answer the
+/// shared double's scripted presence, so a test scripts the evidence row
+/// `Ready` with the same `make_present()` the socket family scripts.
+struct ScriptedEvidence(Arc<FakeSocketEffects>);
 
 #[async_trait::async_trait]
-impl GuestVmmEvidenceSource for AbsentEvidence {
+impl GuestVmmEvidenceSource for ScriptedEvidence {
     async fn present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
-        false
+        self.0.present.load(Ordering::SeqCst)
     }
 }
 
 #[async_trait::async_trait]
-impl DeviceWorkerEvidenceSource for AbsentEvidence {
+impl DeviceWorkerEvidenceSource for ScriptedEvidence {
     async fn present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
-        false
+        self.0.present.load(Ordering::SeqCst)
     }
 }
 
