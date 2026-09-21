@@ -12,6 +12,17 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the zone-native (v3) bundle host contract artifact:the bundle index
+  now declares an optional `hostPath` (`/etc/d2b/host.json`), emitted by
+  `nixos-modules/host-json.nix` with the NetworkManager unmanaged drop-in
+  contract (file path, `interface-name:d2b-*` match criteria,
+  `atomic-reload` behaviour, `root:d2bd` 0640 ownership) and pinned by the
+  same `artifactHashes` drift policy as every other private bundle artifact.
+  The bundle resolver loads the declared artifact into the host model instead
+  of the empty model, so the daemon's host-prepare `apply-nm-unmanaged`
+  kernel installs the declared file; a bundle that declares no `hostPath`
+  keeps failing closed on the empty path. The contract's authority is the
+  bundle, not a compiled constant.
 - Added `make generate`, a local Bazel aggregate for regenerating committed
   schemas, docs, completions, protocol bindings, Nix resource outputs, and
   policy inputs without changing the remote-default `make check` profile.

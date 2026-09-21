@@ -24286,18 +24286,50 @@ mod broker_dispatch_tests {
     /// `sha256(bundle with artifactHashes:null, no bundleHash)` contract
     /// `verify_bundle_hash` enforces for `schemaVersion >= 2`.
     fn write_v3_native_bundle(bundle_path: &Path, privileges_path: &Path, generator: &str) {
+        write_v3_native_bundle_with_optional_host(bundle_path, privileges_path, None, generator)
+    }
+
+    /// Like [`write_v3_native_bundle`] but declaring a hashed `host.json`
+    /// contract artifact beside the privileges artifact, for tests that exercise
+    /// the declared host contract (the NetworkManager unmanaged drop-in)
+    /// through the bundle resolver.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn write_v3_native_bundle_with_optional_host(
+        bundle_path: &Path,
+        privileges_path: &Path,
+        host_path: Option<&Path>,
+        generator: &str,
+    ) {
+        let host_hash = host_path.map(|host_path| {
+            let host_bytes = fs::read(host_path).expect("read host artifact for bundle hash");
+            let hex: String = {
+                use sha2::Digest as _;
+                sha2::Sha256::digest(&host_bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect()
+            };
+            format!("sha256:{hex}")
+        });
+        let mut artifact_hashes = serde_json::Map::new();
+        if let Some(host_hash) = host_hash {
+            artifact_hashes.insert("host.json".to_owned(), serde_json::Value::String(host_hash));
+        }
         let mut bundle = json!({
             "bundleVersion": 1,
             "schemaVersion": "v3",
             "privilegesPath": privileges_path.display().to_string(),
             "zones": [],
-            "artifactHashes": {},
+            "artifactHashes": artifact_hashes,
             "generation": {
                 "generator": generator,
                 "sourceRevision": null,
                 "generatedAt": null
             }
         });
+        if host_path.is_some() {
+            bundle["hostPath"] = json!("host.json");
+        }
         // `verify_bundle_hash` re-derives the digest over the serialization
         // with `bundleHash` absent and `artifactHashes` nullified, so hash the
         // nullified form even though the file ships `artifactHashes: {}`.
@@ -24322,6 +24354,7 @@ mod broker_dispatch_tests {
         write_json_file(bundle_path, &bundle);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn minimal_role_profile(profile_id: &str, subtree: &str) -> serde_json::Value {
         json!({
             "profileId": profile_id,
@@ -28203,6 +28236,202 @@ mod broker_dispatch_tests {
             "ApplyNftables failed",
             &expected_remediation,
         );
+    }
+
+    /// The v3 host contract document the generation side emits:the
+    /// `empty_zone_native_host` fields plus the declared NetworkManager
+    /// unmanaged contract.
+    fn sample_v3_host_contract_json() -> serde_json::Value {
+        json!({
+            "schemaVersion": "v3",
+            "site": { "allowUnsafeEastWest": false },
+            "environments": [],
+            "nftables": {
+                "family": "inet",
+                "table": "d2b",
+                "chains": [],
+                "ownershipId": ""
+            },
+            "networkManager": {
+                "filePath": "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf",
+                "matchCriteria": ["interface-name:d2b-*"],
+                "reloadBehavior": "atomic-reload",
+                "ownership": {
+                    "owner": "root",
+                    "group": "d2bd",
+                    "mode": "0640",
+                    "driftPolicy": "preserve"
+                }
+            },
+            "hostsFile": {
+                "startMarker": "# d2b-managed begin",
+                "endMarker": "# d2b-managed end",
+                "rule": ""
+            },
+            "kernelModules": [],
+            "fdOwnership": [],
+            "cloudHypervisorCapabilities": []
+        })
+    }
+
+    /// Run `host prepare` against a v3 zone-native bundle fixture that
+    /// optionally declares the hashed `host.json` contract artifact, over a
+    /// fake broker capturing the two kernel envelope invocations. Returns the
+    /// observed operation order, the captured `apply-nm-unmanaged` payload,
+    /// and the daemon's response.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn run_host_prepare_nm_scenario(
+        test_name: &str,
+        host_contract: Option<&serde_json::Value>,
+    ) -> (Vec<String>, Option<serde_json::Value>, Value) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = test_daemon_state_dir(test_name);
+        let bundle_dir = root.join("bundle-fixture");
+        let bundle_path = bundle_dir.join("bundle.json");
+        let privileges_path = bundle_dir.join("privileges.json");
+        let host_path = bundle_dir.join("host.json");
+        if let Some(host_contract) = host_contract {
+            write_json_file(&host_path, host_contract);
+        }
+        write_json_file(
+            &privileges_path,
+            &json!({ "schemaVersion": "v2", "operations": [] }),
+        );
+        write_v3_native_bundle_with_optional_host(
+            &bundle_path,
+            &privileges_path,
+            host_contract.map(|_| host_path.as_path()),
+            "tests",
+        );
+        let mut fixture_paths = vec![&bundle_path, &privileges_path];
+        if host_contract.is_some() {
+            fixture_paths.push(&host_path);
+        }
+        for path in fixture_paths {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+                .expect("chmod host-prepare bundle fixture");
+        }
+
+        let operations: Arc<parking_lot::Mutex<Vec<String>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let captured_operations = Arc::clone(&operations);
+        let nm_payload: Arc<parking_lot::Mutex<Option<serde_json::Value>>> =
+            Arc::new(parking_lot::Mutex::new(None));
+        let captured_nm = Arc::clone(&nm_payload);
+        let (socket_path, broker) = start_test_broker_server(test_name, 2, move |_, envelope, fd| {
+            // U12/U14:the host-prepare legs invoke the apply-nftables /
+            // apply-nm-unmanaged kernels over the generic envelope carrier.
+            let BrokerRequest::EnvelopeInvoke(invoke) = envelope.request else {
+                panic!("expected an envelope kernel invocation, got {:?}", envelope.request);
+            };
+            let operation = invoke.operation.clone();
+            if operation == "apply-nm-unmanaged" {
+                *captured_nm.lock() = Some(invoke.payload.clone());
+            }
+            captured_operations.lock().push(operation.clone());
+            write_test_json_frame(
+                fd,
+                &BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                    operation: operation.clone(),
+                    invocation_id: format!("fake-{operation}"),
+                    result: Some(serde_json::json!({ "applied": true })),
+                    refusal: None,
+                    detail: None,
+                    fd_indexes: vec![],
+                    fd_kinds: vec![],
+                }),
+            )
+            .expect("write broker envelope frame");
+        });
+
+        let mut state =
+            test_state_with_broker_socket_and_host(socket_path.clone(), host_path.clone());
+        state.config.artifacts.bundle_path = bundle_path.clone();
+
+        let response = dispatch_broker_host_prepare_as(
+            &state,
+            HostPrepareRequest {
+                flags: MutationFlags {
+                    apply: true,
+                    ..MutationFlags::default()
+                },
+            },
+            BrokerCallerRole::AdminUid { uid: state.daemon_uid },
+        )
+        .expect("host prepare response");
+
+        broker.join().expect("join broker thread");
+        fs::remove_file(&socket_path).ok();
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        let _ = fs::remove_dir_all(&root);
+        (
+            operations.lock().clone(),
+            nm_payload.lock().clone(),
+            response,
+        )
+    }
+
+    fn assert_host_prepare_applied(response: &Value) {
+        assert_eq!(
+            response.get("type").and_then(serde_json::Value::as_str),
+            Some("mutatingVerbResponse")
+        );
+        assert_eq!(
+            response.get("verb").and_then(serde_json::Value::as_str),
+            Some("host prepare")
+        );
+        assert_eq!(
+            response.get("outcome").and_then(serde_json::Value::as_str),
+            Some("applied")
+        );
+    }
+
+    /// The declared `host.json` contract artifact of the zone-native bundle is
+    /// the authority for the NetworkManager unmanaged drop-in:the host-prepare
+    /// path resolves the hashed host artifact through the bundle resolver and
+    /// dispatches the `apply-nm-unmanaged` kernel with the declared path,
+    /// match criteria, reload behaviour, and ownership/mode - never a
+    /// compiled constant.
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn host_prepare_installs_declared_nm_unmanaged_contract() {
+        let host_contract = sample_v3_host_contract_json();
+        let (operations, nm_payload, response) =
+            run_host_prepare_nm_scenario("host-prepare-nm-declared", Some(&host_contract));
+        assert_eq!(operations, vec!["apply-nftables", "apply-nm-unmanaged"]);
+        let nm_payload = nm_payload.expect("nm-unmanaged payload captured");
+        assert_eq!(
+            nm_payload["filePath"].as_str(),
+            Some("/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf")
+        );
+        assert_eq!(nm_payload["reloadBehavior"].as_str(), Some("atomic-reload"));
+        assert_eq!(nm_payload["mode"].as_u64(), Some(0o640_u64));
+        assert!(nm_payload["contents"].as_str().unwrap().contains("interface-name:d2b-*"));
+        assert_host_prepare_applied(&response);
+    }
+
+    /// A bundle that declares no `hostPath` keeps the empty host model:the
+    /// daemon still dispatches the `nm-unmanaged:host` intent row, but its
+    /// empty file path is what the `apply-nm-unmanaged` kernel's path-safety
+    /// preflight refuses before any host write.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn host_prepare_without_declared_host_contract_dispatches_empty_nm_path() {
+        let (operations, nm_payload, response) =
+            run_host_prepare_nm_scenario("host-prepare-nm-undeclared", None);
+        assert_eq!(operations, vec!["apply-nftables", "apply-nm-unmanaged"]);
+        let nm_payload = nm_payload.expect("nm-unmanaged payload captured");
+        assert_eq!(
+            nm_payload["filePath"].as_str(),
+            Some(""),
+            "the empty host model keeps the empty path fail-closed"
+        );
+        assert!(
+            nm_payload["contents"].as_str().unwrap().contains("unmanaged-devices="),
+            "the empty model still renders the managed block the kernel refuses to write"
+        );
+        assert_host_prepare_applied(&response);
     }
 
     #[test]

@@ -186,6 +186,13 @@ struct ZoneNativeBundleIndex {
     /// predates the artifact leaves the site facts absent.
     #[serde(default)]
     site_path: Option<String>,
+    /// Private host contract artifact (`host.json`). Optional: a bundle that
+    /// predates the artifact leaves the empty host model in place, whose
+    /// NetworkManager fields are empty strings: the `apply-nm-unmanaged`
+    /// kernel fails closed on the empty file path rather than inventing a
+    /// contract.
+    #[serde(default)]
+    host_path: Option<String>,
     #[serde(default)]
     realm_workloads_launcher_v2_path: Option<String>,
     zones: Vec<ZoneNativeBundleRef>,
@@ -1156,6 +1163,13 @@ fn normalize_zone_native_artifact_hashes(
         .collect()
 }
 
+/// The host model for a zone-native bundle that declares no `hostPath`
+/// artifact (see [`load_zone_native_host_artifact`]).
+///
+/// The NetworkManager fields are deliberately empty strings: a bundle that
+/// does not declare the host contract must fail closed on the empty file
+/// path in the `apply-nm-unmanaged` kernel, never fall back to a compiled
+/// constant.
 fn empty_zone_native_host() -> HostJson {
     HostJson {
         schema_version: "v3".to_owned(),
@@ -1305,6 +1319,11 @@ impl BundleResolver {
             .as_deref()
             .map(|path| normalize_zone_native_ref(bundle_root, path))
             .transpose()?;
+        let host_path = index
+            .host_path
+            .as_deref()
+            .map(|path| normalize_zone_native_ref(bundle_root, path))
+            .transpose()?;
         let bundle = Bundle {
             bundle_version: index.bundle_version,
             schema_version: index.schema_version,
@@ -1340,7 +1359,7 @@ impl BundleResolver {
             load_optional_realm_workloads_launcher_v2_artifact(&bundle, bundle_root, policy)?;
         let storage = load_optional_storage_artifact(&bundle, bundle_root, policy)?;
         let site = load_optional_site_artifact(&bundle, bundle_root, site_path.as_deref(), policy)?;
-        let host = empty_zone_native_host();
+        let host = load_zone_native_host_artifact(&bundle, bundle_root, host_path.as_deref(), policy)?;
         let processes = ProcessesJson {
             schema_version: "v3".to_owned(),
             vms: Vec::new(),
@@ -5600,6 +5619,36 @@ fn load_optional_site_artifact(
     Ok(Some(site))
 }
 
+/// Load the optional private host contract artifact (`host.json`).
+///
+/// Zone-native (v3) bundles declare the path in their index (`hostPath`);
+/// a bundle that predates the artifact yields the empty host model, whose
+/// NetworkManager fields are empty strings: consumers (the
+/// `apply-nm-unmanaged` kernel) fail closed on the empty file path rather
+/// than inventing a contract.
+fn load_zone_native_host_artifact(
+    bundle: &Bundle,
+    bundle_root: &Path,
+    declared_ref: Option<&str>,
+    policy: &BundleVerifyPolicy,
+) -> Result<HostJson, Error> {
+    let Some(host_ref) = declared_ref else {
+        return Ok(empty_zone_native_host());
+    };
+    let host_path = resolve_bundle_ref(bundle_root, host_ref);
+    let bytes = secure_open_and_read(&host_path, policy)?;
+    verify_artifact_hash(
+        &host_path,
+        &bytes,
+        bundle.artifact_hashes.as_ref(),
+        host_ref,
+    )?;
+    let host: HostJson = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::manifest_parse_error("host.json", manifest_parse_reason(&error.to_string()))
+    })?;
+    Ok(host)
+}
+
 fn load_optional_storage_artifact(
     bundle: &Bundle,
     bundle_root: &Path,
@@ -6964,6 +7013,174 @@ mod tests {
         let _ = fs::remove_dir_all(root);
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(empty_root);
+    }
+
+    /// The v3 host contract doc the generation side emits:`empty_zone_native_host`
+    /// fields plus the declared NetworkManager unmanaged contract, with
+    /// `tableHashAfterApply`/optional fields skipped the same way serde
+    /// serialises them.
+    fn sample_zone_native_host_json() -> serde_json::Value {
+        serde_json::json!({
+            "schemaVersion": "v3",
+            "site": { "allowUnsafeEastWest": false },
+            "environments": [],
+            "nftables": {
+                "family": "inet",
+                "table": "d2b",
+                "chains": [],
+                "ownershipId": ""
+            },
+            "networkManager": {
+                "filePath": "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf",
+                "matchCriteria": ["interface-name:d2b-*"],
+                "reloadBehavior": "atomic-reload",
+                "ownership": {
+                    "owner": "root",
+                    "group": "d2bd",
+                    "mode": "0640",
+                    "driftPolicy": "preserve"
+                }
+            },
+            "hostsFile": {
+                "startMarker": "# d2b-managed begin",
+                "endMarker": "# d2b-managed end",
+                "rule": ""
+            },
+            "kernelModules": [],
+            "fdOwnership": [],
+            "cloudHypervisorCapabilities": []
+        })
+    }
+
+    /// The host contract is a declared artifact of the zone-native bundle:
+    /// a bundle that ships it (declared by its v3 index `hostPath`) resolves
+    /// the NetworkManager unmanaged contract into the host model, matching the
+    /// intent the daemon's host-prepare path dispatches.
+    #[test]
+    fn zone_native_host_artifact_declares_nm_unmanaged_contract() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = test_root("zone-native-host-nm-contract");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::create_dir_all(&root).expect("create bundle root");
+        let host_bytes = serde_json::to_vec(&sample_zone_native_host_json())
+        .expect("serialize host artifact");
+        let host_path = root.join("host.json");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::write(&host_path, &host_bytes).expect("write host artifact");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::set_permissions(&host_path, fs::Permissions::from_mode(0o640)).expect("chmod host");
+        let bundle = site_test_bundle(Some(BTreeMap::from([(
+            "host.json".to_owned(),
+            sha256_hex(&host_bytes),
+        )])));
+        let loaded = load_zone_native_host_artifact(
+            &bundle,
+            &root,
+            Some("host.json"),
+            &current_user_bundle_policy(),
+        )
+        .expect("the declared host artifact loads");
+        assert_eq!(
+            loaded.network_manager.file_path,
+            "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf"
+        );
+        assert_eq!(
+            loaded.network_manager.match_criteria,
+            vec!["interface-name:d2b-*".to_owned()]
+        );
+        assert_eq!(loaded.network_manager.reload_behavior, "atomic-reload");
+        assert_eq!(loaded.network_manager.ownership.owner, "root");
+        assert_eq!(loaded.network_manager.ownership.group, "d2bd");
+        assert_eq!(loaded.network_manager.ownership.mode, "0640");
+
+        // The declared contract resolves the host-wide nm-unmanaged intent
+        // the daemon's host-prepare path dispatches over the kernel envelope.
+
+        let intents = build_nm_unmanaged_intents(&loaded);
+        let intent = intents
+            .get(&intent_id_nm_unmanaged_host())
+            .expect("nm intent resolved");
+        assert_eq!(
+            intent.file_path,
+            PathBuf::from("/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf")
+        );
+        assert!(intent.contents.contains("interface-name:d2b-*"));
+        assert_eq!(intent.mode, 0o640);
+        assert_eq!(intent.reload_behavior,"atomic-reload");
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A bundle that declares no host artifact keeps the empty host model, whose
+    /// NetworkManager fields are empty strings:the intent row still resolves,
+    /// but its empty file path keeps the `apply-nm-unmanaged` kernel's
+    /// path-safety preflight failing closed before any host write.
+    #[test]
+    fn zone_native_host_artifact_absent_keeps_empty_model_fail_closed() {
+        let empty_root = test_root("zone-native-host-absent");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::create_dir_all(&empty_root).expect("create empty bundle root");
+        let host = load_zone_native_host_artifact(
+            &site_test_bundle(None),
+            &empty_root,
+            None,
+            &current_user_bundle_policy(),
+        )
+        .expect("an undeclared host artifact is not an error");
+        assert!(host.network_manager.file_path.is_empty());
+        assert!(host.network_manager.match_criteria.is_empty());
+        assert!(host.network_manager.reload_behavior.is_empty());
+
+        let intents = build_nm_unmanaged_intents(&host);
+        let intent = intents
+            .get(&intent_id_nm_unmanaged_host())
+            .expect("the empty model still resolves the intent row");
+        assert!(
+            intent.file_path.as_os_str().is_empty(),
+            "the empty path keeps the apply-nm-unmanaged kernel fail-closed"
+        );
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        let _ = fs::remove_dir_all(empty_root);
+    }
+
+    /// A tampered or mismatched host artifact is refused by the existing drift/
+    /// verification policy:the declared `artifactHashes` row must match the
+    /// file bytes exactly as it does for every other private bundle artifact.
+    #[test]
+    fn zone_native_host_artifact_tamper_is_refused_by_hash_policy() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = test_root("zone-native-host-tampered");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::create_dir_all(&root).expect("create bundle root");
+        let host_path = root.join("host.json");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::write(
+            &host_path,
+            serde_json::to_vec(&sample_zone_native_host_json())
+                .expect("serialize host artifact"),
+        )
+        .expect("write host artifact");
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fs::set_permissions(&host_path, fs::Permissions::from_mode(0o640)).expect("chmod host");
+        let bundle = site_test_bundle(Some(BTreeMap::from([(
+            "host.json".to_owned(),
+            format!("sha256:{}", "0".repeat(64)),
+        )])));
+        let error = load_zone_native_host_artifact(
+            &bundle,
+            &root,
+            Some("host.json"),
+            &current_user_bundle_policy(),
+        )
+        .expect_err("a mismatched artifact hash must refuse the load");
+        assert_eq!(error.kind().as_str(), "bundle-tampered");
+
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        let _ = fs::remove_dir_all(root);
     }
 
     fn site_test_bundle(artifact_hashes: Option<BTreeMap<String, String>>) -> Bundle {

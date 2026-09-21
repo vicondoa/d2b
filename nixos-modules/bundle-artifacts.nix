@@ -127,6 +127,7 @@ let
     "siteJson"
     "storageJson"
     "realmWorkloadsLauncherV2Json"
+    "hostJson"
   ];
 
   shouldInstall = artifact:
@@ -192,6 +193,14 @@ in
       internal = true;
       visible = false;
       description = "Internal typed realm-workloads-launcher-v2.json public metadata artifact.";
+    };
+
+    hostJson = lib.mkOption {
+      type = artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed host.json contract artifact metadata.";
     };
 
 
