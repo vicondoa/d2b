@@ -287,6 +287,9 @@ enum AuditCommand {
     #[cfg(test)]
     SetWriteLimit {
         writes_per_second: u32,
+        /// Opt-in per test: freeze the rate-limit window (deterministic
+        /// assertions); `false` keeps the real clock.
+        freeze_window: bool,
         reply: SyncSender<io::Result<()>>,
     },
     #[cfg(test)]
@@ -500,12 +503,17 @@ impl AuditLog {
         test_mode: bool,
         retention_days: u32,
         writes_per_second: u32,
+        freeze_window: bool,
     ) -> io::Result<Self> {
+        // Freezing is the caller's explicit, per-test choice: `true` makes
+        // the rate-limit window deterministic, `false` (the default stance)
+        // keeps the worker on the real clock.
         let log = Self::open(audit_dir, expected_gid, test_mode, retention_days)?;
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         log.submit(
             AuditCommand::SetWriteLimit {
                 writes_per_second,
+                freeze_window,
                 reply: reply_tx,
             },
             reply_rx,
@@ -1364,9 +1372,19 @@ fn audit_worker_loop(receiver: mpsc::Receiver<AuditCommand>) {
             #[cfg(test)]
             AuditCommand::SetWriteLimit {
                 writes_per_second,
+                freeze_window,
                 reply,
             } => {
-                state.write_limiter = AuditWriteLimiter::new(writes_per_second);
+                let mut limiter = AuditWriteLimiter::new(writes_per_second);
+                if freeze_window {
+                    // Test-only determinism, opt-in per test: freeze the
+                    // window so rate-limit assertions cannot roll over onto a
+                    // fresh window mid-loop under host load. Production never
+                    // crosses this seam; without the opt-in the real clock
+                    // stays in charge.
+                    limiter.freeze_windows();
+                }
+                state.write_limiter = limiter;
                 let _ = reply.send(Ok(()));
             }
             #[cfg(test)]
@@ -1881,6 +1899,11 @@ struct AuditWriteBucket {
     window_start: Instant,
     writes_this_window: u32,
     max_writes_per_window: u32,
+    /// Test-only clock seam: when frozen, the write window never
+    /// expires, so rate-limit assertions cannot roll over onto a fresh
+    /// window mid-loop under host load. Production never freezes.
+    #[cfg(test)]
+    window_frozen: bool,
 }
 
 impl AuditWriteLimiter {
@@ -1905,6 +1928,15 @@ impl AuditWriteLimiter {
             AuditWriteClass::Unprivileged => self.unprivileged.check(),
         }
     }
+
+    /// Test-only clock seam: freeze every write window so rate-limit
+    /// tests are deterministic (the window cannot roll over mid-loop).
+    /// `AuditWriteLimiter::new` keeps the production default: real time.
+    #[cfg(test)]
+    fn freeze_windows(&mut self) {
+        self.privileged.window_frozen = true;
+        self.unprivileged.window_frozen = true;
+    }
 }
 
 impl AuditWriteBucket {
@@ -1913,7 +1945,17 @@ impl AuditWriteBucket {
             window_start: Instant::now(),
             writes_this_window: 0,
             max_writes_per_window,
+            #[cfg(test)]
+            window_frozen: false,
         }
+    }
+
+    fn window_elapsed(&self) -> bool {
+        #[cfg(test)]
+        if self.window_frozen {
+            return false;
+        }
+        self.window_start.elapsed() >= AUDIT_WRITE_WINDOW
     }
 
     fn check(&mut self) -> io::Result<()> {
@@ -1923,7 +1965,7 @@ impl AuditWriteBucket {
                 "audit write rate limit exceeded",
             ));
         }
-        if self.window_start.elapsed() >= AUDIT_WRITE_WINDOW {
+        if self.window_elapsed() {
             self.window_start = Instant::now();
             self.writes_this_window = 0;
         }
@@ -2924,10 +2966,57 @@ mod tests {
     }
 
     #[test]
+    fn audit_write_bucket_reseats_the_window_after_it_expires() {
+        // Deliberately NOT frozen: this test owns the wall-clock seam and
+        // drives the rollover with an aged window instead of sleeping.
+        let mut bucket = AuditWriteBucket::new(2);
+        assert!(bucket.check().is_ok(), "fresh window admits the first write");
+        assert!(
+            bucket.check().is_ok(),
+            "fresh window admits the second write"
+        );
+        assert!(
+            bucket.check().is_err(),
+            "budget exhausted inside the fresh window"
+        );
+
+        // Age the window past AUDIT_WRITE_WINDOW without waiting on the
+        // clock: the next check must reseat it and reset the counter
+        // before admitting. The invariant: an expired window restores the
+        // full budget - an excess write can never stand after a rollover.
+        let expired = Instant::now() - AUDIT_WRITE_WINDOW - Duration::from_secs(1);
+        bucket.window_start = expired;
+
+        assert!(
+            bucket.check().is_ok(),
+            "expired window reseats and admits the next write"
+        );
+        assert_eq!(
+            bucket.writes_this_window, 1,
+            "counter reset to zero before the write was admitted"
+        );
+        assert!(
+            bucket.window_start > expired,
+            "reseat moved the window start forward"
+        );
+
+        // The reseated window is a fresh window again: it fills to budget
+        // and then refuses an excess write, exactly like the original one.
+        assert!(
+            bucket.check().is_ok(),
+            "reseated window admits within its budget"
+        );
+        assert!(
+            bucket.check().is_err(),
+            "reseated window refuses an excess write again"
+        );
+    }
+
+    #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn privileged_audit_is_not_rate_limited() {
         let root = target_scratch_root("audit-rate-limit");
-        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4)
+        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4, true)
             .expect("open audit log with low write limit");
         log.write_entry("UsbipBind", 1000, "allowed", "operation", "ok")
             .expect("first write allowed");
@@ -3731,7 +3820,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn unprivileged_drop_counters_remain_exact_when_warnings_are_suppressed() {
         let root = target_scratch_root("audit-drop-summary-aggregate");
-        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4)
+        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4, true)
             .expect("open audit log with low write limit");
         log.write_entry_with_class(
             AuditWriteClass::Unprivileged,
@@ -3771,7 +3860,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn privileged_usb_op_records_are_not_rate_limited() {
         let root = target_scratch_root("audit-usb-op-rate-limit");
-        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 1)
+        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 1, true)
             .expect("open audit log with low write limit");
         log.record(
             "UsbipBind",
@@ -3839,7 +3928,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn unprivileged_audit_drops_do_not_starve_privileged_usb_records() {
         let root = target_scratch_root("audit-unprivileged-drop-reserve");
-        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4)
+        let log = AuditLog::open_with_write_limit(&root, Gid::current().as_raw(), true, 14, 4, true)
             .expect("open audit log with low write limit");
 
         log.write_entry_with_class(
