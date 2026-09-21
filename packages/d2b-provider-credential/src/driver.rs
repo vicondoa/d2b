@@ -64,6 +64,8 @@ use d2b_resource_types::{
     AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
 };
 
+use crate::effects_service::{CREDENTIAL_EFFECTS_SERVICE, CredentialEffectsService};
+use crate::facets::CredentialEffectFacets;
 use crate::session::{
     CredentialResourceRuntimeError, CredentialRevocationEvidence, CredentialRevocationInputs,
     CredentialRevocationOutcome, CredentialRevocationRequest, CredentialSession,
@@ -286,7 +288,7 @@ pub trait CredentialDriverEffects: Send + Sync + 'static {
 // ---------------------------------------------------------------------------
 
 /// Everything the composition unit must construct to instantiate the
-/// Credential driver factory for one zone: the preserved provider effects
+/// Credential driver factory for one zone: the daemon-supplied facet set
 /// and the zone-authority controller generation (KTD7).
 pub struct CredentialDriverArgs {
     /// The zone the plane serves.
@@ -294,8 +296,10 @@ pub struct CredentialDriverArgs {
     /// Zone controller generation folded into every revocation request
     /// (old `policy_snapshot.controller_generation`).
     pub controller_generation: ControllerGeneration,
-    /// The family's effect port.
-    pub effects: Arc<dyn CredentialDriverEffects>,
+    /// The daemon-supplied facet set the family's own effects
+    /// implementation is built from (U8): the construction site holds no
+    /// externally built port (R2).
+    pub facets: CredentialEffectFacets,
 }
 
 /// [`ResourceDriverFactory`] for the `Credential` resource type.
@@ -325,7 +329,7 @@ impl ResourceDriverFactory for CredentialDriverFactory {
         Box::new(CredentialDriver::new(CredentialDriverArgs {
             zone: self.args.zone.clone(),
             controller_generation: self.args.controller_generation,
-            effects: Arc::clone(&self.args.effects),
+            facets: self.args.facets.clone(),
         }))
     }
 }
@@ -348,7 +352,9 @@ impl CredentialDriver {
         Self {
             zone: args.zone,
             controller_generation: args.controller_generation,
-            effects: args.effects,
+            // U8: the driver's effects are this crate's own implementation
+            // built from the daemon-supplied facet set (R2).
+            effects: Arc::new(CredentialEffectsService::new(args.facets)),
         }
     }
 
@@ -1017,6 +1023,13 @@ const CREDENTIAL_CREATIONS: &[ChildCreation] = &[ChildCreation {
 /// plane opens. The type is not exportable (`ResourceExport` admits only
 /// qualified `*.d2bus.org.*Service` types), and it serves no broker
 /// operations.
+///
+/// U8: the driver's effects are this crate's own implementation
+/// ([`crate::effects_service::CredentialEffectsService`]) built from the
+/// daemon-supplied facet set - the construction site holds no externally
+/// built port (R2) - and the family's declared effects service
+/// ([`CREDENTIAL_EFFECTS_SERVICE`]) rides the declaration, so a zone that
+/// cannot host it refuses startup by name (R5).
 pub fn credential_descriptor(args: CredentialDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::CREDENTIAL,
@@ -1028,7 +1041,7 @@ pub fn credential_descriptor(args: CredentialDriverArgs) -> DriverDescriptor {
         operations: &[],
         creations: CREDENTIAL_CREATIONS,
         startup: &[],
-        services: &[],
+        services: &[CREDENTIAL_EFFECTS_SERVICE],
         decoder: credential_spec_decoder(),
         factory: Arc::new(CredentialDriverFactory::new(args)),
     }
@@ -1072,7 +1085,7 @@ mod tests {
         CONTROLLER_PROVIDER_GENERATION_ANNOTATION, CONTROLLER_PROVIDER_REF_ANNOTATION,
         CONTROLLER_PROVIDER_UID_ANNOTATION, CREDENTIAL_TYPE_NAME, CredentialDriver,
         CredentialDriverArgs, CredentialDriverFactory, CredentialDriverStatus,
-        CredentialLeaseFacts, credential_spec_decoder,
+        CredentialEffectFacets, CredentialLeaseFacts, credential_spec_decoder,
     };
 
     const MI_PROVIDER: &str = "Provider/credential-managed-identity";
@@ -1275,11 +1288,21 @@ mod tests {
     }
 
     fn driver(effects: Arc<FakeEffects>) -> CredentialDriver {
-        CredentialDriver::new(CredentialDriverArgs {
+        // The driver's own typed seam, scripted: production builds the same
+        // seam from the facets (the factory), tests drive the behavior
+        // directly over the recording double.
+        CredentialDriver {
             zone: "dev".to_owned(),
             controller_generation: ControllerGeneration::new(1).unwrap(),
             effects,
-        })
+        }
+    }
+
+    /// The facet set the factory and declaration tests build over: the
+    /// daemon-supplied runtime double (U8), scripted like the typed-seam
+    /// double the driver tests drive directly.
+    fn facets() -> CredentialEffectFacets {
+        crate::test_support::recording_facets(crate::test_support::RecordingRuntime::new(log()))
     }
 
     // -- tests ---------------------------------------------------------------
@@ -1289,7 +1312,7 @@ mod tests {
         let factory = CredentialDriverFactory::new(CredentialDriverArgs {
             zone: "dev".to_owned(),
             controller_generation: ControllerGeneration::new(1).unwrap(),
-            effects: FakeEffects::new(log()),
+            facets: facets(),
         });
         assert_eq!(factory.resource_types().len(), 1);
         assert_eq!(factory.resource_types()[0].as_str(), CREDENTIAL_TYPE_NAME);
@@ -1301,7 +1324,7 @@ mod tests {
         let factory = CredentialDriverFactory::new(CredentialDriverArgs {
             zone: "dev".to_owned(),
             controller_generation: ControllerGeneration::new(1).unwrap(),
-            effects: FakeEffects::new(log()),
+            facets: facets(),
         });
         let mut ctx = context(row(MI_PROVIDER), RecordingManager::new(log()));
         let mut driver = factory.create(ctx.key()).await;

@@ -1286,6 +1286,7 @@ dependencies = [
  "d2b-provider-credential-managed-identity",
  "d2b-provider-credential-secret-service",
  "d2b-provider-process-minijail",
+ "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "parking_lot",

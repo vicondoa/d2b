@@ -11,9 +11,11 @@
 //! Everything the driver needs from outside arrives through its ports:
 //! [`CredentialDriverEffects`] for the Provider facts, the lease facts, and
 //! the agent probe, and [`CredentialSession`] for the authenticated Provider
-//! revocation call. The production implementations stay in the daemon behind
-//! those ports, so this crate depends on no daemon runtime. The three
-//! Credential realizers stay separate crates
+//! revocation call. The family's own effects implementation
+//! ([`effects_service`], U8) serves those ports over the daemon-supplied
+//! declared facets ([`facets`]) and is hosted per zone as the declared
+//! `credential.d2bus.org/effects` service, so this crate depends on no daemon
+//! runtime. The three Credential realizers stay separate crates
 //! (`d2b-provider-credential-secret-service`, `-entra`,
 //! `-managed-identity`); the family consumes their exported Provider
 //! identities so its admission set cannot drift from the Providers that
@@ -24,6 +26,8 @@
 #![deny(missing_docs)]
 
 mod driver;
+mod effects_service;
+mod facets;
 mod session;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -35,6 +39,13 @@ pub use driver::{
     CredentialDriver, CredentialDriverArgs, CredentialDriverEffects, CredentialDriverError,
     CredentialDriverFactory, CredentialDriverStatus, CredentialLeaseFacts, credential_descriptor,
     credential_spec_decoder,
+};
+pub use effects_service::{
+    CREDENTIAL_EFFECTS_SERVICE, CredentialEffectsService, CredentialEffectsServiceFactory,
+};
+pub use facets::{
+    AgentReadyFuture, CredentialEffectFacets, CredentialRuntime, DependencyFactsFuture,
+    LeaseFactsFuture,
 };
 pub use session::{
     CredentialResourceRuntimeError, CredentialRevocationEvidence, CredentialRevocationInputs,

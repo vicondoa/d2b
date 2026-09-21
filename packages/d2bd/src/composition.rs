@@ -394,7 +394,6 @@ use d2bd_runtime::admission::{PeerOverride, TEST_PEER_OVERRIDE, TEST_PEER_OVERRI
 mod audio_dispatch;
 mod audio_host_controller;
 mod audio_resource_runtime;
-mod credential_backend_runtime;
 mod credential_resource_runtime;
 pub mod interaction_composition;
 pub mod process_provider_runtime;
@@ -14132,7 +14131,7 @@ fn credential_agent_ready_probe(
     client: Arc<std::sync::OnceLock<Arc<d2b_resource_runtime::manager::ResourceManagerClient>>>,
     zone: ZoneId,
 ) -> Arc<
-    dyn for<'a> Fn(&'a ResourceRef) -> crate::credential_effects::AgentReadyFuture<'a> + Send + Sync,
+    dyn for<'a> Fn(&'a ResourceRef) -> d2b_provider_credential::AgentReadyFuture<'a> + Send + Sync,
 > {
     Arc::new(move |agent_ref: &ResourceRef| {
         let client = Arc::clone(&client);
@@ -14521,7 +14520,7 @@ async fn open_resource_plane(
                     resource_runtime::ResourceRuntimeError::HandlerNotReady
                 })?,
                 resolver.clone(),
-                runtime.credential_driver_effects(credential_agent_ready_probe(
+                runtime.credential_runtime(credential_agent_ready_probe(
                     Arc::clone(&credential_agent_client),
                     _zone.clone(),
                 )),
