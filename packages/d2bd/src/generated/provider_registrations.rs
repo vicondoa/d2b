@@ -26,6 +26,10 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &[],
     },
     ProviderRegistration {
+        provider_ref: "credential",
+        services: &["credential.d2bus.org/effects"],
+    },
+    ProviderRegistration {
         provider_ref: "host",
         services: &["host.d2bus.org/effects"],
     },

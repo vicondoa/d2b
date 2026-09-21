@@ -6,19 +6,20 @@ use std::sync::Arc;
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_credential::{
-    CREDENTIAL_TYPE_NAME, CredentialDependencyFacts, CredentialDriverArgs, CredentialDriverEffects,
-    CredentialLeaseFacts, CredentialSession, credential_descriptor,
+    CREDENTIAL_EFFECTS_SERVICE, CREDENTIAL_TYPE_NAME, CredentialDependencyFacts,
+    CredentialDriverArgs, CredentialEffectFacets, CredentialLeaseFacts, CredentialRuntime,
+    CredentialSession, credential_descriptor,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, ChildCustody, WellKnownType};
 
-/// The port instance the declaration carries; the registration boundary
-/// never runs an effect.
-struct UnusedEffects;
+/// The runtime facet instance the declaration carries; the registration
+/// boundary never runs an effect.
+struct UnusedRuntime;
 
 #[async_trait::async_trait]
-impl CredentialDriverEffects for UnusedEffects {
+impl CredentialRuntime for UnusedRuntime {
     async fn dependency_facts(
         &self,
         _provider_ref: &ResourceRef,
@@ -45,7 +46,9 @@ fn descriptor() -> d2b_resource_types::DriverDescriptor {
         zone: "work".to_owned(),
         controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
             .expect("controller generation"),
-        effects: Arc::new(UnusedEffects),
+        facets: CredentialEffectFacets {
+            runtime: Arc::new(UnusedRuntime),
+        },
     })
 }
 
@@ -100,6 +103,14 @@ async fn descriptor_declares_and_registers_the_credential_type() {
         ]
     );
     assert!(descriptor.operations.is_empty());
+
+    // U8: the family's declared effects service rides the declaration, so a
+    // zone that cannot host it refuses startup by name (R5).
+    assert_eq!(
+        descriptor.services,
+        &[CREDENTIAL_EFFECTS_SERVICE],
+        "the declaration carries the family's effects service"
+    );
 
     // The one declared creation is the managed-identity agent Process, under
     // the minijail Process Provider's own exported reference: the family does
