@@ -38,7 +38,7 @@ use d2b_provider_toolkit::{
 };
 use d2b_resource_runtime::context::{ChildEnsure, ResourceContext};
 use d2b_resource_runtime::identity::ResourceTypeName;
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, DriverDescriptor, ServiceDecl, WellKnownType};
 use serde_json::{Value, json};
 
 use crate::effects_service::USBIP_EFFECTS_SERVICE;
@@ -220,6 +220,9 @@ const USBIP_BINDING_READS: &[WellKnownType] = &[WellKnownType::USB_SERVICE, Well
 /// The Service is a qualified semantic Service and is therefore exportable;
 /// a Binding is not. Neither type serves broker operations or creates
 /// children through this declaration beyond the Binding's declared child set.
+/// The family's declared effects service rides on the Service descriptor
+/// alone (U8):the family hosts one effects service per zone; a Binding
+/// descriptor declares none.
 pub fn usbip_descriptors(args: UsbipDriverArgs) -> [DriverDescriptor; 2] {
     let factory: Arc<dyn d2b_resource_runtime::driver::ResourceDriverFactory> =
         Arc::new(SharedProviderDriverFactory::new(SharedProviderDriverArgs {
@@ -231,7 +234,8 @@ pub fn usbip_descriptors(args: UsbipDriverArgs) -> [DriverDescriptor; 2] {
         }));
     let descriptor = |resource_type: WellKnownType,
                       exportable: bool,
-                      reads: &'static [WellKnownType]| DriverDescriptor {
+                      reads: &'static [WellKnownType],
+                      services: &'static [ServiceDecl]| DriverDescriptor {
         resource_type,
         allowed_sources: AllowedSources::BUILTIN
             | AllowedSources::STARTUP
@@ -243,7 +247,7 @@ pub fn usbip_descriptors(args: UsbipDriverArgs) -> [DriverDescriptor; 2] {
         operations: &[],
         creations: &[],
         startup: &[],
-        services: &[USBIP_EFFECTS_SERVICE],
+        services,
         decoder: shared_provider_spec_decoder(),
         factory: Arc::clone(&factory),
     };
@@ -252,11 +256,13 @@ pub fn usbip_descriptors(args: UsbipDriverArgs) -> [DriverDescriptor; 2] {
             WellKnownType::USB_SERVICE,
             true,
             USBIP_SERVICE_READS,
+            &[USBIP_EFFECTS_SERVICE],
         ),
         descriptor(
             WellKnownType::USB_BINDING,
             false,
             USBIP_BINDING_READS,
+            &[],
         ),
     ]
 }

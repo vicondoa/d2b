@@ -41,7 +41,7 @@ use d2b_provider_toolkit::{
 use d2b_resource_runtime::context::{ChildEnsure, ResourceContext};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{
-    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, ServiceDecl, WellKnownType,
 };
 
 use crate::effects_service::SECURITY_KEY_EFFECTS_SERVICE;
@@ -329,8 +329,11 @@ const SECURITY_KEY_BINDING_READS: &[WellKnownType] =
 /// security-key hardware presence is host-dependent, so the driver may arrive
 /// late. The Service is a qualified semantic Service and is therefore
 /// exportable; a Binding is not. The Service's relay and the Binding's
-/// frontend are declared in [`SECURITY_KEY_SERVICE_CREATIONS`] and
-/// [`SECURITY_KEY_BINDING_CREATIONS`].
+/// frontend are declared in [`SECURITY_KEY_SERVICE_CREATIONS`]and
+/// [`SECURITY_KEY_BINDING_CREATIONS`]. The family's declared effects
+/// service rides on the Service descriptor alone (U8):the family
+/// hosts one effects service per zone; a Binding descriptor declares
+/// none.
 pub fn security_key_descriptors(args: SecurityKeyDriverArgs) -> [DriverDescriptor; 2] {
     let factory: Arc<dyn d2b_resource_runtime::driver::ResourceDriverFactory> =
         Arc::new(SharedProviderDriverFactory::new(SharedProviderDriverArgs {
@@ -343,7 +346,8 @@ pub fn security_key_descriptors(args: SecurityKeyDriverArgs) -> [DriverDescripto
     let descriptor = |resource_type: WellKnownType,
                       exportable: bool,
                       reads: &'static [WellKnownType],
-                      creations: &'static [ChildCreation]| DriverDescriptor {
+                      creations: &'static [ChildCreation],
+                      services: &'static [ServiceDecl]| DriverDescriptor {
         resource_type,
         allowed_sources: AllowedSources::BUILTIN
             | AllowedSources::STARTUP
@@ -355,7 +359,7 @@ pub fn security_key_descriptors(args: SecurityKeyDriverArgs) -> [DriverDescripto
         operations: &[],
         creations,
         startup: &[],
-        services: &[SECURITY_KEY_EFFECTS_SERVICE],
+        services,
         decoder: shared_provider_spec_decoder(),
         factory: Arc::clone(&factory),
     };
@@ -365,12 +369,14 @@ pub fn security_key_descriptors(args: SecurityKeyDriverArgs) -> [DriverDescripto
             true,
             SECURITY_KEY_SERVICE_READS,
             &SECURITY_KEY_SERVICE_CREATIONS,
+            &[SECURITY_KEY_EFFECTS_SERVICE],
         ),
         descriptor(
             WellKnownType::SECURITY_KEY_BINDING,
             false,
             SECURITY_KEY_BINDING_READS,
             &SECURITY_KEY_BINDING_CREATIONS,
+            &[],
         ),
     ]
 }

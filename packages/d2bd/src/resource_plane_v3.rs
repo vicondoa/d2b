@@ -3612,7 +3612,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
         let network_facets = d2b_provider_network_local::test_support::recording_facets(
             Arc::new(d2b_provider_network_local::test_support::RecordingRuntime::default()),
         );
-        // U5: the plane tests build the Host family's facet set from the
+// U5: the plane tests build the Host family's facet set from the
         // scripted minijail gate double, exactly as the production
         // composition root builds it from the daemon's gate probe.
         let host_facets = d2b_provider_host::test_support::recording_facets(
@@ -3626,6 +3626,21 @@ use d2b_provider_system_core::MinijailPlatformGate;
         let activation_facets = d2b_provider_activation_nixos::test_support::recording_facets(
             d2b_provider_activation_nixos::test_support::RecordingBrokerDispatch::new(),
         );
+        // U12 (device families): the plane tests build each device
+        // family's facet set from the recording runtime, exactly as
+        // the production composition root builds it from the
+        // daemon's runtime.
+        let usbip_facets = d2b_provider_device_usbip::test_support::recording_facets(
+            Arc::new(d2b_provider_device_usbip::test_support::RecordingRuntime::default()),
+        );
+        let security_key_facets = d2b_provider_device_security_key::test_support::recording_facets(
+            Arc::new(d2b_provider_device_security_key::test_support::RecordingRuntime::default()),
+        );
+        let device_facets = d2b_provider_device::test_support::recording_facets(
+            Arc::new(d2b_provider_device::test_support::RecordingRuntime::default()),
+        );
+        let tpm_facets = d2b_provider_device_tpm::test_support::recording_facets();
+        let gpu_facets = d2b_provider_device_gpu::test_support::recording_facets();
         (
             dir,
             ConstructionInputs {
@@ -3675,19 +3690,9 @@ use d2b_provider_system_core::MinijailPlatformGate;
                     effects.set_session(None);
                     effects
                 },
-                // U12 (device families): the plane tests build each device
-                // family's facet set from the recording runtime, exactly as
-                // the production composition root builds it from the
-                // daemon's runtime.
-                usbip_facets: d2b_provider_device_usbip::test_support::recording_facets(
-                    Arc::new(d2b_provider_device_usbip::test_support::RecordingRuntime::default()),
-                ),
-                security_key_facets: d2b_provider_device_security_key::test_support::recording_facets(
-                    Arc::new(d2b_provider_device_security_key::test_support::RecordingRuntime::default()),
-                ),
-                device_facets: d2b_provider_device::test_support::recording_facets(
-                    Arc::new(d2b_provider_device::test_support::RecordingRuntime::default()),
-                ),
+                usbip_facets: usbip_facets.clone(),
+                security_key_facets: security_key_facets.clone(),
+                device_facets: device_facets.clone(),
                 // U14: the plane tests build the Network family's facet set
                 // from the recording runtime, exactly as the production
                 // composition root builds it from the daemon's runtime.
@@ -3741,32 +3746,32 @@ HOST_EFFECTS_SERVICE.id,
                         USBIP_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device_usbip::effects_service::
                             UsbipEffectsServiceFactory::new(
-                                usbip_facets.clone(),
+                                usbip_facets,
                             )) as Arc<dyn EffectServiceFactory>,
                     ),
                     (
                         SECURITY_KEY_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device_security_key::effects_service::
                             SecurityKeyEffectsServiceFactory::new(
-                                security_key_facets.clone(),
+                                security_key_facets,
                             )) as Arc<dyn EffectServiceFactory>,
                     ),
                     (
                         DEVICE_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device::effects_service::
-                            DeviceEffectsServiceFactory::new(device_facets.clone()))
+                            DeviceEffectsServiceFactory::new(device_facets))
                             as Arc<dyn EffectServiceFactory>,
                     ),
                     (
                         TPM_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device_tpm::effects_service::
-                            TpmEffectsServiceFactory::new(tpm_facets.clone()))
+                            TpmEffectsServiceFactory::new(tpm_facets))
                             as Arc<dyn EffectServiceFactory>,
                     ),
                     (
                         GPU_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device_gpu::effects_service::
-                            GpuEffectsServiceFactory::new(gpu_facets.clone()))
+                            GpuEffectsServiceFactory::new(gpu_facets))
                             as Arc<dyn EffectServiceFactory>,
                     ),
                 ]),
