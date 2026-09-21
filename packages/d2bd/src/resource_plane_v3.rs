@@ -2036,10 +2036,11 @@ impl ConstructionInputs {
                 state: Arc::clone(state),
                 zone: zone.clone(),
             }),
-            Arc::new(DaemonAudioMediatorSource {
+Arc::new(DaemonAudioMediatorSource {
                 state: Arc::clone(state),
             }),
-        // U7: the Volume family's effects ride the declared facets, and the
+        );
+        // U7:the Volume family's effects ride the declared facets
         // composition root hosts the family's declared effects service from
         // the same facet set the driver factories are built from. The
         // daemon's Volume runtime is the reconcile/cleanup orchestration

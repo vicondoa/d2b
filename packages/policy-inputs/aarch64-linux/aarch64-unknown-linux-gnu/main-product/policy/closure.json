@@ -99,7 +99,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "58c910d6dc28d098bf7c02b3d2e6994ac03e32f93ddb738fd827eea5ec8c74c3",
+  "lock_sha256": "ea58e67f92858d1a84723236d1b88604e812e51176b69d78a8cfa00af58b0079",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -8325,6 +8325,12 @@
       "from": "d2b-provider-volume-local@0.0.0-bootstrap#path",
       "to": "d2b-host@0.0.0-bootstrap#path",
       "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-volume-local@0.0.0-bootstrap#path",
+      "to": "d2b-provider-network-local@0.0.0-bootstrap#path",
+      "kind": "dev",
       "target": null
     },
     {
