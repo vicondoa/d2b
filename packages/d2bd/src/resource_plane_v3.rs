@@ -48,7 +48,8 @@ use d2b_contracts_resource::v3::{
 use d2b_contracts_zone_session::v3::resource_bundle::{BundleResource, ResourceBundle};
 use d2b_core::bundle_resolver::{BundleResolver, ResolvedStoreViewIntent, intent_id_store_view};
 use d2b_provider_activation_nixos::{
-    ActivationDriverArgs, ActivationDriverEffects, activation_descriptor,
+    ACTIVATION_EFFECTS_SERVICE, ActivationDriverArgs, ActivationEffectFacets,
+    ActivationEffectsServiceFactory, activation_descriptor,
 };
 use d2b_provider_endpoint::{
     EndpointDriverArgs, EndpointDriverEffects, GuestControlProducer, endpoint_descriptor,
@@ -98,7 +99,6 @@ use d2bd_runtime::target_runtime::DaemonMode;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
 use sha2::{Digest, Sha256};
 
-use crate::activation_effects::ProductionActivationDriverEffects;
 use crate::binding_effects::ProductionBindingDriverEffects;
 use d2b_provider_credential::{
     CredentialDriverArgs, CredentialDriverEffects, credential_descriptor,
@@ -1803,10 +1803,16 @@ pub struct ConstructionInputs {
     /// the resolved bundle intents, supplied through the composition root.
     /// The family never receives a daemon-built effect port (R2).
     pub network_facets: NetworkEffectFacets,
+    /// The daemon-supplied facet set the Activation family's effects
+    /// implementation is built from: the broker dispatch source (the
+    /// daemon's own dispatch over its authenticated origination socket,
+    /// presented as the daemon's admin-uid caller authority), supplied
+    /// through the composition root. The family never receives a
+    /// daemon-built effect port (R2).
+    pub activation_facets: ActivationEffectFacets,
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
     pub binding_effects: Arc<dyn BindingDriverEffects>,
     pub endpoint_effects: Arc<dyn EndpointDriverEffects>,
-    pub activation_effects: Arc<dyn ActivationDriverEffects>,
     pub credential_effects: Arc<dyn CredentialDriverEffects>,
     pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
     pub guest_effects: Arc<dyn GuestDriverEffects>,
@@ -1940,6 +1946,18 @@ impl ConstructionInputs {
         // wraps (in the process-provider runtime module, whose minijail
         // vocabulary is already measured there).
         let host_facets = crate::process_provider_runtime::production_host_facets();
+        // The Activation family's effects ride the declared facets too: the
+        // one daemon-structural capability the family needs - the dispatch
+        // of the preserved `ApplyHostGenerationHandoff` broker request over
+        // the daemon's authenticated origination socket, presented as the
+        // daemon's admin-uid caller authority - crosses the provider
+        // boundary as the declared broker dispatch facet, supplied through
+        // the composition root.
+        let activation_facets = ActivationEffectFacets {
+            broker: Arc::new(ProductionActivationBrokerDispatch {
+                state: Arc::clone(state),
+            }),
+        };
         Ok(Self {
             zone: zone.clone(),
             zone_token,
@@ -2048,7 +2066,7 @@ Box::pin(async move {
                     }),
                 ))
             },
-            activation_effects: Arc::new(ProductionActivationDriverEffects::new(Arc::clone(state))),
+            activation_facets: activation_facets.clone(),
             credential_effects,
             shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects::production(
                 shared_provider_effects,
@@ -2077,6 +2095,7 @@ Box::pin(async move {
                 &process_facets,
                 &network_facets,
                 &host_facets,
+                &activation_facets,
             ),
             foundation: None,
         })
@@ -2092,6 +2111,7 @@ fn registered_service_factories(
     process_facets: &ProcessEffectFacets,
     network_facets: &NetworkEffectFacets,
     host_facets: &HostEffectFacets,
+    activation_facets: &ActivationEffectFacets,
 ) -> BTreeMap<&'static str, Arc<dyn EffectServiceFactory>> {
     let mut factories = BTreeMap::new();
     for registration in PROVIDER_REGISTRATIONS {
@@ -2104,6 +2124,8 @@ fn registered_service_factories(
                     as Arc<dyn EffectServiceFactory>
             } else if service == HOST_EFFECTS_SERVICE.id {
                 Arc::new(HostEffectsServiceFactory::new(host_facets.clone()))
+            } else if service == ACTIVATION_EFFECTS_SERVICE.id {
+                Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone()))
                     as Arc<dyn EffectServiceFactory>
             } else {
                 continue;
@@ -2112,6 +2134,33 @@ fn registered_service_factories(
         }
     }
     factories
+}
+
+/// Production `ActivationBrokerDispatch`: the daemon's own dispatch over its
+/// authenticated origination socket, presented as the daemon's admin-uid
+/// caller authority - the same authority the retired daemon adapter
+/// presented. The family crate receives the dispatch result and never calls
+/// a daemon function or reads a daemon path.
+struct ProductionActivationBrokerDispatch {
+    state: Arc<crate::ServerState>,
+}
+
+impl d2b_provider_activation_nixos::ActivationBrokerDispatch
+    for ProductionActivationBrokerDispatch
+{
+    fn dispatch(
+        &self,
+        request: BrokerRequest,
+    ) -> Result<BrokerResponse, String> {
+        crate::dispatch_broker_request_as(
+            &self.state,
+            request,
+            BrokerCallerRole::AdminUid {
+                uid: self.state.daemon_uid,
+            },
+        )
+        .map_err(|error| format!("{}: {}", error.kind(), error.message()))
+    }
 }
 
 /// Production `GuestOwnerIdentitySource` (KTD7): the pre-v3 plane owns `Guest`,
@@ -2387,18 +2436,6 @@ impl ResourcePlaneV3 {
         // its factory, and a declared service with no registered factory
         // still refuses startup by name.
         set = set.with_effect_service_factories(&inputs.effect_service_factories);
-        // The NixosGeneration type starts through its driver declaration: the
-        // registry serves the type's decoder and factory from it, and the
-        // declaration carries the family's verbs, execution domains,
-        // exportability, reads, and its one declared child creation.
-        set = set.with(
-            family_declaration("activation-nixos"),
-            vec![activation_descriptor(ActivationDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                effects: Arc::clone(&inputs.activation_effects),
-                verifier: Arc::new(d2b_provider_activation_nixos::FailClosedActivationVerifier),
-            })],
-        );
         // The telemetry pair starts through its driver declarations: one per
         // type, each carrying that type's decoder, factory, verbs, execution
         // domains, exportability, reads, and (for the Binding) the
@@ -2589,6 +2626,13 @@ impl ResourcePlaneV3 {
             // daemon-supplied facet set; no externally built port appears at
             // this construction site (R2).
             "host" => vec![host_descriptor(inputs.host_facets.clone())],
+            // The Activation family: the driver builds its effects from the
+            // daemon-supplied facet set; no externally built port appears at
+            // this construction site (R2).
+            "activation-nixos" => vec![activation_descriptor(ActivationDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                facets: inputs.activation_facets.clone(),
+            })],
             _ => Vec::new(),
         }
     }
@@ -3138,8 +3182,7 @@ impl ResourcePlaneV3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_provider_activation_nixos::HostHandoffResult;
-    use d2b_provider_system_core::MinijailPlatformGate;
+use d2b_provider_system_core::MinijailPlatformGate;
     use d2b_contracts_resource::v3::ResourceName;
     use d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata;
     use d2b_process_conformance::ProcessIdentityDigest;
@@ -3352,6 +3395,11 @@ mod tests {
             d2b_provider_host::test_support::RecordingMinijailGate::new(
                 MinijailPlatformGate::new(6, 9, true),
             ),
+        // The plane tests build the Activation family's facet set from the
+        // scripted broker dispatch double, exactly as the production
+        // composition root builds it from the daemon's dispatch.
+        let activation_facets = d2b_provider_activation_nixos::test_support::recording_facets(
+            d2b_provider_activation_nixos::test_support::RecordingBrokerDispatch::new(),
         );
         (
             dir,
@@ -3389,8 +3437,7 @@ mod tests {
                     effects.make_present();
                     effects
                 },
-                activation_effects: d2b_provider_activation_nixos::test_support::
-                    FakeActivationEffects::new(HostHandoffResult::Incomplete),
+                activation_facets: activation_facets.clone(),
                 credential_effects: {
                     let effects = d2b_provider_credential::test_support::FakeEffects::new(
                         d2b_provider_credential::test_support::log(),
@@ -3429,10 +3476,10 @@ mod tests {
                 },
                 interaction_effects: d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
                 trusted_context_publication: None,
-                // U1/U14/U5: the plane hosts the Process, Network, and Host
-                // families' declared effects services from the same facet
-                // sets their driver factories are built from, exactly as the
-                // production composition root does.
+// U1/U14/U5: the plane hosts the Process, Network, Host,
+                // and Activation families' declared effects services from
+                // the same facet sets their driver factories are built
+                // from, exactly as the production composition root does.
                 effect_service_factories: BTreeMap::from([
                     (
                         PROCESS_EFFECTS_SERVICE.id,
@@ -3448,6 +3495,8 @@ mod tests {
                     (
                         HOST_EFFECTS_SERVICE.id,
                         Arc::new(HostEffectsServiceFactory::new(host_facets))
+                        ACTIVATION_EFFECTS_SERVICE.id,
+                        Arc::new(ActivationEffectsServiceFactory::new(activation_facets))
                             as Arc<dyn EffectServiceFactory>,
                     ),
                 ]),
@@ -3898,6 +3947,104 @@ mod tests {
         assert_eq!(
             after_fields, before_fields,
             "the adopted generation answers the same bounded observations (the volatile process count normalized out)"
+    /// The composition root hosts the Activation family's declared effects
+    /// service from the family's own factory over the plane's facet set, and
+    /// the hosted service answers `inspect-activation` through the real
+    /// invocation capability object carrying the real envelope payload - the
+    /// same implementation value the driver factory is built from. The
+    /// report is the family's committed surface, so it proves the family's
+    /// effects run inside the owning crate.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_activation_effects_service_answers_inspect_activation_through_the_binding() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let runtime = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts the declared activation service");
+        let binding = runtime
+            .resolve_effect_service(ACTIVATION_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-inspect-activation".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({})).expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: ACTIVATION_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let response = binding.call(call).await.expect("call");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({
+                "family": "activation-nixos",
+                "resourceType": d2b_provider_activation_nixos::ACTIVATION_TYPE_NAME,
+                "runner": {
+                    "providerRef": "Provider/system-minijail",
+                    "type": "EphemeralProcess",
+                },
+                "handoffOperation": "ApplyHostGenerationHandoff",
+                "runnerSteps": ["switch", "boot", "test"],
+            }))
+            .expect("canonical payload"),
+            "the hosted service answers the family's committed surface from the crate's own vocabulary"
+        );
+    }
+
+    /// A restarted plane re-hosts the Activation family's declared effects
+    /// service from the same facet set, and the fresh generation answers the
+    /// same `inspect-activation` surface - the surface this lane moved
+    /// adopts on restart, with no daemon-side effect module.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_restarted_plane_rehosts_the_activation_effects_service() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let started = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts with the declared activation service");
+        let binding = started
+            .resolve_effect_service(ACTIVATION_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-activation-before-restart".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({})).expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: ACTIVATION_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let before = binding.call(call).await.expect("call before restart");
+        drop(started);
+
+        // The daemon restarts: the provider set is rebuilt from the same
+        // declaration and factory, and the Activation service is hosted
+        // again.
+        let restarted = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the restarted plane starts");
+        let adopted = restarted
+            .resolve_effect_service(ACTIVATION_EFFECTS_SERVICE.id)
+            .await
+            .expect("the restarted plane re-hosts the declared activation service");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-activation-after-restart".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({})).expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: ACTIVATION_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let after = adopted.call(call).await.expect("call after restart");
+        assert_eq!(
+            after.payload, before.payload,
+            "the restarted plane re-hosts the same committed surface"
         );
     }
 
@@ -3931,6 +4078,7 @@ mod tests {
         assert_eq!(
             runtime.startup_order(),
             [
+"activation-nixos",
                 "host",
                 "network-local",
                 "process",
@@ -3938,7 +4086,6 @@ mod tests {
                 "volume-binding",
                 "endpoint",
                 "credential",
-                "activation-nixos",
                 "telemetry-service",
                 "telemetry-binding",
                 "device-usbip",

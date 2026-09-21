@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-activation-nixos",
+  "provider": "activation-nixos",
+  "services": [
+    "activation.d2bus.org/effects"
+  ]
+}

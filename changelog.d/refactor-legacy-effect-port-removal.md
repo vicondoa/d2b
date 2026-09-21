@@ -46,3 +46,15 @@
   `HostProbeEffectPort` surface became an async-trait port so the probe can
   ride the hosted service. The probe's family-knowledge rows the layout
   check reported for the daemon module are retired.
+- The activation family's driver effects ended their daemon-built arm too:
+  the family now serves them from its own crate through its declared
+  `activation.d2bus.org/effects` service, hosted per zone by the daemon from
+  the family's registered factory over the composition root's facet set. The
+  family's `ApplyHostGenerationHandoff` dispatch - caller role `Lifecycle`
+  on the typed request, admin-uid daemon caller on the dispatch - runs
+  inside the crate over the daemon-supplied broker dispatch facet, and the
+  response reduction to the closed handoff result moved with it. The daemon's
+  `activation_effects.rs` module, the facet-set injection at the driver
+  construction site, and the daemon-side verifier wiring are deleted in the
+  same change; the preserved fail-closed application verifier is now built
+  by the family's factory itself.

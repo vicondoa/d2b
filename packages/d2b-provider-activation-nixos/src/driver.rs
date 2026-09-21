@@ -3,9 +3,10 @@
 //!
 //! The driver, its spec decoder, its factory, and the
 //! [`DriverDescriptor`](d2b_resource_types::DriverDescriptor) the plane
-//! registers the type by live in this crate. The production effect
-//! implementation stays in the daemon behind [`ActivationDriverEffects`], so
-//! this crate depends on no daemon runtime.
+//! registers the type by live in this crate. The driver's effects are this
+//! crate's own implementation ([`crate::effects_service`]) built from the
+//! daemon-supplied facet set, so the construction site holds no externally
+//! built port (R2) and this crate depends on no daemon runtime.
 //!
 //! The driver keeps the preserved activation behavior and nothing else: the
 //! pure `ActivationController` policy decides whether an activation runner
@@ -68,6 +69,7 @@ use d2b_resource_types::{
     AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
 };
 
+use crate::effects_service::ACTIVATION_EFFECTS_SERVICE;
 use crate::{
     ActivationApplicationVerifier, ActivationCaller, ActivationController, CallerRole,
     GenerationObservation, GenerationPhase, RunnerRequest, activation_runner_ref,
@@ -329,15 +331,18 @@ fn ordinal_from_name(name: &str) -> Option<u64> {
 // ---------------------------------------------------------------------------
 
 /// Everything the composition unit must construct to instantiate the
-/// activation driver factory for one zone. The application verifier is the
-/// preserved fail-closed gate (old `set_verifier`).
+/// activation driver factory for one zone: the zone's own name and the
+/// daemon-supplied facet set. The driver's effects are this crate's own
+/// implementation ([`crate::effects_service::ActivationEffectsService`])
+/// built from those facets, and the application verifier is the preserved
+/// fail-closed gate (old `set_verifier`) this crate owns - the construction
+/// site holds no externally built port (R2).
 pub struct ActivationDriverArgs {
     /// The zone the driver serves.
     pub zone: String,
-    /// The daemon-realized effect port the driver drives.
-    pub effects: Arc<dyn ActivationDriverEffects>,
-    /// The application verifier the driver gates every effect on.
-    pub verifier: Arc<dyn ActivationApplicationVerifier>,
+    /// The daemon-supplied facet set the family's own effects implementation
+    /// is built from.
+    pub facets: crate::facets::ActivationEffectFacets,
 }
 
 /// [`ResourceDriverFactory`] for the `NixosGeneration` resource type.
@@ -363,11 +368,13 @@ impl ResourceDriverFactory for ActivationDriverFactory {
     }
 
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
-        Box::new(ActivationDriver::new(ActivationDriverArgs {
-            zone: self.args.zone.clone(),
-            effects: Arc::clone(&self.args.effects),
-            verifier: Arc::clone(&self.args.verifier),
-        }))
+        Box::new(ActivationDriver::new(
+            self.args.zone.clone(),
+            Arc::new(crate::effects_service::ActivationEffectsService::new(
+                self.args.facets.clone(),
+            )),
+            Arc::new(crate::FailClosedActivationVerifier),
+        ))
     }
 }
 
@@ -387,11 +394,18 @@ pub struct ActivationDriver {
 }
 
 impl ActivationDriver {
-    pub(crate) fn new(args: ActivationDriverArgs) -> Self {
+    /// Build one driver over the family's own effects implementation (the
+    /// factory constructs it from the declared facets) or a scripted seam
+    /// (tests): the driver never constructs a port itself.
+    pub(crate) fn new(
+        zone: String,
+        effects: Arc<dyn ActivationDriverEffects>,
+        verifier: Arc<dyn ActivationApplicationVerifier>,
+    ) -> Self {
         Self {
-            zone: args.zone,
-            effects: args.effects,
-            verifier: args.verifier,
+            zone,
+            effects,
+            verifier,
             controller: ActivationController::new(),
             watched_runner: tokio::sync::Mutex::new(None),
         }
@@ -872,7 +886,10 @@ const ACTIVATION_READS: &[WellKnownType] = &[WellKnownType::NIXOS_GENERATION];
 /// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
 /// generation can never be an export subject. The driver serves no broker
 /// operations and declares the one child creation it performs - the owned
-/// activation runner ([`ACTIVATION_RUNNER_CREATION`]).
+/// activation runner ([`ACTIVATION_RUNNER_CREATION`]) - and the family's
+/// declared effects service ([`crate::effects_service::ACTIVATION_EFFECTS_SERVICE`])
+/// rides the declaration, so a zone that cannot host it refuses startup by
+/// name (R5).
 pub fn activation_descriptor(args: ActivationDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::NIXOS_GENERATION,
@@ -884,7 +901,7 @@ pub fn activation_descriptor(args: ActivationDriverArgs) -> DriverDescriptor {
         operations: &[],
         creations: ACTIVATION_CREATIONS,
         startup: &[],
-        services: &[],
+        services: &[ACTIVATION_EFFECTS_SERVICE],
         decoder: activation_spec_decoder(),
         factory: Arc::new(ActivationDriverFactory::new(args)),
     }
@@ -923,8 +940,9 @@ mod tests {
 
     use super::{
         ACTIVATION_TYPE_NAME, ActivationApplicationVerifier, ActivationController,
-        ActivationDriverArgs, ActivationDriverFactory, ActivationDriverStatus, HostHandoffResult,
-        RunnerRequest, activation_runner_ref, activation_spec_decoder, ordinal_from_name,
+        ActivationDriver, ActivationDriverArgs, ActivationDriverFactory, ActivationDriverStatus,
+        HostHandoffResult, RunnerRequest, activation_runner_ref, activation_spec_decoder,
+        ordinal_from_name,
     };
     use crate::ActivationVerificationError;
     use crate::test_support::FakeActivationEffects;
@@ -1160,14 +1178,10 @@ mod tests {
         effects: Arc<FakeActivationEffects>,
         verifier: Arc<dyn ActivationApplicationVerifier>,
     ) -> Box<dyn DynResourceDriver> {
-        let factory = ActivationDriverFactory::new(ActivationDriverArgs {
-            zone: "work".to_owned(),
-            effects,
-            verifier,
-        });
-        factory
-            .create(&ResourceKey::new("work", ACTIVATION_TYPE_NAME, "gen-1"))
-            .await
+        // The driver's own typed seam, scripted: production builds the same
+        // seam from the facets (the factory); tests drive the behavior
+        // directly over the recording double.
+        Box::new(ActivationDriver::new("work".to_owned(), effects, verifier))
     }
 
     fn status(ctx: &ResourceContext) -> ActivationDriverStatus {
@@ -1181,8 +1195,9 @@ mod tests {
     async fn factory_registers_only_the_generation_resource_type() {
         let factory = ActivationDriverFactory::new(ActivationDriverArgs {
             zone: "work".to_owned(),
-            effects: FakeActivationEffects::new(HostHandoffResult::Incomplete),
-            verifier: Arc::new(AllowVerifier),
+            facets: crate::test_support::recording_facets(
+                crate::test_support::RecordingBrokerDispatch::new(),
+            ),
         });
         assert_eq!(factory.resource_types().len(), 1);
         assert_eq!(factory.resource_types()[0].as_str(), ACTIVATION_TYPE_NAME);
