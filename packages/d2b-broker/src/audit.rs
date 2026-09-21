@@ -1366,7 +1366,12 @@ fn audit_worker_loop(receiver: mpsc::Receiver<AuditCommand>) {
                 writes_per_second,
                 reply,
             } => {
-                state.write_limiter = AuditWriteLimiter::new(writes_per_second);
+                let mut limiter = AuditWriteLimiter::new(writes_per_second);
+                // `open_with_write_limit` drives a frozen window so rate-limit
+                // assertions are deterministic under host load; production never
+                // crosses this seam (the default stays real time).
+                limiter.freeze_windows();
+                state.write_limiter = limiter;
                 let _ = reply.send(Ok(()));
             }
             #[cfg(test)]
@@ -1881,6 +1886,11 @@ struct AuditWriteBucket {
     window_start: Instant,
     writes_this_window: u32,
     max_writes_per_window: u32,
+    /// Test-only clock seam: when frozen, the write window never
+    /// expires, so rate-limit assertions cannot roll over onto a fresh
+    /// window mid-loop under host load. Production never freezes.
+    #[cfg(test)]
+    window_frozen: bool,
 }
 
 impl AuditWriteLimiter {
@@ -1905,6 +1915,15 @@ impl AuditWriteLimiter {
             AuditWriteClass::Unprivileged => self.unprivileged.check(),
         }
     }
+
+    /// Test-only clock seam: freeze every write window so rate-limit
+    /// tests are deterministic (the window cannot roll over mid-loop).
+    /// `AuditWriteLimiter::new` keeps the production default: real time.
+    #[cfg(test)]
+    fn freeze_windows(&mut self) {
+        self.privileged.window_frozen = true;
+        self.unprivileged.window_frozen = true;
+    }
 }
 
 impl AuditWriteBucket {
@@ -1913,7 +1932,17 @@ impl AuditWriteBucket {
             window_start: Instant::now(),
             writes_this_window: 0,
             max_writes_per_window,
+            #[cfg(test)]
+            window_frozen: false,
         }
+    }
+
+    fn window_elapsed(&self) -> bool {
+        #[cfg(test)]
+        if self.window_frozen {
+            return false;
+        }
+        self.window_start.elapsed() >= AUDIT_WRITE_WINDOW
     }
 
     fn check(&mut self) -> io::Result<()> {
@@ -1923,7 +1952,7 @@ impl AuditWriteBucket {
                 "audit write rate limit exceeded",
             ));
         }
-        if self.window_start.elapsed() >= AUDIT_WRITE_WINDOW {
+        if self.window_elapsed() {
             self.window_start = Instant::now();
             self.writes_this_window = 0;
         }
