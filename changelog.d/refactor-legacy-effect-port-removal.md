@@ -89,3 +89,10 @@
   deleted in the same change, and the daemon composes the family only through
   the generated registration table and its registered driver and service
   factories.
+- The family's effects service is built once per zone by the driver factory
+  and shared across every driver it creates, preserving the retired daemon
+  adapter's per-zone lifetime for the framework-controller state machines: a
+  resource-actor restart or re-Ensure re-creates the driver while the plane
+  is alive, and the shared value lets the qemu-media, azure-container-apps,
+  and azure-virtual-machine controllers resume their generation-fenced slots
+  instead of restarting from scratch.

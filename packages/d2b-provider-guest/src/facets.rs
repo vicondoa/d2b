@@ -49,6 +49,12 @@ pub enum GuestCloudHypervisorOutcome {
 /// identities the plane's registry publishes (KTD7), and the live
 /// controller-session generation. The family crate receives the bounded
 /// reads, never a daemon state handle.
+///
+/// The `Err(())` arm is the closed fail-closed refusal: an unanswerable
+/// plane, never a diagnostic carrier (the daemon's own facet impls hold no
+/// error type to pass; a refusal is a retryable `Unavailable`, and the
+/// effects map it themselves).
+#[allow(clippy::result_unit_err, reason = "the closed fail-closed refusal surface: Err(()) is an unanswerable plane, never a diagnostic carrier")]
 #[async_trait]
 pub trait GuestManagerView: Send + Sync + 'static {
     /// The manager view of one row: `Ok(Some(view))` when the manager holds

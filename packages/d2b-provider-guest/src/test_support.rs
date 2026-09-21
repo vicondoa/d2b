@@ -246,7 +246,7 @@ impl ScriptedFacets {
 #[async_trait::async_trait]
 impl GuestManagerView for ScriptedFacets {
     async fn row_view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ()> {
-        self.calls.lock().push(format!("row:{}", key.to_string()));
+        self.calls.lock().push(format!("row:{key}"));
         if *self.fail_reads.lock() {
             return Err(());
         }
@@ -271,7 +271,7 @@ impl GuestManagerView for ScriptedFacets {
         if *self.fail_reads.lock() {
             return Err(());
         }
-        Ok(self.session_generation.lock().clone())
+        Ok(*self.session_generation.lock())
     }
 }
 

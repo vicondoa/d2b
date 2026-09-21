@@ -621,7 +621,6 @@ pub struct GuestEffectsService {
 impl GuestEffectsService {
     /// Build the effects from one zone's daemon-supplied facet set (R2):every
     /// daemon-structural read rides the facets, never a daemon handle.
-
     pub fn new(facets: GuestEffectFacets) -> Self {
         Self {
             zone: facets.zone,
