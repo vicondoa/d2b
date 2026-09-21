@@ -87,6 +87,14 @@ pub enum LiveHandlerError {
     /// NetworkManager reload failure after writing the unmanaged config
     /// snippet.
     NmReload(String),
+    /// The NetworkManager unmanaged intent declared a reload behavior the
+    /// contract does not admit. Carries the rejected value so the refusal
+    /// names exactly what a hand-declared bundle got wrong.
+    NmReloadBehaviorRefused(String),
+    /// The declared owner/group of the NetworkManager unmanaged file could
+    /// not be resolved or enforced. Carries the failing principal or the
+    /// enforcement detail.
+    NmFileOwnership(String),
     /// A foreign or ambiguous NetworkManager ownership marker occupied the
     /// d2b-managed file.
     NmOwnershipConflict,
@@ -127,6 +135,13 @@ impl std::fmt::Display for LiveHandlerError {
             Self::KeysRotate(detail) => write!(f, "keys rotate: {detail}"),
             Self::HostKey(detail) => write!(f, "host key: {detail}"),
             Self::NmReload(detail) => write!(f, "networkmanager reload: {detail}"),
+            Self::NmReloadBehaviorRefused(value) => write!(
+                f,
+                "NetworkManager reload behavior {value:?} is not supported; expected \"atomic-reload\" or \"none\""
+            ),
+            Self::NmFileOwnership(detail) => {
+                write!(f, "NetworkManager unmanaged file ownership: {detail}")
+            }
             Self::NmOwnershipConflict => f.write_str("nm-managed-foreign-conflict"),
             Self::SwtpmDirHardening { reason, .. } => {
                 // PATH-FREE: only the closed-set reason slug.
@@ -264,6 +279,55 @@ impl NmReloadMethod {
     }
 }
 
+/// The closed reload-behavior set the NetworkManager unmanaged contract
+/// admits. `"atomic-reload"` selects the reload branch; `"none"` and the
+/// empty no-host-contract sentinel select the write-only path. Any other
+/// value is a hand-declared bundle defect: refusing it here (before any
+/// mutation) keeps a typo from silently skipping the NetworkManager reload
+/// while the apply acks success.
+///
+/// Shared with the remove path in `ops/nm.rs`; both arms branch on the
+/// same value, so both must apply the same contract check.
+pub(crate) fn validate_nm_reload_behavior(
+    reload_behavior: &str,
+) -> Result<(), LiveHandlerError> {
+    if matches!(reload_behavior, "atomic-reload" | "none" | "") {
+        return Ok(());
+    }
+    Err(LiveHandlerError::NmReloadBehaviorRefused(reload_behavior.to_owned()))
+}
+
+/// Resolve the declared owner/group names of the NetworkManager unmanaged
+/// drop-in to uid/gid. The declaration is part of the bundle contract and
+/// is enforced on the written file; an unresolvable principal refuses the
+/// apply naming the exact name that failed.
+fn resolve_nm_file_principal(owner: &str, group: &str) -> Result<(u32, u32), LiveHandlerError> {
+    use nix::unistd::{Group, User};
+    let uid = User::from_name(owner)
+        .map_err(|error| {
+            LiveHandlerError::NmFileOwnership(format!(
+                "resolving declared owner {owner:?} failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            LiveHandlerError::NmFileOwnership(format!(
+                "declared owner {owner:?} does not exist on the host"
+            ))
+        })?;
+    let gid = Group::from_name(group)
+        .map_err(|error| {
+            LiveHandlerError::NmFileOwnership(format!(
+                "resolving declared group {group:?} failed: {error}"
+            ))
+        })?
+        .ok_or_else(|| {
+            LiveHandlerError::NmFileOwnership(format!(
+                "declared group {group:?} does not exist on the host"
+            ))
+        })?;
+    Ok((uid.uid.as_raw(), gid.gid.as_raw()))
+}
+
 /// Live broker `ApplyNmUnmanaged` handler.
 pub async fn live_apply_nm_unmanaged(
     executor: &dyn ReconcileExecutor,
@@ -295,6 +359,7 @@ pub(crate) async fn live_apply_nm_unmanaged_with_reload<F>(
 where
     F: AsyncFnMut(&[&str]) -> Result<(), String>,
 {
+    validate_nm_reload_behavior(&intent.reload_behavior)?;
     let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
@@ -302,8 +367,15 @@ where
     };
     crate::ops::nm::validate_existing_managed_conf(&existing, &intent.contents)
         .map_err(|_| LiveHandlerError::NmOwnershipConflict)?;
+    let (owner_uid, owner_gid) = resolve_nm_file_principal(&intent.owner, &intent.group)?;
     executor
-        .write_atomic_file(&intent.file_path, intent.contents.as_bytes(), intent.mode)
+        .write_atomic_file_with_ownership(
+            &intent.file_path,
+            intent.contents.as_bytes(),
+            intent.mode,
+            owner_uid,
+            owner_gid,
+        )
         .await
         .map_err(LiveHandlerError::ReconcileExec)?;
     if intent.reload_behavior == "atomic-reload" {
@@ -329,6 +401,7 @@ where
     D: AsyncFnMut() -> Result<(), String>,
     F: AsyncFnMut(&[&str]) -> Result<(), String>,
 {
+    validate_nm_reload_behavior(&intent.reload_behavior)?;
     let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
@@ -336,8 +409,15 @@ where
     };
     crate::ops::nm::validate_existing_managed_conf(&existing, &intent.contents)
         .map_err(|_| LiveHandlerError::NmOwnershipConflict)?;
+    let (owner_uid, owner_gid) = resolve_nm_file_principal(&intent.owner, &intent.group)?;
     executor
-        .write_atomic_file(&intent.file_path, intent.contents.as_bytes(), intent.mode)
+        .write_atomic_file_with_ownership(
+            &intent.file_path,
+            intent.contents.as_bytes(),
+            intent.mode,
+            owner_uid,
+            owner_gid,
+        )
         .await
         .map_err(LiveHandlerError::ReconcileExec)?;
     if intent.reload_behavior != "atomic-reload" {
@@ -3306,6 +3386,16 @@ mod tests {
             ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
                 Box::pin(async move { unreachable!() })
             }
+            fn write_atomic_file_with_ownership(
+                &self,
+                _: &Path,
+                _: &[u8],
+                _: u32,
+                _: u32,
+                _: u32,
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
+            }
             fn write_path_value(
                 &self,
                 _: &Path,
@@ -3378,6 +3468,16 @@ mod tests {
                 &self,
                 _: &Path,
                 _: &[u8],
+                _: u32,
+            ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
+                Box::pin(async move { unreachable!() })
+            }
+            fn write_atomic_file_with_ownership(
+                &self,
+                _: &Path,
+                _: &[u8],
+                _: u32,
+                _: u32,
                 _: u32,
             ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + '_>> {
                 Box::pin(async move { unreachable!() })
@@ -3810,12 +3910,16 @@ mod tests {
         assert_eq!(log.len(), 1);
         assert!(matches!(
             &log[0],
-            ReconcileOp::WriteAtomicFile {
+            ReconcileOp::WriteAtomicFileWithOwnership {
                 path,
                 mode: 0o644,
                 contents,
+                owner_uid,
+                owner_gid,
             } if path == &intent.file_path
                 && contents.as_slice() == intent.contents.as_bytes()
+                && *owner_uid == 0
+                && *owner_gid == 0
         ));
     }
 
@@ -3894,6 +3998,60 @@ mod tests {
             Err(LiveHandlerError::NmOwnershipConflict)
         ));
         assert!(exec.take_log().is_empty());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn live_apply_nm_unmanaged_refuses_unknown_reload_behavior_before_mutation() {
+        let exec = FakeReconcileExecutor::new();
+        let root = TestDir::new("nm-unmanaged-reload-refused");
+        let mut intent = sample_nm_unmanaged_intent(&root);
+        intent.reload_behavior = "atomic-reloadd".to_owned();
+
+        let err = live_apply_nm_unmanaged_with_reloaders(
+            &exec,
+            &intent,
+            async || Ok(()),
+            async |_| Ok(()),
+        )
+        .await
+        .expect_err("a typo'd reload behavior must refuse the apply");
+
+        assert!(matches!(
+            &err,
+            LiveHandlerError::NmReloadBehaviorRefused(value) if value == "atomic-reloadd"
+        ));
+        assert!(
+            exec.take_log().is_empty(),
+            "the reload-behavior refusal must precede any file mutation"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn live_apply_nm_unmanaged_refuses_unresolvable_declared_owner() {
+        let exec = FakeReconcileExecutor::new();
+        let root = TestDir::new("nm-unmanaged-owner-refused");
+        let mut intent = sample_nm_unmanaged_intent(&root);
+        intent.owner = "rootd".to_owned();
+
+        let err = live_apply_nm_unmanaged_with_reloaders(
+            &exec,
+            &intent,
+            async || Ok(()),
+            async |_| Ok(()),
+        )
+        .await
+        .expect_err("an unresolvable declared owner must refuse the apply");
+
+        assert!(matches!(
+            &err,
+            LiveHandlerError::NmFileOwnership(detail) if detail.contains("rootd")
+        ));
+        assert!(
+            exec.take_log().is_empty(),
+            "the ownership refusal must precede any file mutation"
+        );
     }
 
     #[tokio::test]

@@ -1,0 +1,7 @@
+# `bundle-contract-validation.md`
+
+### Fixed
+
+- Refused unknown NetworkManager reload behaviors. The unmanaged-config apply and remove paths now reject any `reloadBehavior` other than `atomic-reload`, `none`, or the empty no-host-contract sentinel before mutating anything, so a hand-declared bundle typo can no longer silently skip the NetworkManager reload while the apply acks success; the refusal names the rejected value.
+- Enforced the declared NetworkManager unmanaged file ownership. The apply path resolves the declared owner/group and stamps it on the replacement inode during the atomic write, refusing unresolvable principals by name, so the declared owner/group contract can no longer be carried but ignored on a host-mutable `conf.d` path.
+- Converged pre-existing unaddressed uplink bridges. `create-bridge` now bounded-adopts a present, marker-owned uplink bridge whose only drift is the missing derived address (the shape bridges created before the uplink-address derivation have) by applying the address under the existing ownership marker, and `delete-bridge` accepts that legacy shape, so upgraded hosts converge without manual `ip` intervention while foreign markers and any other parameter drift still fail closed.

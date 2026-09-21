@@ -99,6 +99,30 @@ pub trait BridgeBackend {
     async fn delete_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError>;
 }
 
+/// The pre-derivation uplink bridge shape: a present, daemon-owned bridge
+/// that matches the trusted intent on every axis except the newly-declared
+/// derived address, which it does not carry at all. Bridges created before
+/// the uplink-address derivation (#549) have exactly this shape: the old
+/// create flow stamped the ownership marker, MTU, STP, multicast, and IPv6
+/// suppression but no address.
+///
+/// This is the *only* drift shape that is bounded-adopted. Every other
+/// mismatch - a foreign address, a drifted MTU, a foreign marker - keeps
+/// the fail-closed refusal.
+fn is_legacy_unaddressed_uplink(
+    intent: &ResolvedBridgeIntent,
+    observed: &BridgeReadback,
+) -> bool {
+    observed.present
+        && observed.is_bridge
+        && observed.mtu == intent.mtu
+        && observed.stp_disabled == intent.stp_disabled
+        && observed.multicast_snooping_disabled == intent.multicast_snooping_disabled
+        && observed.ipv6_suppressed == intent.ipv6_suppressed
+        && intent.ipv4_address.is_some()
+        && observed.ipv4_address.is_none()
+}
+
 /// Ensure one trusted bridge, applying IPv6 suppression before link-up.
 pub async fn create_bridge<B: BridgeBackend>(
     backend: &B,
@@ -112,6 +136,18 @@ pub async fn create_bridge<B: BridgeBackend>(
         }
         if bridge_matches(intent, &observed, &expected_marker) {
             return Ok(bridge_intent_digest(intent));
+        }
+        // Bounded adoption of the legacy unaddressed shape only: the
+        // bridge provably belongs to the daemon (ownership marker plus
+        // every other trusted parameter match) and predates the derived
+        // address, so adding the declared address and re-verifying is
+        // convergence, not self-healing a foreign or drifted link.
+        if is_legacy_unaddressed_uplink(intent, &observed) {
+            backend.configure_bridge(intent).await?;
+            let observed = backend.read_bridge(intent).await?;
+            if bridge_matches(intent, &observed, &expected_marker) {
+                return Ok(bridge_intent_digest(intent));
+            }
         }
         return Err(NetworkOpError::BridgeParameterMismatch);
     }
@@ -141,7 +177,12 @@ pub async fn delete_bridge<B: BridgeBackend>(
     if observed.ownership_marker.as_deref() != Some(expected_marker.as_str()) {
         return Err(NetworkOpError::ForeignOwnership);
     }
-    if !bridge_matches(intent, &observed, &expected_marker) {
+    // The pre-derivation unaddressed uplink shape is provably the daemon's
+    // own bridge and was deletable before the address derivation existed;
+    // it must not become undeletable after an upgrade.
+    if !bridge_matches(intent, &observed, &expected_marker)
+        && !is_legacy_unaddressed_uplink(intent, &observed)
+    {
         return Err(NetworkOpError::BridgeParameterMismatch);
     }
     if observed.attached_links != 0 {
@@ -1056,15 +1097,19 @@ mod tests {
             "the created uplink bridge carries the derived address"
         );
 
-        // A present, owned uplink bridge without the derived address is a
-        // parameter mismatch, the same refusal posture as any other trusted
-        // parameter drift: no mutation, no adoption.
+        // A present, owned uplink bridge without the derived address is the
+        // pre-derivation legacy shape: it is bounded-adopted by adding the
+        // declared address, not refused.
         let mut unaddressed = backend.state.borrow().clone();
         unaddressed.ipv4_address = None;
         backend.state.replace(unaddressed);
+        create_bridge(&backend, &intent)
+            .await
+            .expect("the legacy unaddressed uplink bridge is adopted");
         assert_eq!(
-            create_bridge(&backend, &intent).await,
-            Err(NetworkOpError::BridgeParameterMismatch)
+            backend.state.borrow().ipv4_address,
+            intent.ipv4_address,
+            "adoption applies the declared derived address"
         );
 
         // A present, owned uplink bridge carrying a foreign address is a
@@ -1081,6 +1126,108 @@ mod tests {
         let mut without = intent.clone();
         without.ipv4_address = None;
         assert_ne!(bridge_intent_digest(&intent), bridge_intent_digest(&without));
+    }
+
+    fn legacy_unaddressed_uplink_state(intent: &ResolvedBridgeIntent) -> BridgeReadback {
+        BridgeReadback {
+            present: true,
+            is_bridge: true,
+            mtu: intent.mtu,
+            stp_disabled: true,
+            multicast_snooping_disabled: true,
+            ipv6_suppressed: true,
+            ipv4_address: None,
+            attached_links: 0,
+            ownership_marker: Some(expected_bridge_marker(intent).expect("test marker")),
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn create_bridge_adopts_legacy_unaddressed_uplink_without_recreating() {
+        let intent = uplink_bridge_intent();
+        let backend = FakeBridge {
+            state: RefCell::new(legacy_unaddressed_uplink_state(&intent)),
+            creates: Cell::new(0),
+            deletes: Cell::new(0),
+        };
+
+        create_bridge(&backend, &intent)
+            .await
+            .expect("the legacy unaddressed owned uplink bridge converges");
+
+        assert_eq!(
+            backend.creates.get(),
+            0,
+            "adoption must not delete and recreate the owned bridge"
+        );
+        assert_eq!(
+            backend.state.borrow().ipv4_address,
+            intent.ipv4_address,
+            "the adopted bridge carries the declared derived address"
+        );
+        assert_eq!(
+            backend.state.borrow().ownership_marker.as_deref(),
+            Some(expected_bridge_marker(&intent).expect("test marker").as_str()),
+            "the adopted bridge keeps the daemon's ownership marker"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn delete_bridge_removes_legacy_unaddressed_uplink() {
+        let intent = uplink_bridge_intent();
+        let backend = FakeBridge {
+            state: RefCell::new(legacy_unaddressed_uplink_state(&intent)),
+            creates: Cell::new(0),
+            deletes: Cell::new(0),
+        };
+
+        delete_bridge(&backend, &intent)
+            .await
+            .expect("the legacy unaddressed owned uplink bridge is deletable");
+
+        assert_eq!(
+            backend.deletes.get(),
+            1,
+            "the legacy shaped bridge is removed exactly once"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn adoption_keeps_fail_closed_for_foreign_marker_and_drifted_parameters() {
+        let intent = uplink_bridge_intent();
+
+        // A legacy-shaped bridge without the daemon's ownership marker is
+        // still foreign: never touched, never adopted.
+        let mut foreign_marker = legacy_unaddressed_uplink_state(&intent);
+        foreign_marker.ownership_marker = Some("d2b managed: foreign".to_owned());
+        let backend = FakeBridge {
+            state: RefCell::new(foreign_marker),
+            creates: Cell::new(0),
+            deletes: Cell::new(0),
+        };
+        assert_eq!(
+            create_bridge(&backend, &intent).await,
+            Err(NetworkOpError::ForeignOwnership)
+        );
+        assert_eq!(backend.creates.get(), 0);
+
+        // A legacy-shaped bridge whose MTU drifted is not the daemon's own
+        // pre-derivation shape: the bounded adoption must not cover it.
+        let mut drifted = legacy_unaddressed_uplink_state(&intent);
+        drifted.mtu = 1400;
+        let backend = FakeBridge {
+            state: RefCell::new(drifted),
+            creates: Cell::new(0),
+            deletes: Cell::new(0),
+        };
+        assert_eq!(
+            create_bridge(&backend, &intent).await,
+            Err(NetworkOpError::BridgeParameterMismatch)
+        );
+        assert_eq!(backend.creates.get(), 0);
     }
 
     #[tokio::test]

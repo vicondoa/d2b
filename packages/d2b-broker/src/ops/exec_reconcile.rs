@@ -164,6 +164,20 @@ pub trait ReconcileExecutor: Send + Sync {
         mode: u32,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>>;
 
+    /// Atomically write `contents` to `path` via tmp+rename+fsync and
+    /// stamp the declared `owner_uid`/`owner_gid` on the replacement
+    /// inode before the rename, so the path can never be observed with
+    /// drifted ownership. Used by the NetworkManager unmanaged apply,
+    /// whose bundle contract declares the drop-in's owner and group.
+    fn write_atomic_file_with_ownership<'a>(
+        &'a self,
+        path: &'a Path,
+        contents: &'a [u8],
+        mode: u32,
+        owner_uid: u32,
+        owner_gid: u32,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>>;
+
     /// Path-safe direct write used for sysfs/procfs-style attribute
     /// files that do not support temp-file + rename semantics.
     fn write_path_value<'a>(
@@ -521,6 +535,56 @@ impl ReconcileExecutor for SystemReconcileExecutor {
                     detail: e.to_string(),
                 },
             )?;
+            Ok(())
+        })
+    }
+
+    fn write_atomic_file_with_ownership<'a>(
+        &'a self,
+        path: &'a Path,
+        contents: &'a [u8],
+        mode: u32,
+        owner_uid: u32,
+        owner_gid: u32,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+        Box::pin(async move {
+            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
+                return Err(ReconcileExecError::InvalidInput {
+                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
+                });
+            }
+            let parent = path
+                .parent()
+                .ok_or_else(|| ReconcileExecError::InvalidInput {
+                    detail: format!("path has no parent: {:?}", path.display().to_string()),
+                })?;
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| ReconcileExecError::InvalidInput {
+                    detail: format!(
+                        "path has no UTF-8 basename: {:?}",
+                        path.display().to_string()
+                    ),
+                })?;
+            let dir_fd = crate::sys::path_safe::open_dir_path_safe(parent).map_err(|e| {
+                ReconcileExecError::Io {
+                    path: parent.display().to_string(),
+                    detail: e.to_string(),
+                }
+            })?;
+            crate::sys::path_safe::atomic_replace_fd_with_owner(
+                &dir_fd,
+                name,
+                contents,
+                mode,
+                Some(owner_uid),
+                Some(owner_gid),
+            )
+            .map_err(|e| ReconcileExecError::Io {
+                path: path.display().to_string(),
+                detail: e.to_string(),
+            })?;
             Ok(())
         })
     }
@@ -1313,6 +1377,13 @@ mod fake {
             contents: Vec<u8>,
             mode: u32,
         },
+        WriteAtomicFileWithOwnership {
+            path: PathBuf,
+            contents: Vec<u8>,
+            mode: u32,
+            owner_uid: u32,
+            owner_gid: u32,
+        },
         WritePathValue {
             path: PathBuf,
             value: String,
@@ -1427,6 +1498,30 @@ mod fake {
                     .lock()
                     .unwrap()
                     .insert(path.to_path_buf(), value.as_bytes().to_vec());
+                Ok(())
+            })
+        }
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn write_atomic_file_with_ownership<'a>(
+            &'a self,
+            path: &'a Path,
+            contents: &'a [u8],
+            mode: u32,
+            owner_uid: u32,
+            owner_gid: u32,
+        ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.log.lock().unwrap().push(ReconcileOp::WriteAtomicFileWithOwnership {
+                    path: path.to_path_buf(),
+                    contents: contents.to_vec(),
+                    mode,
+                    owner_uid,
+                    owner_gid,
+                });
+                self.file_values
+                    .lock()
+                    .unwrap()
+                    .insert(path.to_path_buf(), contents.to_vec());
                 Ok(())
             })
         }
