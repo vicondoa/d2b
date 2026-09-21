@@ -3503,6 +3503,22 @@ use d2b_provider_system_core::MinijailPlatformGate;
     }
 
     fn test_inputs() -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
+        // U12: the plane tests build the interaction family's facet set from
+        // the scripted sources, exactly as the production composition root
+        // builds it from the daemon's.
+        test_inputs_with_interaction_facets(
+            d2b_provider_wayland_policy::test_support::scripted_facets(
+                ZoneId::parse("test").unwrap(),
+            ),
+        )
+    }
+
+    /// The plane inputs over a caller-chosen interaction facet set, so a
+    /// test can seed the family's audio registry through the same facets the
+    /// plane hosts the declared service from.
+    fn test_inputs_with_interaction_facets(
+        interaction_facets: d2b_provider_wayland_policy::InteractionEffectFacets,
+    ) -> (tempfile::TempDir, ConstructionInputs, Arc<NewPlaneReadinessState>) {
         let dir = tempfile::tempdir().expect("tempdir");
         let spec_store_dir = dir.path().join("daemon-state/zones/test");
         let readiness = Arc::new(NewPlaneReadinessState::new());
@@ -3527,11 +3543,6 @@ use d2b_provider_system_core::MinijailPlatformGate;
             d2b_provider_host::test_support::RecordingMinijailGate::new(
                 MinijailPlatformGate::new(6, 9, true),
             ),
-        // U12: the plane tests build the interaction family's facet set from
-        // the scripted sources, exactly as the production composition root
-        // builds it from the daemon's.
-        let interaction_facets = d2b_provider_wayland_policy::test_support::scripted_facets(
-            ZoneId::parse("test").unwrap(),
         );
         // The plane tests build the Activation family's facet set from the
         // scripted broker dispatch double, exactly as the production
@@ -3663,6 +3674,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
     };
     use d2b_resource_runtime::context::ServiceResourceContext;
     use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
+    use d2b_provider_wayland_policy::InteractionDriverEffects;
     use d2b_resource_types::{AllowedSources, DriverDescriptor, ServiceMethod, WellKnownType};
 
     /// The declared service the composition tests host.
@@ -4095,6 +4107,193 @@ use d2b_provider_system_core::MinijailPlatformGate;
             after_fields, before_fields,
             "the adopted generation answers the same bounded observations (the volatile process count normalized out)"
         );
+    /// U12: the composition root hosts the interaction family's declared
+    /// effects service from the family's own factory over the plane's facet
+    /// set, and the hosted service answers `audio-binding-statuses` through
+    /// the real invocation capability object - the same shared per-zone
+    /// audio registry the six drivers reconcile. The method's answer
+    /// hand-mirrors the frozen wire schema, so the exact payload is pinned:
+    /// an empty registry answers the empty bindings list, and a binding
+    /// reconciled through the family's own effects over the same facet set
+    /// appears as its typed status row (the scripted audio source publishes
+    /// the degraded, host-and-guest unavailable status exactly as a target
+    /// without an audio capability does).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_interaction_effects_service_answers_audio_binding_statuses_through_the_binding() {
+        let zone = ZoneId::parse("test").unwrap();
+        let service_ref = ResourceRef::parse("audio.d2bus.org.AudioService/host-audio").unwrap();
+        let guest_ref = ResourceRef::parse("Guest/work").unwrap();
+        let binding_ref = ResourceRef::parse("audio.d2bus.org.AudioBinding/mic").unwrap();
+        let facets = d2b_provider_wayland_policy::test_support::scripted_facets_with_rows(
+            zone.clone(),
+            vec![
+                audio_seeded_row(
+                    &zone,
+                    &service_ref,
+                    serde_json::json!({
+                        "serviceRole": "owner",
+                        "implementationEndpointRefs": ["Endpoint/audio"],
+                        "operations": ["playback", "capture"],
+                    }),
+                ),
+                audio_seeded_row(&zone, &guest_ref, serde_json::json!({})),
+                audio_seeded_row(
+                    &zone,
+                    &binding_ref,
+                    serde_json::json!({
+                        "serviceRef": service_ref.to_canonical_string(),
+                        "targetRef": guest_ref.to_canonical_string(),
+                        "grants": {"mic": "off", "speaker": "off"},
+                    }),
+                ),
+            ],
+        );
+        let (_dir, inputs, _readiness) = test_inputs_with_interaction_facets(facets.clone());
+        let runtime = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts the declared interaction service");
+        let binding = runtime
+            .resolve_effect_service(d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let call = |invocation_id: &str| ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: invocation_id.to_owned(),
+            payload: serde_json::from_value(serde_json::json!({})).expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+
+        // The empty registry answers the empty bindings list.
+        let response = binding.call(call("invocation-u12-audio-binding-statuses")).await.expect("call");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({
+                "family": "interaction",
+                "bindings": [],
+            }))
+            .expect("canonical payload"),
+            "the hosted service answers the empty registry report"
+        );
+
+        // Seed the shared registry through the family's own effects over the
+        // same facet set the plane hosts the service from: the service row
+        // reconciles, then the binding row publishes its typed status (the
+        // scripted audio source carries no capability, so the binding is
+        // degraded with both readinesses unavailable, exactly as a target
+        // without an audio capability is).
+        let effects = d2b_provider_wayland_policy::InteractionEffectsService::new(facets);
+        effects
+            .reconcile(
+                d2b_provider_wayland_policy::InteractionKind::AudioService,
+                &d2b_provider_wayland_policy::InteractionEffectRequest {
+                    target: ResourceKey::new(
+                        "test",
+                        "audio.d2bus.org.AudioService",
+                        "host-audio",
+                    ),
+                    uid: resource_uid(&[0x51; 16]).unwrap(),
+                    generation: 1,
+                    controller_generation: 1,
+                    spec: serde_json::json!({}),
+                    provider_ref: Some(
+                        ResourceRef::parse("Provider/audio-pipewire").unwrap(),
+                    ),
+                    children: &[],
+                },
+            )
+            .await
+            .expect("the service row reconciles");
+        effects
+            .reconcile(
+                d2b_provider_wayland_policy::InteractionKind::AudioBinding,
+                &d2b_provider_wayland_policy::InteractionEffectRequest {
+                    target: ResourceKey::new("test", "audio.d2bus.org.AudioBinding", "mic"),
+                    uid: resource_uid(&[0x52; 16]).unwrap(),
+                    generation: 1,
+                    controller_generation: 1,
+                    spec: serde_json::json!({
+                        "serviceRef": service_ref.to_canonical_string(),
+                        "targetRef": guest_ref.to_canonical_string(),
+                        "grants": {"mic": "off", "speaker": "off"},
+                    }),
+                    provider_ref: Some(
+                        ResourceRef::parse("Provider/audio-pipewire").unwrap(),
+                    ),
+                    children: &[],
+                },
+            )
+            .await
+            .expect("the binding row reconciles");
+
+        let response = binding
+            .call(call("invocation-u12-audio-binding-statuses-seeded"))
+            .await
+            .expect("call");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({
+                "family": "interaction",
+                "bindings": [{
+                    "resource": binding_ref.to_canonical_string(),
+                    "phase": "Degraded",
+                    "hostReadiness": "Unavailable",
+                    "guestReadiness": "Unavailable",
+                    "channels": {
+                        "speaker": {"grant": "off", "level": null, "liveEnforced": false},
+                        "mic": {
+                            "grant": "off",
+                            "gain": null,
+                            "liveEnforced": false,
+                            "arbitrationState": "inactive",
+                        },
+                    },
+                    "enforcementPosture": "None",
+                    "lastSetApplied": "OfflineOnly",
+                }],
+            }))
+            .expect("canonical payload"),
+            "the hosted service answers the seeded binding's typed status row"
+        );
+    }
+
+    /// One manager row the scripted interaction facet set serves: the
+    /// envelope-shaped spec is rendered through the manager's canonical
+    /// projection with the row's live status, so the effects' dependency
+    /// reads validate it exactly as a committed manager row.
+    fn audio_seeded_row(
+        zone: &ZoneId,
+        resource_ref: &ResourceRef,
+        base_spec: serde_json::Value,
+    ) -> ResourceView {
+        let mut spec = base_spec;
+        if let Some(object) = spec.as_object_mut() {
+            object.insert(
+                "providerRef".to_owned(),
+                serde_json::Value::String("Provider/audio-pipewire".to_owned()),
+            );
+        }
+        ResourceView {
+            key: ResourceKey::new(
+                zone.as_str(),
+                resource_ref.resource_type().as_str(),
+                resource_ref.name().as_str(),
+            ),
+            uid: [0x61; 16],
+            generation: 1,
+            deleting: false,
+            provenance: d2b_resource_runtime::identity::ResourceProvenance::Nix,
+            spec: serde_json::to_vec(&spec).expect("seeded row spec"),
+            metadata: Vec::new(),
+            owner_key: None,
+            status: Some(ResourceStatus::Ready),
+            status_generation: Some(1),
+            status_projection: None,
+        }
     }
 
     /// The composition root hosts the Activation family's declared effects

@@ -73,6 +73,21 @@ impl InteractionPlaneRead for ScriptedPlaneRead {
     }
 }
 
+/// A scripted plane read serving a fixed row set, for tests that seed the
+/// family's audio registry through the effects' reconcile path.
+struct ScriptedRows(Vec<ResourceView>);
+
+#[async_trait]
+impl InteractionPlaneRead for ScriptedRows {
+    async fn get(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ()> {
+        Ok(self.0.iter().find(|view| view.key == *key).cloned())
+    }
+
+    async fn list(&self, _selector: &ResourceSelector) -> Result<Vec<ResourceView>, ()> {
+        Ok(self.0.clone())
+    }
+}
+
 /// The scripted audio mediator source: no target carries an audio
 /// capability.
 struct ScriptedAudioSource;
@@ -91,6 +106,19 @@ pub fn scripted_facets(zone: ZoneId) -> InteractionEffectFacets {
         zone,
         Arc::new(ScriptedIdentitySource),
         Arc::new(ScriptedPlaneRead),
+        Arc::new(ScriptedAudioSource),
+    )
+}
+
+/// The scripted facet set over a fixed row set: the same identity and audio
+/// sources, with a plane read that serves exactly the given rows. A test
+/// that drives the effects' reconcile over these facets seeds the shared
+/// audio registry, so the hosted service answers the populated report.
+pub fn scripted_facets_with_rows(zone: ZoneId, rows: Vec<ResourceView>) -> InteractionEffectFacets {
+    InteractionEffectFacets::new(
+        zone,
+        Arc::new(ScriptedIdentitySource),
+        Arc::new(ScriptedRows(rows)),
         Arc::new(ScriptedAudioSource),
     )
 }

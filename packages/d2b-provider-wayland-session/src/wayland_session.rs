@@ -49,8 +49,6 @@ pub struct DisplayChildRequest<'a> {
     pub spec: &'a WaylandSessionSpec,
     /// The session row's generation (the preserved policy generation).
     pub process_generation: u64,
-    /// The controller generation the children bind.
-    pub controller_generation: u64,
 }
 
 /// The source of one session's child intents.
@@ -160,7 +158,6 @@ impl InteractionType for WaylandSession {
             session_uid: &session_uid,
             spec: &spec,
             process_generation: children.generation,
-            controller_generation: children.controller_generation,
         })?;
         intents.iter().map(owned_child_ensure).collect()
     }
