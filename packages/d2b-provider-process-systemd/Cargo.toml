@@ -14,12 +14,23 @@ await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 
 [dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
 d2b-contracts-control = { path = "../d2b-contracts-control", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
-serde = { workspace = true }
+d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
+d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["fs", "macros", "rt", "sync", "time"] }
 tracing = "0.1"
-serde_json.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+zbus = "5.16"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }

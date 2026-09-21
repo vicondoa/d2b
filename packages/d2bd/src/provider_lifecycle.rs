@@ -33,10 +33,15 @@ use d2b_contracts_broker::broker_wire::{
 use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
 use d2bd_runtime::broker_transport::ModeBoundBrokerAdapter;
 use d2bd_runtime::target_runtime::DaemonMode;
+use d2b_provider_host::HOST_EFFECTS_SERVICE;
+use d2b_provider_network_local::NETWORK_EFFECTS_SERVICE;
+use d2b_provider_process::PROCESS_EFFECTS_SERVICE;
+use d2b_provider_process_systemd::effects_service::PROCESS_SYSTEMD_EFFECTS_SERVICE;
 use d2b_provider_toolkit::{
     AttachError, Cardinality, DEFAULT_DRAIN_BUDGET_MS, DrainDeadline, DrainError,
     DriverDescriptor, IsolationPosture, Lifecycle, OperationEnvelope, OperationFailure,
-    OperationResult, ProviderAgentAuditLog, ProviderBase, ProviderDeclaration, ZonePlaneHandle,
+    OperationResult, ProviderAgentAuditLog, ProviderBase, ProviderDeclaration, ServiceDecl,
+    ZonePlaneHandle,
 };
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 use ractor::{Actor, ActorRef};
@@ -48,6 +53,24 @@ use crate::effect_service_actors::{
 use d2b_provider_toolkit::{EffectServiceError, EffectServiceFactory};
 use crate::forward_rendezvous::ForwardRendezvous;
 use crate::plane_port::{PlaneRefusal, ProductionPlanePort};
+
+/// The declared service one registered service id names, when the daemon
+/// hosts it (U15). The registration table carries only ids; the hosting
+/// pass resolves the crate-owned declaration so the row can be published
+/// with its methods and facets.
+fn registered_service_decl(service: &str) -> Option<&'static ServiceDecl> {
+    if service == PROCESS_EFFECTS_SERVICE.id {
+        Some(&PROCESS_EFFECTS_SERVICE)
+    } else if service == NETWORK_EFFECTS_SERVICE.id {
+        Some(&NETWORK_EFFECTS_SERVICE)
+    } else if service == HOST_EFFECTS_SERVICE.id {
+        Some(&HOST_EFFECTS_SERVICE)
+    } else if service == PROCESS_SYSTEMD_EFFECTS_SERVICE.id {
+        Some(&PROCESS_SYSTEMD_EFFECTS_SERVICE)
+    } else {
+        None
+    }
+}
 
 /// The declaration one driver family makes about its zone plane.
 ///
@@ -120,6 +143,15 @@ pub(crate) enum ProviderStartupError {
         method: &'static str,
         facet: &'static str,
     },
+    /// A registered service id the daemon's composition list does not name.
+    /// The registry is the authority for what a registered family serves;
+    /// a service it carries that the hand-written declaration list cannot
+    /// resolve would otherwise be silently neither published nor refused,
+    /// so the zone refuses startup instead of composing nothing.
+    EffectServiceRegistrationUnknown {
+        provider_ref: &'static str,
+        service: &'static str,
+    },
     /// The zone's effect-service supervisor could not start (ractor
     /// runtime failure).
     EffectServiceSupervisorRefused { reason: String },
@@ -139,6 +171,9 @@ impl ProviderStartupError {
             Self::EffectServiceDuplicate { .. } => "effect-service-duplicate",
             Self::EffectServiceFactoryMissing { .. } => "effect-service-factory-missing",
             Self::EffectServiceFacetUnenforced { .. } => "effect-service-facet-unenforced",
+            Self::EffectServiceRegistrationUnknown { .. } => {
+                "effect-service-registration-unknown"
+            }
             Self::EffectServiceSupervisorRefused { .. } => {
                 "effect-service-supervisor-refused"
             }
@@ -155,7 +190,8 @@ impl ProviderStartupError {
             | Self::Drain { provider_ref, .. }
             | Self::OperationSurface { provider_ref, .. }
             | Self::EffectServiceFactoryMissing { provider_ref, .. }
-            | Self::EffectServiceFacetUnenforced { provider_ref, .. } => provider_ref,
+            | Self::EffectServiceFacetUnenforced { provider_ref, .. }
+            | Self::EffectServiceRegistrationUnknown { provider_ref, .. } => provider_ref,
             Self::EffectServiceDuplicate { .. } | Self::EffectServiceSupervisorRefused { .. } => "",
             Self::Plane(refusal) => refusal.provider_ref,
         }
@@ -207,6 +243,9 @@ impl ProviderStartupError {
                 method,
                 facet
             ),
+            Self::EffectServiceRegistrationUnknown { provider_ref, service } => {
+                format!("{}:{}:{}", self.code(), provider_ref, service)
+            }
             Self::EffectServiceSupervisorRefused { reason } => {
                 format!("{}:{reason}", self.code())
             }
@@ -643,6 +682,61 @@ impl ProviderSet {
                             Arc::clone(factory),
                         ));
                     }
+                }
+            }
+            // U15: a registered family whose service no driver declares
+            // (the process-systemd family hosts no plane resource type of
+            // its own) still publishes its registered service: the
+            // registration table carries the row, and the composition
+            // point hosts it from the declared factory over the
+            // registered service identity - the daemon names no family
+            // string, only the crate's declared service id.
+            for registration in crate::resource_plane_v3::PROVIDER_REGISTRATIONS {
+                for &service in registration.services {
+                    if owners.contains_key(service) {
+                        continue;
+                    }
+                    // The registry is the authority: a registered service
+                    // the hand-written declaration list cannot resolve is a
+                    // drift that would otherwise be silently neither
+                    // published nor refused - refuse startup by name.
+                    let Some(decl) = registered_service_decl(service) else {
+                        return Err(ProviderStartupError::EffectServiceRegistrationUnknown {
+                            provider_ref: registration.provider_ref,
+                            service,
+                        });
+                    };
+                    owners.insert(service, registration.provider_ref);
+                    for method in decl.methods {
+                        let facet = if !method.privileges.is_empty() {
+                            Some("privileges")
+                        } else if method.payload_schema.is_some() {
+                            Some("payload-schema")
+                        } else if method.deadline_tier.is_some() {
+                            Some("deadline-tier")
+                        } else {
+                            None
+                        };
+                        if let Some(facet) = facet {
+                            return Err(ProviderStartupError::EffectServiceFacetUnenforced {
+                                provider_ref: registration.provider_ref,
+                                service: decl.id,
+                                method: method.name,
+                                facet,
+                            });
+                        }
+                    }
+                    let Some(factory) = effect_service_factories.get(service) else {
+                        return Err(ProviderStartupError::EffectServiceFactoryMissing {
+                            provider_ref: registration.provider_ref,
+                            service,
+                        });
+                    };
+                    effect_services.push(EffectServiceRow::declared(
+                        zone.as_str(),
+                        decl,
+                        Arc::clone(factory),
+                    ));
                 }
             }
         }
@@ -1168,6 +1262,7 @@ mod tests {
             method: ECHO_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         }
     }
 
@@ -1629,6 +1724,7 @@ mod tests {
             method: ECHO_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(

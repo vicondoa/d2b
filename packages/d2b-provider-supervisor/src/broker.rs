@@ -2,20 +2,18 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{IoSlice, IoSliceMut};
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_contracts_broker::broker_wire::{
-    AuditJoinContext, BrokerCallerRole, BrokerProfile, BrokerRequest, BrokerRequestEnvelope,
-    BrokerResponse, CanonicalAuditDigest, DeregisterRunnerPidfdRequest,
-    DeregisterRunnerPidfdResponse, GuestExecutionBinding as BrokerGuestExecutionBinding,
-    ObserveRunnerRequest, ObserveRunnerResponse, OpenPidfdRequest, OpenPidfdResponse,
-    RunnerLaunchArgs, RunnerRole, RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest,
-    SignalRunnerResponse, SpawnRunnerRequest, SpawnRunnerResponse,
+    BrokerCallerRole, BrokerProfile, DeregisterRunnerPidfdRequest, DeregisterRunnerPidfdResponse,
+    GuestExecutionBinding as BrokerGuestExecutionBinding, ObserveRunnerRequest,
+    ObserveRunnerResponse, OpenPidfdRequest, OpenPidfdResponse, RunnerLaunchArgs, RunnerRole,
+    RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SignalRunnerResponse, SpawnRunnerRequest,
+    SpawnRunnerResponse,
 };
 use d2b_contracts_broker::kernel_client::{
     KernelInvocation, KernelInvokeError, KernelReply, envelope_invoke_kernel,
@@ -32,12 +30,7 @@ use d2b_provider_process::{
     ProcessStopClass, WaitReapOwner,
 };
 use rustix::event::{PollFd, PollFlags, poll};
-use rustix::net::{
-    AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
-    SendAncillaryMessage, SendFlags, SocketFlags, SocketType, recvmsg, send, sendmsg, socket_with,
-};
 use sha2::{Digest, Sha256};
-use socket2::Socket;
 use tracing::{debug, error, warn};
 
 const MAX_PENDING_OBSERVATIONS: usize = 1024;
@@ -1742,40 +1735,6 @@ pub(crate) fn wait_pidfd_observer(
     }
 }
 
-pub(crate) struct BrokerFrame {
-    pub(crate) response: BrokerResponse,
-    fds: Mutex<Vec<Option<OwnedFd>>>,
-}
-
-impl BrokerFrame {
-    // Sync by construction: the descriptor table lives behind the sync broker
-    // wire boundary, read once during reply unwrap on a dedicated blocking
-    // worker; critical section short, no suspension inside.
-
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    pub(crate) fn take_fd(&self, index: u32) -> Result<OwnedFd, ProcessEffectError> {
-        self.fds
-            .lock()
-            .map_err(|_| {
-                warn!(
-                    provider = "supervisor",
-                    "broker frame descriptor table lock poisoned"
-                );
-                ProcessEffectError::PidfdUnavailable
-            })?
-            .get_mut(usize::try_from(index).map_err(|_| {
-                warn!(
-                    provider = "supervisor",
-                    index = index,
-                    "broker frame descriptor index out of range"
-                );
-                ProcessEffectError::PidfdUnavailable
-            })?)
-            .and_then(Option::take)
-            .ok_or(ProcessEffectError::PidfdUnavailable)
-    }
-}
-
 #[derive(Clone, Copy)]
 enum BrokerOperation<'a> {
     OpenPidfd(&'a BrokerObservedProcess),
@@ -1840,7 +1799,10 @@ fn is_dispatch_failure_refusal(code: &str) -> bool {
 
 /// Take one descriptor a kernel reply's response frame attached, by the
 /// index the typed response declared.
-fn reply_take_fd(reply: &mut KernelReply, index: u32) -> Result<OwnedFd, ProcessEffectError> {
+pub(crate) fn reply_take_fd(
+    reply: &mut KernelReply,
+    index: u32,
+) -> Result<OwnedFd, ProcessEffectError> {
     let position = usize::try_from(index).map_err(|_| {
         warn!(
             provider = "supervisor",
@@ -1902,6 +1864,8 @@ fn response_error(error: &KernelInvokeError, operation: BrokerOperation<'_>) -> 
 // Keep focused broker tests beside the response mapping they exercise.
 #[allow(clippy::items_after_test_module)]
 mod tests {
+    use std::path::Path;
+
     use d2b_core::processes::ProcessRole;
 
     use super::*;
@@ -2675,183 +2639,3 @@ fn read_proc_start_time(pid: i32) -> Result<Option<u64>, ProcessEffectError> {
         .map_err(|_| ProcessEffectError::ObserveFailed)
 }
 
-pub(crate) fn broker_round_trip(
-    socket_path: &Path,
-    io_timeout: Duration,
-    request: BrokerRequest,
-    caller_role: BrokerCallerRole,
-) -> Result<BrokerFrame, ProcessEffectError> {
-    broker_round_trip_with_fds(socket_path, io_timeout, request, caller_role, &[])
-}
-
-pub(crate) fn broker_round_trip_with_fds(
-    socket_path: &Path,
-    io_timeout: Duration,
-    request: BrokerRequest,
-    caller_role: BrokerCallerRole,
-    inherited_fds: &[OwnedFd],
-) -> Result<BrokerFrame, ProcessEffectError> {
-    let fd = socket_with(
-        AddressFamily::UNIX,
-        SocketType::SEQPACKET,
-        SocketFlags::CLOEXEC,
-        None,
-    )
-    .map_err(|error| {
-        warn!(
-            provider = "supervisor",
-            transport_error = ?error,
-            "broker transport step failed"
-        );
-        ProcessEffectError::LaunchFailed
-    })?;
-    let socket = Socket::from(fd);
-    let address = socket2::SockAddr::unix(socket_path).map_err(|error| {
-        warn!(
-            provider = "supervisor",
-            transport_error = ?error,
-            "broker transport step failed"
-        );
-        ProcessEffectError::LaunchFailed
-    })?;
-    socket
-        .connect_timeout(&address, io_timeout)
-        .map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
-    socket.set_read_timeout(Some(io_timeout)).map_err(|error| {
-        warn!(
-            provider = "supervisor",
-            transport_error = ?error,
-            "broker transport step failed"
-        );
-        ProcessEffectError::LaunchFailed
-    })?;
-    socket
-        .set_write_timeout(Some(io_timeout))
-        .map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
-    let (zone_id, operation_identity) = request.authoritative_audit_join().ok_or_else(|| {
-        warn!(
-            provider = "supervisor",
-            "broker request lacks an authoritative audit join"
-        );
-        ProcessEffectError::LaunchFailed
-    })?;
-    let audit_join = AuditJoinContext {
-        zone_id: CanonicalAuditDigest::parse(zone_id).map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?,
-        operation_identity: CanonicalAuditDigest::parse(operation_identity).map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?,
-    };
-    let envelope = BrokerRequestEnvelope {
-        request,
-        caller_role,
-        test_peer_uid: None,
-        audit_join: Some(audit_join),
-    };
-    let frame = d2b_contracts::encode_frame(&envelope).map_err(|error| {
-        warn!(
-            provider = "supervisor",
-            transport_error = ?error,
-            "broker transport step failed"
-        );
-        ProcessEffectError::LaunchFailed
-    })?;
-    let written = if inherited_fds.is_empty() {
-        send(&socket, &frame, SendFlags::empty()).map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?
-    } else {
-        let descriptors = inherited_fds
-            .iter()
-            .map(std::os::fd::AsFd::as_fd)
-            .collect::<Vec<_>>();
-        let mut control_bytes = vec![0_u8; rustix::cmsg_space!(ScmRights(256))];
-        let mut control = SendAncillaryBuffer::new(&mut control_bytes);
-        if !control.push(SendAncillaryMessage::ScmRights(&descriptors)) {
-            warn!(
-                provider = "supervisor",
-                "broker transport rejected inherited descriptor control data"
-            );
-            return Err(ProcessEffectError::LaunchFailed);
-        }
-        let iov = [IoSlice::new(&frame)];
-        sendmsg(&socket, &iov, &mut control, SendFlags::empty()).map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?
-    };
-    if written != frame.len() {
-        warn!(provider = "supervisor", "broker transport short write");
-        return Err(ProcessEffectError::LaunchFailed);
-    }
-
-    let mut payload = vec![0_u8; d2b_contracts::MAX_FRAME_SIZE + 4];
-    let mut iov = [IoSliceMut::new(&mut payload)];
-    let mut control_bytes = vec![0_u8; rustix::cmsg_space!(ScmRights(256))];
-    let mut control = RecvAncillaryBuffer::new(&mut control_bytes);
-    let message =
-        recvmsg(&socket, &mut iov, &mut control, RecvFlags::CMSG_CLOEXEC).map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
-    let bytes = message.bytes;
-    let mut fds = Vec::new();
-    for message in control.drain() {
-        if let RecvAncillaryMessage::ScmRights(received) = message {
-            for owned in received {
-                fds.push(Some(owned));
-            }
-        }
-    }
-    let response =
-        d2b_contracts::decode_frame("BrokerResponse", &payload[..bytes]).map_err(|error| {
-            warn!(
-                provider = "supervisor",
-                transport_error = ?error,
-                "broker transport step failed"
-            );
-            ProcessEffectError::LaunchFailed
-        })?;
-    Ok(BrokerFrame {
-        response,
-        fds: Mutex::new(fds),
-    })
-}

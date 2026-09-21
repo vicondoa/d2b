@@ -121,6 +121,9 @@ use d2b_provider_network_local::{
     NETWORK_EFFECTS_SERVICE, NetworkDriverArgs, NetworkEffectFacets, NetworkEffectsServiceFactory,
     network_descriptor,
 };
+use d2b_provider_process_systemd::effects_service::{
+    PROCESS_SYSTEMD_EFFECTS_SERVICE, SystemdEffectsServiceFactory,
+};
 use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
 use crate::system_core_effects::ProductionUserDriverEffects;
@@ -2159,6 +2162,13 @@ fn registered_service_factories(
                         interaction_facets.clone(),
                     ),
                 ) as Arc<dyn EffectServiceFactory>
+            } else if service == PROCESS_SYSTEMD_EFFECTS_SERVICE.id {
+                // U15:the family's service carries no facet set (R2), so
+                // the composition root hosts its factory from crate-owned
+                // constants alone, over the registered service identity - the
+                // family itself is never named here.
+
+                Arc::new(SystemdEffectsServiceFactory::new()) as Arc<dyn EffectServiceFactory>
             } else {
                 continue;
             };
@@ -3659,6 +3669,15 @@ use d2b_provider_system_core::MinijailPlatformGate;
                         Arc::new(ActivationEffectsServiceFactory::new(activation_facets))
                             as Arc<dyn EffectServiceFactory>,
                     ),
+                    // U15: the family's service carries no facet set (R2),
+                    // so the plane tests host its factory from crate-owned
+                    // constants alone, exactly as the production composition
+                    // root does.
+                    (
+                        PROCESS_SYSTEMD_EFFECTS_SERVICE.id,
+                        Arc::new(SystemdEffectsServiceFactory::new())
+                            as Arc<dyn EffectServiceFactory>,
+                    ),
                 ]),
                 foundation: None,
             },
@@ -3794,6 +3813,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: COMPOSITION_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(
@@ -3857,6 +3877,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: PROCESS_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(
@@ -3895,6 +3916,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: NETWORK_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(
@@ -3970,6 +3992,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: HOST_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         let string_field = |key: &str| -> String {
@@ -4059,6 +4082,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: HOST_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let before = binding.call(call).await.expect("call before restart");
         drop(started);
@@ -4081,6 +4105,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: HOST_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let after = adopted.call(call).await.expect("call after restart");
         // `activeProcessCount` is computed from the live `/proc` process
@@ -4170,6 +4195,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
 
         // The empty registry answers the empty bindings list.
@@ -4327,6 +4353,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: ACTIVATION_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(
@@ -4370,6 +4397,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: ACTIVATION_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let before = binding.call(call).await.expect("call before restart");
         drop(started);
@@ -4393,11 +4421,67 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: ACTIVATION_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let after = adopted.call(call).await.expect("call after restart");
         assert_eq!(
             after.payload, before.payload,
             "the restarted plane re-hosts the same committed surface"
+        );
+    }
+
+    /// U15:the composition root hosts the process-systemd family's
+    /// declared effects service from the family's own factory over the
+    /// registered service identity (U3,R5: the registration table
+    /// carries the row;the daemon names no family string, only the
+    /// crate's declared service id),and the hosted service answers
+    /// `inspect-process-systemd` through the real invocation capability
+    /// object carrying the real envelope payload - hermetic, served from
+    /// the crate's own handler table, reaching no daemon state.
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_process_systemd_effects_service_answers_inspect_process_systemd_through_the_binding() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let runtime = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts the declared process-systemd service");
+        let binding = runtime
+            .resolve_effect_service(PROCESS_SYSTEMD_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let method = PROCESS_SYSTEMD_EFFECTS_SERVICE
+            .methods
+            .iter()
+            .find(|method| method.name == "inspect-process-systemd")
+            .copied()
+            .expect("the zone-plane inventory method is declared");
+        let call = ServiceCallData {
+            zone:"test".to_owned(),
+            invocation_id:"invocation-u15-inspect-process-systemd".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({})).expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method,
+            kernel: None,
+            request_fds: Vec::new(),
+            chain_identities: Vec::new(),
+        };
+        let response = binding.call(call).await.expect("call");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({
+                "family": "process-systemd",
+                "declaringProvider": "d2b-provider-process-systemd",
+                "operations": [
+                    "StartSystemdUnit", "CheckSystemdUserManager", "ObserveSystemdUnit",
+                    "OpenSystemdUnitPidfd", "StopSystemdUnit",
+                ],
+                "declaredOperations": 5,
+                "service": "process-systemd.d2bus.org/effects",
+            }))
+            .expect("canonical payload"),
+            "the hosted service answers the crate-owned operation inventory"
         );
     }
 

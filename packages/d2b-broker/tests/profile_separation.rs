@@ -139,15 +139,10 @@ fn host_and_guest_instances_keep_separate_runtime_bindings() {
         panic!("guest should return Hello");
     };
     assert!(host_hello.capabilities.contains(&"Hello".to_owned()));
-    // U10 retired the process-family wire variants and U12 the
-    // network-fds family variants: the guest advertises the remaining
-    // local-process effects (e.g. StartSystemdUnit) and never a retired
-    // process or network operation.
-    assert!(
-        guest_hello
-            .capabilities
-            .contains(&"StartSystemdUnit".to_owned())
-    );
+    // U10 retired the process-family wire variants, U12 the network-fds
+    // family variants, and U15 the process-systemd family variants: the
+    // guest advertises only the remaining broker lifecycle handshakes and
+    // never a retired process, network, or systemd operation.
     for retired in [
         "SpawnRunner",
         "OpenPidfd",
@@ -157,6 +152,11 @@ fn host_and_guest_instances_keep_separate_runtime_bindings() {
         "SeedDnsmasqLease",
         "CreateBridge",
         "ApplySysctl",
+        "StartSystemdUnit",
+        "CheckSystemdUserManager",
+        "ObserveSystemdUnit",
+        "OpenSystemdUnitPidfd",
+        "StopSystemdUnit",
     ] {
         assert!(
             !guest_hello.capabilities.contains(&retired.to_owned()),

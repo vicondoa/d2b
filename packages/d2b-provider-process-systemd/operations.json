@@ -1,0 +1,419 @@
+{
+  "crate": "d2b-provider-process-systemd",
+  "operations": [
+    {
+      "operation": "StartSystemdUnit",
+      "family": "process-systemd",
+      "declaringProvider": "d2b-provider-process-systemd",
+      "service": "d2b.process-systemd",
+      "method": "start-systemd-unit",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "systemd-unit",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SystemdUnit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": { "type": "string" },
+            "roleId": { "type": "string" },
+            "resourceRef": { "type": "string" },
+            "resourceUid": { "type": "string" },
+            "role": { "type": "string" },
+            "bundleRunnerIntentRef": { "type": "string" },
+            "bundleContentIdentity": { "type": "string" },
+            "providerIdentity": { "type": "string" },
+            "templateIdentity": { "type": "string" },
+            "generation": { "type": "integer" },
+            "domain": { "type": "string" },
+            "executionRef": { "type": "string" },
+            "userRef": { "type": "string" },
+            "guestExecution": { "type": "object" },
+            "sandboxPlan": { "type": "object" },
+            "tracingSpanId": { "type": "string" }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "role",
+            "bundleRunnerIntentRef",
+            "bundleContentIdentity",
+            "providerIdentity",
+            "templateIdentity",
+            "generation",
+            "domain"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "CheckSystemdUserManager",
+      "family": "process-systemd",
+      "declaringProvider": "d2b-provider-process-systemd",
+      "service": "d2b.process-systemd",
+      "method": "check-systemd-user-manager",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "systemd-user-manager",
+        "scope": "per-user",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SystemdUnit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": { "type": "string" },
+            "roleId": { "type": "string" },
+            "resourceRef": { "type": "string" },
+            "resourceUid": { "type": "string" },
+            "role": { "type": "string" },
+            "bundleRunnerIntentRef": { "type": "string" },
+            "bundleContentIdentity": { "type": "string" },
+            "providerIdentity": { "type": "string" },
+            "templateIdentity": { "type": "string" },
+            "generation": { "type": "integer" },
+            "domain": { "type": "string" },
+            "executionRef": { "type": "string" },
+            "userRef": { "type": "string" },
+            "guestExecution": { "type": "object" },
+            "sandboxPlan": { "type": "object" },
+            "tracingSpanId": { "type": "string" }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "role",
+            "bundleRunnerIntentRef",
+            "bundleContentIdentity",
+            "providerIdentity",
+            "templateIdentity",
+            "generation",
+            "domain"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "ObserveSystemdUnit",
+      "family": "process-systemd",
+      "declaringProvider": "d2b-provider-process-systemd",
+      "service": "d2b.process-systemd",
+      "method": "observe-systemd-unit",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "systemd-unit",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "MetadataOnly",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SystemdUnit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": { "type": "string" },
+            "roleId": { "type": "string" },
+            "resourceRef": { "type": "string" },
+            "resourceUid": { "type": "string" },
+            "role": { "type": "string" },
+            "bundleRunnerIntentRef": { "type": "string" },
+            "bundleContentIdentity": { "type": "string" },
+            "providerIdentity": { "type": "string" },
+            "templateIdentity": { "type": "string" },
+            "generation": { "type": "integer" },
+            "domain": { "type": "string" },
+            "executionRef": { "type": "string" },
+            "userRef": { "type": "string" },
+            "guestExecution": { "type": "object" },
+            "sandboxPlan": { "type": "object" },
+            "tracingSpanId": { "type": "string" }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "role",
+            "bundleRunnerIntentRef",
+            "bundleContentIdentity",
+            "providerIdentity",
+            "templateIdentity",
+            "generation",
+            "domain"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "OpenSystemdUnitPidfd",
+      "family": "process-systemd",
+      "declaringProvider": "d2b-provider-process-systemd",
+      "service": "d2b.process-systemd",
+      "method": "open-systemd-unit-pidfd",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "systemd-unit-pidfd",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": false,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SystemdUnit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": { "type": "string" },
+            "roleId": { "type": "string" },
+            "resourceRef": { "type": "string" },
+            "resourceUid": { "type": "string" },
+            "role": { "type": "string" },
+            "bundleRunnerIntentRef": { "type": "string" },
+            "bundleContentIdentity": { "type": "string" },
+            "providerIdentity": { "type": "string" },
+            "templateIdentity": { "type": "string" },
+            "generation": { "type": "integer" },
+            "domain": { "type": "string" },
+            "executionRef": { "type": "string" },
+            "userRef": { "type": "string" },
+            "guestExecution": { "type": "object" },
+            "sandboxPlan": { "type": "object" },
+            "tracingSpanId": { "type": "string" },
+            "expected": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "invocationId": { "type": "string" },
+                "cgroupIdentity": { "type": "string" },
+                "mainPid": { "type": "integer" },
+                "startTimeTicks": { "type": "integer" },
+                "providerIdentity": { "type": "string" },
+                "templateIdentity": { "type": "string" },
+                "generation": { "type": "integer" },
+                "bundleContentIdentity": { "type": "string" },
+                "guestExecution": { "type": "object" }
+              },
+              "required": [
+                "invocationId",
+                "cgroupIdentity",
+                "mainPid",
+                "startTimeTicks",
+                "providerIdentity",
+                "templateIdentity",
+                "generation",
+                "bundleContentIdentity"
+              ]
+            }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "role",
+            "bundleRunnerIntentRef",
+            "bundleContentIdentity",
+            "providerIdentity",
+            "templateIdentity",
+            "generation",
+            "domain",
+            "expected"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    },
+    {
+      "operation": "StopSystemdUnit",
+      "family": "process-systemd",
+      "declaringProvider": "d2b-provider-process-systemd",
+      "service": "d2b.process-systemd",
+      "method": "stop-systemd-unit",
+      "profiles": [
+        "host",
+        "guest"
+      ],
+      "w3": false,
+      "capabilities": false,
+      "disposition": "promoted-live",
+      "dispositionTarget": "live in production broker",
+      "authz": {
+        "subject": "systemd-unit",
+        "scope": "per-VM/role",
+        "allowedGroups": [
+          "d2bd"
+        ],
+        "destructive": true,
+        "secretAccess": "None",
+        "brokerRequired": "Yes",
+        "auditMode": "Yes"
+      },
+      "audit": {
+        "fields": [
+          "SystemdUnit"
+        ],
+        "required": true,
+        "mode": "yes"
+      },
+      "payload": {
+        "provenance": "request",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vmId": { "type": "string" },
+            "roleId": { "type": "string" },
+            "resourceRef": { "type": "string" },
+            "resourceUid": { "type": "string" },
+            "role": { "type": "string" },
+            "bundleRunnerIntentRef": { "type": "string" },
+            "bundleContentIdentity": { "type": "string" },
+            "providerIdentity": { "type": "string" },
+            "templateIdentity": { "type": "string" },
+            "generation": { "type": "integer" },
+            "domain": { "type": "string" },
+            "executionRef": { "type": "string" },
+            "userRef": { "type": "string" },
+            "guestExecution": { "type": "object" },
+            "sandboxPlan": { "type": "object" },
+            "tracingSpanId": { "type": "string" },
+            "expected": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "invocationId": { "type": "string" },
+                "cgroupIdentity": { "type": "string" },
+                "mainPid": { "type": "integer" },
+                "startTimeTicks": { "type": "integer" },
+                "providerIdentity": { "type": "string" },
+                "templateIdentity": { "type": "string" },
+                "generation": { "type": "integer" },
+                "bundleContentIdentity": { "type": "string" },
+                "guestExecution": { "type": "object" }
+              },
+              "required": [
+                "invocationId",
+                "cgroupIdentity",
+                "mainPid",
+                "startTimeTicks",
+                "providerIdentity",
+                "templateIdentity",
+                "generation",
+                "bundleContentIdentity"
+              ]
+            },
+            "class": { "type": "string" }
+          },
+          "required": [
+            "vmId",
+            "roleId",
+            "role",
+            "bundleRunnerIntentRef",
+            "bundleContentIdentity",
+            "providerIdentity",
+            "templateIdentity",
+            "generation",
+            "domain",
+            "expected",
+            "class"
+          ]
+        }
+      },
+      "deadline": {
+        "tier": "standard"
+      }
+    }
+  ]
+}

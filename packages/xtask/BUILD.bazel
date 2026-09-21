@@ -70,6 +70,7 @@ generated_artifact_check(
         "//:generated_broker_operations",
         "//packages/d2b-provider-network-local:operations.json",
         "//packages/d2b-provider-process:operations.json",
+        "//packages/d2b-provider-process-systemd:operations.json",
     ],
 )
 

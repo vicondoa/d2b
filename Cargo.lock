@@ -1602,15 +1602,23 @@ dependencies = [
 name = "d2b-provider-process-systemd"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-contracts-broker",
  "d2b-contracts-control",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
+ "d2b-core",
  "d2b-process-conformance",
  "d2b-provider-toolkit",
+ "d2b-resource-runtime",
+ "d2b-resource-types",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tracing",
+ "zbus",
 ]
 
 [[package]]

@@ -21,17 +21,12 @@ fn guest_profile_admits_only_local_process_effects() {
     // U10 retired the typed process-family wire variants (SpawnRunner,
     // OpenPidfd, ObserveRunner, SignalRunner, DeregisterRunnerPidfd among
     // them), so the guest catalog no longer admits them; the guest-local
-    // effects that remain are the systemd unit ops and the generic
-    // envelope surface.
+    // effects that remain are the broker lifecycle handshakes and the
+    // generic envelope surface.
     for operation in [
         "Hello",
         "PublishTrustedContext",
         "ExportBrokerAudit",
-        "StartSystemdUnit",
-        "CheckSystemdUserManager",
-        "ObserveSystemdUnit",
-        "OpenSystemdUnitPidfd",
-        "StopSystemdUnit",
         "EnvelopeInvoke",
     ] {
         assert!(
@@ -72,6 +67,15 @@ fn guest_profile_admits_only_local_process_effects() {
         "SetBridgePortFlags",
         "UpdateHostsFile",
         "SeedDnsmasqLease",
+        // U15 retired the five process-systemd family wire variants the
+        // same way: their privileged cores are the family handlers served
+        // through the broker's forward seam, so the typed variants are
+        // gone from every catalog.
+        "StartSystemdUnit",
+        "CheckSystemdUserManager",
+        "ObserveSystemdUnit",
+        "OpenSystemdUnitPidfd",
+        "StopSystemdUnit",
     ] {
         assert!(
             !BrokerProfile::Guest.allows_operation(operation),

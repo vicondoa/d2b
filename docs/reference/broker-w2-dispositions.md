@@ -24,7 +24,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | BindMountFromHardlinkFarm | promoted-live | Resolves the per-VM store-view intent, records the hardlink-farm source, and acknowledges the daemon-owned bind-mount step. | live in production broker |
 | BindUnixSocket | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; sidecar socket binding is not implemented. | reserved |
 | CgroupKill | promoted-live | Re-verifies the trusted runner leaf and performs the broker-only last-resort `cgroup.kill` escalation. | live in production broker |
-| CheckSystemdUserManager | promoted-live | Checks the declared user manager through the brokered systemd effect path and returns bounded readiness metadata. | live in production broker |
+| CheckSystemdUserManager | promoted-live | Checks the declared user manager through the brokered systemd effect path and returns bounded readiness metadata. | U15: family-served through the forward seam (daemon-side `d2b-provider-process-systemd` handlers); no broker dispatch arm |
 | CreateOrReconcileUsersGroups | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; host account reconciliation is not implemented in the production dispatcher. | bootstrap-only |
 | CreateBridge | promoted-live | Resolves the trusted bundle bridge intent and creates the managed bridge with IPv6 suppressed before link-up. | live in production broker |
 | CreatePersistentTap | promoted-live | Creates or reconciles the VM TAP device through the live TAP handler and records the resulting ifnames. | live in production broker |
@@ -41,7 +41,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | ModprobeIfAllowed | promoted-live | Resolves the trusted module policy, checks the host module posture, and runs the live modprobe handler when allowed. | live in production broker |
 | MigrateLegacySwtpmState | promoted-live | Resolves the trusted legacy swtpm intent and performs crash-safe, byte-preserving journal/marker migration with replay and source retirement. | live in production broker |
 | ObserveRunner | promoted-live | Re-discovers a declared runner and returns bounded process identity and cgroup verification metadata. | live in production broker |
-| ObserveSystemdUnit | promoted-live | Observes the declared transient systemd unit and returns bounded lifecycle state. | live in production broker |
+| ObserveSystemdUnit | promoted-live | Observes the declared transient systemd unit and returns bounded lifecycle state. | U15: family-served through the forward seam (daemon-side `d2b-provider-process-systemd` handlers); no broker dispatch arm |
 | OpenCgroupDir | promoted-live | Opens the trusted cgroup directory and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenDevice | promoted-live | Opens a device allowed by the trusted device matrix and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenFuse | promoted-live | Opens the allowed FUSE device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
@@ -49,7 +49,7 @@ side-effect audit operation that never reaches the wire dispatcher).
 | OpenKvm | promoted-live | Opens the allowed KVM device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenPidfd | promoted-live | Opens a runner pidfd, re-verifies the process start time, and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OpenPeerPidfdFromAcceptedSocket | callable-read-only | Derives a close-on-exec pidfd only from the peer of one SCM_RIGHTS accepted Unix socket; numeric PID, credential, and subject claims are refused. | live read-only callable |
-| OpenSystemdUnitPidfd | promoted-live | Opens a pidfd for the declared systemd-owned process after identity verification and returns it over `SCM_RIGHTS`. | live in production broker |
+| OpenSystemdUnitPidfd | promoted-live | Opens a pidfd for the declared systemd-owned process after identity verification and returns it over `SCM_RIGHTS`. | U15: family-served through the forward seam (daemon-side `d2b-provider-process-systemd` handlers); no broker dispatch arm |
 | OpenVhostNet | promoted-live | Opens the allowed vhost-net device path and returns the fd over `SCM_RIGHTS`. | live in production broker |
 | OwnershipMatrixCheck | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; ownership-matrix preflight is not implemented. | future work |
 | PauseBroker | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; broker admin pause controls are not implemented. | future work |
@@ -86,8 +86,8 @@ side-effect audit operation that never reaches the wire dispatcher).
 | SignalRunner | promoted-live | Looks up the runner's registered pidfd, sends the requested signal, and audits the live stop request. | live in production broker |
 | SpawnRunner | promoted-live | Handles CH/virtiofsd/swtpm child process launch and `SCM_RIGHTS` pidfd handoff. | live in production broker |
 | SshHostKeyPreflight | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; SSH host-key preflight is not implemented. | future work |
-| StartSystemdUnit | promoted-live | Starts the declared transient systemd unit through the brokered systemd effect path. | live in production broker |
-| StopSystemdUnit | promoted-live | Stops the declared transient systemd unit through the brokered systemd effect path. | live in production broker |
+| StartSystemdUnit | promoted-live | Starts the declared transient systemd unit through the brokered systemd effect path. | U15: family-served through the forward seam (daemon-side `d2b-provider-process-systemd` handlers); no broker dispatch arm |
+| StopSystemdUnit | promoted-live | Stops the declared transient systemd unit through the brokered systemd effect path. | U15: family-served through the forward seam (daemon-side `d2b-provider-process-systemd` handlers); no broker dispatch arm |
 | StoreSync | promoted-live | Resolves the per-VM store-view intent, synchronizes the hardlink farm, and emits the terminal store-sync audit record. | live in production broker |
 | StoreVerify | promoted-live | Verifies the per-VM store hardlink farm and optionally repairs drift through the store-sync path. | live in production broker |
 | UpdateHostsFile | promoted-live | Resolves the trusted hosts-file intent and reconciles the managed `/etc/hosts` block. | live in production broker |

@@ -63,8 +63,9 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "net", "time", "fs", "process", "io-util", "test-util"] }
 sha2 = "0.10"
 # U9 (plan R16): the `blocking-api` feature is removed - the broker's
-# systemd D-Bus surface is async (ops/systemd.rs), so the blocking module
-# must not be linkable into the broker closure.
+# D-Bus surface is async (the systemd operations now live in the
+# process-systemd provider crate), so the blocking module must not be
+# linkable into the broker closure.
 zbus = "5.16"
 
 [dev-dependencies]

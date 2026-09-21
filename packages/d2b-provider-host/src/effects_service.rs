@@ -317,6 +317,7 @@ mod tests {
     ) -> ServiceInvocation<'a> {
         ServiceInvocation {
             zone: "work",
+            method: HOST_EFFECTS_SERVICE.methods[0].name,
             invocation_id: "invocation-u5",
             payload,
             resources,
@@ -325,6 +326,7 @@ mod tests {
             request_fds: &[],
             response_fds: HOST_EFFECTS_SERVICE.methods[0].response_fds,
             payload_schema: None,
+            chain_identities: &[],
         }
     }
 

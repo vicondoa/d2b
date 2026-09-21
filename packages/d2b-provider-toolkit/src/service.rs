@@ -140,6 +140,13 @@ pub enum EffectServiceError {
 pub struct ServiceInvocation<'a> {
     /// The zone the invocation runs in.
     pub zone: &'a str,
+    /// The declared method being served, by its declared name.
+    ///
+    /// The actor builds the capability object from the call's declared
+    /// method facets, so the method identity rides with the invocation:
+    /// a service that serves several methods distinguishes them here rather
+    /// than guessing from the payload.
+    pub method: &'a str,
     /// The invocation identifier the audit record carries.
     pub invocation_id: &'a str,
     /// The canonical request payload the envelope validated (R8).
@@ -163,6 +170,14 @@ pub struct ServiceInvocation<'a> {
     /// The declared payload schema reference of the method being served:
     /// the row schema the envelope validated the payload against.
     pub payload_schema: Option<&'a str>,
+    /// The evidence chain this invocation runs under (U10, KTD6): the
+    /// ordered identities, root first, of the chain the broker minted for
+    /// the forwarded root call. A handler that invokes a broker-generic
+    /// kernel as the nested core of its family operation presents this
+    /// chain with its own identity appended, so the graft rule authorizes
+    /// the kernel call against the chain's initiating principal. Empty for
+    /// a root call.
+    pub chain_identities: &'a [String],
 }
 
 /// A provider service: one handle-loop shape plus an optional timer-driven

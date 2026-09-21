@@ -237,6 +237,7 @@ mod tests {
     ) -> ServiceInvocation<'a> {
         ServiceInvocation {
             zone: "work",
+            method: "inspect-network",
             invocation_id,
             payload,
             resources,
@@ -245,6 +246,7 @@ mod tests {
             request_fds: &[],
             response_fds: NETWORK_EFFECTS_SERVICE.methods[0].response_fds,
             payload_schema: None,
+            chain_identities: &[],
         }
     }
 
