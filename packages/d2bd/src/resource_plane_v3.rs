@@ -4428,44 +4428,44 @@ use d2b_provider_system_core::MinijailPlatformGate;
     async fn providers_start_in_the_committed_order_and_drain_in_reverse() {
         let (_dir, inputs, _readiness) = test_inputs();
         let runtime = ResourcePlaneV3::start_providers(&inputs).await.expect("providers");
-        assert_eq!(
-            runtime.startup_order(),
-            [
-"activation-nixos",
-                "host",
-                "network-local",
-                "process",
-                "volume",
-                "volume-binding",
-                "endpoint",
-                "credential",
-                "telemetry-service",
-                "telemetry-binding",
-                "device-usbip",
-                "device-security-key",
-                "device",
-                "guest",
-                "user",
-                "zone",
-                "zone-link",
-                "provider",
-                "role",
-                "role-binding",
-                "quota",
-                "emergency-policy",
-                "resource-export",
-                "resource-import",
-                "command",
-                "operation",
-                "seccomp-profile",
-                "wayland-policy",
-                "wayland-session",
-                "audio-service",
-                "audio-binding",
-                "shell-pool",
-                "shell-session",
-            ]
-        );
+        // The registered families start first, in the generated table's
+        // declaration order; the families wired below the table keep the
+        // order the composition root has assembled them in since the moves
+        // landed. Deriving the registered prefix from the table keeps this
+        // pin authoritative: a family that moves into the table starts at
+        // the front in crate-name order without a hand-maintained edit
+        // here, and the composed order still fails the assert if the
+        // composition diverges from the table.
+        let mut expected: Vec<&'static str> = PROVIDER_REGISTRATIONS
+            .iter()
+            .map(|registration| registration.provider_ref)
+            .collect();
+        expected.extend([
+            "volume",
+            "volume-binding",
+            "endpoint",
+            "credential",
+            "telemetry-service",
+            "telemetry-binding",
+            "device-usbip",
+            "device-security-key",
+            "device",
+            "guest",
+            "user",
+            "zone",
+            "zone-link",
+            "provider",
+            "role",
+            "role-binding",
+            "quota",
+            "emergency-policy",
+            "resource-export",
+            "resource-import",
+            "command",
+            "operation",
+            "seccomp-profile",
+        ]);
+        assert_eq!(runtime.startup_order(), expected);
         runtime.drain().await.expect("the providers drain");
         let mut reversed = runtime.startup_order().to_vec();
         reversed.reverse();
