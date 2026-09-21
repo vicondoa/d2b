@@ -1,47 +1,25 @@
-//! Daemon-side User family effects.
+//! The bounded local-account probe (U5): the NSS discovery the User
+//! reconciler reads the machine through.
 //!
-//! The `d2b-provider-user` crate owns the driver and its effect port; this
-//! module implements that port over the preserved system-core realization:
-//! the local NSS discovery the `UserReconciler` drives. Every call that
-//! touches the account database stays here, so the family crate reaches no
-//! host state of its own. The Host family's probe moved into
-//! `d2b-provider-host` with its declared service (U5).
+//! The probe moved wholesale into this crate with the family's daemon-side
+//! effects: every call that touches the account database - the bounded
+//! `getpwnam` / `getgrnam` record reads and the group-membership checks -
+//! lives here, so this crate reaches host state through no daemon runtime.
 
-use async_trait::async_trait;
 use d2b_contracts_resource::v3::{ResourceRef, user::UserSpec};
 use d2b_provider_system_core::{
     DiscoveredUser, SystemCoreError, UserBinding, UserDiscoveryEffectPort, UserIdentityDigest,
-    UserObservation, UserReconciler, UserStatusReport,
+    UserObservation,
 };
-use d2b_provider_user::UserDriverEffects;
 
-// ---------------------------------------------------------------------------
-// Production local User discovery (moved with the family's daemon-side
-// effects)
-// ---------------------------------------------------------------------------
-
-/// Production effects over the local host for the `User` type: the NSS
-/// discovery adapter the old core runner wired.
-pub(crate) struct ProductionUserDriverEffects;
-
-#[async_trait]
-impl UserDriverEffects for ProductionUserDriverEffects {
-    async fn observe_user(
-        &self,
-        user_ref: &ResourceRef,
-        spec: &UserSpec,
-    ) -> Result<UserStatusReport, String> {
-        UserReconciler::new(LocalUserDiscovery)
-            .reconcile(user_ref, spec)
-            .await
-            .map_err(|error| error.to_string())
-    }
-}
-
+/// The bounded local-account probe: resolves one declared User through the
+/// fixed NSS surface and derives the opaque identity digest and the verified
+/// bindings, exactly as the daemon-side adapter did (U5).
 #[derive(Debug, Clone, Copy, Default)]
-struct LocalUserDiscovery;
+pub(crate) struct UserProbe;
 
-impl UserDiscoveryEffectPort for LocalUserDiscovery {
+#[async_trait::async_trait]
+impl UserDiscoveryEffectPort for UserProbe {
     async fn discover(
         &self,
         user_ref: &ResourceRef,
@@ -51,6 +29,14 @@ impl UserDiscoveryEffectPort for LocalUserDiscovery {
     }
 }
 
+/// Resolve one declared User locally.
+///
+/// `Ok(None)` means the local machine resolves no such identity, which is
+/// an ordinary state rather than a failure; an NSS lookup that cannot
+/// complete reports [`SystemCoreError::DiscoveryUnavailable`]. The digest is
+/// derived from the immutable identity material: the declared reference and
+/// username, the resolved numeric ids, and every declared group, in the
+/// fixed `d2b-system-core-user-v1` domain.
 async fn discover_local_user(
     user_ref: &ResourceRef,
     spec: &UserSpec,

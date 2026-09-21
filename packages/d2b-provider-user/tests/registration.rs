@@ -7,14 +7,14 @@ use d2b_contracts_resource::v3::{
     execution_policy::to_base_object,
     user::{OsUsername, UserSpec},
 };
-use d2b_provider_user::test_support::RecordingEffects;
+use d2b_provider_user::test_support::recording_facets;
 use d2b_provider_user::user_descriptor;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{DriverRegistration, ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, WellKnownType};
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
-    user_descriptor(RecordingEffects::new())
+    user_descriptor(recording_facets())
 }
 
 /// The declaration registers the one type it serves and carries the
@@ -43,7 +43,7 @@ async fn descriptor_declares_and_registers_the_user_type() {
     );
     assert!(
         descriptor.reads.is_empty(),
-        "discovery reaches the local machine through the effect port"
+        "discovery reaches the local machine through the family's own probe"
     );
     assert_eq!(
         descriptor.verbs,
@@ -61,6 +61,11 @@ async fn descriptor_declares_and_registers_the_user_type() {
     );
     assert!(descriptor.operations.is_empty());
     assert!(descriptor.creations.is_empty());
+    assert_eq!(
+        descriptor.services,
+        &[d2b_provider_user::USER_EFFECTS_SERVICE],
+        "the family's declared effects service rides the declaration (U5)"
+    );
 
     let mut providers = ProviderDirectory::new();
     providers.register_driver(&descriptor).expect("register");

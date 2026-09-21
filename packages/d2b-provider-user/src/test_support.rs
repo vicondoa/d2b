@@ -14,7 +14,14 @@ use d2b_contracts_resource::v3::{ResourcePhase, ResourceRef};
 use d2b_contracts_resource::v3::user::UserSpec;
 use d2b_provider_system_core::{UserDiscoveryCondition, UserStatusReport};
 
-use crate::UserDriverEffects;
+use crate::{UserDriverEffects, UserEffectFacets};
+
+/// Build the user family's declared facet set, exactly as the production
+/// composition root builds it: the family reads no daemon state, so the set
+/// is empty.
+pub fn recording_facets() -> UserEffectFacets {
+    UserEffectFacets {}
+}
 
 /// Scripted discovery port: records every call order-preservingly and can
 /// fail discovery.

@@ -3280,12 +3280,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (system-core)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/system_core_effects.rs",
-        token: "system_core",
-        family: "system-core",
-        retires_with: "U10-U12 family rollout (system-core)",
-    },
-    SharedFamilyKnowledgeExemption {
     // U4 permanent carve-out: the Host and User primitive shapes stay in the
     // shared contracts crate. A shared runtime consumer (d2bd-runtime) needs
     // the shapes, so placing them in the owning provider crate makes a shared
@@ -8599,6 +8593,7 @@ const PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS: &[ProviderFamilyKnowledgeExemption] 
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "system_systemd", family: "system-systemd", reason: "the supervisor dispatches runner roles" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-system-core", module: "packages/d2b-provider-system-core/src/host.rs", token: "audio_pipewire", family: "audio-pipewire", reason: "the system-core host names the audio-pipewire workload kind" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/driver.rs", token: "system_core", family: "system-core", reason: "the user error-code strings keep the system-core prefix stable" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/probe.rs", token: "system_core", family: "system-core", reason: "the user probe implements the system-core-declared discovery port whose error type is system-core's" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/test_support.rs", token: "system_core", family: "system-core", reason: "test-support fixture provider names the system-core provider" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-volume", module: "packages/d2b-provider-volume/src/driver.rs", token: "volume_local", family: "volume-local", reason: "the volume provider's own name const uses its sibling family's id" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/wayland_policy.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-policy provider's interface types name the display-wayland surface" },

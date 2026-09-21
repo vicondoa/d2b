@@ -1,5 +1,6 @@
 //! The User provider crate: the `User` resource type's driver, its spec
-//! decoder, and its driver declaration.
+//! decoder, its driver declaration, and the implementation of the family's
+//! driver effects.
 //!
 //! The crate owns the User type's complete resource knowledge: the closed
 //! User base contract, the driver's validate, recover, reconcile, finalize,
@@ -7,15 +8,24 @@
 //! [`DriverDescriptor`](d2b_resource_types::DriverDescriptor) the plane
 //! registers the type by.
 //!
-//! Everything the driver needs from outside arrives through the driver effect
-//! port ([`UserDriverEffects`]): local NSS discovery with its opaque identity
-//! digest, which the daemon realizes over the preserved `UserReconciler`. The
-//! production implementation lives in the daemon behind that port, so this
-//! crate depends on no daemon runtime.
+//! The family's driver effects (U5) are implemented by this crate itself
+//! ([`crate::effects_service`]): the bounded local-account probe
+//! ([`crate::probe`]) runs inside the crate over the preserved
+//! `UserReconciler`, and the family reads no daemon state of its own, so
+//! the daemon-supplied facet set (the declared
+//! [`crate::facets::UserEffectFacets`]) is empty today. The daemon hosts
+//! the family's declared effects service
+//! ([`crate::effects_service::USER_EFFECTS_SERVICE`]) per zone from the
+//! family's registered factory; no externally built port appears at any
+//! construction site (R2).
 
 #![deny(missing_docs)]
 
 mod driver;
+
+mod effects_service;
+mod facets;
+mod probe;
 
 // The scripted UserDriverEffects recording double. Needed both by
 // external crates (d2bd's plane tests, which opt in via the `test-support`
@@ -31,3 +41,7 @@ pub use driver::{
     UserDriver, UserDriverEffects, UserDriverError, UserDriverFactory, UserDriverStatus,
     user_descriptor, user_spec_decoder,
 };
+pub use effects_service::{
+    USER_EFFECTS_SERVICE, UserEffectsService, UserEffectsServiceFactory,
+};
+pub use facets::UserEffectFacets;
