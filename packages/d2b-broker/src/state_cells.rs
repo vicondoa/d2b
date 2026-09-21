@@ -1628,7 +1628,13 @@ mod tests {
         let store = CellStore::with_retention(
             Some(root_path.clone()),
             RetentionPolicy {
-                outcome_ttl_ms: 0, // every ephemeral outcome record is stale
+                // TTL far beyond the test's timescale: no record consumed
+                // during the test can ever satisfy the staleness predicate,
+                // so the per-cell cap is the only operative retention
+                // dimension. A TTL of 0 would make staleness mean "consumed
+                // before the current millisecond", flipping the cap+1 tail
+                // assertion on wall-clock boundaries.
+                outcome_ttl_ms: 60_000,
                 max_ephemeral_outcome_records: 1,
             },
         );

@@ -987,6 +987,112 @@ impl NetworkIntentSource for ResolverNetworkIntentSource {
     }
 }
 
+/// A [`NetworkIntentSource`] served by a daemon-supplied loader that yields a
+/// fresh trusted bundle resolver per invocation (U14).
+///
+/// The daemon host supplies the loader (a closure over its own trusted
+/// bundle state) through the composition root; every intent this source
+/// resolves is resolved against the resolver the loader just returned, so a
+/// replaced on-disk bundle is observed without a daemon restart. A load
+/// failure yields no intent, so the kernel broker refuses with the same
+/// closed codes the retired adapter produced for a missing, tampered, or
+/// unreadable bundle.
+pub struct LoaderNetworkIntentSource {
+    load: Box<dyn Fn() -> Option<BundleResolver> + Send + Sync>,
+}
+
+impl LoaderNetworkIntentSource {
+    /// Build the intent source over the daemon-supplied fresh loader.
+    pub fn new(
+        load: impl Fn() -> Option<BundleResolver> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            load: Box::new(load),
+        }
+    }
+}
+
+impl NetworkIntentSource for LoaderNetworkIntentSource {
+    fn resolve_bridge_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedBridgeIntent> {
+        let resolver = (self.load)()?;
+        resolver
+            .resolve_network_bridge_intent(intent_ref, provenance)
+    }
+
+    fn resolve_projection_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedNftablesProjectionIntent> {
+        let resolver = (self.load)()?;
+        resolver
+            .resolve_network_projection_intent(intent_ref, provenance)
+    }
+
+    fn resolve_marker_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedOwnershipMarkerIntent> {
+        let resolver = (self.load)()?;
+        resolver
+            .resolve_network_marker_intent(intent_ref, provenance)
+    }
+
+    fn find_nm_unmanaged_intent(&self, intent_ref: &str) -> Option<ResolvedNmUnmanagedIntent> {
+        let resolver = (self.load)()?;
+        resolver
+            .find_nm_unmanaged_intent(intent_ref)
+            .cloned()
+    }
+
+    fn resolve_route_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedRouteIntent> {
+        let resolver = (self.load)()?;
+        resolver
+            .resolve_network_route_intent(intent_ref, provenance)
+    }
+
+    fn resolve_sysctl_intent(
+        &self,
+        intent_ref: &str,
+        provenance: &NetworkProvenance,
+    ) -> Option<ResolvedSysctlIntent> {
+        let resolver = (self.load)()?;
+        resolver
+            .resolve_network_sysctl_intent(intent_ref, provenance)
+    }
+
+    fn resolve_hosts_intent(
+        &self,
+        intent_ref: &str,
+        provenance: Option<&NetworkProvenance>,
+    ) -> Option<ResolvedHostsIntent> {
+        let resolver = (self.load)()?;
+        match provenance {
+            Some(provenance) => resolver
+                .resolve_network_hosts_intent(intent_ref, provenance),
+            None => resolver.find_hosts_intent(intent_ref).cloned(),
+        }
+    }
+
+    fn installed_generation_identity(&self) -> Option<ResourceBundleGenerationId> {
+        let resolver = (self.load)()?;
+        resolver
+            .installed_generation_identity()
+            .and_then(|identity| {
+                ResourceBundleGenerationId::parse(identity.as_str().to_owned()).ok()
+            })
+    }
+}
+
 /// The daemon-supplied broker facets one kernel-invoking broker is built
 /// from (U14): the authenticated origination socket, the caller authority,
 /// and the intent source.

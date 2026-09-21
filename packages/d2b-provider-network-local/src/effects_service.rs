@@ -203,8 +203,8 @@ mod tests {
 
     #[async_trait]
     impl NetworkRuntime for ScriptedRuntime {
-        fn bundle(&self) -> &d2b_core::bundle_resolver::BundleResolver {
-            &self.bundle
+        fn bundle(&self) -> std::sync::Arc<d2b_core::bundle_resolver::BundleResolver> {
+            std::sync::Arc::new(self.bundle.clone())
         }
         fn broker_socket_path(&self) -> &std::path::Path {
             unreachable!("the inspect-network surface reads no broker socket")

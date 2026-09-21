@@ -1902,11 +1902,15 @@ impl ConstructionInputs {
                 state: Arc::clone(state),
             })),
         };
-        // U14: the Network family's effects ride the declared facets, and
+// U14:the Network family's effects ride the declared facets,and
         // the composition root hosts the family's declared effects service
         // from the same facet set the driver factories are built from. The
         // shared-provider adapter serves as the daemon's Network runtime
-        // over the plane's trusted bundle.
+        // over the plane's trusted bundle; the composed resolver is only
+        // the last-verified seed, because every invocation (the runtime
+        // facet's bundle read and the kernel intent source's per-call loader)
+        // reloads and re-verifies the on-disk bundle (the retired adapter's
+        // per-call behaviour).
         let shared_provider_effects = Arc::new(ProductionSharedProviderEffects::new(
             Arc::clone(state),
             zone.clone(),

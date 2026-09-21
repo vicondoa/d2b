@@ -246,7 +246,7 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 - **Phase A - enabling units and the two finishing units.** U2 (operation-row declarations become the source) and U3 (real service payload and capability object) are landed; U1 converts the process family, then U14 converts the network family. No other family lane starts before the enabling units and both finishing units land, because every later lane depends on the declaration surface, the payload contract, and the conversion pattern the two finishing units establish.
 - **Phase B - vocabulary and generation.** U4 declares provider-owned facts and generates their consumers, including the authority bound and the drift gates.
-- **Phase C - family lanes.** One lane per family, each lane covering a single named family: host, then user, then endpoint, then volume-binding, then volume, then credential, then each device family, then the guest runtime, then activation, and last the interaction and desktop lane, whose approach decides the frozen stream-plane wire vocabulary. A unit whose title names two families (U5, U6, U9, U11) therefore executes as one lane per family in the order listed, each closing on its own gate pair before the next begins.
+- **Phase C - family lanes.** One lane per family, each lane covering a single named family: host, then user, then process-systemd (U15), then endpoint, then volume-binding, then volume, then credential, then each device family, then the guest runtime, then activation, and last the interaction and desktop lane, whose approach decides the frozen stream-plane wire vocabulary. A unit whose title names two families (U5, U6, U9, U11) therefore executes as one lane per family in the order listed, each closing on its own gate pair before the next begins.
 - **Phase D - close.** U13 retires the inventory to its closed carve-out list, amends the normative ADR sentence, and records the completion proof.
 
 ### Risks & Mitigations
@@ -281,7 +281,8 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 | U10 | Guest-runtime family | `packages/d2bd/src/guest_effects.rs`, `packages/d2b-provider-guest*/` | U9 |
 | U11 | Interaction and desktop family | `packages/d2bd/src/resource_runtime/interaction_effects.rs`, `packages/d2bd/src/interaction_composition.rs`, `packages/d2bd/src/audio_host_controller.rs`, `packages/d2bd/src/audio_resource_runtime.rs` | U3, U4, U14 |
 | U12 | Activation family | `packages/d2bd/src/activation_effects.rs`, `packages/d2b-provider-activation-nixos/` | U3, U4, U14 |
-| U13 | Close the inventory and the normative surface | `packages/xtask/src/provider_crate_policy.rs`, `docs/adr/0046-d2b-3-provider-control-plane.md`, dossiers, `docs/contributing/critical-subsystems.md`, `changelog.d/` | U1, U2, U3, U4-U12, U14 |
+| U13 | Close the inventory and the normative surface | `packages/xtask/src/provider_crate_policy.rs`, `docs/adr/0046-d2b-3-provider-control-plane.md`, dossiers, `docs/contributing/critical-subsystems.md`, `changelog.d/` | U1, U2, U3, U4-U12, U14, U15 |
+| U15 | Finish the process-systemd family | `packages/d2bd/src/shared_provider_effects.rs`, `packages/d2b-broker/src/ops/systemd.rs`, `packages/d2b-provider-process-systemd/` | U14 |
 
 ### U1. Finish the process family
 
@@ -324,6 +325,25 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
   - Edge: an already-provisioned zone restarts and its network rows adopt unchanged (KTD8).
   - Integration: the owning host-integration check asserts the host fabric state the moved operations produce, and the unit names the operations exercised there.
 - **Verification:** `make check` and `make test-host-integration` green on the unit head; the daemon adapter and injection leave no citation; the host-owned check asserts the fabric surface and the exercised operations are named.
+
+### U15. Finish the process-systemd family
+
+- **Goal:** The five committed process-systemd rows stop being served by a broker module: the declaring crate declares and handles them over the generic kernel, and the broker's systemd operation module retires.
+- **Requirements:** R1, R2, R5, R7, R9, R15, R16, R17, R18
+- **Dependencies:** U14.
+- **Files:** `packages/d2b-provider-process-systemd/`, `packages/d2b-broker/src/ops/systemd.rs` (delete), `packages/d2bd/src/shared_provider_effects.rs`, `packages/d2bd/src/resource_plane_v3.rs`, `docs/specs/providers/ADR-046-provider-system-systemd.md`, `docs/reference/policy/broker-operations.json` (regenerated)
+- **Approach:**
+  1. Open with the caller audit for the five rows (`StartSystemdUnit`, `CheckSystemdUserManager`, `ObserveSystemdUnit`, `OpenSystemdUnitPidfd`, `StopSystemdUnit`): which broker module serves each, what kernel each privileged core invokes, and what authority it presents.
+  2. Declare the rows in the crate's `operations.json` and move their handlers behind its declared service, over the same kernel rows and the same authority path.
+  3. Delete the broker's systemd operation module and the family's measured rows in the same change, with the dossier and task-row pins.
+  4. Assert restart adoption for the surfaces the unit moves (KTD8).
+- **Patterns to follow:** `packages/d2b-provider-process/src/operations.rs` and `packages/d2b-provider-process/src/effects_service.rs` (the finished process family's shape), and the U14 retirement template.
+- **Test scenarios:**
+  - Covers AE3. Happy path: each declared row is handled by the crate, and the construction site holds no externally built port.
+  - Happy path: each migrated hermetic operation answers end to end with one audit record; any host-mutating one is named for its owning check.
+  - Error: a row with no declared handler is refused by name rather than served by a daemon-side path.
+  - Edge: an already-provisioned zone restarts and its systemd rows adopt unchanged (KTD8).
+- **Verification:** `make check` and `make test-host-integration` green on the unit head; no broker family operation module for systemd remains; the migrated rows are proven or named.
 
 ### U2. Operation rows declared in the crate
 
@@ -495,12 +515,14 @@ The lane pipeline is the Product Contract diagram: declare, move, retire the dae
 
 - **Goal:** The measurement is retired to its closed carve-out list, the normative effect-port sentence matches the built end state, and the completion proof is recorded.
 - **Requirements:** R13, R14, R17, R18, R20
-- **Dependencies:** U1, U2, U3, U4-U12, U14.
+- **Dependencies:** U1, U2, U3, U4-U12, U14, U15.
 - **Files:** `packages/xtask/src/provider_crate_policy.rs`, `docs/adr/0046-d2b-3-provider-control-plane.md`, dossiers under `docs/specs/providers/`, `specs/001-adr046-d2b3-completion/`, `docs/contributing/critical-subsystems.md`, `changelog.d/`
 - **Approach:** Retire every remaining non-permanent row, close the carve-out list and state each entry's permanent reason, reject any retained carve-out that does not carry its hand-maintained-exception record naming the declaring provider and the committed view it mirrors, amend the ADR's typed-effect-port sentence to the declared-service call path, and sweep every dossier, task row, and reference that names a deleted surface. Record the final proof run in the plan's completion note.
+- **Carve-outs this unit must state:** the three committed process wire rows `DelegateCgroupV2`, `OpenCgroupDir`, and `LaunchMinijailChild` stay as broker-generic kernels rather than family rows: each is the privileged core a process-family handler invokes as a nested call, not an operation a crate declares and owns, so the family-row criterion does not reach them and the reason is recorded rather than a lane invented for them.
 - **Patterns to follow:** the layout check's stale-row branch as the tripwire, and the deletion sweep discipline in KTD5.
 - **Test scenarios:**
   - Covers AE5. Happy path: the layout check passes with only the documented carve-outs remaining, and a tree-wide sweep finds no surviving citation of a deleted surface.
+  - Happy path: the three process wire rows appear in the closed carve-out list with their reason, and the completion proof names them.
   - Error: a carve-out whose site no longer carries its signal fails the check.
   - Error: a dossier or task row still naming a deleted surface fails the sweep.
   - Integration: `make check` and `make test-host-integration` pass on the final head, with the exercised surfaces named.
@@ -550,19 +572,18 @@ Gate evidence notes: a lane whose host check cannot run on the build host record
 
 - **Three committed process-family wire rows have no lane** - Implementation Units (U1, U2) (P1, feasibility, confidence 75)
 
-  The completion bar requires every committed family operation row to be declared
-  and handled by its provider crate. Three committed process rows - the cgroup
-  delegation, the cgroup directory open, and the minijail child launch - are still
-  served by a broker module, are not among the process crate's eleven declared
-  operations, and no unit covers them. An implementer finishing the process unit
-  therefore either fails the bar at the closing gate or invents scope that unit was
-  meant to carry. Decide whether these rows are declared in the process crate or
-  recorded as a permanent carve-out with its reason.
+  Resolved 2026-09-20: recorded as permanent carve-outs. The cgroup delegation,
+  the cgroup directory open, and the minijail child launch each name the
+  privileged core a process-family handler invokes as a nested call, not an
+  operation a crate declares and owns, so U13 now states them in the closed
+  carve-out list with that reason and its completion proof names them. No lane
+  was invented for them.
 
 - **The process-systemd family has no lane** - Problem Frame / Implementation Units (P1, scope-guardian, confidence 75)
 
-  Five committed operation rows carry the process-systemd family and are served by a
-  broker module, but the plan's family inventory never names that family and no unit
-  touches its crate. No implementer can reach the program's "no broker family
-  operation module" criterion while those rows stand, so the family needs either its
-  own lane or an explicit carve-out entry with its permanent reason.
+  Resolved 2026-09-20: given its own lane as U15, with the crate named in the
+  unit table, the file list, and the sequencing. Five committed rows were being
+  served by a broker module the inventory never listed, which kept the closing
+  criterion out of reach; the family now has the same shape as the other lanes,
+  including the deletion of the broker's systemd operation module and the
+  dossier pins.
