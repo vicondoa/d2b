@@ -469,7 +469,6 @@ d2b_rust_test(
         "src/resource_runtime.rs",
         "src/process_resource_runtime.rs",
 
-        "src/guest_effects.rs",
         "src/shared_provider_effects.rs",
         "src/provider_registry.rs",
     ],

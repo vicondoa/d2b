@@ -23,6 +23,8 @@ d2b_rust_library(
     deps = [
         "//packages/d2bd-runtime:d2bd_runtime",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         "//packages/d2b-provider-guest-azure-container-apps:d2b_provider_guest_azure_container_apps",
         "//packages/d2b-provider-guest-azure-virtual-machine:d2b_provider_guest_azure_virtual_machine",
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
@@ -41,6 +43,8 @@ d2b_rust_library(
     deps = [
         "//packages/d2bd-runtime:d2bd_runtime",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         "//packages/d2b-provider-guest-azure-container-apps:d2b_provider_guest_azure_container_apps_test_support",
         "//packages/d2b-provider-guest-azure-virtual-machine:d2b_provider_guest_azure_virtual_machine",
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor_test_support",
@@ -63,6 +67,8 @@ d2b_rust_test(
     deps = [
         "//packages/d2bd-runtime:d2bd_runtime",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-contracts-provider:d2b_contracts_provider",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         "//packages/d2b-provider-guest-azure-container-apps:d2b_provider_guest_azure_container_apps",
         "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",

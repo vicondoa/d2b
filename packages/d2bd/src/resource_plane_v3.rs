@@ -40,7 +40,7 @@ use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole, BrokerRequest, BrokerResponse, StoreSyncRequest,
 };
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
+    ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
     execution_policy::BoundedToken,
     volume::{SourceKind, VolumeSpec},
     volume_binding::VolumeBindingSpec,
@@ -54,7 +54,10 @@ use d2b_provider_activation_nixos::{
 use d2b_provider_endpoint::{
     EndpointDriverArgs, EndpointDriverEffects, GuestControlProducer, endpoint_descriptor,
 };
-use d2b_provider_guest::{GuestDriverArgs, GuestDriverEffects, guest_descriptor};
+use d2b_provider_guest::{
+    GUEST_EFFECTS_SERVICE, GuestDriverArgs, GuestEffectFacets, GuestEffectsServiceFactory,
+    guest_descriptor,
+};
 use d2b_provider_host::{HOST_EFFECTS_SERVICE, HostEffectFacets, HostEffectsServiceFactory, host_descriptor};
 use d2b_provider_user::{USER_EFFECTS_SERVICE, UserEffectFacets, UserEffectsServiceFactory, user_descriptor};
 use d2b_provider_process::{
@@ -124,7 +127,6 @@ use d2b_provider_network_local::{
 use d2b_provider_process_systemd::effects_service::{
     PROCESS_SYSTEMD_EFFECTS_SERVICE, SystemdEffectsServiceFactory,
 };
-use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
 use d2b_provider_command::command_descriptor;
 use d2b_provider_emergency_policy::emergency_policy_descriptor;
@@ -1826,7 +1828,13 @@ pub struct ConstructionInputs {
     pub endpoint_effects: Arc<dyn EndpointDriverEffects>,
     pub credential_effects: Arc<dyn CredentialDriverEffects>,
     pub shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects,
-    pub guest_effects: Arc<dyn GuestDriverEffects>,
+/// The daemon-supplied facet set the Guest family's effects
+    /// implementation is built from (U10):the zone's manager view (live
+    /// rows, committed Provider identities, and the controller-session
+    /// generation)and the Cloud Hypervisor controller session, supplied
+    /// through the composition root. The family never receives a
+    /// daemon-built effect port (R2).
+    pub guest_facets: GuestEffectFacets,
     /// The daemon-supplied facet set the interaction family's effects
     /// implementation is built from (U12): the committed interaction
     /// identity, the zone's manager-plane reads, and the broker-backed audio
@@ -1935,7 +1943,7 @@ impl ConstructionInputs {
                 state: Arc::clone(state),
             })),
         };
-// U14:the Network family's effects ride the declared facets,and
+        // U14:the Network family's effects ride the declared facets,and
         // the composition root hosts the family's declared effects service
         // from the same facet set the driver factories are built from. The
         // shared-provider adapter serves as the daemon's Network runtime
@@ -1972,6 +1980,23 @@ impl ConstructionInputs {
         let activation_facets = ActivationEffectFacets {
             broker: Arc::new(ProductionActivationBrokerDispatch {
                 state: Arc::clone(state),
+            }),
+        };
+// U10: the Guest family's effects ride the declared facets, and the
+        // composition root hosts the family's declared effects service from
+        // the same facet set the driver factories are built from. The
+        // manager view and the Cloud Hypervisor controller session are
+        // per-zone daemon-supplied facets over `ServerState`.
+        let guest_facets = GuestEffectFacets {
+            zone: zone.clone(),
+            controller_generation,
+            manager: Arc::new(PlaneGuestManagerView {
+                state: Arc::clone(state),
+                zone: zone.clone(),
+            }),
+            cloud_hypervisor: Arc::new(PlaneCloudHypervisorGuestRuntime {
+                state: Arc::clone(state),
+                zone: zone.clone(),
             }),
         };
         // U12: the interaction family's effects ride the declared facets
@@ -2112,11 +2137,7 @@ Box::pin(async move {
             shared_provider_effects: crate::shared_provider_effects::SharedProviderEffects::production(
                 shared_provider_effects,
             ),
-            guest_effects: Arc::new(ProductionGuestDriverEffects::new(
-                Arc::clone(state),
-                zone.clone(),
-                controller_generation,
-            )),
+            guest_facets: guest_facets.clone(),
             interaction_facets: interaction_facets.clone(),
             trusted_context_publication: Some(
                 crate::provider_lifecycle::TrustedContextPublication::production(
@@ -2133,6 +2154,7 @@ Box::pin(async move {
                 &process_facets,
                 &network_facets,
                 &host_facets,
+                &guest_facets,
                 &activation_facets,
                 &interaction_facets,
                 &user_facets,
@@ -2151,6 +2173,7 @@ fn registered_service_factories(
     process_facets: &ProcessEffectFacets,
     network_facets: &NetworkEffectFacets,
     host_facets: &HostEffectFacets,
+    guest_facets: &GuestEffectFacets,
     activation_facets: &ActivationEffectFacets,
     interaction_facets: &InteractionEffectFacets,
     user_facets: &UserEffectFacets,
@@ -2184,6 +2207,9 @@ fn registered_service_factories(
                 // family itself is never named here.
 
                 Arc::new(SystemdEffectsServiceFactory::new()) as Arc<dyn EffectServiceFactory>
+            } else if service == GUEST_EFFECTS_SERVICE.id {
+                Arc::new(GuestEffectsServiceFactory::new(guest_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
             } else {
                 continue;
             };
@@ -2360,6 +2386,109 @@ impl GuestOwnerIdentitySource for PlaneGuestOwnerIdentities {
                 None
             }
         }
+    }
+}
+
+/// Production `GuestManagerView` (U10): the zone's v3 plane manager view,
+/// committed Provider identities, and live controller-session generation,
+/// over `ServerState`.
+struct PlaneGuestManagerView {
+    state: Arc<crate::ServerState>,
+    zone: ZoneId,
+}
+
+impl PlaneGuestManagerView {
+    /// The zone runtime, resolved the same way the retired daemon effect
+    /// resolved it: non-blocking `try_lock` per plan U4; a collision
+    /// reports unavailable (fail-closed), never a stall.
+    fn runtime(&self) -> Result<Arc<crate::resource_runtime::ZoneResourceRuntime>, ()> {
+        self.state
+            .resource_plane
+            .try_lock()
+            .ok()
+            .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&self.zone).ok()))
+            .ok_or(())
+    }
+
+    /// The published v3 plane (manager rows and their live status).
+    fn plane(&self) -> Result<Arc<ResourcePlaneV3>, ()> {
+        self.runtime()?
+            .v3_plane()
+            .map_err(|_| ())
+    }
+}
+
+#[async_trait::async_trait]
+impl d2b_provider_guest::GuestManagerView for PlaneGuestManagerView {
+    async fn row_view(
+        &self,
+        key: &d2b_resource_runtime::identity::ResourceKey,
+    ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ()> {
+        let plane = self.plane()?;
+        plane.client().get(key.clone()).await.map_err(|_| ())
+    }
+
+    fn committed_provider_identity(
+        &self,
+        provider_ref: &ResourceRef,
+    ) -> Result<Option<(ResourceUid, ResourceGeneration)>, ()> {
+        let plane = self.plane()?;
+        Ok(plane.registry().committed_provider_identity(provider_ref))
+    }
+
+    fn controller_session_generation(
+        &self,
+    ) -> Result<
+        Option<d2b_contracts_resource::v3::identity::ReconnectGeneration>,
+        (),
+    > {
+        Ok(self.runtime()?.controller_session_generation())
+    }
+}
+
+/// Production `CloudHypervisorGuestRuntime` (U10): the daemon's controller
+/// session for one zone - target-session establishment and the
+/// controller-owned reconcile of one Cloud Hypervisor Guest - over
+/// `ServerState`.
+struct PlaneCloudHypervisorGuestRuntime {
+    state: Arc<crate::ServerState>,
+    zone: ZoneId,
+}
+
+#[async_trait::async_trait]
+impl d2b_provider_guest::CloudHypervisorGuestRuntime for PlaneCloudHypervisorGuestRuntime {
+    async fn ensure_target_session(&self, guest_ref: &ResourceRef) -> Result<(), String> {
+        crate::ensure_guest_target_session(&self.state, &self.zone, guest_ref).await
+    }
+
+    async fn reconcile_guest(
+        &self,
+        guest_ref: &ResourceRef,
+        status_sink: Option<d2b_provider_guest::GuestStatusSink>,
+    ) -> Result<d2b_provider_guest::GuestCloudHypervisorOutcome, String> {
+        let runtime = self
+            .state
+            .resource_plane
+            .try_lock()
+            .ok()
+            .and_then(|plane| plane.as_ref().and_then(|plane| plane.zone(&self.zone).ok()))
+            .ok_or_else(|| "guest-effect:zone-runtime-unavailable".to_owned())?;
+        let outcome = runtime
+            .reconcile_cloud_hypervisor_guest_with_status(
+                Arc::clone(&self.state),
+                guest_ref,
+                status_sink,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(match outcome {
+            crate::resource_runtime::CloudHypervisorReconcileOutcome::Ready => {
+                d2b_provider_guest::GuestCloudHypervisorOutcome::Ready
+            }
+            crate::resource_runtime::CloudHypervisorReconcileOutcome::Pending => {
+                d2b_provider_guest::GuestCloudHypervisorOutcome::Pending
+            }
+        })
     }
 }
 
@@ -2641,19 +2770,10 @@ impl ResourcePlaneV3 {
                 effects: Arc::clone(&inputs.shared_provider_effects.device),
             })],
         );
-        // The Guest type starts through its driver declaration: the registry
-        // serves the type's decoder and factory from it, and the declaration
-        // carries the family's verbs, execution domains, exportability, reads,
-        // and the children its runtime Providers create.
-        set = set.with(
-            family_declaration("guest"),
-            vec![guest_descriptor(GuestDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                controller_generation: inputs.authority.controller_generation,
-                effects: Arc::clone(&inputs.guest_effects),
-            })],
-        );
-
+// The Guest family starts through the generated registration table
+        // above (its row carries the family's declared effects service); the
+        // descriptor construction lives in `registered_drivers` beside the
+        // other registered families.
         // The controller family starts through its per-type declarations:
         // each crate serves exactly one type, and the registry resolves that
         // type's decoder, factory, verbs, execution domains, exportability,
@@ -2786,6 +2906,13 @@ impl ResourcePlaneV3 {
             // implementation over the daemon-supplied facet set (U5); no
             // externally built port appears here (R2).
             "user" => vec![user_descriptor(inputs.user_facets.clone())],
+            // The Guest family: the descriptor builds its effects from the
+            // declared facets; no externally built port appears here (R2).
+            "guest" => vec![guest_descriptor(GuestDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                facets: inputs.guest_facets.clone(),
+            })],
             _ => Vec::new(),
         }
     }
@@ -3575,6 +3702,14 @@ use d2b_provider_system_core::MinijailPlatformGate;
         let user_facets = d2b_provider_user::test_support::recording_facets(
             d2b_provider_user::test_support::ScriptedProbe::new(),
         );
+        // U10: the plane tests build the Guest family's facet set from the
+        // scripted facets double, exactly as the production composition
+        // root builds it from the daemon's runtime.
+        let guest_facets = d2b_provider_guest::test_support::ScriptedFacets::new().facet_set();
+        // U1/U5/U10/U14: the plane hosts the Process, Network, Host,
+        // Activation, and Guest families' declared effects services from the
+        // same facet sets their driver factories are built from, exactly as
+        // the production composition root does.
         (
             dir,
             ConstructionInputs {
@@ -3639,21 +3774,13 @@ use d2b_provider_system_core::MinijailPlatformGate;
                 // from the recording runtime, exactly as the production
                 // composition root builds it from the daemon's runtime.
                 network_facets: network_facets.clone(),
-                user_facets: user_facets.clone(),
-                guest_effects: {
-                    let effects = d2b_provider_guest::test_support::ScriptedEffects::new();
-                    // The old plane fake reported Pending (the plane tests
-                    // only need the Guest driver registered, never a Guest
-                    // reaching Ready); the shared double starts Ready, so
-                    // script it back.
-                    effects.set_phase(d2b_provider_guest::GuestEffectPhase::Pending);
-                    effects
-                },
+user_facets: user_facets.clone(),
+                guest_facets: guest_facets.clone(),
                 interaction_facets: interaction_facets.clone(),
                 trusted_context_publication: None,
-                // U1/U14/U5: the plane hosts the Process, Network, Host,
-                // and Activation families' declared effects services from
-                // the same facet sets their driver factories are built
+                // U1/U14/U5/U10: the plane hosts the Process, Network, Host,
+                // Activation, and Guest families' declared effects services
+                // from the same facet sets their driver factories are built
                 // from, exactly as the production composition root does.
                 // Activation, and User families' declared effects services
                 // from the same facet sets their driver factories are built
@@ -3700,6 +3827,11 @@ HOST_EFFECTS_SERVICE.id,
                     (
                         USER_EFFECTS_SERVICE.id,
                         Arc::new(UserEffectsServiceFactory::new(user_facets.clone()))
+                            as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        GUEST_EFFECTS_SERVICE.id,
+                        Arc::new(GuestEffectsServiceFactory::new(guest_facets))
                             as Arc<dyn EffectServiceFactory>,
                     ),
                 ]),
@@ -4633,6 +4765,53 @@ HOST_EFFECTS_SERVICE.id,
         assert_eq!(
             after.payload, before.payload,
             "the adopted generation answers the same bounded observations"
+        );
+    }
+
+    /// U10: the composition root hosts the Guest family's declared effects
+    /// service from the family's own factory over the plane's facet set,
+    /// and the hosted service answers `guest-phase` through the real
+    /// invocation capability object carrying the real envelope payload -
+    /// the same manager-view read the driver's effects gate on. The
+    /// scripted facets double holds no row for the payload's Guest, so the
+    /// honest answer is `Absent`.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_guest_effects_service_answers_guest_phase_through_the_binding() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let runtime = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts the declared guest service");
+        let binding = runtime
+            .resolve_effect_service(GUEST_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-u10-guest-phase".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({
+                "zone": "test",
+                "zoneUid": serde_json::Value::Null,
+                "resourceRef": "Guest/worker",
+            }))
+            .expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: GUEST_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let response = binding.call(call).await.expect("call");
+        assert_eq!(
+            response.payload,
+            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({
+                "family": "guest",
+                "resourceType": "Guest",
+                "guestRef": "Guest/worker",
+                "phase": "Absent",
+            }))
+            .expect("canonical payload"),
+            "the hosted service answers the manager view's honest absent report"
         );
     }
 

@@ -1045,12 +1045,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/shared_provider_effects.rs",
         token: "server_state",
         family: "d2bd-state",
@@ -3040,12 +3034,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "cloud_hypervisor",
-        family: "runtime-cloud-hypervisor",
-        retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
@@ -3104,12 +3092,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "qemu_media",
         family: "runtime-qemu-media",
         retires_with: "permanent:wire vocabulary crossing CLI/daemon/broker boundaries;no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/guest_effects.rs",
-        token: "qemu_media",
-        family: "runtime-qemu-media",
-        retires_with: "permanent:the daemon's media effect and composition adapters spell the provider's own typed API (QemuMedia*);the daemon reads the media contract, runner identity, and runtime naming from the provider declarations",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-core/src/runtime.rs",

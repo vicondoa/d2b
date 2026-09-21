@@ -1494,11 +1494,13 @@ name = "d2b-provider-guest"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
+ "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-provider-guest-azure-container-apps",
  "d2b-provider-guest-azure-virtual-machine",
  "d2b-provider-guest-cloud-hypervisor",
  "d2b-provider-guest-qemu-media",
+ "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "d2bd-runtime",
@@ -1506,6 +1508,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

@@ -5,7 +5,7 @@ pub(crate) mod credential_effects;
 pub(crate) mod binding_effects;
 pub(crate) mod volume_effects;
 pub(crate) mod shared_provider_effects;
-pub(crate) mod guest_effects;
+
 
 /// The daemon-side half of the Guest target-control seam: the family crate
 /// owns the channel, this module offers it the authenticated session.
