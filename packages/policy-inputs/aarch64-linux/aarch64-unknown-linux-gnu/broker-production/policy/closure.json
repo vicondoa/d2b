@@ -10,7 +10,7 @@
   "features": [],
   "default_features": false,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "3edc46414b0f1d9a63bf4e005d011534aafa96664a38b6734d9bbac2a659a5a4",
+  "lock_sha256": "c48d1bcb3bd706e9460e2180e98253dc3fde66feabbd4dc106f0998dae862991",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",

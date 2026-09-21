@@ -26,6 +26,10 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &[],
     },
     ProviderRegistration {
+        provider_ref: "endpoint",
+        services: &["endpoint.d2bus.org/effects"],
+    },
+    ProviderRegistration {
         provider_ref: "host",
         services: &["host.d2bus.org/effects"],
     },
@@ -44,6 +48,10 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
     ProviderRegistration {
         provider_ref: "shell-session",
         services: &[],
+    },
+    ProviderRegistration {
+        provider_ref: "volume-binding",
+        services: &["volume-binding.d2bus.org/effects"],
     },
     ProviderRegistration {
         provider_ref: "wayland-policy",
