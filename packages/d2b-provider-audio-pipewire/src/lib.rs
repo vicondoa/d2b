@@ -14,7 +14,10 @@ pub mod telemetry;
 
 /// The PipeWire runtime socket file name the host capability probe looks for.
 ///
-/// The daemon reads this name instead of spelling the host realization itself。
+/// The name is shared by contract: the host family's probe asserts the same
+/// kernel-visible socket name under the caller's runtime dir, spelled in
+/// `d2b-provider-host` rather than imported (the probe needs no sibling
+/// crate); this crate declares the vocabulary for its own family surfaces.
 pub const PIPEWIRE_RUNTIME_SOCKET: &str = "pipewire-0";
 
 pub use argv::{AudioComponentTemplate, AudioTemplateError, RenderedAudioTemplate};

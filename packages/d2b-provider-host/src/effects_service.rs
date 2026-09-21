@@ -39,7 +39,6 @@ use d2b_resource_types::{ServiceDecl, ServiceMethod};
 
 use crate::driver::HostDriverEffects;
 use crate::facets::HostEffectFacets;
-use crate::probe::HostProbe;
 
 /// The Host family's declared effects service.
 ///
@@ -101,7 +100,7 @@ fn inspect_host_response(
 /// fallback stays on the driver seam, where the row's spec decision is
 /// available).
 async fn serve_inspect_host(
-    probe: &impl HostProbeEffectPort,
+    probe: &dyn HostProbeEffectPort,
 ) -> Result<EffectResponse, EffectServiceError> {
     let declined = |reason: &'static str| EffectServiceError::Declined {
         service: HOST_EFFECTS_SERVICE.id.to_owned(),
@@ -136,38 +135,24 @@ async fn serve_inspect_host(
 /// the composition root supplies, so the hosted surface and the driver
 /// observe the same probe.
 ///
-/// The probe is generic over the [`HostProbeEffectPort`] surface the
-/// crate's production `HostProbe` implements; tests script the same surface.
-pub struct HostEffectsService<P: HostProbeEffectPort> {
-    probe: P,
+/// The probe is the facet-carried [`HostProbeEffectPort`] trait object: the
+/// crate's production probe in production, a scripted double in tests.
+pub struct HostEffectsService {
+    probe: Arc<dyn HostProbeEffectPort>,
 }
 
-impl HostEffectsService<HostProbe> {
-    /// Build the effects over the crate's own probe from one zone's
-    /// daemon-supplied facet set (R2): every daemon-structural read rides
-    /// the facets, never a daemon handle.
+impl HostEffectsService {
+    /// Build the effects from one zone's daemon-supplied facet set (R2):
+    /// every daemon-structural read rides the facets, never a daemon handle.
     pub fn new(facets: HostEffectFacets) -> Self {
         Self {
-            probe: HostProbe::new(facets.minijail_gate),
+            probe: facets.probe,
         }
     }
 }
 
-impl<P: HostProbeEffectPort> HostEffectsService<P> {
-    /// Build the effects over a scripted probe (test-support only): the
-    /// same [`HostProbeEffectPort`] surface the crate's production probe
-    /// implements, so the happy and degraded observation paths are testable
-    /// hermetically.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_probe(probe: P) -> Self {
-        Self { probe }
-    }
-}
-
 #[async_trait]
-impl<P: HostProbeEffectPort + Send + Sync + 'static> HostDriverEffects
-    for HostEffectsService<P>
-{
+impl HostDriverEffects for HostEffectsService {
     async fn observe_host(
         &self,
         host_ref: &ResourceRef,
@@ -179,7 +164,7 @@ impl<P: HostProbeEffectPort + Send + Sync + 'static> HostDriverEffects
                 host_ref,
                 provider_ref,
                 spec,
-                &self.probe,
+                &*self.probe,
                 &BTreeSet::new(),
                 false,
             )
@@ -209,7 +194,7 @@ impl<P: HostProbeEffectPort + Send + Sync + 'static> HostDriverEffects
 }
 
 #[async_trait]
-impl<P: HostProbeEffectPort + Send + Sync + 'static> EffectService for HostEffectsService<P> {
+impl EffectService for HostEffectsService {
     async fn handle(
         &self,
         _invocation: ServiceInvocation<'_>,
@@ -217,7 +202,7 @@ impl<P: HostProbeEffectPort + Send + Sync + 'static> EffectService for HostEffec
         // The declaration's method gates admission at the hosting side; the
         // service serves its one declared zone-plane method from the
         // family's bounded probe.
-        serve_inspect_host(&self.probe).await
+        serve_inspect_host(&*self.probe).await
     }
 }
 
@@ -248,78 +233,9 @@ mod tests {
     use super::*;
 
     use d2b_contracts_resource::v3::host::{HOST_PROVIDER_REF, HostSpec};
-    use d2b_provider_system_core::{
-        HostCapabilityClass, HostProbeMetadata, MinijailPlatformGate, SystemCoreError,
-    };
+    use d2b_provider_system_core::HostCapabilityClass;
 
-    // -- scripted probe ------------------------------------------------------
-
-    /// The scripted probe surface the service's observation paths run over:
-    /// records the probed classes and can script a probe failure. The
-    /// scripted state lives behind an `Arc` (the probe is `Clone`), so a
-    /// test can keep a handle and script the service-held probe.
-    #[derive(Clone)]
-    struct ScriptedProbe {
-        core: Arc<ScriptedCore>,
-    }
-
-    struct ScriptedCore {
-        calls: tokio::sync::Mutex<Vec<HostCapabilityClass>>,
-        capabilities: Vec<HostCapabilityClass>,
-        fail: std::sync::atomic::AtomicBool,
-        gate: MinijailPlatformGate,
-    }
-
-    impl ScriptedProbe {
-        fn new(capabilities: Vec<HostCapabilityClass>) -> Self {
-            Self {
-                core: Arc::new(ScriptedCore {
-                    calls: tokio::sync::Mutex::new(Vec::new()),
-                    capabilities,
-                    fail: std::sync::atomic::AtomicBool::new(false),
-                    gate: MinijailPlatformGate::new(6, 9, true),
-                }),
-            }
-        }
-
-        fn probed_classes(&self) -> Vec<HostCapabilityClass> {
-            self.core.calls.try_lock().expect("uncontended test mutex").clone()
-        }
-
-        fn set_failing(&self, failing: bool) {
-            self.core.fail.store(failing, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl HostProbeEffectPort for ScriptedProbe {
-        async fn probe(&self, capability: HostCapabilityClass) -> Result<bool, SystemCoreError> {
-            self.core.calls.lock().await.push(capability);
-            if self.core.fail.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(SystemCoreError::HostProbeFailed);
-            }
-            Ok(self.core.capabilities.contains(&capability))
-        }
-
-        async fn platform(&self) -> Result<MinijailPlatformGate, SystemCoreError> {
-            if self.core.fail.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(SystemCoreError::HostProbeFailed);
-            }
-            Ok(self.core.gate)
-        }
-
-        async fn metadata(&self) -> Result<HostProbeMetadata, SystemCoreError> {
-            if self.core.fail.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(SystemCoreError::HostProbeFailed);
-            }
-            Ok(HostProbeMetadata {
-                kernel_release: "6.9.0-test".to_owned(),
-                os_name: "Linux".to_owned(),
-                user_manager_available: true,
-                active_process_count: 3,
-            })
-        }
-    }
+    use crate::test_support::{RecordingProbe, scripted_facets};
 
     fn host_ref() -> ResourceRef {
         ResourceRef::parse("Host/host-system").expect("host ref")
@@ -333,10 +249,12 @@ mod tests {
         HostSpec::system_default()
     }
 
-    /// The service over a scripted probe: the same `HostProbeEffectPort`
-    /// surface production's `HostProbe` implements.
-    fn service(probe: ScriptedProbe) -> HostEffectsService<ScriptedProbe> {
-        HostEffectsService::with_probe(probe)
+    /// The service over a scripted probe carried by the facet set, exactly
+    /// as the composition root builds it from the production probe: the
+    /// same `HostProbeEffectPort` surface production's `HostProbe`
+    /// implements.
+    fn service(probe: Arc<RecordingProbe>) -> HostEffectsService {
+        HostEffectsService::new(scripted_facets(probe))
     }
 
     // -- driver seam: happy and degraded observation parity -------------------
@@ -347,7 +265,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn observe_host_publishes_the_probe_observation() {
-        let probe = ScriptedProbe::new(vec![HostCapabilityClass::Kvm]);
+        let probe = RecordingProbe::new(vec![HostCapabilityClass::Kvm]);
         let report = service(probe.clone())
             .observe_host(&host_ref(), &provider_ref(), &system_spec())
             .await
@@ -372,7 +290,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn observe_host_publishes_degraded_when_the_probe_cannot_complete() {
-        let probe = ScriptedProbe::new(Vec::new());
+        let probe = RecordingProbe::new(Vec::new());
         probe.set_failing(true);
         let report = service(probe)
             .observe_host(&host_ref(), &provider_ref(), &system_spec())
@@ -415,7 +333,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn inspect_host_answers_the_bounded_host_observations() {
-        let service = service(ScriptedProbe::new(vec![
+        let service = service(RecordingProbe::new(vec![
             HostCapabilityClass::Kvm,
             HostCapabilityClass::Pidfd,
         ]));
@@ -450,7 +368,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn inspect_host_refuses_when_the_probe_cannot_complete() {
-        let probe = ScriptedProbe::new(Vec::new());
+        let probe = RecordingProbe::new(Vec::new());
         probe.set_failing(true);
         let payload = canonical(serde_json::json!({}));
         let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();

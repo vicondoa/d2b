@@ -168,22 +168,31 @@ struct ProductionMinijailPlatformGateSource;
 
 impl MinijailPlatformGateSource for ProductionMinijailPlatformGateSource {
     fn platform_gate(&self) -> d2b_provider_host::MinijailPlatformGate {
-        let gate = detect_minijail_platform_gate();
-        d2b_provider_host::MinijailPlatformGate::new(
-            gate.kernel_major,
-            gate.kernel_minor,
-            gate.cgroup_kill_available,
-        )
+        convert_platform_gate(detect_minijail_platform_gate())
     }
+}
+
+/// Convert the daemon's own minijail `PlatformGate` snapshot into the Host
+/// family's gate type: the same bounded kernel/cgroup posture, field for
+/// field.
+fn convert_platform_gate(gate: PlatformGate) -> d2b_provider_host::MinijailPlatformGate {
+    d2b_provider_host::MinijailPlatformGate::new(
+        gate.kernel_major,
+        gate.kernel_minor,
+        gate.cgroup_kill_available,
+    )
 }
 
 /// The Host family's declared facet set, composed beside the gate probe it
 /// wraps (U5): the daemon's own minijail platform gate is the one
 /// daemon-owned read the family's probe needs; every other probe input is
-/// host state the family crate reads itself.
+/// host state the family crate reads itself. The facet carries the crate's
+/// production probe built over that gate source.
 pub(crate) fn production_host_facets() -> HostEffectFacets {
     HostEffectFacets {
-        minijail_gate: Arc::new(ProductionMinijailPlatformGateSource),
+        probe: d2b_provider_host::production_probe(Arc::new(
+            ProductionMinijailPlatformGateSource,
+        )),
     }
 }
 
@@ -4830,6 +4839,25 @@ mod tests {
         processes::ProcessesJson,
     };
     use d2bd_runtime::target_runtime::ProviderDeployment;
+
+    /// The daemon's own minijail `PlatformGate` converts into the Host
+    /// family's gate type field for field, including the negative posture:
+    /// a swapped or mis-copied field would change the gate the family's
+    /// probe reports through the facet.
+    #[test]
+    fn minijail_platform_gate_converts_field_for_field() {
+        let positive = PlatformGate::from_observed(6, 9, true);
+        let converted = convert_platform_gate(positive);
+        assert_eq!(converted.kernel_major, 6);
+        assert_eq!(converted.kernel_minor, 9);
+        assert!(converted.cgroup_kill_available);
+
+        let negative = PlatformGate::from_observed(5, 2, false);
+        let converted = convert_platform_gate(negative);
+        assert_eq!(converted.kernel_major, 5);
+        assert_eq!(converted.kernel_minor, 2);
+        assert!(!converted.cgroup_kill_available);
+    }
 
     fn controller_bootstrap_context_for_fence(
         generation: u64,

@@ -28,7 +28,9 @@ mod effects_service;
 mod facets;
 mod probe;
 
-// The scripted HostDriverEffects recording double. Needed both by
+// The test-support doubles: the scripted HostDriverEffects recording
+// double, the scripted HostProbeEffectPort probe double, and the scripted
+// minijail gate source the production probe is built from. Needed both by
 // external crates (d2bd's plane tests, which opt in via the `test-support`
 // feature) and by this crate's own tests. Gating on
 // `any(test, feature = "test-support")` makes it available automatically to
@@ -46,6 +48,7 @@ pub use effects_service::{
     HOST_EFFECTS_SERVICE, HostEffectsService, HostEffectsServiceFactory,
 };
 pub use facets::{HostEffectFacets, MinijailPlatformGateSource};
+pub use probe::{PIPEWIRE_RUNTIME_SOCKET, USBIP_CORE_MODULE, USBIP_HOST_MODULE, production_probe};
 // The gate type the family's facets carry: re-exported through the owning
 // crate so a daemon composition module can name it without importing the
 // system-core crate path (the same re-export shape the process crate uses

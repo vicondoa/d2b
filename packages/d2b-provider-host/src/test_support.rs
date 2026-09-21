@@ -1,10 +1,22 @@
-//! Test-support recording double for the [`HostDriverEffects`] port.
+//! Test-support doubles for the Host family's effects surfaces.
 //!
-//! The scripted effect fake for the Host family: records every probe call
-//! order-preservingly and can script the reported phase or a probe refusal.
+//! Three doubles share this module:
+//!
+//! - [`RecordingEffects`], the scripted [`HostDriverEffects`] seam: records
+//!   every `observe_host` call order-preservingly and can script the
+//!   reported phase or a refusal, so the driver's behavior tests run over
+//!   scripted observations;
+//! - [`RecordingProbe`], the scripted [`HostProbeEffectPort`] surface the
+//!   family's effects run over: the same surface the crate's production
+//!   probe implements, so the hosted and driver observation paths are
+//!   testable hermetically;
+//! - [`RecordingMinijailGate`], the scripted
+//!   [`MinijailPlatformGateSource`] facet the production probe reads its
+//!   platform gate through.
+//!
 //! Gated behind the `test-support` Cargo feature (available automatically
 //! under `cargo test`), so production consumers never pull it in. The plane
-//! tests in `d2bd` reach it through the same public surface.
+//! tests in `d2bd` reach the same public surface.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +24,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use d2b_contracts_resource::v3::{ResourcePhase, ResourceRef};
 use d2b_contracts_resource::v3::host::HostSpec;
 use d2b_provider_system_core::{
-    HostCapabilityClass, HostObservationReport, HostReconciler, MinijailPlatformGate,
+    HostCapabilityClass, HostObservationReport, HostProbeEffectPort, HostProbeMetadata,
+    HostReconciler, MinijailPlatformGate, SystemCoreError,
 };
 
 use crate::{HostDriverEffects, HostEffectFacets, MinijailPlatformGateSource};
@@ -76,9 +89,86 @@ impl HostDriverEffects for RecordingEffects {
     }
 }
 
+/// Scripted `HostProbeEffectPort` double: the probe surface the family's
+/// effects run over, scripted hermetically (no host state read). Records
+/// the probed capability classes order-preservingly and can script a probe
+/// refusal. The scripted state lives behind an `Arc`, so a test can keep a
+/// handle and script the service-held probe.
+pub struct RecordingProbe {
+    core: Arc<RecordingProbeCore>,
+}
+
+struct RecordingProbeCore {
+    calls: tokio::sync::Mutex<Vec<HostCapabilityClass>>,
+    capabilities: Vec<HostCapabilityClass>,
+    fail: AtomicBool,
+    gate: MinijailPlatformGate,
+    metadata: HostProbeMetadata,
+}
+
+impl RecordingProbe {
+    /// Construct the double over one scripted capability set, the default
+    /// Ready gate (6.9 with cgroup.kill), and the default bounded metadata.
+    pub fn new(capabilities: Vec<HostCapabilityClass>) -> Arc<Self> {
+        Arc::new(Self {
+            core: Arc::new(RecordingProbeCore {
+                calls: tokio::sync::Mutex::new(Vec::new()),
+                capabilities,
+                fail: AtomicBool::new(false),
+                gate: MinijailPlatformGate::new(6, 9, true),
+                metadata: HostProbeMetadata {
+                    kernel_release: "6.9.0-test".to_owned(),
+                    os_name: "Linux".to_owned(),
+                    user_manager_available: true,
+                    active_process_count: 3,
+                },
+            }),
+        })
+    }
+
+    /// The probed capability classes in arrival order.
+    pub fn probed_classes(&self) -> Vec<HostCapabilityClass> {
+        self.core
+            .calls
+            .try_lock()
+            .expect("uncontended test mutex")
+            .clone()
+    }
+
+    /// Script whether the next probe refuses.
+    pub fn set_failing(&self, failing: bool) {
+        self.core.fail.store(failing, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl HostProbeEffectPort for RecordingProbe {
+    async fn probe(&self, capability: HostCapabilityClass) -> Result<bool, SystemCoreError> {
+        self.core.calls.lock().await.push(capability);
+        if self.core.fail.load(Ordering::SeqCst) {
+            return Err(SystemCoreError::HostProbeFailed);
+        }
+        Ok(self.core.capabilities.contains(&capability))
+    }
+
+    async fn platform(&self) -> Result<MinijailPlatformGate, SystemCoreError> {
+        if self.core.fail.load(Ordering::SeqCst) {
+            return Err(SystemCoreError::HostProbeFailed);
+        }
+        Ok(self.core.gate)
+    }
+
+    async fn metadata(&self) -> Result<HostProbeMetadata, SystemCoreError> {
+        if self.core.fail.load(Ordering::SeqCst) {
+            return Err(SystemCoreError::HostProbeFailed);
+        }
+        Ok(self.core.metadata.clone())
+    }
+}
+
 /// Scripted minijail platform gate source: the daemon-supplied
-/// [`MinijailPlatformGateSource`] facet double the plane tests and this
-/// crate's tests build faceted services from.
+/// [`MinijailPlatformGateSource`] facet double the production probe is
+/// built from in tests.
 pub struct RecordingMinijailGate {
     gate: tokio::sync::Mutex<MinijailPlatformGate>,
 }
@@ -103,9 +193,18 @@ impl MinijailPlatformGateSource for RecordingMinijailGate {
     }
 }
 
-/// Build the host family's declared facet set over a scripted (or
-/// recording) minijail gate source, exactly as the production composition
-/// root builds it from the daemon's gate probe.
+/// Build the host family's declared facet set over the crate's production
+/// probe on a scripted (or recording) minijail gate source, exactly as the
+/// production composition root builds it from the daemon's gate probe.
 pub fn recording_facets(gate: Arc<RecordingMinijailGate>) -> HostEffectFacets {
-    HostEffectFacets { minijail_gate: gate }
+    HostEffectFacets {
+        probe: crate::production_probe(gate),
+    }
+}
+
+/// Build the host family's declared facet set over a scripted probe double:
+/// the same [`HostProbeEffectPort`] surface the crate's production probe
+/// implements, so the observation paths are testable hermetically.
+pub fn scripted_facets(probe: Arc<RecordingProbe>) -> HostEffectFacets {
+    HostEffectFacets { probe }
 }

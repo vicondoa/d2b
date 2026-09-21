@@ -27,22 +27,31 @@ use crate::facets::MinijailPlatformGateSource;
 ///
 /// A host-state path name the probe reads, spelled here instead of imported
 /// from the audio-pipewire family's vocabulary: the probe checks the socket
-/// under the caller's own runtime dir and needs no sibling crate.
-const PIPEWIRE_RUNTIME_SOCKET: &str = "pipewire-0";
+/// under the caller's own runtime dir and needs no sibling crate. The name
+/// is shared by contract - the audio-pipewire family declares the same
+/// kernel-visible name - and the agreement is pinned by the daemon's
+/// composition-root test.
+pub const PIPEWIRE_RUNTIME_SOCKET: &str = "pipewire-0";
 
 /// The kernel module the USBIP core stack loads as (`/sys/module/usbip_core`).
 ///
 /// A host-state module name the probe reads, spelled here instead of
 /// imported from the device-usbip family's vocabulary: the probe checks the
-/// module directory under `/sys/module` and needs no sibling crate.
-const USBIP_CORE_MODULE: &str = "usbip_core";
+/// module directory under `/sys/module` and needs no sibling crate. The name
+/// is shared by contract - the device-usbip family declares the same
+/// kernel-visible name - and the agreement is pinned by the daemon's
+/// composition-root test.
+pub const USBIP_CORE_MODULE: &str = "usbip_core";
 
 /// The kernel module the USBIP host driver loads as (`/sys/module/usbip_host`).
 ///
 /// A host-state module name the probe reads, spelled here instead of
 /// imported from the device-usbip family's vocabulary: the probe checks the
-/// module directory under `/sys/module` and needs no sibling crate.
-const USBIP_HOST_MODULE: &str = "usbip_host";
+/// module directory under `/sys/module` and needs no sibling crate. The name
+/// is shared by contract - the device-usbip family declares the same
+/// kernel-visible name - and the agreement is pinned by the daemon's
+/// composition-root test.
+pub const USBIP_HOST_MODULE: &str = "usbip_host";
 
 /// The bounded probe the Host effects service reads the machine through:
 /// capability classes, the minijail platform gate, and the bounded metadata
@@ -63,7 +72,19 @@ impl HostProbe {
             minijail_gate,
         }
     }
+}
 
+/// Build the crate's production probe over the daemon-supplied minijail
+/// platform gate source (U5): the bounded probe the family's effects run
+/// over, reading host state itself and the one daemon-owned read (the
+/// platform gate) through the facet.
+pub fn production_probe(
+    minijail_gate: Arc<dyn MinijailPlatformGateSource>,
+) -> Arc<dyn HostProbeEffectPort> {
+    Arc::new(HostProbe::new(minijail_gate))
+}
+
+impl HostProbe {
     fn kernel_release() -> Result<String, SystemCoreError> {
         read_bounded("/proc/sys/kernel/osrelease", 64)
             .map(|release| release.trim().to_owned())
@@ -234,7 +255,7 @@ mod tests {
     use super::*;
 
     use d2b_provider_system_core::MinijailPlatformGate;
-    use crate::test_support::{RecordingMinijailGate, recording_facets};
+    use crate::test_support::RecordingMinijailGate;
 
     /// The production probe returns the bounded host observations (the
     /// daemon-side test moved with the family's effects, U5): the metadata
@@ -244,7 +265,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn production_host_probe_returns_bounded_host_observations() {
         let gate = RecordingMinijailGate::new(MinijailPlatformGate::new(6, 9, true));
-        let probe = HostProbe::new(recording_facets(Arc::clone(&gate)).minijail_gate);
+        let probe = production_probe(gate);
         let metadata = probe
             .metadata()
             .await

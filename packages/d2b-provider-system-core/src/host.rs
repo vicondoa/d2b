@@ -478,7 +478,7 @@ impl HostReconciler {
     /// injected port. This keeps the controller independent from NSS, D-Bus,
     /// `/proc`, and cgroup paths while allowing a production adapter to put
     /// its own per-call timeouts around each OS operation.
-    pub async fn reconcile_with_probe<P: HostProbeEffectPort>(
+    pub async fn reconcile_with_probe<P: HostProbeEffectPort + ?Sized>(
         &self,
         host_ref: &ResourceRef,
         provider_ref: &ResourceRef,

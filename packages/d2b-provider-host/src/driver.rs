@@ -242,7 +242,11 @@ pub struct HostDriver {
 
 impl HostDriver {
     /// Build one resource's driver over the host-observation port.
-    pub fn new(effects: Arc<dyn HostDriverEffects>) -> Self {
+    ///
+    /// Crate-private: the only construction site is the factory, which
+    /// builds the effects from the daemon-supplied facet set (U5); no
+    /// externally built port appears anywhere (R2).
+    pub(crate) fn new(effects: Arc<dyn HostDriverEffects>) -> Self {
         Self { effects }
     }
 
@@ -495,7 +499,7 @@ mod tests {
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
-    use crate::test_support::RecordingEffects;
+    use crate::test_support::{RecordingEffects, RecordingProbe, scripted_facets};
 
     use super::{
         HostDriver, HostDriverFactory, HostDriverStatus, host_descriptor, host_spec_decoder,
@@ -722,12 +726,16 @@ mod tests {
     /// registry alone; the driver's effects come from the crate's own
     /// implementation over the facet set (U5), so no externally built port
     /// appears at the construction site.
+    ///
+    /// The facet set carries the scripted probe double, so the reconcile is
+    /// hermetic: the real probe's local-machine observations stay the plane
+    /// binding test's integration point.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_registry_serves_the_declared_factory_for_a_host_row() {
         let mut providers = ProviderDirectory::new();
         providers
-            .register_driver(&host_descriptor(facets()))
+            .register_driver(&host_descriptor(scripted_facets(RecordingProbe::new(Vec::new()))))
             .expect("the declaration registers");
 
         let key = ResourceKey::new("work", "Host", "host-system");
@@ -740,7 +748,7 @@ mod tests {
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied,
-            "the crate's own probe observes the system-only bootstrap Host as Ready"
+            "the scripted probe observes the system-only bootstrap Host as Ready"
         );
         let status = ctx.status::<HostDriverStatus>().expect("status published");
         assert_eq!(status.report().status.phase, ResourcePhase::Ready);

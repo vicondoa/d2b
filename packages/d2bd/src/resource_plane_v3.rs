@@ -3708,6 +3708,30 @@ mod tests {
         );
     }
 
+    /// The kernel-visible names the host family's probe asserts are the
+    /// same names the sibling families declare: the pipewire runtime socket
+    /// and the usbip kernel modules. The host probe spells them locally
+    /// (it needs no sibling crate), so this composition-root test pins the
+    /// shared-by-contract agreement: a rename on either side fails here.
+    #[test]
+    fn the_host_probe_and_sibling_families_agree_on_kernel_visible_names() {
+        assert_eq!(
+            d2b_provider_host::PIPEWIRE_RUNTIME_SOCKET,
+            d2b_provider_audio_pipewire::PIPEWIRE_RUNTIME_SOCKET,
+            "the host probe and the audio-pipewire family assert the same pipewire socket name"
+        );
+        assert_eq!(
+            d2b_provider_host::USBIP_CORE_MODULE,
+            d2b_provider_device_usbip::vocabulary::USBIP_CORE_MODULE,
+            "the host probe and the device-usbip family assert the same usbip core module name"
+        );
+        assert_eq!(
+            d2b_provider_host::USBIP_HOST_MODULE,
+            d2b_provider_device_usbip::vocabulary::USBIP_HOST_MODULE,
+            "the host probe and the device-usbip family assert the same usbip host module name"
+        );
+    }
+
     /// U5: the composition root hosts the Host family's declared effects
     /// service from the family's own factory over the plane's facet set, and
     /// the hosted service answers `inspect-host` through the real invocation
@@ -3833,9 +3857,31 @@ mod tests {
             request_fds: Vec::new(),
         };
         let after = adopted.call(call).await.expect("call after restart");
+        // `activeProcessCount` is computed from the live `/proc` process
+        // count, so any process starting or exiting between the two calls
+        // changes it; the restart-adoption meaning lives in the stable
+        // fields. Normalize the volatile field on both sides (asserting it
+        // is present and well-formed on both) and compare the remainders
+        // exactly.
+        let volatile_count = |payload: &d2b_contracts_resource::v3::CanonicalJsonObject| {
+            match payload.get("activeProcessCount") {
+                Some(d2b_contracts_resource::v3::CanonicalJsonValue::Integer(count)) => *count,
+                other => panic!("activeProcessCount is not a canonical integer: {other:?}"),
+            }
+        };
+        let before_count = volatile_count(&before.payload);
+        let after_count = volatile_count(&after.payload);
+        assert!(
+            before_count >= 0 && after_count >= 0,
+            "the process count is a non-negative observation"
+        );
+        let mut before_fields = before.payload.clone().into_inner();
+        let mut after_fields = after.payload.clone().into_inner();
+        before_fields.remove("activeProcessCount");
+        after_fields.remove("activeProcessCount");
         assert_eq!(
-            after.payload, before.payload,
-            "the adopted generation answers the same bounded observations"
+            after_fields, before_fields,
+            "the adopted generation answers the same bounded observations (the volatile process count normalized out)"
         );
     }
 

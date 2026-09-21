@@ -15,23 +15,23 @@
 
 use std::sync::Arc;
 
-use d2b_provider_system_core::MinijailPlatformGate;
+use d2b_provider_system_core::{HostProbeEffectPort, MinijailPlatformGate};
 
 /// The daemon-supplied facet set the provider-owned Host effects are built
 /// from (U5).
 ///
 /// The composition root supplies the objects; the driver never holds a
-/// daemon state type (R2). The one facet is the minijail platform gate
-/// source: the daemon's own bounded kernel/cgroup posture probe, which this
-/// crate's probe reads the `Pidfd` capability and the platform gate
-/// observations from. Every other probe input is host state the crate reads
-/// itself.
+/// daemon state type (R2). The one facet is the bounded probe the family's
+/// effects run over: the crate's production probe, built by the composition
+/// root from the daemon's minijail platform gate source (see
+/// [`crate::production_probe`]), or a scripted double in tests. Every other
+/// probe input is host state the crate reads itself.
 #[derive(Clone)]
 pub struct HostEffectFacets {
-    /// The minijail platform gate source: the daemon's own bounded
-    /// kernel-version / cgroup.kill posture probe (the same gate the
-    /// daemon-owned minijail Provider is constructed from).
-    pub minijail_gate: Arc<dyn MinijailPlatformGateSource>,
+    /// The bounded probe the family's effects run over: the same
+    /// [`HostProbeEffectPort`] surface the crate's production `HostProbe`
+    /// implements.
+    pub probe: Arc<dyn HostProbeEffectPort>,
 }
 
 /// The daemon-supplied minijail platform gate source (U5).
