@@ -3387,10 +3387,11 @@ mod tests {
         // resolution re-verifies it per invocation and refuses closed, and
         // the tamper reason must be journaled at the point of collapse.
 
-        std::fs::write(
+        tokio::fs::write(
             &state.config.artifacts.bundle_path,
             br#"{ "schemaVersion": "v3" }"#,
         )
+        .await
         .expect("tamper the bundle");
 
         let output = capture_journal_output(|| {
