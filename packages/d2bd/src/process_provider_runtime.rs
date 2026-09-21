@@ -715,6 +715,34 @@ impl d2b_provider_supervisor::LaunchedObserver for PidfdTableLaunchedObserver {
         start_time_ticks: u64,
         pidfd: std::os::fd::OwnedFd,
     ) {
+        // A broker-confirmed spawn proves a live process now owns this
+        // (vm, role). If the slot still holds a STALE entry from a failed
+        // prior launch - the launch-failure cleanup stops the child but
+        // never clears this table, and its dead pid is what the readiness
+        // probe (`ObserveRunnerHandler::runner_lookup`) and the stop path
+        // (`SignalRunnerHandler::runner_lookup`) both read - drop the dead
+        // entry before registering. Otherwise the relaunch's registration
+        // is refused as a duplicate, the probe reports `present: false` for
+        // a `gone` pid while the fresh runner is live, the stop refuses
+        // against the same gone pid, and the row is wedged (the broker's
+        // duplicate-runner guard then refuses every retry spawn).
+        //
+        // `register` refuses a duplicate by design (the concurrent-spawn
+        // guard for one broker runner), so the stale replacement has to
+        // happen here. A LIVE duplicate is kept untouched: a second live
+        // spawn for one broker runner is impossible (the broker's
+        // duplicate-runner guard), and replacing a live entry would orphan
+        // its pidfd.
+        if self.pidfd_table.contains(vm, role)
+            && !self.pidfd_table.still_alive_same_start_time(vm, role)
+        {
+            tracing::warn!(
+                vm,
+                role,
+                "pidfd-table: dropping stale entry before relaunched runner registration"
+            );
+            self.pidfd_table.deregister(vm, role);
+        }
         match self.pidfd_table.register(
             vm.to_owned(),
             role.to_owned(),
@@ -740,7 +768,13 @@ impl d2b_provider_supervisor::LaunchedObserver for PidfdTableLaunchedObserver {
                 }
                 let _ = pid;
             }
-            Err(d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }) => {}
+            Err(d2bd_runtime::supervisor::pidfd_table::PidfdTableError::DuplicateRegistration { .. }) => {
+                tracing::warn!(
+                    vm,
+                    role,
+                    "pidfd-table: registering a live duplicate for a launched runner"
+                );
+            }
             Err(error) => {
                 tracing::warn!(
                     vm,
@@ -6343,5 +6377,119 @@ mod tests {
             Err("device-worker-wayland-sock-unbound"),
             "a bundle that predates site.json keeps the GPU launch refused by name"
         );
+    }
+
+    // -- Launched-runner pidfd-table registration -----------------------------
+    //
+    // A failed launch (e.g. a readiness-probe envelope timeout) stops the
+    // spawned child but never clears the daemon's pidfd-table slot for its
+    // (vm, role). The next launch's observer registration would hit the
+    // duplicate guard and be swallowed, leaving the probe and the stop path
+    // reading the dead pid. The observer must replace the stale entry.
+
+    #[test]
+    fn launched_observer_replaces_stale_pidfd_table_entry_on_relaunch() {
+        use d2b_provider_supervisor::LaunchedObserver;
+        use d2bd_runtime::supervisor::pidfd_table::PidfdTable;
+
+        let state_path = std::env::temp_dir().join(format!(
+            "d2b-test-pidfd-observer-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock before epoch")
+                .as_nanos()
+        ));
+        let table = Arc::new(PidfdTable::new(state_path.clone()));
+        // The stale slot: a (vm, role) whose recorded process can never be
+        // alive (a pid above pid_max).
+        table
+            .register(
+                "host-system".to_owned(),
+                "controller-stale".to_owned(),
+                d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
+                    pidfd: std::fs::File::open("/dev/null").expect("null").into(),
+                    pid: i32::MAX,
+                    start_time_ticks: 1,
+                },
+            )
+            .expect("stale entry registers");
+        let observer = PidfdTableLaunchedObserver {
+            pidfd_table: Arc::clone(&table),
+        };
+        // The relaunch: a fresh broker-confirmed spawn for the same slot.
+        let live_pid = std::process::id() as i32;
+        observer.launched(
+            "host-system",
+            "controller-stale",
+            live_pid,
+            2,
+            std::fs::File::open("/dev/null").expect("null").into(),
+        );
+        let registration = table
+            .list_for_vm("host-system")
+            .into_iter()
+            .find(|registration| registration.role == "controller-stale")
+            .expect("the relaunched runner is registered");
+        assert_eq!(
+            registration.pid, live_pid,
+            "the stale dead pid must be replaced by the relaunched runner"
+        );
+        let _ = std::fs::remove_file(&state_path);
+    }
+
+    #[test]
+    fn launched_observer_keeps_a_live_duplicate_slot() {
+        use d2b_provider_supervisor::LaunchedObserver;
+        use d2bd_runtime::supervisor::pidfd_table::PidfdTable;
+
+        let state_path = std::env::temp_dir().join(format!(
+            "d2b-test-pidfd-observer-live-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock before epoch")
+                .as_nanos()
+        ));
+        let table = Arc::new(PidfdTable::new(state_path.clone()));
+        // A slot whose recorded process is this test process itself: alive
+        // with a matching start time.
+        let live_pid = std::process::id() as i32;
+        let start_time_ticks = d2bd_runtime::supervisor::pidfd_table::read_proc_start_time_pub(
+            live_pid,
+        )
+        .expect("own proc start time")
+        .expect("own proc is alive");
+        table
+            .register(
+                "host-system".to_owned(),
+                "controller-live".to_owned(),
+                d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
+                    pidfd: std::fs::File::open("/dev/null").expect("null").into(),
+                    pid: live_pid,
+                    start_time_ticks,
+                },
+            )
+            .expect("live entry registers");
+        let observer = PidfdTableLaunchedObserver {
+            pidfd_table: Arc::clone(&table),
+        };
+        observer.launched(
+            "host-system",
+            "controller-live",
+            live_pid,
+            start_time_ticks,
+            std::fs::File::open("/dev/null").expect("null").into(),
+        );
+        let registration = table
+            .list_for_vm("host-system")
+            .into_iter()
+            .find(|registration| registration.role == "controller-live")
+            .expect("the live entry is kept");
+        assert_eq!(
+            registration.pid, live_pid,
+            "a live duplicate slot is kept untouched (concurrent-spawn guard)"
+        );
+        let _ = std::fs::remove_file(&state_path);
     }
 }

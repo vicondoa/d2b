@@ -408,7 +408,10 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         }
         let phase = match self.readiness_phase(ticket, candidate.identity).await {
             Ok(phase) => phase,
-            Err(readiness_error) => {
+            // The probe ran and found no candidate: the observed process
+            // can no longer be confirmed to exist, so its identity is
+            // unverifiable - the terminal identity-ambiguous quarantine.
+            Err(readiness_error @ ProcessConformanceError::DeadlineExceeded) => {
                 warn!(
                     provider = PROVIDER_NAME,
                     resource = %ticket.process_ref().to_canonical_string(),
@@ -423,6 +426,13 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
                     AdoptionCondition::Quarantined,
                 )));
             }
+            // Any other readiness failure - above all a broker transport
+            // timeout on the probe envelope, or a refused observe - is
+            // transient and says nothing about the candidate's identity: a
+            // healthy running process must not be terminally quarantined
+            // because one envelope call exceeded its io budget. Report the
+            // error so the driver retries.
+            Err(readiness_error) => return Err(readiness_error),
         };
         let _pidfd = self.port.open_pidfd(&candidate).await.inspect_err(|error| {
             warn!(

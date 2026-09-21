@@ -6269,12 +6269,59 @@ fn remove_runner_registries(runner_id: &str) -> bool {
 /// work-review (W1fu1/fu2).
 #[cfg(not(feature = "layer1-bootstrap"))]
 pub(crate) fn reserve_runner_id_for_spawn(runner_id: &str) -> Result<(), BrokerError> {
-    if runner_pidfds().contains_key(runner_id) {
-        return Err(BrokerError::Protocol(format!(
-            "runner {runner_id} already has an active registration; refusing duplicate spawn"
-        )));
+    let Some(pidfd) = runner_pidfds().get(runner_id) else {
+        return Ok(());
+    };
+    // A reservation is a LIVE-process guard and must not outlive the runner
+    // it names. The SIGCHLD loop reaps the child under its invocation key,
+    // and the runner-id-keyed duplicate entry is not guaranteed to be
+    // cleared by that same pass (the reap loop can be overtaken by the next
+    // spawn reservation, and a registration can also outlive the child when
+    // the runner dies outside the reap window). A registration whose
+    // process is gone would otherwise refuse every relaunch forever - a
+    // failed launch (for example a lost spawn reply) wedges the row with no
+    // recovery.
+    //
+    // Liveness is decided from the runner's own registered pidfd - the
+    // authoritative, generation-exact handle the broker holds for exactly
+    // this process - never by re-deriving identity from /proc (a registered
+    // start-time and a later /proc read are not comparable across the
+    // child's own user/PID namespace in general). A live pidfd refuses a
+    // duplicate spawn exactly as before; a pidfd whose process has exited -
+    // or been reaped (ECHILD) - is a stale registration: evict it so the
+    // stored child is relaunched instead of wedging the row. An
+    // unreadable/unexpected pidfd state keeps the conservative refusal.
+    use nix::errno::Errno;
+    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
+    match waitid(
+        Id::PIDFd(pidfd.as_fd()),
+        WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG,
+    ) {
+        // A dead-but-unreaped child, or one reaped by the SIGCHLD loop:
+        // reclaim the stale registration and let the relaunch proceed.
+        Ok(WaitStatus::Exited(_, _)) | Ok(WaitStatus::Signaled(_, _, _)) => {
+            tracing::warn!(
+                runner_id,
+                "reserve: reclaiming stale registration of a dead runner before relaunch"
+            );
+            remove_runner_registries(runner_id);
+            return Ok(());
+        }
+        Err(Errno::ECHILD) => {
+            tracing::warn!(
+                runner_id,
+                "reserve: reclaiming registration of an already-reaped runner before relaunch"
+            );
+            remove_runner_registries(runner_id);
+            return Ok(());
+        }
+        // Any other outcome - a live child (StillAlive), an unreadable or
+        // unexpected pidfd state - keeps the refusal.
+        Ok(_) | Err(_) => {}
     }
-    Ok(())
+    Err(BrokerError::Protocol(format!(
+        "runner {runner_id} already has an active registration; refusing duplicate spawn"
+    )))
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -16047,6 +16094,37 @@ mod tests {
         spawn_payload_with_preflight(argv, role, serving_worker, vm_id, role_id, bundle_runner_intent_ref, Vec::new())
     }
 
+    /// The same minimal spawn payload plus a user namespace mapping the
+    /// child's in-ns root to the current principal. A plain (no-namespace)
+    /// child that runs as an unprivileged principal calls `setgroups` and
+    /// fails with EPERM before `execve`; inside a user namespace the
+    /// broker skips that step, so the kernel-spawned child is genuinely
+    /// alive and the test can exercise liveness against a running runner.
+    fn spawn_payload_with_user_namespace(
+        argv: Vec<String>,
+        role: &str,
+        serving_worker: bool,
+        vm_id: &str,
+        role_id: &str,
+        bundle_runner_intent_ref: &str,
+    ) -> serde_json::Value {
+        let mut payload = spawn_payload_with_preflight(
+            argv,
+            role,
+            serving_worker,
+            vm_id,
+            role_id,
+            bundle_runner_intent_ref,
+            Vec::new(),
+        );
+        payload["namespaces"]["user"] = serde_json::json!(true);
+        payload["userNamespace"] = serde_json::json!({
+            "hostUidForZero": nix::unistd::Uid::current().as_raw(),
+            "hostGidForZero": Gid::current().as_raw(),
+        });
+        payload
+    }
+
     fn spawn_payload_with_preflight(
         argv: Vec<String>,
         role: &str,
@@ -16403,11 +16481,18 @@ mod tests {
             &root.join("unused-bundle.json"),
             &root.join("runtime"),
         );
+        // The first child must be GENUINELY alive when the second spawn is
+        // checked, because the contract under test is that a duplicate of a
+        // live registration is refused. A plain (no-namespace) kernel spawn
+        // running as an unprivileged principal dies in `setgroups` before
+        // exec (CHILD_EXIT_SETGROUPS) and would funnel into the stale-
+        // registration reclaim path instead, so the fixture spawns it in a
+        // user namespace where the broker skips that step.
         let first = envelope_response(
             harness
                 .invoke(
                     "spawn-process",
-                    spawn_payload(
+                    spawn_payload_with_user_namespace(
                         vec![spawn_test_binary("sleep"), "30".to_owned()],
                         "cloud-hypervisor",
                         false,
@@ -20383,6 +20468,98 @@ mod tests {
                 .expect("ChildReaped notification should appear within 3 s");
             assert_eq!(notif.exit_status.kind, ChildExitKind::Exited);
             assert_eq!(notif.exit_status.code, Some(0));
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn reserve_reclaims_stale_registration_of_a_dead_runner() {
+            // A launch whose reply is lost leaves the broker holding the
+            // runner-id-keyed registration of the spawned child. When that
+            // child exits or is killed, the runner-keyed duplicate can
+            // survive. The next spawn for the same runner id must not be
+            // refused forever by the dead registration: the reserve guard
+            // asks the registered pidfd (the authoritative handle) and
+            // reclaims the stale entry, exactly as the watchdog relaunch in
+            // the guest-preflight check needs after a lost spawn reply.
+            let _guard = ReapTestGuard::new();
+
+            let runner_id = "reap-vm:ch-runner";
+            let child = Command::new("true")
+                .spawn()
+                .expect("spawn a short-lived child");
+            let pid = child.id() as i32;
+            let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+            let start_time_ticks = read_proc_start_time_ticks(pid)
+                .expect("read start time")
+                .expect("live child");
+            runner_pidfds()
+                .insert(runner_id, pidfd)
+                .expect("register runner pidfd");
+            with_runner_metadata_mut(|registry| {
+                registry.insert(
+                    runner_id.to_owned(),
+                    test_runner_registration(pid, start_time_ticks),
+                );
+            });
+            // Reap the child so the registered pidfd reports it exited.
+            let _ = nix::sys::wait::waitpid(Pid::from_raw(pid), None);
+            std::mem::forget(child);
+
+            assert!(
+                runner_pidfds().contains_key(runner_id),
+                "precondition: registration exists"
+            );
+            assert!(reserve_runner_id_for_spawn(runner_id).is_ok());
+            assert!(
+                !runner_pidfds().contains_key(runner_id),
+                "the stale pidfd registration must be reclaimed"
+            );
+            assert!(
+                !with_runner_metadata_mut(|registry| registry.contains_key(runner_id)),
+                "the stale metadata registration must be reclaimed"
+            );
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn reserve_keeps_refusing_a_live_registration() {
+            let _guard = ReapTestGuard::new();
+
+            let child = Command::new("sleep")
+                .arg("600")
+                .spawn()
+                .expect("spawn sleep child");
+            let pid = child.id() as i32;
+            let runner_id = "reap-vm:ch-runner-live";
+            let start_time_ticks = read_proc_start_time_ticks(pid)
+                .expect("read start time")
+                .expect("live child");
+            let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+            runner_pidfds()
+                .insert(runner_id, pidfd)
+                .expect("register runner pidfd");
+            with_runner_metadata_mut(|registry| {
+                registry.insert(
+                    runner_id.to_owned(),
+                    test_runner_registration(pid, start_time_ticks),
+                );
+            });
+
+            let error = reserve_runner_id_for_spawn(runner_id)
+                .expect_err("a live registration must still refuse a duplicate spawn");
+            assert!(matches!(error, BrokerError::Protocol(_)));
+            assert!(
+                runner_pidfds().contains_key(runner_id),
+                "the live registration must be kept intact"
+            );
+
+            kill(Pid::from_raw(pid), Signal::SIGKILL).expect("kill child");
+            let _ = nix::sys::wait::waitpid(Pid::from_raw(pid), None);
+            std::mem::forget(child);
+            runner_pidfds().remove(runner_id);
+            with_runner_metadata_mut(|registry| {
+                registry.remove(runner_id);
+            });
         }
 
         #[test]

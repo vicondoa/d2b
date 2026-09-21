@@ -21,7 +21,9 @@ use crate::identity::{
     WaitReapOwner,
 };
 use crate::port::{AdoptionCandidate, LaunchedProcess, ProcessLaunchEffectPort, StopClass};
-use crate::ticket::{CompiledDigests, GuestExecutionBinding, LaunchTicket, OperationBinding};
+use crate::ticket::{
+    CompiledDigests, GuestExecutionBinding, LaunchTicket, OperationBinding, ReadinessExpectation,
+};
 
 /// Drive a future to completion on the calling thread.
 ///
@@ -210,6 +212,7 @@ pub mod fixtures {
         selected_provider: BoundedToken,
         expected_identity: BTreeSet<IdentityBinding>,
         guest_execution_binding: bool,
+        readiness: ReadinessExpectation,
     }
 
     impl TicketBuilder {
@@ -258,6 +261,12 @@ pub mod fixtures {
             self
         }
 
+        /// Override the ticket's readiness expectation.
+        pub fn with_readiness(mut self, readiness: ReadinessExpectation) -> Self {
+            self.readiness = readiness;
+            self
+        }
+
         /// Build the ticket.
         pub fn build(self) -> Result<LaunchTicket, ProcessConformanceError> {
             let is_guest = self.execution_ref.resource_type().as_str() == "Guest";
@@ -276,7 +285,8 @@ pub mod fixtures {
                 compiled_digests(),
                 OperationBinding::new(operation_uid(), 30_000)?,
                 self.expected_identity,
-            )?;
+            )?
+            .with_readiness(self.readiness);
             if is_guest && self.guest_execution_binding {
                 ticket.with_guest_execution_binding(GuestExecutionBinding::new(
                     ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
@@ -304,6 +314,7 @@ pub mod fixtures {
             selected_provider: token("system-systemd"),
             expected_identity: BTreeSet::from([IdentityBinding::Cgroup]),
             guest_execution_binding: true,
+            readiness: ReadinessExpectation::None,
         }
     }
 }
