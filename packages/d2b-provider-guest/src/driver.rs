@@ -57,6 +57,9 @@ use d2b_resource_types::{
 };
 use serde_json::{Value, json};
 
+use crate::effects_service::GUEST_EFFECTS_SERVICE;
+use crate::facets::GuestEffectFacets;
+
 /// The one ResourceType this factory serves.
 pub const GUEST_TYPE_NAME: &str = "Guest";
 
@@ -699,9 +702,12 @@ const GUEST_CREATIONS: &[ChildCreation] = &[
 /// present before the plane opens. The type is not exportable:
 /// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
 /// guest can never be an export subject. The driver serves no broker
-/// operations and contributes no startup step or service of its own; every
-/// child the family's drivers and controller sessions create is declared in
-/// [`GUEST_CREATIONS`].
+/// operations and contributes no startup step of its own; every child the
+/// family's drivers and controller sessions create is declared in
+/// [`GUEST_CREATIONS`]. The family's declared effects service
+/// (`guest.d2bus.org/effects`, U10) rides the declaration, so the daemon
+/// hosts it through the registered factory over the composition root's
+/// facet set.
 pub fn guest_descriptor(args: GuestDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::GUEST,
@@ -713,7 +719,7 @@ pub fn guest_descriptor(args: GuestDriverArgs) -> DriverDescriptor {
         operations: &[],
         creations: GUEST_CREATIONS,
         startup: &[],
-        services: &[],
+        services: &[GUEST_EFFECTS_SERVICE],
         decoder: guest_spec_decoder(),
         factory: Arc::new(GuestDriverFactory::new(args)),
     }
@@ -730,8 +736,10 @@ pub struct GuestDriverArgs {
     pub zone: String,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
-    /// The typed Provider effect port.
-    pub effects: Arc<dyn GuestDriverEffects>,
+    /// The daemon-supplied facet set the family's effects implementation is
+    /// built from (U10). The composition supplies the objects; the driver
+    /// never holds a daemon state type (R2).
+    pub facets: GuestEffectFacets,
 }
 
 /// Factory for the `Guest` ResourceType.
@@ -764,6 +772,10 @@ impl ResourceDriverFactory for GuestDriverFactory {
 }
 
 /// One desired Guest resource.
+
+/// The effects are this crate's own implementation (U10), built from the
+/// daemon-supplied facet set:the construction site holds no externally
+/// built port (R2).
 pub struct GuestDriver {
     zone: ZoneId,
     controller_generation: ControllerGeneration,
@@ -773,13 +785,30 @@ pub struct GuestDriver {
 }
 
 impl GuestDriver {
-    /// Build one driver for a single row.
+    /// Build one driver for a single row over the family's production effects
+    /// (U10: built from the daemon-supplied facet set inside the factory).
     pub fn new(args: GuestDriverArgs) -> Self {
         let zone = ZoneId::parse(args.zone).expect("driver zone was validated at construction");
         Self {
             zone,
             controller_generation: args.controller_generation,
-            effects: args.effects,
+            effects: Arc::new(crate::effects_service::GuestEffectsService::new(args.facets)),
+            watched: Vec::new(),
+        }
+    }
+
+    /// Build one driver over an explicit effects port (driver tests script
+    /// the typed seam;the production composition never takes this surface).
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_effects(
+        zone: &str,
+        controller_generation: ControllerGeneration,
+        effects: Arc<dyn GuestDriverEffects>,
+    ) -> Self {
+        Self {
+            zone: ZoneId::parse(zone).expect("driver zone was validated at construction"),
+            controller_generation,
+            effects,
             watched: Vec::new(),
         }
     }
@@ -1841,11 +1870,11 @@ mod tests {
     }
 
     fn driver(effects: Arc<ScriptedEffects>) -> GuestDriver {
-        GuestDriver::new(GuestDriverArgs {
-            zone: "work".to_owned(),
-            controller_generation: ControllerGeneration::new(3).expect("generation"),
+        GuestDriver::with_effects(
+            "work",
+            ControllerGeneration::new(3).expect("generation"),
             effects,
-        })
+        )
     }
 
     fn guest_status(ctx: &ResourceContext) -> GuestDriverStatus {
@@ -1900,7 +1929,7 @@ mod tests {
         let factory = GuestDriverFactory::new(GuestDriverArgs {
             zone: "work".to_owned(),
             controller_generation: ControllerGeneration::new(1).expect("generation"),
-            effects: ScriptedEffects::new(),
+            facets: crate::test_support::ScriptedFacets::new().facet_set(),
         });
         assert_eq!(factory.resource_types().len(), 1);
         assert_eq!(factory.resource_types()[0].as_str(), GUEST_TYPE_NAME);

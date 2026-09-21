@@ -72,3 +72,20 @@
   display child derivation moves into `d2b-provider-display-wayland`, and
   each of the six interaction types registers through the generated
   registration table.
+- The guest family's driver effects ended their daemon-built arm: the family
+  now serves them from its own crate through its declared
+  `guest.d2bus.org/effects` service, hosted per zone by the daemon from the
+  family's registered factory over the composition root's facet set. The
+  Cloud Hypervisor controller session (target-session establishment and the
+  controller-owned reconcile) and the zone's manager view (live rows,
+  committed Provider identities, and the controller-session generation)
+  cross the boundary as daemon-supplied facets, never derived from caller
+  input; the preserved framework state machines for the qemu-media,
+  azure-container-apps, and azure-virtual-machine kinds moved into the crate
+  read nothing from the daemon. Every refusal and admission check moved
+  verbatim: the typed admission, the dependency barrier, the KTD7 identity
+  fence, and the gateway-custody validation. The daemon's `guest_effects.rs`
+  module and the port-shaped injection at the driver construction site are
+  deleted in the same change, and the daemon composes the family only through
+  the generated registration table and its registered driver and service
+  factories.
