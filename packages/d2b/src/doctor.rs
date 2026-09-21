@@ -2411,14 +2411,20 @@ mod tests {
         // Wait for the child to exit without being reaped: the exited state
         // is the observable condition, not a fixed sleep. The guard only
         // bounds the environment producing the precondition (the child always
-        // exits; load only delays the observation). If the proc entry is
-        // already gone (reaped), there is nothing to assert.
+        // exits; load only delays the observation). Nothing reaps the child
+        // before the explicit wait below, so its proc entry staying absent is
+        // a failure, not a skip.
         let settled = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let state_char = loop {
+        let state = loop {
             match read_proc_stat_state(pid) {
-                Some(state @ ('Z' | 'X')) => break Some(state),
+                Some(state @ ('Z' | 'X')) => break state,
                 Some(_) => {}
-                None => break None,
+                // Nothing reaps this test's own unreaped child, so a vanished
+                // proc entry is a parser or environment failure, not a reason
+                // to skip the assertion: a test that can skip its own checks
+                // is a silent pass. (Mirrors the readiness sibling's Gone
+                // panic.)
+                None => panic!("child {pid} vanished before its exited state was observed"),
             }
             assert!(
                 std::time::Instant::now() < settled,
@@ -2428,12 +2434,10 @@ mod tests {
         };
         // Reap to avoid leaking zombies.
         let _ = child.wait();
-        if let Some(state_char) = state_char {
-            assert!(
-                state_char == 'Z' || state_char == 'X',
-                "child {pid} exited but read_proc_stat_state reported {state_char:?}"
-            );
-        }
+        assert!(
+            state == 'Z' || state == 'X',
+            "child {pid} exited but read_proc_stat_state reported {state:?}"
+        );
     }
 
     // --- check_bridge_ipv6_sysctl ---

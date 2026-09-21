@@ -3521,23 +3521,26 @@ mod tests {
                 serde_json::from_slice(&mock_recv_frame(server.as_fd())).unwrap();
             assert!(matches!(cancel.request, NamedProcessStreamRequest::Cancel));
         });
-let stream = CliAttachStream::new(Some(Arc::new(client)));
+        let stream = CliAttachStream::new(Some(Arc::new(client)));
         let started = Instant::now();
         // The observable condition is the outcome itself:the round trip must
         // end as the named deadline (asserted below). The finite ceiling below
         // then guards the magnitude:the round trip is bounded by the advertised
-        // 5s io budget, and a regression that inflates that budget (e.g., an
-        // ms-misread-as-seconds change, or an order-of-magnitude inflation)
-        // must fail on the wait itself, not merely return the right error kind
-        // after taking far longer than the shell's bound should have allowed.
-
-
+        // 5s io budget, and a regression that inflates that budget must fail
+        // on the wait itself rather than return the right error kind after
+        // taking far longer than the shell's bound should have allowed.
 
         // 60s is a 12x headroom over that budget: wide enough that scheduling
         // delay cannot trip it on any normally-loaded machine, finite enough
-        // that the >12x inflation class fails on the measurement. (The server
-        // thread above proves the teardown cancel was actually sent, and a
-        // deadline that never fires would hang the test deterministically.)
+        // that inflation beyond ~12x (e.g., an ms-misread-as-seconds change, a
+        // 10x arithmetic inflation to 50s) fails on the measurement. A smaller
+        // inflation - e.g. a copy-paste to the 30s request lifetime - lands
+        // below the ceiling by design: catching it would require a ~20-25s
+        // bound, back in the load-tripable regime this headroom exists to
+        // avoid, and it still surfaces as a visibly slow test rather than a
+        // silent pass. (The server thread above proves the teardown cancel
+        // was actually sent, and a deadline that never fires would hang the
+        // test deterministically.)
         let error = block_on(stream.receive()).unwrap_err();
         let elapsed = started.elapsed();
         assert_eq!(error, ClientError::DeadlineExpired);
