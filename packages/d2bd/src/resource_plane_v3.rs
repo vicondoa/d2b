@@ -1817,7 +1817,6 @@ pub struct ConstructionInputs {
     pub volume_effects: Arc<dyn VolumeDriverEffects>,
     pub binding_effects: Arc<dyn BindingDriverEffects>,
     pub endpoint_effects: Arc<dyn EndpointDriverEffects>,
-    pub activation_effects: Arc<dyn ActivationDriverEffects>,
     /// The daemon-supplied facet set the Credential family's effects
     /// implementation is built from (U8): the daemon's Credential runtime
     /// (the preserved Provider and execution-target reads, the lease-facts
