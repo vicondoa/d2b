@@ -3646,6 +3646,10 @@ use d2b_provider_system_core::MinijailPlatformGate;
         let activation_facets = d2b_provider_activation_nixos::test_support::recording_facets(
             d2b_provider_activation_nixos::test_support::RecordingBrokerDispatch::new(),
         );
+        // U10: the plane tests build the Guest family's facet set from the
+        // scripted facets double, exactly as the production composition
+        // root builds it from the daemon's runtime.
+        let guest_facets = d2b_provider_guest::test_support::ScriptedFacets::new().facet_set();
         // U1/U5/U10/U14: the plane hosts the Process, Network, Host,
         // Activation, and Guest families' declared effects services from the
         // same facet sets their driver factories are built from, exactly as
