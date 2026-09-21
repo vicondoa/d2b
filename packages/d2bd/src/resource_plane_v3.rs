@@ -3813,6 +3813,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: COMPOSITION_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(
@@ -3876,6 +3877,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: PROCESS_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(
@@ -3914,6 +3916,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method: NETWORK_EFFECTS_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(
@@ -4455,6 +4458,7 @@ use d2b_provider_system_core::MinijailPlatformGate;
             method,
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(

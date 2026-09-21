@@ -170,6 +170,14 @@ pub struct ServiceInvocation<'a> {
     /// The declared payload schema reference of the method being served:
     /// the row schema the envelope validated the payload against.
     pub payload_schema: Option<&'a str>,
+    /// The evidence chain this invocation runs under (U10, KTD6): the
+    /// ordered identities, root first, of the chain the broker minted for
+    /// the forwarded root call. A handler that invokes a broker-generic
+    /// kernel as the nested core of its family operation presents this
+    /// chain with its own identity appended, so the graft rule authorizes
+    /// the kernel call against the chain's initiating principal. Empty for
+    /// a root call.
+    pub chain_identities: &'a [String],
 }
 
 /// A provider service: one handle-loop shape plus an optional timer-driven

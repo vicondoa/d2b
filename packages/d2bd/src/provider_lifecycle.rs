@@ -140,6 +140,15 @@ pub(crate) enum ProviderStartupError {
         method: &'static str,
         facet: &'static str,
     },
+    /// A registered service id the daemon's composition list does not name.
+    /// The registry is the authority for what a registered family serves;
+    /// a service it carries that the hand-written declaration list cannot
+    /// resolve would otherwise be silently neither published nor refused,
+    /// so the zone refuses startup instead of composing nothing.
+    EffectServiceRegistrationUnknown {
+        provider_ref: &'static str,
+        service: &'static str,
+    },
     /// The zone's effect-service supervisor could not start (ractor
     /// runtime failure).
     EffectServiceSupervisorRefused { reason: String },
@@ -159,6 +168,9 @@ impl ProviderStartupError {
             Self::EffectServiceDuplicate { .. } => "effect-service-duplicate",
             Self::EffectServiceFactoryMissing { .. } => "effect-service-factory-missing",
             Self::EffectServiceFacetUnenforced { .. } => "effect-service-facet-unenforced",
+            Self::EffectServiceRegistrationUnknown { .. } => {
+                "effect-service-registration-unknown"
+            }
             Self::EffectServiceSupervisorRefused { .. } => {
                 "effect-service-supervisor-refused"
             }
@@ -175,7 +187,8 @@ impl ProviderStartupError {
             | Self::Drain { provider_ref, .. }
             | Self::OperationSurface { provider_ref, .. }
             | Self::EffectServiceFactoryMissing { provider_ref, .. }
-            | Self::EffectServiceFacetUnenforced { provider_ref, .. } => provider_ref,
+            | Self::EffectServiceFacetUnenforced { provider_ref, .. }
+            | Self::EffectServiceRegistrationUnknown { provider_ref, .. } => provider_ref,
             Self::EffectServiceDuplicate { .. } | Self::EffectServiceSupervisorRefused { .. } => "",
             Self::Plane(refusal) => refusal.provider_ref,
         }
@@ -227,6 +240,9 @@ impl ProviderStartupError {
                 method,
                 facet
             ),
+            Self::EffectServiceRegistrationUnknown { provider_ref, service } => {
+                format!("{}:{}:{}", self.code(), provider_ref, service)
+            }
             Self::EffectServiceSupervisorRefused { reason } => {
                 format!("{}:{reason}", self.code())
             }
@@ -677,8 +693,15 @@ impl ProviderSet {
                     if owners.contains_key(service) {
                         continue;
                     }
+                    // The registry is the authority: a registered service
+                    // the hand-written declaration list cannot resolve is a
+                    // drift that would otherwise be silently neither
+                    // published nor refused - refuse startup by name.
                     let Some(decl) = registered_service_decl(service) else {
-                        continue;
+                        return Err(ProviderStartupError::EffectServiceRegistrationUnknown {
+                            provider_ref: registration.provider_ref,
+                            service,
+                        });
                     };
                     owners.insert(service, registration.provider_ref);
                     for method in decl.methods {
@@ -1236,6 +1259,7 @@ mod tests {
             method: ECHO_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         }
     }
 
@@ -1697,6 +1721,7 @@ mod tests {
             method: ECHO_SERVICE.methods[0],
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         };
         let response = binding.call(call).await.expect("call");
         assert_eq!(

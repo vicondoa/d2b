@@ -112,10 +112,10 @@ const IPC_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
 /// Bound on one PipeWire probe subprocess (`pw_dump` / `wpctl`) wait.
 ///
 /// The typed `PipeWireAudio` arm carries no envelope context deadline, so
-/// the probe wait is bounded by this default, mirroring the zbus
-/// `SYSTEMD_METHOD_TIMEOUT` precedent (5s) in `ops/systemd.rs`. A probe
-/// that exceeds the bound is treated exactly like a failed probe (host not
-/// ready / effect not applied), never a stall of the dispatch worker.
+/// the probe wait is bounded by this default, mirroring the systemd
+/// family's method-timeout precedent (5s). A probe that exceeds the bound
+/// is treated exactly like a failed probe (host not ready / effect not
+/// applied), never a stall of the dispatch worker.
 const PW_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_IPC_RATE_LIMIT_MAX_BUCKETS: usize = 4096;
 const MAX_MODULE_NAME_LEN: usize = 64;

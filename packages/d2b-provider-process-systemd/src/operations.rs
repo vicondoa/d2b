@@ -183,6 +183,10 @@ static STOP_SYSTEMD_UNIT_HANDLER: StopSystemdUnitHandler = StopSystemdUnitHandle
 /// The daemon suffers no caller assertion here: the unit name, user, domain,
 /// and sandbox posture are all resolved from the Zone's verified bundle, and
 /// a request that names a different identity by field refuses fail-closed.
+// The read is one short /proc read on a genuinely synchronous validation
+// path (the retired broker arm read the same file async; this crate's
+// request fence is sync, and the read has no async form at this site).
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn validate_request(
     bundle: &BundleResolver,
     request: &d2b_contracts_broker::broker_wire::UnitRequest,
@@ -252,6 +256,48 @@ fn validate_request(
         .map_err(|_| UNIT_IDENTITY_MISMATCH)?;
     if request.user_ref != expected_user {
         return Err(UNIT_IDENTITY_MISMATCH);
+    }
+    // The Guest execution binding gate (restored from the retired broker
+    // arm's `validate_guest_process_binding`, which ran under the Guest
+    // profile). It is two checks, and both belong here:
+    //
+    // 1. A request whose execution reference targets a Guest must carry a
+    //    Guest execution binding - the profile gate required the binding,
+    //    and the row's payload schema admits it as an opaque object, so
+    //    only this fence can refuse a Guest-targeting request that omits
+    //    it.
+    // 2. A carried binding must be well-formed and its boot-identity
+    //    digest must be the domain-tagged SHA-256 of this kernel's
+    //    `/proc/sys/kernel/random/boot_id` (the deleted validator's
+    //    `d2b-kernel-boot-id-v1` tag) - the stale-boot replay guard. A
+    //    binding minted on a previous boot, or a zero/unpopulated
+    //    binding, refuses fail-closed with the handler's invalid-request
+    //    code.
+    //
+    // Host-mode requests carry no binding and target no Guest, so the
+    // admission is identical to the old Host profile, which never checked.
+    if let Some(binding) = &request.guest_execution {
+        if !binding.is_valid() {
+            return Err(UNIT_INVALID_REQUEST);
+        }
+        let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .map_err(|_| UNIT_INVALID_REQUEST)?;
+        let mut digest = Sha256::new();
+        digest.update(b"d2b-kernel-boot-id-v1\0");
+        digest.update(boot_id.trim().as_bytes());
+        let expected: [u8; 32] = digest.finalize().into();
+        if binding.boot_identity_digest != expected {
+            return Err(UNIT_INVALID_REQUEST);
+        }
+    } else if request
+        .execution_ref
+        .as_ref()
+        .is_some_and(|execution| execution.resource_type().as_str() == "Guest")
+    {
+        // A Guest-targeting request without a binding is the profile
+        // gate's refusal: the binding is mandatory for a Guest execution
+        // reference, not optional.
+        return Err(UNIT_INVALID_REQUEST);
     }
     Ok(intent.clone())
 }
@@ -973,6 +1019,210 @@ impl OperationHandler for StopSystemdUnitHandler {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Shared test fixtures (unit tests in this crate, including the hosted-
+// service tests in effects_service.rs)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+use d2b_contracts_broker::broker_wire::UnitRequest;
+
+/// The trusted bundle whose runner targets a Host execution reference:
+/// every unit-request fixture's intent resolves here, with the bundle
+/// hash the request's content identity matches.
+#[cfg(test)]
+pub(crate) fn fixture_resolver() -> BundleResolver {
+    fixture_resolver_with_execution("Host/vm")
+}
+
+/// The trusted bundle whose runner targets a Guest execution reference:
+/// the request-facing variant the guest-binding gate's profile half
+/// exercises.
+#[cfg(test)]
+pub(crate) fn fixture_guest_resolver() -> BundleResolver {
+    fixture_resolver_with_execution("Guest/vm")
+}
+
+#[cfg(test)]
+fn fixture_resolver_with_execution(execution_ref: &str) -> BundleResolver {
+    use d2b_core::bundle::{Bundle, BundleGeneration};
+    use d2b_core::manifest_v04::ManifestV04;
+    use d2b_core::processes::{
+        NodeId, ProcessExecutionDomain, ProcessNode, ProcessRole, ProcessesJson, RoleProfile,
+        VmProcessDag, VmProcessInvariants,
+    };
+    use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+    use std::collections::BTreeMap;
+
+    let host = serde_json::from_value(serde_json::json!({
+        "schemaVersion": "v2",
+        "site": { "allowUnsafeEastWest": false },
+        "environments": [],
+        "nftables": {
+            "family": "inet",
+            "table": "d2b",
+            "chains": [],
+            "tableHashAfterApply": null,
+            "ownershipId": "test"
+        },
+        "networkManager": {
+            "filePath": "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf",
+            "matchCriteria": [],
+            "reloadBehavior": "atomic-reload",
+            "ownership": {
+                "owner": "root",
+                "group": "root",
+                "mode": "0644",
+                "driftPolicy": "replace"
+            }
+        },
+        "hostsFile": {
+            "startMarker": "# d2b-managed begin",
+            "endMarker": "# d2b-managed end",
+            "rule": "replace-managed-block"
+        },
+        "kernelModules": [],
+        "fdOwnership": [],
+        "cloudHypervisorCapabilities": [],
+        "ifNameMappings": [],
+        "qemuMedia": null,
+        "ch": null,
+        "firewallCoexistencePolicy": null
+    }))
+    .expect("host fixture parses");
+    let manifest = ManifestV04::from_slice(
+        serde_json::to_vec(&serde_json::json!({
+            "_manifest": { "manifestVersion": 6 },
+            "_observability": {
+                "enabled": false,
+                "signozUrl": "http://127.0.0.1:8080",
+                "signozOtlpGrpcPort": 4317,
+                "signozOtlpHttpPort": 4318,
+                "obsVsockCid": 0,
+                "obsVsockHostSocket": "",
+                "vmName": ""
+            }
+        }))
+        .expect("manifest json serializes")
+        .as_slice(),
+    )
+    .expect("manifest fixture parses");
+    // The unit tests never reach the manager leg (the gate tests refuse
+    // before it), so a fixed runner uid is fine here; the d2bd end-to-end
+    // test uses the real test uid where the handler drives the user bus.
+    let uid = 1000_u32;
+    BundleResolver::from_artifacts_with_zone_resource_bundles(
+        Bundle {
+            bundle_version: 1,
+            schema_version: "v3".to_owned(),
+            privileges_path: "privileges.json".to_owned(),
+            storage_path: None,
+            realm_workloads_launcher_v2_path: None,
+            generation: BundleGeneration {
+                generator: "test".to_owned(),
+                source_revision: None,
+                generated_at: None,
+            },
+            bundle_hash: Some("sha256:bundle".to_owned()),
+            artifact_hashes: None,
+        },
+        host,
+        ProcessesJson {
+            schema_version: "v2".to_owned(),
+            vms: vec![VmProcessDag {
+                workload_identity: None,
+                vm: "vm".to_owned(),
+                nodes: vec![ProcessNode {
+                    id: NodeId("role".to_owned()),
+                    execution_ref: Some(execution_ref.to_owned()),
+                    execution_domain: Some(ProcessExecutionDomain::User),
+                    user_ref: Some("User/user-1000".to_owned()),
+                    role: ProcessRole::Audio,
+                    unit: None,
+                    binary_path: Some("/run/current-system/sw/bin/sleep".to_owned()),
+                    argv: vec!["sleep".to_owned(), "60".to_owned()],
+                    env: Vec::new(),
+                    plan_ops: Vec::new(),
+                    network_interfaces: Vec::new(),
+                    profile: RoleProfile {
+                        profile_id: "profile-role".to_owned(),
+                        uid,
+                        gid: 100_u32,
+                        adr_carve_out: None,
+                        caps: Vec::new(),
+                        namespaces: NamespaceSet {
+                            mount: false,
+                            pid: false,
+                            net: false,
+                            ipc: false,
+                            uts: false,
+                            user: false,
+                        },
+                        seccomp_policy_ref: None,
+                        mount_policy: MountPolicy {
+                            read_only_paths: Vec::new(),
+                            writable_paths: Vec::new(),
+                            nix_store_read_only: true,
+                            hide_device_nodes_by_default: true,
+                            device_binds: Vec::new(),
+                            bind_mounts: Vec::new(),
+                        },
+                        cgroup_placement: CgroupPlacement {
+                            subtree: "d2b.slice/vm/role".to_owned(),
+                            controllers: Vec::new(),
+                            delegated: false,
+                        },
+                        user_namespace: None,
+                        umask: None,
+                    },
+                    readiness: Vec::new(),
+                }],
+                edges: Vec::new(),
+                invariants: VmProcessInvariants {
+                    swtpm_pre_start_flush: false,
+                    per_vm_audit_pipeline: false,
+                    usbip_gating: true,
+                    tpm_ownership_migration_without_running_vm_mutation: true,
+                },
+            }],
+        },
+        manifest,
+        BTreeMap::new(),
+    )
+}
+
+/// The typed unit request that passes every bundle check in
+/// [`validate_request`]: every field matches the fixture resolver's
+/// trusted runner intent.
+#[cfg(test)]
+pub(crate) fn fixture_unit_request() -> UnitRequest {
+    use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+    use d2b_contracts_broker::broker_wire::RunnerRole;
+    use d2b_contracts_resource::v3::ResourceRef;
+    UnitRequest {
+        vm_id: VmId::new("vm"),
+        role_id: RoleId::new("role"),
+        resource_ref: None,
+        resource_uid: None,
+        role: RunnerRole::Audio,
+        bundle_runner_intent_ref: BundleOpId::new("runner:vm:vm:role:role"),
+        bundle_content_identity: "sha256:bundle".to_owned(),
+        provider_identity: [1; 32],
+        template_identity: [2; 32],
+        generation: 3,
+        domain: UnitDomain::User,
+        execution_ref: Some(
+            ResourceRef::parse("Host/vm").expect("the execution reference is canonical"),
+        ),
+        user_ref: Some(
+            ResourceRef::parse("User/user-1000").expect("the user reference is canonical"),
+        ),
+        guest_execution: None,
+        sandbox_plan: None,
+        tracing_span_id: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1072,6 +1322,73 @@ mod tests {
             ),
             Err(UNIT_IDENTITY_MISMATCH)
         ));
+    }
+
+    /// The Guest execution binding gate: a request that carries a binding
+    /// with a zero or wrong boot-identity digest refuses with the
+    /// invalid-request code, and a binding carrying this kernel's
+    /// domain-tagged boot-identity digest is admitted - the gate compares
+    /// against the digest of `/proc/sys/kernel/random/boot_id`, never a
+    /// constant.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_guest_execution_binding_with_a_wrong_boot_identity_digest_is_refused() {
+        use d2b_contracts_broker::broker_wire::GuestExecutionBinding;
+        let bundle = fixture_resolver();
+        let mut request = fixture_unit_request();
+        request.guest_execution = Some(GuestExecutionBinding {
+            target_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .expect("the guest uid is canonical"),
+            boot_identity_digest: [0; 32],
+            session_generation: 1,
+            assignment_epoch: 2,
+            provider_generation: 3,
+            controller_generation: 4,
+        });
+        assert_eq!(
+            validate_request(&bundle, &request),
+            Err(UNIT_INVALID_REQUEST),
+            "a zero boot-identity digest is no binding"
+        );
+
+        let mut wrong = request.clone();
+        wrong.guest_execution.as_mut().unwrap().boot_identity_digest = [7; 32];
+        assert_eq!(
+            validate_request(&bundle, &wrong),
+            Err(UNIT_INVALID_REQUEST),
+            "a digest that is not this kernel's boot identity is refused"
+        );
+
+        // The matching digest is admitted: the commitment is this
+        // kernel's domain-tagged boot identity, so the gate proves the
+        // comparison rather than rejecting every binding.
+        let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .expect("the kernel boot id is readable");
+        let mut digest = Sha256::new();
+        digest.update(b"d2b-kernel-boot-id-v1\0");
+        digest.update(boot_id.trim().as_bytes());
+        request.guest_execution.as_mut().unwrap().boot_identity_digest = digest.finalize().into();
+        assert!(
+            validate_request(&bundle, &request).is_ok(),
+            "the matching kernel boot-identity digest is admitted"
+        );
+    }
+
+    /// The Guest execution binding gate's profile half: a request whose
+    /// execution reference targets a Guest but carries no binding is
+    /// refused with the invalid-request code - the binding is mandatory
+    /// for a Guest target, never optional.
+    #[test]
+    fn a_guest_targeting_request_without_a_binding_is_refused() {
+        let bundle = fixture_guest_resolver();
+        let mut request = fixture_unit_request();
+        request.execution_ref =
+            Some(ResourceRef::parse("Guest/vm").expect("the execution reference is canonical"));
+        assert_eq!(
+            validate_request(&bundle, &request),
+            Err(UNIT_INVALID_REQUEST),
+            "a Guest execution reference requires a Guest execution binding"
+        );
     }
 
     #[test]

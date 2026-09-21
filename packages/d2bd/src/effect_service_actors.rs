@@ -75,6 +75,9 @@ pub(crate) struct ServiceCallData {
     pub kernel: Option<KernelCaller>,
     /// The descriptors the caller attached on the request leg.
     pub request_fds: Vec<RawFd>,
+    /// The evidence chain's ordered identities, root first, of the
+    /// forwarded root call the broker minted (U10, KTD6).
+    pub chain_identities: Vec<String>,
 }
 
 /// The durable declaration row for one effect service (U8): the production
@@ -324,6 +327,7 @@ impl Actor for EffectServiceActor {
                     request_fds: &call.request_fds,
                     response_fds: call.method.response_fds,
                     payload_schema: call.method.payload_schema,
+                    chain_identities: &call.chain_identities,
                 };
                 let result = state.service.handle(invocation).await;
                 // If the actor dies before this sends, the caller's receiver
@@ -626,6 +630,7 @@ mod tests {
             method: PING_METHOD,
             kernel: None,
             request_fds: Vec::new(),
+            chain_identities: Vec::new(),
         }
     }
 

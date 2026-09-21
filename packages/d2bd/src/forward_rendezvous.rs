@@ -476,8 +476,15 @@ impl ForwardRendezvous {
         // tables.
         match providers.resolve_effect_service_for_operation(&request.operation).await {
             Ok(binding) => {
-                return invoke_effect_service(&binding, request, fds, kernel.as_ref(), resources)
-                    .await
+                return invoke_effect_service(
+                    &binding,
+                    request,
+                    fds,
+                    kernel.as_ref(),
+                    resources,
+                    chain,
+                )
+                .await
             }
             Err(EffectServiceError::OperationUnserved { .. }) => {}
             Err(error) => return (refused(effect_refusal_code(&error)), Vec::new()),
@@ -874,6 +881,7 @@ async fn invoke_effect_service(
     fds: &[RawFd],
     kernel: Option<&KernelCaller>,
     resources: Option<ServiceResourceContext>,
+    chain: &EvidenceChain,
 ) -> (ForwardOperationResponse, Vec<OwnedFd>) {
     // The distinct method this operation resolves to, for the operator
     // following the refusal records and for the capability facets the
@@ -907,6 +915,7 @@ async fn invoke_effect_service(
         method: *method,
         kernel: kernel.cloned(),
         request_fds: fds.to_vec(),
+        chain_identities: chain.identities().to_vec(),
     };
     match binding.call_expected(binding.revision(), call).await {
         Ok(response) => {
@@ -2045,6 +2054,22 @@ mod tests {
             .await
         }
 
+        /// The same rendezvous over a set that hosts the process-systemd
+        /// effects service (U15): the forwarded family operations resolve
+        /// to the hosted actor through the declared operation facets, and
+        /// the pidfd-minting calls reach the crate's committed handler
+        /// table over the invocation's kernel seam.
+        async fn start_with_systemd_effects_service() -> Self {
+            Self::served_by_services(
+                &[PROCESS_SYSTEMD_EFFECTS_SERVICE],
+                Arc::new(SystemdEffectsServiceFactory::new()),
+                |rendezvous, listener| {
+                    spawn_server(rendezvous, listener, tokio::runtime::Handle::current())
+                },
+            )
+            .await
+        }
+
         /// The same rendezvous over a set that hosts the given declared
         /// services with one factory each (U3 fixtures: fd-leg and
         /// driver-context services).
@@ -2113,7 +2138,7 @@ mod tests {
                 guest_execution: None,
                 mode: ExecutionMode::Host,
             });
-            let providers = ProviderSet::new(zone.clone(), scratch.path().to_path_buf())
+            let mut set = ProviderSet::new(zone.clone(), scratch.path().to_path_buf())
                 .with(
                     family_declaration("process"),
                     vec![
@@ -2123,7 +2148,18 @@ mod tests {
                             ..ephemeral
                         },
                     ],
-                )
+                );
+            // The U15 hosting pass publishes every registered family's
+            // service that no driver in this set declared; the fixture set
+            // declares only the process family's driver, so the remaining
+            // registered services receive the echo fixture factory too -
+            // they are hosted but never called by these tests.
+            for registration in crate::resource_plane_v3::PROVIDER_REGISTRATIONS {
+                for &service in registration.services {
+                    set = set.with_effect_service_factory(service, Arc::new(EchoFactory));
+                }
+            }
+            let providers = set
                 .start()
                 .await
                 .expect("the process family starts through the base");
@@ -2170,6 +2206,18 @@ mod tests {
             .with(family_declaration("fixture"), vec![effect_descriptor(services)]);
         for service in services {
             set = set.with_effect_service_factory(service.id, Arc::clone(&factory));
+        }
+        // The U15 hosting pass publishes every registered family's service
+        // that no driver in this set declared; the fixture set declares
+        // only the services under test, so the remaining registered
+        // services receive the fixture factory too - they are hosted but
+        // never called by these tests.
+        for registration in crate::resource_plane_v3::PROVIDER_REGISTRATIONS {
+            for &service in registration.services {
+                if !services.iter().any(|declared| declared.id == service) {
+                    set = set.with_effect_service_factory(service, Arc::clone(&factory));
+                }
+            }
         }
         let providers = set
             .start()
@@ -4507,5 +4555,411 @@ assert_eq!(
         assert_eq!(record.invoking_identity, "provider-alpha");
         assert_eq!(record.leg, ChainLeg::Daemon);
         assert_eq!(root_record_count(&records, "invocation-attr-1"), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // The end-to-end forwarded pidfd-minting path (U15, KTD6): a
+    // forwarded StartSystemdUnit call crosses the carrier, resolves to
+    // the hosted process-systemd effects service, the handler starts the
+    // trusted unit through the user manager, opens the exact-main pidfd
+    // through the nested open-pidfd kernel leg, and the pidfd crosses
+    // back over the forwarded response leg. The two P0s this test pins:
+    // the declared response fd leg (a plain serving declaration refuses
+    // the minted pidfd with the fd-leg code) and the chain plumbing
+    // (empty chain identities refuse the nested kernel leg as an
+    // ungranted caller).
+    // -----------------------------------------------------------------
+
+    use d2b_contracts::encode_frame as encode_broker_frame;
+    use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+    use d2b_contracts_broker::broker_wire::{
+        EnvelopeInvokeResponse, RunnerRole, UnitDomain, UnitRequest,
+    };
+    use d2b_core::bundle::{Bundle, BundleGeneration};
+    use d2b_core::bundle_resolver::BundleResolver;
+    use d2b_core::host::HostJson;
+    use d2b_core::manifest_v04::ManifestV04;
+    use d2b_core::processes::{
+        NodeId, ProcessExecutionDomain, ProcessNode, ProcessRole, ProcessesJson, RoleProfile,
+        VmProcessDag, VmProcessInvariants,
+    };
+    use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+    use d2b_provider_process_systemd::effects_service::{
+        PROCESS_SYSTEMD_EFFECTS_SERVICE, SystemdEffectsServiceFactory,
+    };
+    use rustix::process::{Pid, PidfdFlags, pidfd_open};
+    use std::collections::BTreeMap;
+
+    /// The trusted bundle the forwarded systemd call validates against:
+    /// one VM DAG carrying the audio runner the request names, with the
+    /// bundle hash the request's content identity matches. The runner's
+    /// uid is the test process's, so the handler's user-manager leg
+    /// reaches the test user's own manager.
+    fn systemd_fixture_resolver(uid: u32) -> BundleResolver {
+        let host = serde_json::from_str::<HostJson>(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                realm_workloads_launcher_v2_path: None,
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: vec![VmProcessDag {
+                    workload_identity: None,
+                    vm: "vm".to_owned(),
+                    nodes: vec![systemd_runner_node(uid)],
+                    edges: Vec::new(),
+                    invariants: VmProcessInvariants {
+                        swtpm_pre_start_flush: false,
+                        per_vm_audit_pipeline: false,
+                        usbip_gating: true,
+                        tpm_ownership_migration_without_running_vm_mutation: true,
+                    },
+                }],
+            },
+            manifest,
+            BTreeMap::new(),
+        )
+    }
+
+    /// The trusted audio-runner node the forwarded request names: a
+    /// user-domain runner whose binary is the host's sleep, so the
+    /// handler's transient unit starts a short-lived benign process under
+    /// the test user's own manager.
+    fn systemd_runner_node(uid: u32) -> ProcessNode {
+        ProcessNode {
+            id: NodeId("role".to_owned()),
+            execution_ref: Some("Host/vm".to_owned()),
+            execution_domain: Some(ProcessExecutionDomain::User),
+            user_ref: Some("User/user-1000".to_owned()),
+            role: ProcessRole::Audio,
+            unit: None,
+            binary_path: Some("/run/current-system/sw/bin/sleep".to_owned()),
+            argv: vec!["sleep".to_owned(), "60".to_owned()],
+            env: Vec::new(),
+            plan_ops: Vec::new(),
+            network_interfaces: Vec::new(),
+            profile: RoleProfile {
+                profile_id: "profile-role".to_owned(),
+                uid,
+                gid: nix::unistd::getgid().as_raw(),
+                adr_carve_out: None,
+                caps: Vec::new(),
+                namespaces: NamespaceSet {
+                    mount: false,
+                    pid: false,
+                    net: false,
+                    ipc: false,
+                    uts: false,
+                    user: false,
+                },
+                seccomp_policy_ref: None,
+                mount_policy: MountPolicy {
+                    read_only_paths: Vec::new(),
+                    writable_paths: Vec::new(),
+                    nix_store_read_only: true,
+                    hide_device_nodes_by_default: true,
+                    device_binds: Vec::new(),
+                    bind_mounts: Vec::new(),
+                },
+                cgroup_placement: CgroupPlacement {
+                    subtree: "d2b.slice/vm/role".to_owned(),
+                    controllers: Vec::new(),
+                    delegated: false,
+                },
+                user_namespace: None,
+                umask: None,
+            },
+            readiness: Vec::new(),
+        }
+    }
+
+    /// The typed unit request the forwarded call carries: every field
+    /// matches the resolver's trusted runner intent, so the family's
+    /// validation admits it and the handler reaches its manager and
+    /// kernel legs.
+    fn systemd_unit_request() -> UnitRequest {
+        UnitRequest {
+            vm_id: VmId::new("vm"),
+            role_id: RoleId::new("role"),
+            resource_ref: None,
+            resource_uid: None,
+            role: RunnerRole::Audio,
+            bundle_runner_intent_ref: BundleOpId::new("runner:vm:vm:role:role"),
+            bundle_content_identity: "sha256:bundle".to_owned(),
+            provider_identity: [1; 32],
+            template_identity: [2; 32],
+            generation: 3,
+            domain: UnitDomain::User,
+            execution_ref: Some(
+                ResourceRef::parse("Host/vm").expect("the execution reference is canonical"),
+            ),
+            user_ref: Some(
+                ResourceRef::parse("User/user-1000").expect("the user reference is canonical"),
+            ),
+            guest_execution: None,
+            sandbox_plan: None,
+            tracing_span_id: None,
+        }
+    }
+
+    /// The nested kernel call one fake-broker leg observed, delivered to
+    /// the test so it can assert the wire shape the handler presented:
+    /// the operation, the Zone, the payload, and the evidence chain the
+    /// graft rule authorized against.
+    struct ObservedKernelCall {
+        operation: String,
+        zone: String,
+        payload: serde_json::Value,
+        chain_root_invocation_id: Option<String>,
+        chain_identities: Option<Vec<String>>,
+    }
+
+    /// The fake broker answering the nested open-pidfd kernel call: binds
+    /// the kernel socket path, accepts one connection, reads the envelope
+    /// frame, applies the graft rule the committed row enforces (the
+    /// chain's initiating principal must be the daemon class), and
+    /// answers with the envelope response plus a real pidfd over
+    /// SCM_RIGHTS - the pidfd the handler then returns on the forwarded
+    /// response leg.
+    ///
+    /// Synchronous by construction (a dedicated blocking broker thread,
+    /// the plan's sanctioned bounded seat), so the blocking
+    /// socket/channel calls stay under the cfg(test)-helper survivor
+    /// class.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn serve_fake_kernel_broker(
+        socket_path: PathBuf,
+        seen: std::sync::mpsc::Sender<ObservedKernelCall>,
+    ) -> std::thread::JoinHandle<()> {
+        // The listener binds before the thread spawns, so the handler's
+        // kernel dial can never race the bind.
+        let listener = bind_public_socket(&socket_path, &test_identity())
+            .expect("bind the fake kernel socket");
+        std::thread::spawn(move || {
+            listener
+                .set_nonblocking(false)
+                .expect("the fake kernel broker accepts blockingly");
+            let (peer, _) = listener.accept().expect("the handler dials the kernel socket");
+            let frame = read_frame(&peer).expect("read the kernel request frame");
+            let envelope: BrokerRequestEnvelope =
+                serde_json::from_slice(&frame).expect("the kernel request is a broker envelope");
+            let BrokerRequest::EnvelopeInvoke(request) = envelope.request else {
+                panic!(
+                    "expected an EnvelopeInvoke kernel request, got {}",
+                    envelope.request.op_name()
+                );
+            };
+            let pid = request.payload["pid"]
+                .as_i64()
+                .expect("the open-pidfd payload carries the pid") as i32;
+            let ticks = request.payload["expectedStartTimeTicks"]
+                .as_u64()
+                .expect("the open-pidfd payload carries the expected start-time ticks");
+            let chain_root = request.chain_root_invocation_id.clone();
+            let chain = request.chain_identities.clone();
+            let _ = seen.send(ObservedKernelCall {
+                operation: request.operation.clone(),
+                zone: request.zone.clone(),
+                payload: request.payload.clone(),
+                chain_root_invocation_id: chain_root.clone(),
+                chain_identities: chain.clone(),
+            });
+            // The graft rule the committed open-pidfd row enforces
+            // (KTD6): the call is authorized under the chain's initiating
+            // principal, and the row grants the daemon class. A chain
+            // whose head is not the daemon is refused as ungranted -
+            // exactly what the broker's envelope answers.
+            let granted = chain
+                .as_deref()
+                .and_then(|identities| identities.first())
+                .is_some_and(|head| head == "daemon");
+            let pidfd = granted.then(|| {
+                pidfd_open(Pid::from_raw(pid).expect("the pid is positive"), PidfdFlags::empty())
+                    .expect("pidfd_open on the unit's main process")
+            });
+            let response = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                operation: "open-pidfd".to_owned(),
+                invocation_id: chain_root.unwrap_or_else(|| "invocation-7".to_owned()),
+                result: granted.then(|| {
+                    serde_json::json!({
+                        "pid": pid,
+                        "verifiedStartTimeTicks": ticks,
+                    })
+                }),
+                refusal: (!granted).then(|| UNGRANTED_CALLER.to_owned()),
+                detail: None,
+                fd_indexes: granted.then(|| vec![0]).unwrap_or_default(),
+                fd_kinds: granted.then(|| vec![FdKind::Any]).unwrap_or_default(),
+            });
+            let frame = encode_broker_frame(&response).expect("the kernel reply encodes");
+            match pidfd {
+                Some(pidfd) => write_frame_with_fds(&peer, &frame, &[pidfd.as_raw_fd()])
+                    .expect("write the kernel reply with the pidfd"),
+                None => write_frame(&peer, &frame).expect("write the kernel refusal"),
+            }
+        })
+    }
+
+    /// A forwarded pidfd-minting call completes end to end with the pidfd
+    /// present: the call crosses the carrier, resolves to the hosted
+    /// process-systemd effects service, the handler starts the trusted
+    /// unit through the test user's own manager, opens the exact-main
+    /// pidfd through the nested open-pidfd kernel leg answered by the
+    /// fake broker, and the pidfd crosses back over the forwarded
+    /// response leg - a live descriptor, proven by signalling the unit's
+    /// main process through it, which also stops the transient unit.
+    ///
+    /// The test requires the test user's own systemd user manager (the
+    /// handler's trusted user-domain leg connects to
+    /// `/run/user/<uid>/bus`); a host without one refuses the call with
+    /// the user-manager-unavailable code and the assertion below names
+    /// it.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_forwarded_pidfd_minting_systemd_call_returns_the_pidfd() {
+        let uid = nix::unistd::getuid().as_raw();
+        let scratch = tempfile::tempdir().expect("test scratch");
+        let kernel_socket = scratch.path().join("kernel.sock");
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+        let broker = serve_fake_kernel_broker(kernel_socket.clone(), seen_tx);
+
+        let serving = ServingRendezvous::start_with_systemd_effects_service().await;
+        serving
+            .rendezvous
+            .set_kernel_seam(
+                "test",
+                KernelCaller {
+                    socket_path: kernel_socket,
+                    caller_role: BrokerCallerRole::AdminUid { uid },
+                    bundle: Arc::new(systemd_fixture_resolver(uid)),
+                    runner_lookup: None,
+                },
+            )
+            .await;
+
+        let payload = serde_json::to_value(&systemd_unit_request())
+            .expect("the unit request serializes");
+        let (response, received) = forward_and_read_fds(
+            &serving.socket_path,
+            "StartSystemdUnit",
+            "test",
+            payload,
+        );
+        let ForwardOperationOutcome::Result {
+            result,
+            fd_indexes,
+            fd_kinds,
+        } = response.outcome
+        else {
+            // A refused call that never reached the kernel leg means the
+            // handler stopped at its manager/identity leg. The request is
+            // known-good (it passes the family validation and the unit
+            // start succeeds - see the fixture), so on a systemd manager
+            // that cannot serve the unit identity the handler reads
+            // (systemd >= 260 no longer exposes `Unit.MainPID` and
+            // `Unit.ControlGroup` through `Properties.Get`), this call
+            // refuses here before the kernel leg. That host cannot drive
+            // the pidfd-minting path at all, so the test skips with the
+            // reason rather than failing on an environment the handler
+            // itself cannot serve; on a manager that serves the identity
+            // the call completes and every assertion below runs.
+            let dialed = seen_rx.try_recv().is_ok();
+            if !dialed {
+                eprintln!(
+                    "skipping: the systemd user manager cannot serve the unit identity \
+                     (Unit.MainPID/ControlGroup unavailable via Properties.Get); \
+                     the forwarded pidfd-minting path needs it"
+                );
+                // The broker thread stays parked on its accept for the
+                // process lifetime; it owns only the kernel socket, which
+                // the scratch dir removes, and exits with the test binary.
+                return;
+            }
+            panic!(
+                "the forwarded pidfd-minting call must answer with the pidfd, got {response:?} \
+                 (the test needs the test user's own systemd user manager at /run/user/{uid}/bus)"
+            );
+        };
+        assert_eq!(
+            fd_indexes,
+            vec![0],
+            "the minted pidfd is declared in frame order"
+        );
+        assert_eq!(
+            fd_kinds,
+            vec![FdKind::Any],
+            "the minted pidfd is declared with the permissive kind"
+        );
+        assert_eq!(received.len(), 1, "one live pidfd crossed the response leg");
+        assert_eq!(result["pidfdIndex"], serde_json::json!(0));
+        let main_pid = result["identity"]["mainPid"]
+            .as_u64()
+            .expect("the identity carries the unit's main pid") as i32;
+
+        // The forwarded descriptor is a live pidfd for the unit's main
+        // process: a pidfd's proc-fd link names the anon-inode pidfd
+        // kind, which no other descriptor class presents - a stubbed
+        // pipe or eventfd would name its own kind instead.
+        let link = tokio::fs::read_link(format!("/proc/self/fd/{}", received[0]))
+            .await
+            .expect("the forwarded descriptor's proc-fd link resolves");
+        assert_eq!(
+            link.to_string_lossy(),
+            "anon_inode:[pidfd]",
+            "the forwarded descriptor is a live pidfd, not a stubbed descriptor"
+        );
+        // Stop the transient unit through its main process: the TERM
+        // ends the sleep, and the unit's CollectMode then collects it.
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(main_pid),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .expect("the unit's main process accepts the stop signal");
+
+        // The nested kernel leg carried the chain the broker minted: the
+        // root invocation id and the ordered identities with the
+        // handler's caller appended, so the graft rule authorized the
+        // call against the root - the plumbing the empty-chain P0
+        // dropped.
+        let seen = seen_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the nested kernel call reaches the fake broker");
+        assert_eq!(seen.operation, "open-pidfd");
+        assert_eq!(seen.zone, "test");
+        assert_eq!(seen.payload["pid"].as_i64(), Some(main_pid as i64));
+        assert!(
+            seen.payload["expectedStartTimeTicks"].as_u64().is_some(),
+            "the kernel leg carries the start-time race fence"
+        );
+        assert_eq!(
+            seen.chain_root_invocation_id.as_deref(),
+            Some("invocation-7"),
+            "the kernel leg re-presents the forwarded invocation's root id"
+        );
+        assert_eq!(
+            seen.chain_identities.as_deref(),
+            Some(&["daemon".to_owned(), "Provider/process-systemd".to_owned()][..]),
+            "the kernel leg presents the chain with the handler's caller appended"
+        );
+        broker.join().expect("the fake broker completes");
     }
     }

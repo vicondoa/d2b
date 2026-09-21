@@ -242,25 +242,36 @@ struct CommittedServiceFacetScope {
 /// subject/scope privilege pairs below; a declaration widening any of them
 /// fails as a gated change rather than regenerating silently. A later lane
 /// that proves a facet widens extends this table in the same change.
-const COMMITTED_SERVICE_FACET_SCOPES: &[(&str, CommittedServiceFacetScope)] = &[(
-    "d2b-provider-process",
-    CommittedServiceFacetScope {
-        privileges: &[
-            "pidfd/per-VM/role",
-            "pidfd/accepted Unix socket",
-            "runner/per-VM/role",
-            "runner/global",
-            "fs/global/per-VM",
-            "cgroup/per-VM/role leaf",
-            "runner/per-VM",
-            "vm-runner/per-VM/role",
-            "process/per-type",
-        ],
-        state_cells: &["runner-pidfd-registry"],
-        fd_kinds: &["Any"],
-        max_fds: 3,
-    },
-)];
+const COMMITTED_SERVICE_FACET_SCOPES: &[(&str, CommittedServiceFacetScope)] = &[
+    (
+        "d2b-provider-process",
+        CommittedServiceFacetScope {
+            privileges: &[
+                "pidfd/per-VM/role",
+                "pidfd/accepted Unix socket",
+                "runner/per-VM/role",
+                "runner/global",
+                "fs/global/per-VM",
+                "cgroup/per-VM/role leaf",
+                "runner/per-VM",
+                "vm-runner/per-VM/role",
+                "process/per-type",
+            ],
+            state_cells: &["runner-pidfd-registry"],
+            fd_kinds: &["Any"],
+            max_fds: 3,
+        },
+    ),
+    (
+        "d2b-provider-process-systemd",
+        CommittedServiceFacetScope {
+            privileges: &[],
+            state_cells: &[],
+            fd_kinds: &["Any"],
+            max_fds: 1,
+        },
+    ),
+];
 
 /// The service-facet authority-bound violations: a declared method's
 /// privileges, state cells, or descriptor-leg type/rights beyond its crate's

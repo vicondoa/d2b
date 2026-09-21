@@ -20,7 +20,7 @@ use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId, canon
 use d2b_provider_toolkit::{
     EffectResponse, EffectService, EffectServiceError, EffectServiceFactory, ServiceInvocation,
 };
-use d2b_resource_types::{OperationCtx, ServiceDecl, ServiceMethod, ValidatedPayload};
+use d2b_resource_types::{MethodFdContract, OperationCtx, ServiceDecl, ServiceMethod, ValidatedPayload};
 
 use crate::operations::{
     CHECK_SYSTEMD_USER_MANAGER, OBSERVE_SYSTEMD_UNIT, OPEN_SYSTEMD_UNIT_PIDFD,
@@ -41,10 +41,33 @@ use crate::operations::{
 pub const PROCESS_SYSTEMD_EFFECTS_SERVICE: ServiceDecl = ServiceDecl {
     id: "process-systemd.d2bus.org/effects",
     methods:&[
-        ServiceMethod::serving(START_SYSTEMD_UNIT, "start-systemd-unit"),
+        // StartSystemdUnit and OpenSystemdUnitPidfd return the exact-main
+        // pidfd the nested open-pidfd kernel minted, so their response leg
+        // declares the one-descriptor carriage (anon-inode kind, the
+        // pidfd's fstat shape); the hosting side enforces the declared
+        // response leg before replying (U15).
+        ServiceMethod::serving_with(
+            START_SYSTEMD_UNIT,
+            "start-systemd-unit",
+            None,
+            MethodFdContract::NONE,
+            MethodFdContract { max_fds: 1, fd_kind: Some("any") },
+            &[],
+            &[],
+            None,
+        ),
         ServiceMethod::serving(CHECK_SYSTEMD_USER_MANAGER, "check-systemd-user-manager"),
         ServiceMethod::serving(OBSERVE_SYSTEMD_UNIT, "observe-systemd-unit"),
-        ServiceMethod::serving(OPEN_SYSTEMD_UNIT_PIDFD, "open-systemd-unit-pidfd"),
+        ServiceMethod::serving_with(
+            OPEN_SYSTEMD_UNIT_PIDFD,
+            "open-systemd-unit-pidfd",
+            None,
+            MethodFdContract::NONE,
+            MethodFdContract { max_fds: 1, fd_kind: Some("any") },
+            &[],
+            &[],
+            None,
+        ),
         ServiceMethod::serving(STOP_SYSTEMD_UNIT, "stop-systemd-unit"),
         ServiceMethod::zone_plane("inspect-process-systemd"),
     ],
@@ -153,7 +176,7 @@ let zone = ZoneId::parse(invocation.zone).map_err(|_| {
         operation:&def.operation_ref,
         invocation_id:invocation.invocation_id,
         fds:invocation.request_fds,
-        chain_identities:&[],
+        chain_identities:invocation.chain_identities,
         kernel:invocation.kernel,
     };
     let result = def
@@ -207,9 +230,10 @@ impl EffectServiceFactory for SystemdEffectsServiceFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::CanonicalJsonValue;
+    use d2b_contracts_broker::broker_wire::{BrokerCallerRole, GuestExecutionBinding};
+    use d2b_contracts_resource::v3::{CanonicalJsonValue, ResourceUid};
     use d2b_resource_runtime::context::ServiceResourceContext;
-    use d2b_resource_types::MethodFdContract;
+    use d2b_resource_types::{KernelCaller, MethodFdContract};
 
     #[tokio::test]
     async fn the_declared_service_answers_its_operation_inventory() {
@@ -231,6 +255,7 @@ mod tests {
                 request_fds:&[],
                 response_fds:MethodFdContract::NONE,
                 payload_schema:None,
+                chain_identities:&[],
             })
             .await
             .expect("the inspection answers");
@@ -292,6 +317,7 @@ mod tests {
                     request_fds:&[],
                     response_fds:method.response_fds,
                     payload_schema:method.payload_schema,
+                    chain_identities:&[],
                 })
                 .await
                 .expect_err("the operation method refuses without a kernel seam");
@@ -313,5 +339,64 @@ mod tests {
         let second = factory.build();
         // A respawn builds a fresh instance from the durable row (KTD5).
         assert!(!Arc::ptr_eq(&first,&second));
+    }
+
+    /// The Guest execution binding gate through the hosted service: a
+    /// forwarded call carrying a binding with a zero boot-identity digest
+    /// is refused by the committed handler with the invalid-request code,
+    /// the same refusal the validation fence produces directly - the
+    /// hosted actor runs the crate's committed handler table, so the gate
+    /// holds on the serving path too.
+    #[tokio::test]
+    async fn a_guest_execution_binding_with_a_wrong_digest_refuses_through_the_hosted_service() {
+        let service = SystemdEffectsService::new();
+        let mut request = crate::operations::fixture_unit_request();
+        request.guest_execution = Some(GuestExecutionBinding {
+            target_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .expect("the guest uid is canonical"),
+            boot_identity_digest: [0; 32],
+            session_generation: 1,
+            assignment_epoch: 2,
+            provider_generation: 3,
+            controller_generation: 4,
+        });
+        let payload = CanonicalJsonObject::parse(
+            &canonical_json_bytes(&serde_json::to_value(&request).expect("request serializes"))
+                .expect("payload bytes"),
+        )
+        .expect("payload object");
+        let kernel = KernelCaller {
+            // The gate refuses before any manager or kernel leg, so no
+            // socket is ever dialed.
+            socket_path: std::path::PathBuf::from("/nonexistent/kernel.sock"),
+            caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
+            bundle: std::sync::Arc::new(crate::operations::fixture_resolver()),
+            runner_lookup: None,
+        };
+        let mut resources = ServiceResourceContext::fail_closed();
+        let error = service
+            .handle(ServiceInvocation {
+                zone:"zone-a",
+                method:"start-systemd-unit",
+                invocation_id:"invocation-test",
+                payload:&payload,
+                resources:&mut resources,
+                state_cells:&[],
+                kernel:Some(&kernel),
+                request_fds:&[],
+                response_fds:MethodFdContract::NONE,
+                payload_schema:None,
+                chain_identities:&[],
+            })
+            .await
+            .expect_err("the guest binding gate refuses the hosted call");
+        assert!(
+            matches!(
+                error,
+                EffectServiceError::Declined { ref reason, .. }
+                    if reason == "unit-invalid-request"
+            ),
+            "the hosted call refuses with the handler's invalid-request code: {error:?}"
+        );
     }
 }
