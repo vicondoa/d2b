@@ -3357,6 +3357,9 @@
             "intentId": {
               "type": "string"
             },
+            "ipv4Address": {
+              "type": "string"
+            },
             "ipv6Suppressed": {
               "type": "boolean"
             },
@@ -3434,6 +3437,9 @@
               "type": "string"
             },
             "intentId": {
+              "type": "string"
+            },
+            "ipv4Address": {
               "type": "string"
             },
             "ipv6Suppressed": {

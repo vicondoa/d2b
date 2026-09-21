@@ -15388,6 +15388,36 @@ mod tests {
             response.detail
         );
 
+        // create-bridge: an ipv4Address the Ipv4Cidr contract rejects is
+        // refused before any netlink mutation.
+        let response = envelope_response(
+            invoke(
+                "create-bridge",
+                serde_json::json!({
+                    "intentId": "bridge:test",
+                    "scopeLabel": "work",
+                    "bridgeIfname": "br-test",
+                    "mtu": 1500,
+                    "ipv4Address": "192.0.2.1",
+                }),
+                Vec::new(),
+                (None, None),
+            )
+            .expect("invalid-ipv4Address create-bridge dispatches"),
+        );
+        assert_eq!(
+            response.refusal.as_deref(),
+            Some(crate::envelope::HANDLER_REFUSED)
+        );
+        assert!(
+            response
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("ipv4Address")),
+            "the refusal names the invalid ipv4Address: {:?}",
+            response.detail
+        );
+
         // The field-contract kernels refuse a payload missing a required
         // field before any host effect: the envelope's payload gate answers
         // a payload missing a row-declared required field with the

@@ -24,6 +24,7 @@ impl FakeBridge {
                 stp_disabled: false,
                 multicast_snooping_disabled: false,
                 ipv6_suppressed: false,
+                ipv4_address: None,
                 attached_links: 0,
                 ownership_marker: None,
             }),
@@ -52,6 +53,7 @@ impl BridgeBackend for FakeBridge {
             stp_disabled: intent.stp_disabled,
             multicast_snooping_disabled: intent.multicast_snooping_disabled,
             ipv6_suppressed: intent.ipv6_suppressed,
+            ipv4_address: intent.ipv4_address.clone(),
             attached_links: 0,
             ownership_marker: Some(expected_marker()),
         });
@@ -73,6 +75,7 @@ impl BridgeBackend for FakeBridge {
             stp_disabled: false,
             multicast_snooping_disabled: false,
             ipv6_suppressed: false,
+            ipv4_address: None,
             attached_links: 0,
             ownership_marker: None,
         });
@@ -89,6 +92,7 @@ fn intent() -> ResolvedBridgeIntent {
         stp_disabled: true,
         multicast_snooping_disabled: true,
         ipv6_suppressed: true,
+        ipv4_address: None,
         provenance: Some(provenance()),
         ownership_marker: Some(expected_marker()),
     }
@@ -171,6 +175,7 @@ async fn delete_bridge_never_cascades_attached_tap() {
         stp_disabled: true,
         multicast_snooping_disabled: true,
         ipv6_suppressed: true,
+        ipv4_address: None,
         attached_links: 1,
         ownership_marker: Some(expected_marker()),
     });
@@ -215,6 +220,7 @@ async fn unmarked_existing_bridge_is_foreign_and_unchanged() {
         stp_disabled: true,
         multicast_snooping_disabled: true,
         ipv6_suppressed: true,
+        ipv4_address: None,
         attached_links: 0,
         ownership_marker: None,
     });
@@ -238,6 +244,7 @@ async fn matching_bridge_marker_allows_adoption_without_mutation() {
         stp_disabled: true,
         multicast_snooping_disabled: true,
         ipv6_suppressed: true,
+        ipv4_address: None,
         attached_links: 0,
         ownership_marker: Some(expected_marker()),
     });
@@ -261,6 +268,7 @@ async fn matching_bridge_marker_with_parameter_drift_is_unchanged() {
         stp_disabled: true,
         multicast_snooping_disabled: true,
         ipv6_suppressed: true,
+        ipv4_address: None,
         attached_links: 0,
         ownership_marker: Some(expected_marker()),
     });
@@ -284,6 +292,7 @@ async fn mismatched_existing_bridge_refuses_create_without_mutation() {
         stp_disabled: true,
         multicast_snooping_disabled: true,
         ipv6_suppressed: true,
+        ipv4_address: None,
         attached_links: 0,
         ownership_marker: Some("d2b managed: foreign".to_owned()),
     });
@@ -307,6 +316,7 @@ async fn mismatched_existing_bridge_refuses_delete_without_mutation() {
         stp_disabled: true,
         multicast_snooping_disabled: true,
         ipv6_suppressed: true,
+        ipv4_address: None,
         attached_links: 0,
         ownership_marker: Some("d2b managed: foreign".to_owned()),
     });

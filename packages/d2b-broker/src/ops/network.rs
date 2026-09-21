@@ -7,6 +7,7 @@ use std::process::Stdio;
 use d2b_contracts_broker::broker_wire::{CreatePersistentTapRequest, DeletePersistentTapRequest};
 use d2b_contracts_resource::v3::IfName;
 use d2b_contracts_resource::v3::ResourceUid;
+use d2b_contracts_resource::v3::network::Ipv4Cidr;
 use d2b_core::bundle_resolver::ResolvedBridgeIntent;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -75,6 +76,8 @@ pub struct BridgeReadback {
     pub multicast_snooping_disabled: bool,
     /// IPv6 is disabled.
     pub ipv6_suppressed: bool,
+    /// Observed IPv4 address the bridge carries, when any.
+    pub ipv4_address: Option<Ipv4Cidr>,
     /// Number of links currently attached to the bridge.
     pub attached_links: usize,
     /// Observable d2b ownership marker from the link alias.
@@ -183,6 +186,10 @@ fn bridge_matches(
         && observed.stp_disabled == intent.stp_disabled
         && observed.multicast_snooping_disabled == intent.multicast_snooping_disabled
         && observed.ipv6_suppressed == intent.ipv6_suppressed
+        && intent
+            .ipv4_address
+            .as_ref()
+            .is_none_or(|expected| observed.ipv4_address.as_ref() == Some(expected))
         && observed.ownership_marker.as_deref() == Some(expected_marker)
 }
 
@@ -201,14 +208,25 @@ async fn delete_created_bridge_if_owned<B: BridgeBackend>(
 
 /// Path-free digest over trusted bridge configuration.
 pub fn bridge_intent_digest(intent: &ResolvedBridgeIntent) -> String {
-    digest_parts(&[
-        b"bridge-intent-v1",
-        intent.intent_id.as_bytes(),
-        &intent.mtu.to_be_bytes(),
-        &[intent.stp_disabled as u8],
-        &[intent.multicast_snooping_disabled as u8],
-        &[intent.ipv6_suppressed as u8],
-    ])
+    match intent.ipv4_address.as_ref() {
+        None => digest_parts(&[
+            b"bridge-intent-v1",
+            intent.intent_id.as_bytes(),
+            &intent.mtu.to_be_bytes(),
+            &[intent.stp_disabled as u8],
+            &[intent.multicast_snooping_disabled as u8],
+            &[intent.ipv6_suppressed as u8],
+        ]),
+        Some(cidr) => digest_parts(&[
+            b"bridge-intent-v1",
+            intent.intent_id.as_bytes(),
+            &intent.mtu.to_be_bytes(),
+            &[intent.stp_disabled as u8],
+            &[intent.multicast_snooping_disabled as u8],
+            &[intent.ipv6_suppressed as u8],
+            cidr.as_str().as_bytes(),
+        ]),
+    }
 }
 
 /// System bridge adapter using `ip` and fixed sysctl/sysfs leaves.
@@ -241,6 +259,7 @@ impl BridgeBackend for SystemBridgeBackend {
                     stp_disabled: false,
                     multicast_snooping_disabled: false,
                     ipv6_suppressed: false,
+                    ipv4_address: None,
                     attached_links: 0,
                     ownership_marker: None,
                 });
@@ -290,6 +309,7 @@ impl BridgeBackend for SystemBridgeBackend {
         } else {
             return Err(NetworkOpError::BridgeBackend);
         };
+        let ipv4_address = read_bridge_ipv4_address(intent).await?;
         Ok(BridgeReadback {
             present: true,
             is_bridge,
@@ -297,6 +317,7 @@ impl BridgeBackend for SystemBridgeBackend {
             stp_disabled,
             multicast_snooping_disabled,
             ipv6_suppressed,
+            ipv4_address,
             attached_links,
             ownership_marker,
         })
@@ -340,7 +361,18 @@ impl BridgeBackend for SystemBridgeBackend {
         let ipv6 = PathBuf::from("/proc/sys/net/ipv6/conf").join(intent.bridge_ifname.as_str());
         write_fixed(&ipv6.join("disable_ipv6"), "1").await?;
         write_fixed(&ipv6.join("accept_ra"), "0").await?;
-        write_fixed(&ipv6.join("autoconf"), "0").await
+        write_fixed(&ipv6.join("autoconf"), "0").await?;
+        if let Some(cidr) = intent.ipv4_address.as_ref() {
+            run_ip(&[
+                "addr",
+                "add",
+                cidr.as_str(),
+                "dev",
+                intent.bridge_ifname.as_str(),
+            ])
+            .await?;
+        }
+        Ok(())
     }
 
     async fn set_bridge_up(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
@@ -350,6 +382,45 @@ impl BridgeBackend for SystemBridgeBackend {
     async fn delete_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
         run_ip(&["link", "delete", "dev", intent.bridge_ifname.as_str()]).await
     }
+}
+
+/// Read the first IPv4 address one bridge carries, when any.
+///
+/// The bridge readback observes `ip -j addr show` so the trusted-intent
+/// fence can verify the uplink bridge carries the address its routes'
+/// gateway is on-link with. IPv6 entries are skipped (the bridge IPv6
+/// suppression is applied before link-up anyway).
+async fn read_bridge_ipv4_address(
+    intent: &ResolvedBridgeIntent,
+) -> Result<Option<Ipv4Cidr>, NetworkOpError> {
+    let output = ip_command(&["-j", "addr", "show", "dev", intent.bridge_ifname.as_str()])
+        .await?;
+    if !output.status.success() {
+        return Err(NetworkOpError::BridgeBackend);
+    }
+    let links: Vec<serde_json::Value> =
+        serde_json::from_slice(&output.stdout).map_err(|_| NetworkOpError::BridgeBackend)?;
+    let Some(link) = links.first() else {
+        return Ok(None);
+    };
+    let Some(entries) = link.get("addr_info").and_then(serde_json::Value::as_array) else {
+        return Ok(None);
+    };
+    for entry in entries {
+        if entry.get("family").and_then(serde_json::Value::as_str) != Some("inet") {
+            continue;
+        }
+        let Some(local) = entry.get("local").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(prefix) = entry.get("prefixlen").and_then(serde_json::Value::as_u64) else {
+            continue;
+        };
+        if let Ok(cidr) = Ipv4Cidr::parse(format!("{local}/{prefix}")) {
+            return Ok(Some(cidr));
+        }
+    }
+    Ok(None)
 }
 
 async fn ip_command(args: &[&str]) -> Result<std::process::Output, NetworkOpError> {
@@ -882,6 +953,7 @@ mod tests {
         }
 
         async fn configure_bridge(&self, intent: &ResolvedBridgeIntent) -> Result<(), NetworkOpError> {
+            let marker = expected_bridge_marker(intent).expect("test intent marker");
             self.state.replace(BridgeReadback {
                 present: true,
                 is_bridge: true,
@@ -889,11 +961,9 @@ mod tests {
                 stp_disabled: true,
                 multicast_snooping_disabled: true,
                 ipv6_suppressed: true,
+                ipv4_address: intent.ipv4_address.clone(),
                 attached_links: 0,
-                ownership_marker: Some(
-                    "d2b managed: network:bridge:lan:zone:223e4567-e89b-42d3-a456-426614174001:network:323e4567-e89b-42d3-a456-426614174002:generation:4:attachment:7:bundle:sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                        .to_owned(),
-                ),
+                ownership_marker: Some(marker),
             });
             Ok(())
         }
@@ -911,6 +981,7 @@ mod tests {
                 stp_disabled: false,
                 multicast_snooping_disabled: false,
                 ipv6_suppressed: false,
+                ipv4_address: None,
                 attached_links: 0,
                 ownership_marker: None,
             });
@@ -934,12 +1005,82 @@ mod tests {
             stp_disabled: true,
             multicast_snooping_disabled: true,
             ipv6_suppressed: true,
+            ipv4_address: None,
             provenance: Some(provenance),
             ownership_marker: Some(
                 "d2b managed: network:bridge:lan:zone:223e4567-e89b-42d3-a456-426614174001:network:323e4567-e89b-42d3-a456-426614174002:generation:4:attachment:7:bundle:sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                     .to_owned(),
             ),
         }
+    }
+
+    fn uplink_bridge_intent() -> ResolvedBridgeIntent {
+        let mut intent = bridge_intent();
+        intent.intent_id =
+            "network-bridge:223e4567-e89b-42d3-a456-426614174001:323e4567-e89b-42d3-a456-426614174002:aaaaaaaaaaaaaaaa:uplink".to_owned();
+        intent.ipv4_address = Ipv4Cidr::parse("192.0.2.1/30").ok();
+        intent.ownership_marker = Some(format!(
+            "d2b managed: {}",
+            d2b_contracts_resource::v3::derive_network_ownership_marker(
+                intent.provenance.as_ref().expect("test provenance"),
+                "bridge:uplink",
+            )
+        ));
+        intent
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn create_bridge_assigns_derived_uplink_address_and_refuses_address_drift() {
+        let absent = BridgeReadback {
+            present: false,
+            is_bridge: false,
+            mtu: 0,
+            stp_disabled: false,
+            multicast_snooping_disabled: false,
+            ipv6_suppressed: false,
+            ipv4_address: None,
+            attached_links: 0,
+            ownership_marker: None,
+        };
+        let backend = FakeBridge {
+            state: RefCell::new(absent),
+            creates: Cell::new(0),
+            deletes: Cell::new(0),
+        };
+        let intent = uplink_bridge_intent();
+        create_bridge(&backend, &intent).await.unwrap();
+        assert_eq!(
+            backend.state.borrow().ipv4_address,
+            intent.ipv4_address,
+            "the created uplink bridge carries the derived address"
+        );
+
+        // A present, owned uplink bridge without the derived address is a
+        // parameter mismatch, the same refusal posture as any other trusted
+        // parameter drift: no mutation, no adoption.
+        let mut unaddressed = backend.state.borrow().clone();
+        unaddressed.ipv4_address = None;
+        backend.state.replace(unaddressed);
+        assert_eq!(
+            create_bridge(&backend, &intent).await,
+            Err(NetworkOpError::BridgeParameterMismatch)
+        );
+
+        // A present, owned uplink bridge carrying a foreign address is a
+        // parameter mismatch too.
+        let mut foreign = backend.state.borrow().clone();
+        foreign.ipv4_address = Ipv4Cidr::parse("203.0.113.1/30").ok();
+        backend.state.replace(foreign);
+        assert_eq!(
+            create_bridge(&backend, &intent).await,
+            Err(NetworkOpError::BridgeParameterMismatch)
+        );
+
+        // The address participates in the trusted-intent digest.
+        let mut without = intent.clone();
+        without.ipv4_address = None;
+        assert_ne!(bridge_intent_digest(&intent), bridge_intent_digest(&without));
     }
 
     #[tokio::test]
@@ -952,6 +1093,7 @@ mod tests {
             stp_disabled: false,
             multicast_snooping_disabled: false,
             ipv6_suppressed: false,
+            ipv4_address: None,
             attached_links: 0,
             ownership_marker: None,
         };

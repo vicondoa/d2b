@@ -84,7 +84,7 @@ use d2b_contracts::launcher::RealmWorkloadsLauncherV2Json;
 use d2b_contracts_resource::v3::{
     IfName, NetworkIfRole, NetworkProvenance, ResourceRef, ResourceUid, ZoneId,
     derive_network_ifname, derive_network_route_name,
-    network::NetworkSpec,
+    network::{Ipv4Cidr, NetworkSpec},
     resource_schema::{CanonicalJsonValue, framed_canonical_digest},
     storage::ZoneStoreStorageRow,
 };
@@ -241,6 +241,10 @@ pub struct ResolvedBridgeIntent {
     pub stp_disabled: bool,
     pub multicast_snooping_disabled: bool,
     pub ipv6_suppressed: bool,
+    /// The IPv4 address the uplink bridge must carry so the blocklist
+    /// routes' gateway host is on-link; derived from the resolved uplink
+    /// CIDR for the uplink role and absent for the LAN role.
+    pub ipv4_address: Option<Ipv4Cidr>,
     pub provenance: Option<NetworkProvenance>,
     pub ownership_marker: Option<String>,
 }
@@ -1710,6 +1714,13 @@ impl BundleResolver {
             stp_disabled: true,
             multicast_snooping_disabled: true,
             ipv6_suppressed: true,
+            ipv4_address: match role {
+                NetworkIfRole::UplinkBridge => {
+                    uplink_bridge_cidr(spec.uplink_cidr().as_str())
+                }
+                NetworkIfRole::LanBridge => None,
+                _ => None,
+            },
             provenance: Some(provenance.clone()),
             ownership_marker: Some(ownership_marker),
         })
@@ -3212,6 +3223,64 @@ fn network_cidr_host_address(cidr: &str, host: u8) -> Option<String> {
     )
 }
 
+fn ipv4_to_u32(value: &str) -> Option<u32> {
+    let octets = value
+        .split('.')
+        .map(|octet| octet.parse::<u8>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    if octets.len() != 4 {
+        return None;
+    }
+    Some(u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]))
+}
+
+fn prefix_mask(prefix: u8) -> u32 {
+    if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    }
+}
+
+/// Whether one dotted-quad address lies inside one CIDR's subnet.
+fn cidr_contains_address(cidr: &str, address: &str) -> bool {
+    let (network, prefix) = match cidr.split_once('/') {
+        Some(parts) => parts,
+        None => return false,
+    };
+    let Ok(prefix) = prefix.parse::<u8>() else {
+        return false;
+    };
+    if prefix > 32 {
+        return false;
+    }
+    let mask = prefix_mask(prefix);
+    let (Some(address), Some(network)) = (ipv4_to_u32(address), ipv4_to_u32(network)) else {
+        return false;
+    };
+    address & mask == network & mask
+}
+
+/// The uplink bridge address derived from the resolved uplink intent.
+///
+/// The uplink point-to-point convention (the nixos `subnetIp` split) gives
+/// the host-side bridge host octet 1 of the uplink CIDR while the routes'
+/// gateway host (host octet 2) rides the net-VM side. The derivation
+/// refuses a malformed uplink CIDR and any uplink whose gateway host would
+/// fall outside the bridge's own subnet (e.g. a `/31` or `/32` uplink, or
+/// a network whose host octet cannot carry both hosts).
+fn uplink_bridge_cidr(uplink_cidr: &str) -> Option<Ipv4Cidr> {
+    let bridge = network_cidr_host_address(uplink_cidr, 1)?;
+    let gateway = network_cidr_host_address(uplink_cidr, 2)?;
+    if !cidr_contains_address(uplink_cidr, &bridge)
+        || !cidr_contains_address(uplink_cidr, &gateway)
+    {
+        return None;
+    }
+    let prefix = uplink_cidr.split_once('/')?.1;
+    Ipv4Cidr::parse(format!("{bridge}/{prefix}")).ok()
+}
+
 /// Per-intent-kind Network resolution maps produced by
 /// [`build_resource_network_intents`].
 type ResolvedNetworkIntentMaps = (
@@ -3318,6 +3387,7 @@ fn build_resource_network_intents(
                     stp_disabled: true,
                     multicast_snooping_disabled: true,
                     ipv6_suppressed: true,
+                    ipv4_address: None,
                     provenance: None,
                     ownership_marker: None,
                 },
@@ -3334,6 +3404,7 @@ fn build_resource_network_intents(
                     stp_disabled: true,
                     multicast_snooping_disabled: true,
                     ipv6_suppressed: true,
+                    ipv4_address: uplink_bridge_cidr(spec.uplink_cidr().as_str()),
                     provenance: None,
                     ownership_marker: None,
                 },
@@ -3551,6 +3622,7 @@ fn build_bridge_intents(host: &HostJson) -> BTreeMap<String, ResolvedBridgeInten
                     stp_disabled: true,
                     multicast_snooping_disabled: true,
                     ipv6_suppressed: true,
+                    ipv4_address: None,
                     provenance: None,
                     ownership_marker: None,
                 },
@@ -7310,6 +7382,119 @@ mod tests {
         .unwrap()
         .with_zone_uid(zone_uid.clone());
         d2b_contracts_resource::v3::canonical_json_bytes(&bundle).unwrap()
+    }
+
+    #[test]
+    fn uplink_bridge_address_derivation_matches_gateway_host_for_30() {
+        // The uplink point-to-point convention: the host bridge carries
+        // host octet 1 of the uplink CIDR while the blocklist routes'
+        // gateway host (host octet 2) rides the net-VM side.
+        let bridge = uplink_bridge_cidr("192.0.2.0/30").expect("derived /30 bridge address");
+        assert_eq!(bridge.as_str(), "192.0.2.1/30");
+        assert_eq!(bridge.prefix_len(), 30);
+        assert_eq!(
+            network_cidr_host_address("192.0.2.0/30", 2).as_deref(),
+            Some("192.0.2.2"),
+            "the route step's gateway host is the net-VM side of the same /30"
+        );
+        assert!(
+            cidr_contains_address("192.0.2.0/30", bridge.as_str().split('/').next().unwrap()),
+            "the bridge address lies inside the uplink subnet"
+        );
+    }
+
+    #[test]
+    fn uplink_bridge_address_derivation_refuses_malformed_cidr() {
+        for malformed in [
+            "not-a-cidr",
+            "192.0.2.0",
+            "192.0.2.0/33",
+            "192.0.2.0/30/extra",
+            "192.0.2/30",
+            "192.0.2.0.1/30",
+        ] {
+            assert_eq!(
+                uplink_bridge_cidr(malformed),
+                None,
+                "malformed uplink CIDR {malformed:?} must not derive a bridge address"
+            );
+        }
+    }
+
+    #[test]
+    fn uplink_bridge_address_derivation_refuses_gateway_outside_bridge_subnet() {
+        // A /31 uplink can carry the bridge (host octet 1) but its gateway
+        // host (host octet 2) falls outside the bridge's own subnet; a /32
+        // uplink cannot even carry the bridge address.
+        assert_eq!(uplink_bridge_cidr("192.0.2.0/31"), None);
+        assert_eq!(uplink_bridge_cidr("192.0.2.0/32"), None);
+        // A network whose host octet cannot carry both hosts overflows the
+        // host octet and refuses too.
+        assert_eq!(uplink_bridge_cidr("192.0.2.255/30"), None);
+    }
+
+    #[test]
+    fn resolved_uplink_bridge_intent_carries_derived_address_and_lan_none() {
+        let root = test_root("network-bridge-address");
+        let zone_uid =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("zone uid");
+        let network_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("network uid");
+        let provenance = NetworkProvenance::new(
+            zone_uid.clone(),
+            network_uid.clone(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+            d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
+        );
+        let mut resolver = build_personal_dev_bundle(&root);
+        resolver.zone_resource_bundles.insert(
+            "work".to_owned(),
+            network_resource_bundle_bytes(
+                "work",
+                &zone_uid,
+                &network_uid,
+                "work-net",
+                "10.20.0.0/24",
+                "192.0.2.0/30",
+            ),
+        );
+
+        let lan_id = intent_id_network_bridge_uids(&zone_uid, &network_uid, "work-net", false);
+        let lan = resolver
+            .resolve_network_bridge_intent(&lan_id, &provenance)
+            .expect("resolved LAN bridge");
+        assert_eq!(lan.ipv4_address, None, "the LAN bridge carries no address");
+
+        let uplink_id = intent_id_network_bridge_uids(&zone_uid, &network_uid, "work-net", true);
+        let uplink = resolver
+            .resolve_network_bridge_intent(&uplink_id, &provenance)
+            .expect("resolved uplink bridge");
+        assert_eq!(
+            uplink.ipv4_address.as_ref().map(Ipv4Cidr::as_str),
+            Some("192.0.2.1/30"),
+            "the uplink bridge carries the address its routes' gateway is on-link with"
+        );
+
+        let route_id = intent_id_network_route_uids(&zone_uid, &network_uid, "work-net", 0);
+        let route = resolver
+            .resolve_network_route_intent(&route_id, &provenance)
+            .expect("resolved Network route");
+        assert_eq!(
+            route.via.as_deref(),
+            Some("192.0.2.2"),
+            "the route step's gateway is the net-VM side of the same /30"
+        );
+        assert_eq!(
+            route.device.as_deref(),
+            Some(uplink.bridge_ifname.as_str()),
+            "the route step rides the uplink bridge that now carries the address"
+        );
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
