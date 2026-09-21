@@ -17,8 +17,17 @@ await_holding_refcell_ref = "deny"
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+# The anchored adapter (U7) verifies `file-record` lease ownership against
+# the hardlink-farm sync-lock owner record the broker writes, and uses the
+# same OFD-lock and fd-relative syscall wrappers the daemon adapter used.
+d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
+nix = { version = "0.29", default-features = false, features = ["fs", "user"] }
+rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tracing = "0.1"
+
+[dev-dependencies]
+# The anchored adapter's in-module tests materialize roots in temp dirs.
+tempfile = "3"

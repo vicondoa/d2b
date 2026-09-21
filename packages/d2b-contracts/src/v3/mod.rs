@@ -1,6 +1,5 @@
 //! Neutral d2b v3 foundation contracts.
 
-pub mod effect_port;
 pub mod ifname;
 
 pub use ifname::{

@@ -4,7 +4,6 @@ pub(crate) mod endpoint_effects;
 pub(crate) mod activation_effects;
 pub(crate) mod credential_effects;
 pub(crate) mod binding_effects;
-pub(crate) mod volume_effects;
 pub(crate) mod shared_provider_effects;
 pub(crate) mod guest_effects;
 pub(crate) mod system_core_effects;

@@ -836,7 +836,7 @@ predicates without taking ownership of Network implementation.
 - [ ] T466 [US2] `ADR046-vl-009` - `src/audit.rs` (adapt)
 - [ ] T467 [US2] `ADR046-vl-010` - `nixos-modules/zone-resources.nix` (per §ADR046-pstate-010) (adapt)
 - [ ] T468 [US2] `ADR046-vl-011` - `packages/xtask/src/provider_crate_policy.rs` (adapt)
-- [ ] T469 [US2] `ADR046-vl-012` - `packages/d2b-host/src/volume_effect_adapter.rs` (or the equivalent host-runtime crate designated by the Zone broker owner) (adapt)
+- [x] T469 [US2] `ADR046-vl-012` - Retired (U7): the planned host-runtime `VolumeEffectPort` adapter was declared-but-unbuilt; the anchored-fd implementation landed in `packages/d2b-provider-volume-local/src/adapter.rs` and the family's effects run through the declared `volume.d2bus.org/effects` service
 - [ ] T470 [US2] `ADR046-vl-013` - Zone core ProviderDeployment controller-start path (outside `d2b-provider-volume-local`) (create)
 
 ### Group `wi:ADR-046-provider-volume-virtiofs` (7 items)

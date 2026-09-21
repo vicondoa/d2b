@@ -33,9 +33,6 @@ pub mod netlink;
 pub mod nftables;
 pub mod routes;
 pub mod seccomp;
-// Neutral Volume effect-port composition wrapper. Concrete broker-backed
-// implementations are supplied by the Zone runtime.
-pub mod volume_effect_adapter;
 // Hardlink-farm primitive for per-VM store activation. Same-filesystem
 // check + per-generation marker + atomic current-symlink swap with crash
 // reconciliation.

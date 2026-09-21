@@ -21,10 +21,12 @@
 //! - `UpdateStatus` -> `ctx.set_status` (in-memory only).
 //!
 //! Everything the driver needs from outside arrives through the driver
-//! effect port ([`VolumeDriverEffects`]): the layout effect the daemon
-//! realizes over the preserved volume-local controller and the durable
-//! probe recover reads. The production implementation lives in the daemon
-//! behind that port, so the family carries no effect implementation.
+//! effect port ([`VolumeDriverEffects`]): the layout effect over the
+//! preserved volume-local controller and the durable probe recover reads.
+//! U7: the production implementation is this crate's own
+//! [`VolumeEffectsService`], built from the daemon-supplied declared facets
+//! ([`crate::facets`]); the daemon holds no volume effect implementation
+//! and no externally built port appears at the construction site (R2).
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,6 +35,8 @@ use d2b_contracts_resource::v3::{
     ResourceUid,
     volume::VolumeSpec,
 };
+use crate::effects_service::{VOLUME_EFFECTS_SERVICE, VolumeEffectsService};
+use crate::facets::VolumeEffectFacets;
 use d2b_provider_volume_local::desired_binding_intents;
 use d2b_resource_runtime::context::{
     ChildEnsure, ResourceContext, SpecDecoder, typed_spec_decoder,
@@ -206,8 +210,9 @@ pub fn volume_spec_decoder() -> Arc<dyn SpecDecoder> {
 // ---------------------------------------------------------------------------
 
 /// The provider-facing layout effect surface the Volume driver needs. The
-/// production implementation drives the already-preserved
-/// `VolumeLocalController`; test doubles implement the same seam (R4).
+/// production implementation is this crate's own [`VolumeEffectsService`]
+/// (U7) over the daemon-supplied facets; test doubles implement the same
+/// seam (R4).
 ///
 /// Object-erased on purpose: the driver holds the port as
 /// `Arc<dyn VolumeDriverEffects>` so one factory serves every Volume row.
@@ -238,12 +243,16 @@ pub trait VolumeDriverEffects: Send + Sync + 'static {
 // ---------------------------------------------------------------------------
 
 /// Everything the plane must construct to instantiate the Volume driver
-/// factory for one zone.
+/// factory for one zone: the declared facet set the effects run over plus
+/// the zone identity every derived row folds in (U7).
 pub struct VolumeDriverArgs {
     /// The zone this driver's rows live in.
     pub zone: String,
-    /// The layout effect port the production implementation realizes.
-    pub effects: Arc<dyn VolumeDriverEffects>,
+    /// The daemon-supplied facet set the family's effects implementation is
+    /// built from. The composition supplies the objects; the driver never
+    /// holds a daemon state type and no externally built port appears here
+    /// (R2).
+    pub facets: VolumeEffectFacets,
 }
 
 /// [`ResourceDriverFactory`] for the `Volume` resource type. Construction is
@@ -271,7 +280,7 @@ impl ResourceDriverFactory for VolumeDriverFactory {
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
         Box::new(VolumeDriver::new(VolumeDriverArgs {
             zone: self.args.zone.clone(),
-            effects: Arc::clone(&self.args.effects),
+            facets: self.args.facets.clone(),
         }))
     }
 }
@@ -305,7 +314,7 @@ pub(crate) struct DesiredBindingChild {
 impl VolumeDriver {
     pub(crate) fn new(args: VolumeDriverArgs) -> Self {
         Self {
-            effects: args.effects,
+            effects: Arc::new(VolumeEffectsService::new(args.facets)),
             layout_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -726,8 +735,15 @@ pub const fn volume_provider_declaration() -> ProviderDeclaration {
 /// the plane opens. The type is not exportable: `ResourceExport` admits only
 /// qualified `*.d2bus.org.*Service` types, so a volume can never be an
 /// export subject. The driver serves no broker operations and contributes no
-/// startup steps or services; the `VolumeBinding` children it mints are
-/// declared in [`VOLUME_CREATIONS`].
+/// startup steps; the `VolumeBinding` children it mints are declared in
+/// [`VOLUME_CREATIONS`].
+///
+/// U7: the driver's effects are this crate's own implementation
+/// ([`VolumeEffectsService`]) built from the daemon-supplied facet set -
+/// the construction site holds no externally built port (R2) - and the
+/// family's declared effects service ([`VOLUME_EFFECTS_SERVICE`]) rides
+/// the declaration, so a zone that cannot host it refuses startup by name
+/// (R5).
 pub fn volume_descriptor(args: VolumeDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::VOLUME,
@@ -739,7 +755,7 @@ pub fn volume_descriptor(args: VolumeDriverArgs) -> DriverDescriptor {
         operations: &[],
         creations: VOLUME_CREATIONS,
         startup: &[],
-        services: &[],
+        services: &[VOLUME_EFFECTS_SERVICE],
         decoder: volume_spec_decoder(),
         factory: Arc::new(VolumeDriverFactory::new(args)),
     }
@@ -768,7 +784,7 @@ mod tests {
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
     use super::{VolumeDriverArgs, VolumeDriverFactory, volume_spec_decoder};
-    use crate::test_support::FakeLayoutEffects;
+    use crate::test_support::{RecordingRuntime, recording_facets};
 
     // -- fakes ---------------------------------------------------------------
 
@@ -989,10 +1005,10 @@ mod tests {
         Fixture { ctx, effects: effects_rx }
     }
 
-    async fn driver(effects: Arc<FakeLayoutEffects>) -> Box<dyn DynResourceDriver> {
+    async fn driver(runtime: Arc<RecordingRuntime>) -> Box<dyn DynResourceDriver> {
         let factory = VolumeDriverFactory::new(VolumeDriverArgs {
             zone: "work".to_owned(),
-            effects,
+            facets: recording_facets(runtime),
         });
         factory
             .create(&ResourceKey::new("work", "Volume", "data"))
@@ -1022,7 +1038,7 @@ mod tests {
     async fn factory_registers_only_the_volume_resource_type() {
         let factory = VolumeDriverFactory::new(VolumeDriverArgs {
             zone: "work".to_owned(),
-            effects: FakeLayoutEffects::new(),
+            facets: recording_facets(RecordingRuntime::new()),
         });
         assert_eq!(factory.resource_types().len(), 1);
         assert_eq!(factory.resource_types()[0].as_str(), "Volume");
@@ -1033,7 +1049,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn ensure_creates_binding_children_after_the_layout_effect() {
-        let fake = FakeLayoutEffects::new();
+        let fake = RecordingRuntime::new();
         let manager = RecordingManager::new();
         let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
         let mut d = driver(fake.clone()).await;
@@ -1100,7 +1116,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_the_existing_layout_and_revalidates_it() {
-        let fake = FakeLayoutEffects::new();
+        let fake = RecordingRuntime::new();
         let manager = RecordingManager::new();
         let mut first = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
         let mut d = driver(fake.clone()).await;
@@ -1153,7 +1169,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn degraded_layout_reports_one_retryable_failure_per_pass() {
-        let fake = FakeLayoutEffects::degraded();
+        let fake = RecordingRuntime::degraded();
         let manager = RecordingManager::new();
         let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
         let mut d = driver(fake.clone()).await;
@@ -1206,7 +1222,7 @@ mod tests {
         let manager = RecordingManager::new();
         {
             let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
-            let mut d = driver(FakeLayoutEffects::new()).await;
+            let mut d = driver(RecordingRuntime::new()).await;
             reconcile_to_children(&mut d, &mut f).await;
         }
         let first = manager.order();
@@ -1214,7 +1230,7 @@ mod tests {
         // as Unchanged (no duplicate identity, no churn).
         {
             let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
-            let mut d = driver(FakeLayoutEffects::new()).await;
+            let mut d = driver(RecordingRuntime::new()).await;
             d.recover(&mut f.ctx).await.expect("recover");
             reconcile_to_children(&mut d, &mut f).await;
         }
@@ -1250,7 +1266,7 @@ mod tests {
     async fn parent_spec_change_retires_obsolete_children_and_retains_matching() {
         let manager = RecordingManager::new();
         let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
-        let mut d = driver(FakeLayoutEffects::new()).await;
+        let mut d = driver(RecordingRuntime::new()).await;
         d.recover(&mut f.ctx).await.expect("recover");
         reconcile_to_children(&mut d, &mut f).await;
         let first_child = manager
@@ -1335,7 +1351,7 @@ mod tests {
             metadata: Vec::new(),
             created_at: 0,
         });
-        let fake = FakeLayoutEffects::new();
+        let fake = RecordingRuntime::new();
         let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
         let mut d = driver(fake.clone()).await;
 
@@ -1360,7 +1376,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_removes_the_volume_layout_exactly() {
-        let fake = FakeLayoutEffects::new();
+        let fake = RecordingRuntime::new();
         let manager = RecordingManager::new();
         let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager);
         let mut d = driver(fake.clone()).await;
@@ -1391,7 +1407,7 @@ mod tests {
         );
         let bytes = serde_json::to_vec(&spec).expect("spec");
         let mut f = fixture(test_row(&bytes), RecordingManager::new());
-        let mut d = driver(FakeLayoutEffects::new()).await;
+        let mut d = driver(RecordingRuntime::new()).await;
         let failure = d.validate(&mut f.ctx).await.expect_err("terminal");
         assert_eq!(failure.class(), FailureClass::Terminal, "provider mismatch is terminal");
     }
@@ -1406,7 +1422,7 @@ mod tests {
         .to_string()
         .into_bytes();
         let mut f = fixture(test_row(&bytes), RecordingManager::new());
-        let mut d = driver(FakeLayoutEffects::new()).await;
+        let mut d = driver(RecordingRuntime::new()).await;
         let failure = d.reconcile(&mut f.ctx).await.expect_err("terminal");
         assert_eq!(failure.class(), FailureClass::Terminal);
     }
