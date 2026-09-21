@@ -19099,6 +19099,7 @@ mod tests {
             true,
             config.audit_retention_days,
             0,
+            false,
         )
         .expect("open rate-limited audit log");
         let backend = FakeDispatchBackend::default();
