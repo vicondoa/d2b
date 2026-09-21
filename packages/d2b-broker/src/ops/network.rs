@@ -1239,10 +1239,10 @@ mod tests {
     #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn v3_realization_persists_and_removes_after_fenced_cleanup() {
-        let root = std::env::current_dir()
-            .unwrap()
-            .join("target")
-            .join(format!("network-realization-{}", std::process::id()));
+        let root = crate::test_scratch_root().join(format!(
+            "network-realization-{}",
+            std::process::id()
+        ));
         let _ = tokio::fs::remove_dir_all(&root).await;
         fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
         let attachment_id = ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap();
@@ -1326,10 +1326,10 @@ mod tests {
     #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn v3_realization_reclaims_stale_temp_and_rejects_conflicting_row() {
-        let root = std::env::current_dir()
-            .unwrap()
-            .join("target")
-            .join(format!("network-realization-retry-{}", std::process::id()));
+        let root = crate::test_scratch_root().join(format!(
+            "network-realization-retry-{}",
+            std::process::id()
+        ));
         let _ = tokio::fs::remove_dir_all(&root).await;
         fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
         let attachment_id = ResourceUid::parse("523e4567-e89b-42d3-a456-426614174004").unwrap();
@@ -1394,13 +1394,10 @@ mod tests {
     #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn deleted_realization_tombstone_makes_duplicate_cleanup_idempotent() {
-        let root = std::env::current_dir()
-            .unwrap()
-            .join("target")
-            .join(format!(
-                "network-realization-tombstone-{}",
-                std::process::id()
-            ));
+        let root = crate::test_scratch_root().join(format!(
+            "network-realization-tombstone-{}",
+            std::process::id()
+        ));
         let _ = tokio::fs::remove_dir_all(&root).await;
         fs::DirBuilder::new().mode(0o750).create(&root).unwrap();
         let attachment_id = ResourceUid::parse("623e4567-e89b-42d3-a456-426614174005").unwrap();
