@@ -2157,12 +2157,19 @@ async fn outbound_cancel_fails_closed_before_a_queued_call_dispatch() {
         let request_id = request_id.clone();
         tokio::spawn(async move { initiator.start_ttrpc(request_id, vec![0x22]).await })
     };
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    // One cooperative yield per spawn is the deterministic handoff on this
+    // single-threaded runtime: the spawned task delivers its driver command
+    // and the single-threaded driver processes it in FIFO order (the writer
+    // stays parked on the transport fence). The queued call is therefore
+    // registered before the cancel is handled, and the cancel is fully
+    // processed - token revoked, session close armed - before the fence
+    // drops. A fixed sleep races in both directions; the yield cannot.
+    tokio::task::yield_now().await;
     let cancel = {
         let initiator = Arc::clone(&initiator);
         tokio::spawn(async move { initiator.cancel(7, request_id).await })
     };
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    tokio::task::yield_now().await;
 
     handles.block_sends_a.store(false, Ordering::Release);
     handles.send_release_a.notify_waiters();

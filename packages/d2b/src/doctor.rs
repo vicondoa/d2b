@@ -2408,25 +2408,32 @@ mod tests {
         // before waitpid - it should be in Z state.
         let mut child = system_tool_command("true").spawn().expect("spawn true");
         let pid = child.id() as i32;
-        // Give the child time to exit without being reaped.
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        // Read state; if it's already reaped by the OS before we get here
-        // (proc entry gone), skip the assertion.
-        if let Some(state_char) = read_proc_stat_state(pid) {
-            // May be zombie ('Z'), already gone/dead ('X'), or transiently
-            // still runnable ('R'), sleeping ('S'), or in uninterruptible
-            // sleep ('D') before the scheduler reaches process teardown.
+        // Wait for the child to exit without being reaped: the exited state
+        // is the observable condition, not a fixed sleep. The guard only
+        // bounds the environment producing the precondition (the child always
+        // exits; load only delays the observation). If the proc entry is
+        // already gone (reaped), there is nothing to assert.
+        let settled = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let state_char = loop {
+            match read_proc_stat_state(pid) {
+                Some(state @ ('Z' | 'X')) => break Some(state),
+                Some(_) => {}
+                None => break None,
+            }
             assert!(
-                state_char == 'Z'
-                    || state_char == 'X'
-                    || state_char == 'R'
-                    || state_char == 'S'
-                    || state_char == 'D',
-                "unexpected state: {state_char}"
+                std::time::Instant::now() < settled,
+                "child {pid} did not reach an exited state within the guard window"
             );
-        }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
         // Reap to avoid leaking zombies.
         let _ = child.wait();
+        if let Some(state_char) = state_char {
+            assert!(
+                state_char == 'Z' || state_char == 'X',
+                "child {pid} exited but read_proc_stat_state reported {state_char:?}"
+            );
+        }
     }
 
     // --- check_bridge_ipv6_sysctl ---
