@@ -11,9 +11,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use d2b_contracts_resource::v3::{ResourcePhase, ResourceRef};
 use d2b_contracts_resource::v3::host::HostSpec;
-use d2b_provider_system_core::{HostCapabilityClass, HostObservationReport, HostReconciler};
+use d2b_provider_system_core::{
+    HostCapabilityClass, HostObservationReport, HostReconciler, MinijailPlatformGate,
+};
 
-use crate::HostDriverEffects;
+use crate::{HostDriverEffects, HostEffectFacets, MinijailPlatformGateSource};
 
 /// Scripted observation port: records every call order-preservingly and
 /// can fail the probe.
@@ -72,4 +74,38 @@ impl HostDriverEffects for RecordingEffects {
             minijail_ready: true,
         })
     }
+}
+
+/// Scripted minijail platform gate source: the daemon-supplied
+/// [`MinijailPlatformGateSource`] facet double the plane tests and this
+/// crate's tests build faceted services from.
+pub struct RecordingMinijailGate {
+    gate: tokio::sync::Mutex<MinijailPlatformGate>,
+}
+
+impl RecordingMinijailGate {
+    /// Construct the double over one scripted gate snapshot.
+    pub fn new(gate: MinijailPlatformGate) -> Arc<Self> {
+        Arc::new(Self {
+            gate: tokio::sync::Mutex::new(gate),
+        })
+    }
+
+    /// Script the gate the next probes observe.
+    pub fn set(&self, gate: MinijailPlatformGate) {
+        *self.gate.try_lock().expect("uncontended test mutex") = gate;
+    }
+}
+
+impl MinijailPlatformGateSource for RecordingMinijailGate {
+    fn platform_gate(&self) -> MinijailPlatformGate {
+        *self.gate.try_lock().expect("uncontended test mutex")
+    }
+}
+
+/// Build the host family's declared facet set over a scripted (or
+/// recording) minijail gate source, exactly as the production composition
+/// root builds it from the daemon's gate probe.
+pub fn recording_facets(gate: Arc<RecordingMinijailGate>) -> HostEffectFacets {
+    HostEffectFacets { minijail_gate: gate }
 }

@@ -23,7 +23,7 @@
 //! becomes the `defaultUserRef` requirement asserted below.
 
 use d2b_contracts_resource::v3::ResourceRef;
-use std::{collections::BTreeSet, future::Future, future::ready};
+use std::collections::BTreeSet;
 
 use tracing::{debug, warn};
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
@@ -218,23 +218,28 @@ impl HostProbeSnapshot {
 }
 
 /// An injected, bounded Host capability probe.
-pub trait HostProbeEffectPort {
+///
+/// The async-trait surface keeps the probe dyn-compatible and `Send`, which
+/// the provider-owned Host effects service (U5) needs to hold the probe
+/// behind its hosted service and driver seams.
+#[async_trait::async_trait]
+pub trait HostProbeEffectPort: Send + Sync {
     /// Probe one capability class.
-    fn probe(
+    async fn probe(
         &self,
         capability: HostCapabilityClass,
-    ) -> impl Future<Output = Result<bool, SystemCoreError>>;
+    ) -> Result<bool, SystemCoreError>;
 
     /// Return kernel/platform evidence without exposing paths or handles.
-    fn platform(&self) -> impl Future<Output = Result<MinijailPlatformGate, SystemCoreError>>;
+    async fn platform(&self) -> Result<MinijailPlatformGate, SystemCoreError>;
 
     /// Return bounded metadata for the same probe pass.
     ///
     /// The default keeps small hermetic fakes source-compatible; a production
     /// adapter overrides it with bounded `uname`, os-release, and supervisor
     /// observations.
-    fn metadata(&self) -> impl Future<Output = Result<HostProbeMetadata, SystemCoreError>> {
-        ready(Ok(HostProbeMetadata::default()))
+    async fn metadata(&self) -> Result<HostProbeMetadata, SystemCoreError> {
+        Ok(HostProbeMetadata::default())
     }
 }
 

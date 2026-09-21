@@ -38,8 +38,15 @@
 //! non-Ready observation therefore re-probes on [`HOST_REOBSERVE`] and answers
 //! [`ReconcileOutcome::RetryScheduled`], never `Satisfied`.
 //!
+//! U5: the driver's effects are this crate's own implementation
+//! ([`crate::effects_service::HostEffectsService`]) built from the
+//! daemon-supplied facet set - the construction site holds no externally
+//! built port (R2) - and the family's declared effects service
+//! (`host.d2bus.org/effects`) rides the declaration, so a zone that cannot
+//! host it refuses startup by name (R5).
+//!
 //! KTD13: the driver has no spawn surface at all. It observes the local host
-//! through the effect port the daemon implements and owns no Process.
+//! through the family's own probe and owns no Process.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,6 +58,10 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_provider_system_core::HostObservationReport;
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
+
+use crate::effects_service::{HOST_EFFECTS_SERVICE, HostEffectsService};
+use crate::facets::HostEffectFacets;
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
 };
@@ -59,7 +70,6 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
-use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 // ---------------------------------------------------------------------------
 // Driver error and status
@@ -171,8 +181,10 @@ pub fn host_spec_decoder() -> Arc<dyn SpecDecoder> {
 
 /// The host-observation surface the Host driver needs: the preserved
 /// `system-core` Provider behavior (bounded capability/platform/metadata
-/// probe with its degraded fallback), behind the erased seam driver tests
-/// script. The production implementation lives in the daemon.
+/// probe with its degraded fallback), behind the erased seam the driver
+/// tests script. The production implementation is this crate's own
+/// [`crate::effects_service::HostEffectsService`] (U5), built from the
+/// daemon-supplied facet set.
 #[async_trait]
 pub trait HostDriverEffects: Send + Sync + 'static {
     /// Observe one Host and compute its public status, or report why the
@@ -190,18 +202,20 @@ pub trait HostDriverEffects: Send + Sync + 'static {
 // ---------------------------------------------------------------------------
 
 /// [`ResourceDriverFactory`] for the `Host` resource type. Construction is
-/// infallible by contract: the effect port carries no fallible setup.
+/// infallible by contract: the effects carry no fallible setup.
 pub struct HostDriverFactory {
     types: [ResourceTypeName; 1],
     effects: Arc<dyn HostDriverEffects>,
 }
 
 impl HostDriverFactory {
-    /// Build the factory over the host-observation port.
-    pub fn new(effects: Arc<dyn HostDriverEffects>) -> Self {
+    /// Build the factory over the family's own effects implementation
+    /// (U5), constructed from the daemon-supplied facet set: the
+    /// construction site holds no externally built port (R2).
+    pub fn new(facets: HostEffectFacets) -> Self {
         Self {
             types: [ResourceTypeName::new(HOST_RESOURCE_TYPE)],
-            effects,
+            effects: Arc::new(HostEffectsService::new(facets)),
         }
     }
 }
@@ -426,8 +440,15 @@ const HOST_EXECUTION_DOMAINS: &[&str] = &["host"];
 /// plane opens. The type is not exportable: `ResourceExport` admits only
 /// qualified `*.d2bus.org.*Service` types. The driver serves no broker
 /// operations, creates no children, and reads no other resource: the
-/// observation reaches the local machine through the effect port.
-pub fn host_descriptor(effects: Arc<dyn HostDriverEffects>) -> DriverDescriptor {
+/// observation reaches the local machine through the family's own probe.
+///
+/// U5: the driver's effects are this crate's own implementation
+/// ([`crate::effects_service::HostEffectsService`]) built from the
+/// daemon-supplied facet set - the construction site holds no externally
+/// built port (R2) - and the family's declared effects service
+/// ([`HOST_EFFECTS_SERVICE`]) rides the declaration, so a zone that cannot
+/// host it refuses startup by name (R5).
+pub fn host_descriptor(facets: HostEffectFacets) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::HOST,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
@@ -438,9 +459,9 @@ pub fn host_descriptor(effects: Arc<dyn HostDriverEffects>) -> DriverDescriptor 
         operations: &[],
         creations: &[],
         startup: &[],
-        services: &[],
+        services: &[HOST_EFFECTS_SERVICE],
         decoder: host_spec_decoder(),
-        factory: Arc::new(HostDriverFactory::new(effects)),
+        factory: Arc::new(HostDriverFactory::new(facets)),
     }
 }
 
@@ -477,8 +498,9 @@ mod tests {
     use crate::test_support::RecordingEffects;
 
     use super::{
-        HostDriverEffects, HostDriverFactory, HostDriverStatus, host_descriptor, host_spec_decoder,
+        HostDriver, HostDriverFactory, HostDriverStatus, host_descriptor, host_spec_decoder,
     };
+    use crate::HostEffectFacets;
 
     // -- fakes ---------------------------------------------------------------
 
@@ -648,14 +670,10 @@ mod tests {
     }
 
     async fn build_driver(effects: Arc<RecordingEffects>) -> Box<dyn DynResourceDriver> {
-        HostDriverFactory::new(effects)
-            .create(&ResourceKey::new("work", "Host", "host-system"))
-            .await
-    }
-
-    /// The erased port one declaration carries.
-    fn port(effects: Arc<RecordingEffects>) -> Arc<dyn HostDriverEffects> {
-        effects
+        // The driver's own typed seam, scripted: production builds the same
+        // seam from the facets (the factory), tests drive the behavior
+        // directly over the recording double.
+        Box::new(HostDriver::new(effects))
     }
 
     async fn host_fixture() -> (
@@ -677,12 +695,21 @@ mod tests {
         (ctx, effects, manager, requeue, driver)
     }
 
+    /// The facet set the factory and declaration tests build over: the
+    /// daemon-supplied minijail gate source double (the plane supplies the
+    /// other probe inputs as host state the probe reads itself).
+    fn facets() -> HostEffectFacets {
+        crate::test_support::recording_facets(crate::test_support::RecordingMinijailGate::new(
+            d2b_provider_system_core::MinijailPlatformGate::new(6, 9, true),
+        ))
+    }
+
     // -- factory -------------------------------------------------------------
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn factory_registers_exactly_the_host_resource_type() {
-        let factory = HostDriverFactory::new(RecordingEffects::new());
+        let factory = HostDriverFactory::new(facets());
         assert_eq!(factory.resource_types().len(), 1);
         assert_eq!(factory.resource_types()[0].as_str(), "Host");
         factory
@@ -692,14 +719,15 @@ mod tests {
 
     /// The declaration registers the type and the registry serves the
     /// declared factory, so a Host row reaches its driver through the
-    /// registry alone.
+    /// registry alone; the driver's effects come from the crate's own
+    /// implementation over the facet set (U5), so no externally built port
+    /// appears at the construction site.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_registry_serves_the_declared_factory_for_a_host_row() {
-        let effects = RecordingEffects::new();
         let mut providers = ProviderDirectory::new();
         providers
-            .register_driver(&host_descriptor(port(Arc::clone(&effects))))
+            .register_driver(&host_descriptor(facets()))
             .expect("the declaration registers");
 
         let key = ResourceKey::new("work", "Host", "host-system");
@@ -711,9 +739,11 @@ mod tests {
         );
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("reconcile"),
-            ReconcileOutcome::Satisfied
+            ReconcileOutcome::Satisfied,
+            "the crate's own probe observes the system-only bootstrap Host as Ready"
         );
-        assert_eq!(effects.call_order(), vec!["observe-host".to_owned()]);
+        let status = ctx.status::<HostDriverStatus>().expect("status published");
+        assert_eq!(status.report().status.phase, ResourcePhase::Ready);
     }
 
     // -- validate ------------------------------------------------------------

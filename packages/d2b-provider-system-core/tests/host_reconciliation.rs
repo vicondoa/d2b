@@ -7,7 +7,7 @@
 //! override them, and a Host with a different execution policy does not
 //! receive the field at all.
 
-use std::{collections::BTreeSet, future::Future};
+use std::collections::BTreeSet;
 
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 use d2b_contracts_resource::v3::host::IsolationPosture;
@@ -183,6 +183,7 @@ struct Probe {
     gate: MinijailPlatformGate,
 }
 
+#[async_trait::async_trait]
 impl HostProbeEffectPort for Probe {
     async fn probe(&self, capability: HostCapabilityClass) -> Result<bool, SystemCoreError> {
         Ok(self.capabilities.contains(&capability))
@@ -192,8 +193,8 @@ impl HostProbeEffectPort for Probe {
         Ok(self.gate)
     }
 
-    fn metadata(&self) -> impl Future<Output = Result<HostProbeMetadata, SystemCoreError>> {
-        std::future::ready(Ok(self.metadata.clone()))
+    async fn metadata(&self) -> Result<HostProbeMetadata, SystemCoreError> {
+        Ok(self.metadata.clone())
     }
 }
 

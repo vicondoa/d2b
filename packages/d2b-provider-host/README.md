@@ -48,14 +48,21 @@ with the decoder, the type's verbs, execution domain, reads, and the
 ## Placement and dependencies
 
 `Host` names no placement anchor: the row *is* the host target, so the plane
-reconciles it on its own Host domain. The observation reaches the local
-machine only through the `HostDriverEffects` port, which the daemon
-implements over the preserved `HostReconciler` probe.
+reconciles it on its own Host domain. The observation is this crate's own
+bounded probe (`src/probe.rs`), served through the family's declared effects
+service (`host.d2bus.org/effects`, U5): the probe reads `/proc`,
+`/etc/os-release`, `/dev`, `/sys/fs/cgroup`, and `/run/user` directly, and
+the one daemon-owned read - the minijail platform gate - arrives as the
+declared `MinijailPlatformGateSource` facet the composition root supplies.
 
 The crate depends on `d2b-contracts-resource`, `d2b-provider-system-core`
-(the Host reconciler the daemon's effect implementation drives),
-`d2b-resource-runtime`, and `d2b-resource-types`. It depends on no daemon
-runtime, so the driver cannot reach host state except through its port.
+(the Host reconciler and probe-port types the implementation drives),
+`d2b-resource-runtime`, `d2b-resource-types`, and `d2b-provider-toolkit`
+(the effects-service vocabulary it serves). The probe reads the pipewire
+runtime socket name and the usbip kernel module names as host-state paths
+spelled in the crate itself, with no sibling-provider vocabulary. It depends
+on no daemon runtime; the daemon hosts the family's declared effects service
+per zone from the crate's own factory.
 
 ## RBAC requirements
 
@@ -68,8 +75,9 @@ manager with the plane's own caller identity. It serves no broker operations.
 The driver never invents a capability, kernel release, or process count from
 spec text: the stored spec is decoded strictly, the Provider fence refuses
 anything but `Provider/system-core`, and every observation is a bounded value
-the production effect adapter already reduced. A spec that fails to decode is
-a terminal refusal, and the family owns no spawn surface at all.
+the crate's own probe already reduced (bounded reads, bounded lengths, a
+degraded fallback when the probe cannot complete). A spec that fails to
+decode is a terminal refusal, and the family owns no spawn surface at all.
 
 ## State and telemetry
 
@@ -88,7 +96,9 @@ cargo test -p d2b-provider-host
 ```
 
 The unit tests drive validate, recover, reconcile, finalize, and delete over
-a scripted effect port, and prove a Host row reaches its driver through the
-registry alone; the `registration` suite proves the declaration registers the
-type with its decoder and factory, that a duplicate registration is refused,
-and that the declared mask cannot arrive after the plane opens.
+a scripted effects double, prove a Host row reaches its driver through the
+registry alone, and prove the effects service's happy and degraded
+observation paths over a scripted probe; the `registration` suite proves the
+declaration registers the type with its decoder and factory, that a
+duplicate registration is refused, and that the declared mask cannot arrive
+after the plane opens.

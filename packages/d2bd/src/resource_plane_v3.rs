@@ -54,7 +54,7 @@ use d2b_provider_endpoint::{
     EndpointDriverArgs, EndpointDriverEffects, GuestControlProducer, endpoint_descriptor,
 };
 use d2b_provider_guest::{GuestDriverArgs, GuestDriverEffects, guest_descriptor};
-use d2b_provider_host::host_descriptor;
+use d2b_provider_host::{HOST_EFFECTS_SERVICE, HostEffectFacets, HostEffectsServiceFactory, host_descriptor};
 use d2b_provider_user::user_descriptor;
 use d2b_provider_process::{
     CommittedProviderIdentitySource, GuestOwnerIdentitySource, PROCESS_EFFECTS_SERVICE,
@@ -123,7 +123,7 @@ use d2b_provider_network_local::{
 };
 use crate::guest_effects::ProductionGuestDriverEffects;
 use crate::shared_provider_effects::ProductionSharedProviderEffects;
-use crate::system_core_effects::{ProductionHostDriverEffects, ProductionUserDriverEffects};
+use crate::system_core_effects::ProductionUserDriverEffects;
 use d2b_provider_command::command_descriptor;
 use d2b_provider_emergency_policy::emergency_policy_descriptor;
 use d2b_provider_operation::operation_descriptor;
@@ -1792,6 +1792,12 @@ pub struct ConstructionInputs {
     /// composition root. The family never receives a daemon-built effect
     /// port (R2).
     pub process_facets: ProcessEffectFacets,
+    /// The daemon-supplied facet set the Host family's effects
+    /// implementation is built from (U5): the minijail platform gate source
+    /// (the daemon's own bounded kernel/cgroup posture probe), supplied
+    /// through the composition root. The family never receives a
+    /// daemon-built effect port (R2).
+    pub host_facets: HostEffectFacets,
     /// The daemon-supplied facet set the Network family's effects
     /// implementation is built from (U14): the daemon's Network runtime and
     /// the resolved bundle intents, supplied through the composition root.
@@ -1926,6 +1932,14 @@ impl ConstructionInputs {
             runtime: Arc::clone(&shared_provider_effects)
                 as Arc<dyn d2b_provider_network_local::NetworkRuntime>,
         };
+        // U5: the Host family's effects ride the declared facets too: the
+        // daemon's own minijail platform gate probe is the one daemon-owned
+        // read the family's probe needs, supplied through the composition
+        // root; every other probe input is host state the family crate
+        // reads itself. The facet set is composed beside the gate probe it
+        // wraps (in the process-provider runtime module, whose minijail
+        // vocabulary is already measured there).
+        let host_facets = crate::process_provider_runtime::production_host_facets();
         Ok(Self {
             zone: zone.clone(),
             zone_token,
@@ -1943,6 +1957,7 @@ impl ConstructionInputs {
             registry: Arc::clone(&registry),
             provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
             process_facets: process_facets.clone(),
+            host_facets: host_facets.clone(),
             network_facets: network_facets.clone(),
             volume_effects: Arc::new(production_volume_effects(state, zone.clone(), resolver, Arc::clone(&registry))),
             binding_effects: Arc::new(ProductionBindingDriverEffects::new(
@@ -2061,6 +2076,7 @@ Box::pin(async move {
             effect_service_factories: registered_service_factories(
                 &process_facets,
                 &network_facets,
+                &host_facets,
             ),
             foundation: None,
         })
@@ -2075,6 +2091,7 @@ Box::pin(async move {
 fn registered_service_factories(
     process_facets: &ProcessEffectFacets,
     network_facets: &NetworkEffectFacets,
+    host_facets: &HostEffectFacets,
 ) -> BTreeMap<&'static str, Arc<dyn EffectServiceFactory>> {
     let mut factories = BTreeMap::new();
     for registration in PROVIDER_REGISTRATIONS {
@@ -2084,6 +2101,9 @@ fn registered_service_factories(
                     as Arc<dyn EffectServiceFactory>
             } else if service == NETWORK_EFFECTS_SERVICE.id {
                 Arc::new(NetworkEffectsServiceFactory::new(network_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
+            } else if service == HOST_EFFECTS_SERVICE.id {
+                Arc::new(HostEffectsServiceFactory::new(host_facets.clone()))
                     as Arc<dyn EffectServiceFactory>
             } else {
                 continue;
@@ -2432,14 +2452,12 @@ impl ResourcePlaneV3 {
                 effects: Arc::clone(&inputs.guest_effects),
             })],
         );
-        // The Host and User bootstrap types start through their driver
-        // declarations: the registry serves each type's decoder and factory
-        // from its declaration, and the declarations carry the types' verbs,
-        // execution domains, exportability, and reads.
-        set = set.with(
-            family_declaration("host"),
-            vec![host_descriptor(Arc::new(ProductionHostDriverEffects))],
-        );
+        // The Host family starts through the generated registration table
+        // above (its row carries the family's declared effects service); the
+        // User bootstrap type starts through its driver declaration: the
+        // registry serves each type's decoder and factory from its
+        // declaration, and the declarations carry the types' verbs, execution
+        // domains, exportability, and reads.
         set = set.with(
             family_declaration("user"),
             vec![user_descriptor(Arc::new(ProductionUserDriverEffects))],
@@ -2567,6 +2585,10 @@ impl ResourcePlaneV3 {
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.network_facets.clone(),
             })],
+            // The Host family (U5): the driver builds its effects from the
+            // daemon-supplied facet set; no externally built port appears at
+            // this construction site (R2).
+            "host" => vec![host_descriptor(inputs.host_facets.clone())],
             _ => Vec::new(),
         }
     }
@@ -3117,6 +3139,7 @@ impl ResourcePlaneV3 {
 mod tests {
     use super::*;
     use d2b_provider_activation_nixos::HostHandoffResult;
+    use d2b_provider_system_core::MinijailPlatformGate;
     use d2b_contracts_resource::v3::ResourceName;
     use d2b_contracts_zone_session::v3::resource_bundle::BundleResourceMetadata;
     use d2b_process_conformance::ProcessIdentityDigest;
@@ -3322,6 +3345,14 @@ mod tests {
         let network_facets = d2b_provider_network_local::test_support::recording_facets(
             Arc::new(d2b_provider_network_local::test_support::RecordingRuntime::default()),
         );
+        // U5: the plane tests build the Host family's facet set from the
+        // scripted minijail gate double, exactly as the production
+        // composition root builds it from the daemon's gate probe.
+        let host_facets = d2b_provider_host::test_support::recording_facets(
+            d2b_provider_host::test_support::RecordingMinijailGate::new(
+                MinijailPlatformGate::new(6, 9, true),
+            ),
+        );
         (
             dir,
             ConstructionInputs {
@@ -3341,6 +3372,7 @@ mod tests {
                 registry: Arc::new(PlaneResourceRegistry::new()),
                 provider_effects: Arc::new(d2b_provider_provider::FailClosedProviderDriverEffects),
                 process_facets: process_facets.clone(),
+                host_facets: host_facets.clone(),
                 volume_effects: d2b_provider_volume::test_support::FakeLayoutEffects::new(),
                 binding_effects: {
                     let effects =
@@ -3397,10 +3429,10 @@ mod tests {
                 },
                 interaction_effects: d2b_provider_wayland_policy::test_support::ScriptedEffects::new(),
                 trusted_context_publication: None,
-                // U1/U14: the plane hosts the Process and Network families'
-                // declared effects services from the same facet sets their
-                // driver factories are built from, exactly as the production
-                // composition root does.
+                // U1/U14/U5: the plane hosts the Process, Network, and Host
+                // families' declared effects services from the same facet
+                // sets their driver factories are built from, exactly as the
+                // production composition root does.
                 effect_service_factories: BTreeMap::from([
                     (
                         PROCESS_EFFECTS_SERVICE.id,
@@ -3412,6 +3444,11 @@ mod tests {
                         Arc::new(NetworkEffectsServiceFactory::new(
                             network_facets.clone(),
                         )) as Arc<dyn EffectServiceFactory>,
+                    ),
+                    (
+                        HOST_EFFECTS_SERVICE.id,
+                        Arc::new(HostEffectsServiceFactory::new(host_facets))
+                            as Arc<dyn EffectServiceFactory>,
                     ),
                 ]),
                 foundation: None,
@@ -3671,6 +3708,137 @@ mod tests {
         );
     }
 
+    /// U5: the composition root hosts the Host family's declared effects
+    /// service from the family's own factory over the plane's facet set, and
+    /// the hosted service answers `inspect-host` through the real invocation
+    /// capability object carrying the real envelope payload - the same
+    /// implementation value the driver factory is built from. The report is
+    /// the family's bounded probe running inside the owning crate: the
+    /// capability classes present, the bounded metadata, and the minijail
+    /// platform gate from the daemon-supplied facet.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_host_effects_service_answers_inspect_host_through_the_binding() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let runtime = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts the declared host service");
+        let binding = runtime
+            .resolve_effect_service(HOST_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-u5-inspect-host".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({})).expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: HOST_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let response = binding.call(call).await.expect("call");
+        let string_field = |key: &str| -> String {
+            match response.payload.get(key) {
+                Some(d2b_contracts_resource::v3::CanonicalJsonValue::String(value)) => {
+                    value.clone()
+                }
+                other => panic!("field {key} is not a canonical string: {other:?}"),
+            }
+        };
+        assert_eq!(string_field("family"), "host");
+        assert_eq!(string_field("resourceType"), "Host");
+        match response.payload.get("capabilities") {
+            Some(d2b_contracts_resource::v3::CanonicalJsonValue::Array(capabilities)) => {
+                assert!(
+                    capabilities.len()
+                        <= d2b_provider_system_core::HostCapabilityClass::ALL.len(),
+                    "the report carries the bounded capability class set"
+                );
+            }
+            other => panic!("capabilities is not a canonical array: {other:?}"),
+        }
+        let integer_field = |key: &str| -> i64 {
+            match response
+                .payload
+                .get("minijail")
+                .and_then(d2b_contracts_resource::v3::CanonicalJsonValue::as_object)
+                .and_then(|gate| gate.get(key))
+            {
+                Some(d2b_contracts_resource::v3::CanonicalJsonValue::Integer(value)) => *value,
+                other => panic!("minijail.{key} is not a canonical integer: {other:?}"),
+            }
+        };
+        assert_eq!(
+            integer_field("kernelMajor"),
+            6,
+            "the platform gate comes from the daemon-supplied facet"
+        );
+        assert_eq!(
+            integer_field("kernelMinor"),
+            9,
+            "the platform gate comes from the daemon-supplied facet"
+        );
+        let kernel_release = string_field("kernelRelease");
+        assert!(!kernel_release.is_empty());
+        assert!(kernel_release.len() <= 64, "the observation is bounded");
+    }
+
+    /// KTD8 restart adoption for the rows this lane moves: an
+    /// already-provisioned plane restarts and re-hosts the Host family's
+    /// declared effects service from the same facet set, and the fresh
+    /// generation answers the same `inspect-host` surface - the surface this
+    /// lane moved adopts on restart, with no daemon-side effect module.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_restarted_plane_rehosts_the_host_effects_service() {
+        let (_dir, inputs, _readiness) = test_inputs();
+        let started = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the plane starts with the declared host service");
+        let binding = started
+            .resolve_effect_service(HOST_EFFECTS_SERVICE.id)
+            .await
+            .expect("the declared effects service resolves");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-u5-before-restart".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({})).expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: HOST_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let before = binding.call(call).await.expect("call before restart");
+        drop(started);
+
+        // The daemon restarts: the provider set is rebuilt from the same
+        // declaration and factory, and the Host service is hosted again.
+        let restarted = ResourcePlaneV3::provider_set(&inputs)
+            .start()
+            .await
+            .expect("the restarted plane starts");
+        let adopted = restarted
+            .resolve_effect_service(HOST_EFFECTS_SERVICE.id)
+            .await
+            .expect("the restarted plane re-hosts the declared host service");
+        let call = ServiceCallData {
+            zone: "test".to_owned(),
+            invocation_id: "invocation-u5-after-restart".to_owned(),
+            payload: serde_json::from_value(serde_json::json!({})).expect("canonical payload"),
+            resources: ServiceResourceContext::fail_closed(),
+            method: HOST_EFFECTS_SERVICE.methods[0],
+            kernel: None,
+            request_fds: Vec::new(),
+        };
+        let after = adopted.call(call).await.expect("call after restart");
+        assert_eq!(
+            after.payload, before.payload,
+            "the adopted generation answers the same bounded observations"
+        );
+    }
+
     /// The providers the plane starts register exactly the converted-type
     /// authority list: no listed type is missing a driver, no driver serves a
     /// type outside the list, and every provider drains through the base in
@@ -3701,6 +3869,7 @@ mod tests {
         assert_eq!(
             runtime.startup_order(),
             [
+                "host",
                 "network-local",
                 "process",
                 "volume",
@@ -3714,7 +3883,6 @@ mod tests {
                 "device-security-key",
                 "device",
                 "guest",
-                "host",
                 "user",
                 "zone",
                 "zone-link",

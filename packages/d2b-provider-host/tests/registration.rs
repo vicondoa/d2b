@@ -7,14 +7,16 @@ use d2b_contracts_resource::v3::{
     execution_policy::to_base_object,
     host::{HOST_PROVIDER_REF, HostSpec},
 };
-use d2b_provider_host::test_support::RecordingEffects;
+use d2b_provider_host::test_support::{RecordingMinijailGate, recording_facets};
 use d2b_provider_host::host_descriptor;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{DriverRegistration, ProviderDirectory, ProviderDirectoryError};
 use d2b_resource_types::{AllowedSources, WellKnownType};
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
-    host_descriptor(RecordingEffects::new())
+    host_descriptor(recording_facets(RecordingMinijailGate::new(
+        d2b_provider_host::MinijailPlatformGate::new(6, 9, true),
+    )))
 }
 
 /// The declaration registers the one type it serves and carries the
@@ -43,7 +45,7 @@ async fn descriptor_declares_and_registers_the_host_type() {
     );
     assert!(
         descriptor.reads.is_empty(),
-        "the observation reaches the local machine through the effect port"
+        "the observation reaches the local machine through the family's own probe"
     );
     assert_eq!(
         descriptor.verbs,
@@ -61,6 +63,11 @@ async fn descriptor_declares_and_registers_the_host_type() {
     );
     assert!(descriptor.operations.is_empty());
     assert!(descriptor.creations.is_empty());
+    assert_eq!(
+        descriptor.services,
+        &[d2b_provider_host::HOST_EFFECTS_SERVICE],
+        "the family's declared effects service rides the declaration (U5)"
+    );
 
     let mut providers = ProviderDirectory::new();
     providers.register_driver(&descriptor).expect("register");

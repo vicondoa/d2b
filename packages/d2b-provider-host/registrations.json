@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-host",
+  "provider": "host",
+  "services": [
+    "host.d2bus.org/effects"
+  ]
+}

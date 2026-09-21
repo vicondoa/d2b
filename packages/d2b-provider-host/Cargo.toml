@@ -17,10 +17,12 @@ await_holding_refcell_ref = "deny"
 async-trait = "0.1"
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-provider-system-core = { path = "../d2b-provider-system-core", version = "0.0.0-bootstrap" }
+d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
+nix = { version = "0.29", features = ["user"] }
 serde_json.workspace = true
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["fs", "sync"] }
 
 [features]
 test-support = []
