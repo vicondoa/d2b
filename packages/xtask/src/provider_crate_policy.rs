@@ -1039,12 +1039,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2bd/src/usbip_production.rs",
-        token: "server_state",
-        family: "d2bd-state",
-        retires_with: "R13 (drivers read state through the driver context; only daemon-structural state stays behind ServerState)",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2bd/src/guest_effects.rs",
         token: "server_state",
         family: "d2bd-state",
