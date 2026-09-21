@@ -57,9 +57,14 @@ signed `virtiofsd-worker` template the launch ticket resolves binds it.
 The crate depends on `d2b-contracts-resource`, `d2b-provider-process-minijail`
 (the worker Provider reference), `d2b-provider-volume-virtiofs` (the binding
 row contract, the frozen worker plan, and the binding Provider reference),
-`d2b-resource-runtime`, and `d2b-resource-types`. The serving effects arrive
-through `BindingDriverEffects`, so the crate carries neither a socket path nor
-a mount observation of its own.
+`d2b-resource-runtime`, and `d2b-resource-types`. The family's driver effects
+are implemented by this crate itself (`effects_service`); the daemon-owned
+reads - the serving-socket probe, the socket removal, and the guest-mount
+observation - cross the provider boundary as the declared `BindingEffectFacets`
+the composition root supplies, so the crate carries neither a socket path nor
+a mount observation of its own. The daemon hosts the family's declared
+effects service (`volume-binding.d2bus.org/effects`) per zone from the
+family's registered factory.
 
 ## RBAC requirements
 
@@ -75,9 +80,9 @@ The driver never invents a socket path, worker argv, or mount source: the
 stored spec is decoded strictly, the launch plan comes from the frozen
 `VirtiofsdWorkerPlan` contract, and the worker child is minted argv-free so
 the Process controller composes its launch from the committed binding and
-Volume rows. The drain gate fails closed: a guest mount the port cannot
-observe keeps the durable deleting mark and the owned children rather than
-force-clearing a share that is still mounted. Effects are idempotent under
+Volume rows. The drain gate fails closed: a guest mount the observation
+cannot see keeps the durable deleting mark and the owned children rather
+than force-clearing a share that is still mounted. Effects are idempotent under
 retry.
 
 ## State and telemetry

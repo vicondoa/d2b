@@ -70,15 +70,17 @@ use d2b_resource_types::{
     WellKnownType,
 };
 
+use crate::effects_service::BINDING_EFFECTS_SERVICE;
+
 /// The one resource type this factory serves.
 pub const BINDING_TYPE_NAME: &str = "VolumeBinding";
 
 /// The serving Provider this driver owns.
-const BINDING_PROVIDER_REF: &str = d2b_provider_volume_virtiofs::PROVIDER_REF;
+pub(crate) const BINDING_PROVIDER_REF: &str = d2b_provider_volume_virtiofs::PROVIDER_REF;
 
 /// The Process Provider the binding-owned worker runs under (old
 /// `worker_child_specs`).
-const WORKER_PROVIDER_REF: &str = d2b_provider_process_minijail::PROVIDER_REF;
+pub(crate) const WORKER_PROVIDER_REF: &str = d2b_provider_process_minijail::PROVIDER_REF;
 
 /// Deterministic owned-child resource types.
 const WORKER_TYPE: &str = "Process";
@@ -340,8 +342,11 @@ pub trait BindingDriverEffects: Send + Sync + 'static {
 pub struct BindingDriverArgs {
     /// The zone this driver's rows live in.
     pub zone: String,
-    /// The serving effect port the production implementation realizes.
-    pub effects: Arc<dyn BindingDriverEffects>,
+    /// The daemon-supplied facet set the family's effects are built from
+    /// (R2): the serving-socket probe, the socket removal, and the
+    /// guest-mount observation. The family never receives a daemon-built
+    /// effect port.
+    pub facets: crate::facets::BindingEffectFacets,
     /// Target Guest vcpu count; the worker thread-pool size.
     pub vcpu_count: u32,
 }
@@ -369,11 +374,15 @@ impl ResourceDriverFactory for BindingDriverFactory {
     }
 
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
-        Box::new(BindingDriver::new(BindingDriverArgs {
-            zone: self.args.zone.clone(),
-            effects: Arc::clone(&self.args.effects),
-            vcpu_count: self.args.vcpu_count,
-        }))
+        Box::new(BindingDriver::new(
+            self.args.zone.clone(),
+            // The driver builds its effects from the declared facets; no
+            // externally built port appears at this construction site (R2).
+            Arc::new(crate::effects_service::BindingEffectsService::new(
+                self.args.facets.clone(),
+            )),
+            self.args.vcpu_count,
+        ))
     }
 }
 
@@ -395,11 +404,15 @@ pub(crate) struct BindingDriver {
 }
 
 impl BindingDriver {
-    pub(crate) fn new(args: BindingDriverArgs) -> Self {
+    pub(crate) fn new(
+        zone: String,
+        effects: Arc<dyn BindingDriverEffects>,
+        vcpu_count: u32,
+    ) -> Self {
         Self {
-            zone: args.zone,
-            effects: args.effects,
-            vcpu_count: args.vcpu_count,
+            zone,
+            effects,
+            vcpu_count,
             watched: Vec::new(),
         }
     }
@@ -1063,8 +1076,11 @@ const BINDING_READS: &[WellKnownType] = &[WellKnownType::VOLUME];
 /// before the plane opens. The type is not exportable: `ResourceExport`
 /// admits only qualified `*.d2bus.org.*Service` types, so a binding can never
 /// be an export subject. The driver serves no broker operations and
-/// contributes no startup steps or services; the worker Process and Endpoint
-/// children it mints are declared in [`BINDING_CREATIONS`].
+/// contributes no startup steps; the worker Process and Endpoint children it
+/// mints are declared in [`BINDING_CREATIONS`], and the declaration carries
+/// the family's declared effects service
+/// ([`crate::effects_service::BINDING_EFFECTS_SERVICE`]), which the daemon
+/// hosts per zone from the family's registered factory.
 pub fn binding_descriptor(args: BindingDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::VOLUME_BINDING,
@@ -1076,7 +1092,7 @@ pub fn binding_descriptor(args: BindingDriverArgs) -> DriverDescriptor {
         operations: &[],
         creations: BINDING_CREATIONS,
         startup: &[],
-        services: &[],
+        services: &[BINDING_EFFECTS_SERVICE],
         decoder: binding_spec_decoder(),
         factory: Arc::new(BindingDriverFactory::new(args)),
     }
@@ -1409,7 +1425,7 @@ mod tests {
     async fn driver(effects: Arc<FakeServingEffects>) -> Box<dyn DynResourceDriver> {
         let factory = BindingDriverFactory::new(BindingDriverArgs {
             zone: "work".to_owned(),
-            effects,
+            facets: effects.facet_set(),
             vcpu_count: 4,
         });
         factory
@@ -1424,7 +1440,7 @@ mod tests {
     async fn factory_registers_only_the_binding_resource_type() {
         let factory = BindingDriverFactory::new(BindingDriverArgs {
             zone: "work".to_owned(),
-            effects: FakeServingEffects::new(),
+            facets: FakeServingEffects::new().facet_set(),
             vcpu_count: 4,
         });
         assert_eq!(factory.resource_types().len(), 1);

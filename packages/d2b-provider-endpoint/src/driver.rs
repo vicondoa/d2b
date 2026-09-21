@@ -34,10 +34,9 @@
 //! - socket removal -> [`ResourceDriver::delete`].
 //! - `UpdateStatus` -> `ctx.set_status` (in-memory only).
 //!
-//! Which purposes a declaring provider commits, and on which producer, is not
-//! this crate's knowledge: it arrives through
-//! [`EndpointPurposeVocabulary`], which the daemon implements over the
-//! declaring provider crates.
+//! Which purposes a declaring provider commits, and on which producer, is
+//! this crate's own derivation ([`crate::effects_service`]): the closed
+//! admission set is read from the declaring providers' own vocabularies.
 
 use std::sync::Arc;
 
@@ -55,8 +54,15 @@ use d2b_resource_runtime::error::{
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 
+use crate::effects_service::ENDPOINT_EFFECTS_SERVICE;
+
 /// The frozen purpose of the binding-owned virtiofsd socket.
-const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
+///
+/// The purpose is this family's own vocabulary: the shape check classifies
+/// against it, and the daemon's host socket facet refuses any purpose it
+/// does not realize through the same constant (the refusal is preserved
+/// from the pre-move port rather than weakened).
+pub const VIRTIOFSD_PURPOSE: &str = "virtiofsd";
 
 /// The producer one guest-runtime control purpose is declared with, exactly
 /// as the Cloud Hypervisor provider's fixed child roles commit it: `ch-api`
@@ -91,12 +97,11 @@ impl GuestControlProducer {
     }
 }
 
-/// The per-provider purpose derivation the Endpoint family port answers with.
+/// The per-provider purpose derivation the Endpoint family answers with.
 ///
 /// The family admits exactly the endpoint shapes its declaring providers
-/// commit, and that commitment lives in provider crates this crate does not
-/// depend on. The daemon implements this derivation over those providers'
-/// own vocabularies - the Cloud Hypervisor provider's child roles and the
+/// commit, and this crate derives that commitment from those providers' own
+/// vocabularies - the Cloud Hypervisor provider's child roles and the
 /// Device TPM Provider's declared purposes - so the closed admission set
 /// cannot drift from the children a guest's provider controller commits.
 /// Test doubles answer with the same closed set.
@@ -296,8 +301,10 @@ pub trait EndpointDriverEffects: EndpointPurposeVocabulary {
 pub struct EndpointDriverArgs {
     /// The zone the driver serves.
     pub zone: String,
-    /// The daemon-realized effect port the driver drives.
-    pub effects: Arc<dyn EndpointDriverEffects>,
+    /// The daemon-supplied facet set the family's effects are built from
+    /// (R2): the host socket surface and the two row-evidence probes. The
+    /// family never receives a daemon-built effect port.
+    pub facets: crate::facets::EndpointEffectFacets,
 }
 
 /// [`ResourceDriverFactory`] for the `Endpoint` resource type. Construction
@@ -308,7 +315,7 @@ pub struct EndpointDriverFactory {
 }
 
 impl EndpointDriverFactory {
-    /// Build the factory over the zone's effect port.
+    /// Build the factory over the zone's facet set.
     pub fn new(args: EndpointDriverArgs) -> Self {
         Self {
             types: [WellKnownType::ENDPOINT.to_resource_type_name()],
@@ -324,10 +331,13 @@ impl ResourceDriverFactory for EndpointDriverFactory {
     }
 
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
-        Box::new(EndpointDriver::new(EndpointDriverArgs {
-            zone: self.args.zone.clone(),
-            effects: Arc::clone(&self.args.effects),
-        }))
+        Box::new(EndpointDriver::new(
+            // The driver builds its effects from the declared facets; no
+            // externally built port appears at this construction site (R2).
+            Arc::new(crate::effects_service::EndpointEffectsService::new(
+                self.args.facets.clone(),
+            )),
+        ))
     }
 }
 
@@ -342,11 +352,9 @@ pub struct EndpointDriver {
 }
 
 impl EndpointDriver {
-    /// Build one resource's driver over the zone's effect port.
-    pub fn new(args: EndpointDriverArgs) -> Self {
-        Self {
-            effects: args.effects,
-        }
+    /// Build one resource's driver over the zone's effect object.
+    pub fn new(effects: Arc<dyn EndpointDriverEffects>) -> Self {
+        Self { effects }
     }
 
     /// Decode the stored spec into the strict typed Endpoint contract.
@@ -578,7 +586,9 @@ const ENDPOINT_READS: &[WellKnownType] = &[
 /// qualified `*.d2bus.org.*Service` types, so an endpoint can never be an
 /// export subject. The driver serves no broker operations and creates no
 /// children through this declaration; the endpoint children the volume
-/// binding realizes are created by that family.
+/// binding realizes are created by that family. The declaration carries the
+/// family's declared effects service ([`crate::effects_service::ENDPOINT_EFFECTS_SERVICE`]),
+/// which the daemon hosts per zone from the family's registered factory.
 pub fn endpoint_descriptor(args: EndpointDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::ENDPOINT,
@@ -590,7 +600,7 @@ pub fn endpoint_descriptor(args: EndpointDriverArgs) -> DriverDescriptor {
         operations: &[],
         creations: &[],
         startup: &[],
-        services: &[],
+        services: &[ENDPOINT_EFFECTS_SERVICE],
         decoder: endpoint_spec_decoder(),
         factory: Arc::new(EndpointDriverFactory::new(args)),
     }
@@ -754,7 +764,7 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
     async fn driver(effects: Arc<FakeSocketEffects>) -> Box<dyn DynResourceDriver> {
         let factory = EndpointDriverFactory::new(EndpointDriverArgs {
             zone: "work".to_owned(),
-            effects,
+            facets: effects.facet_set(),
         });
         factory
             .create(&ResourceKey::new("work", "Endpoint", "endpoint"))
@@ -1251,10 +1261,18 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
                 ReconcileOutcome::InProgress { .. } => {}
                 other => panic!("expected InProgress, got {other:?}"),
             }
+            // The evidence family realizes through its evidence facet, not
+            // the host socket facet: script the evidence row Ready (the
+            // production probe reads the guest's committed VMM row), and the
+            // socket facet records no call for the evidence purposes.
+            fake.make_present();
             for _ in 0..16 {
                 tokio::task::yield_now().await;
             }
-            assert!(fake.call_order().contains(&"ensure-socket"));
+            assert!(
+                !fake.call_order().contains(&"ensure-socket"),
+                "an evidence purpose realizes through the evidence facet, never the host socket"
+            );
             assert_eq!(
                 d.reconcile(&mut ctx).await.expect("reconcile"),
                 ReconcileOutcome::Satisfied

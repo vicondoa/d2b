@@ -1401,6 +1401,9 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts-resource",
+ "d2b-provider-device-tpm",
+ "d2b-provider-guest-cloud-hypervisor",
+ "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "parking_lot",
@@ -1948,6 +1951,7 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-provider-endpoint",
  "d2b-provider-process-minijail",
+ "d2b-provider-toolkit",
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
  "d2b-resource-types",

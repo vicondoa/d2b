@@ -38,6 +38,10 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
         services: &["usbip.d2bus.org/effects"],
     },
     ProviderRegistration {
+        provider_ref: "endpoint",
+        services: &["endpoint.d2bus.org/effects"],
+    },
+    ProviderRegistration {
         provider_ref: "guest",
         services: &["guest.d2bus.org/effects"],
     },
@@ -68,6 +72,10 @@ pub(crate) const PROVIDER_REGISTRATIONS: &[ProviderRegistration] = &[
     ProviderRegistration {
         provider_ref: "user",
         services: &["user.d2bus.org/effects"],
+    },
+    ProviderRegistration {
+        provider_ref: "volume-binding",
+        services: &["volume-binding.d2bus.org/effects"],
     },
     ProviderRegistration {
         provider_ref: "wayland-policy",

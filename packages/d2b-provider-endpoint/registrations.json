@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-endpoint",
+  "provider": "endpoint",
+  "services": [
+    "endpoint.d2bus.org/effects"
+  ]
+}

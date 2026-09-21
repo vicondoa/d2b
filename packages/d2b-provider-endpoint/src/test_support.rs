@@ -4,9 +4,9 @@
 //! recording implementation of [`EndpointDriverEffects`] and
 //! [`EndpointPurposeVocabulary`], so the closed admission vocabulary and the
 //! socket effect script cannot drift between the owner crate and the plane.
-//! The vocabulary mapping equals the daemon's `endpoint_effects.rs` output
-//! (both derive from the same provider constants), which preserves the
-//! plane tests' vocabulary behavior.
+//! The vocabulary mapping delegates to this crate's own derivations (both
+//! derive from the same provider constants), which preserves the plane
+//! tests' vocabulary behavior.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +17,8 @@ use d2b_contracts_resource::v3::ResourceRef;
 use crate::driver::{
     EndpointDriverEffects, EndpointPurposeVocabulary, GuestControlProducer,
 };
+use crate::effects_service::{device_worker_endpoint_class, guest_control_producer};
+use crate::facets::{DeviceWorkerEvidenceSource, EndpointEffectFacets, EndpointSocketSource, GuestVmmEvidenceSource};
 
 /// Scripted socket port: records every call in order, and answers the
 /// purpose derivations with the purposes the declaring providers commit
@@ -44,23 +46,71 @@ impl FakeSocketEffects {
     pub fn make_present(&self) {
         self.present.store(true, Ordering::SeqCst);
     }
+
+    /// The facet set the plane and this crate's tests build the driver and
+    /// the effects service from: the scripted socket double behind the host
+    /// socket facet, and the same scripted presence behind the two
+    /// row-evidence facets (a realized evidence family answers the same
+    /// scripted flag the socket family answers).
+    pub fn facet_set(self: &Arc<Self>) -> EndpointEffectFacets {
+        EndpointEffectFacets {
+            socket: Arc::new(ScriptedSocketSource(Arc::clone(self))),
+            guest_vmm: Arc::new(ScriptedEvidence(Arc::clone(self))),
+            device_worker: Arc::new(ScriptedEvidence(Arc::clone(self))),
+        }
+    }
+}
+
+/// The scripted host socket facet: records the socket calls on the shared
+/// double and answers its scripted presence.
+struct ScriptedSocketSource(Arc<FakeSocketEffects>);
+
+#[async_trait::async_trait]
+impl EndpointSocketSource for ScriptedSocketSource {
+    async fn present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
+        self.0.calls.lock().push("socket-present");
+        self.0.present.load(Ordering::SeqCst)
+    }
+
+    async fn ensure(&self, _producer_ref: &ResourceRef, _purpose: &str) -> Result<(), String> {
+        self.0.calls.lock().push("ensure-socket");
+        self.0.make_present();
+        Ok(())
+    }
+
+    async fn remove(&self, _producer_ref: &ResourceRef, _purpose: &str) -> Result<(), String> {
+        self.0.calls.lock().push("remove-socket");
+        self.0.present.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// The scripted row-evidence double: both evidence families answer the
+/// shared double's scripted presence, so a test scripts the evidence row
+/// `Ready` with the same `make_present()` the socket family scripts.
+struct ScriptedEvidence(Arc<FakeSocketEffects>);
+
+#[async_trait::async_trait]
+impl GuestVmmEvidenceSource for ScriptedEvidence {
+    async fn present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
+        self.0.present.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl DeviceWorkerEvidenceSource for ScriptedEvidence {
+    async fn present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
+        self.0.present.load(Ordering::SeqCst)
+    }
 }
 
 impl EndpointPurposeVocabulary for FakeSocketEffects {
     fn guest_control_producer(&self, purpose: &str) -> Option<GuestControlProducer> {
-        match purpose {
-            "ch-api" => Some(GuestControlProducer::VmmProcess),
-            "guest-control" => Some(GuestControlProducer::Guest),
-            _ => None,
-        }
+        guest_control_producer(purpose)
     }
 
     fn device_worker_endpoint_class(&self, purpose: &str) -> Option<EndpointClass> {
-        match purpose {
-            "swtpm-tpm-socket" => Some(EndpointClass::Device),
-            "swtpm-control-socket" => Some(EndpointClass::Control),
-            _ => None,
-        }
+        device_worker_endpoint_class(purpose)
     }
 }
 
