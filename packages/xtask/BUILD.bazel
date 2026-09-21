@@ -449,7 +449,6 @@ d2b_rust_test(
     data = [
         ":xtask",
         "//:BUILD.bazel",
-        "//:Cargo.lock",
         "//:Cargo.toml",
         "//:flake.nix",
         "//:rust-toolchain.toml",

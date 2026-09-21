@@ -8067,10 +8067,12 @@ fn cargo_metadata(repo_root: &Path) -> Result<CargoMetadata, String> {
             Ok::<PathBuf, String>(cargo_home)
         })
         .transpose()?;
-    // Metadata for the committed tree must never depend on registry or
-    // network state: the workspace lockfile pins the graph, and cargo is
-    // asked to resolve offline first (mirroring production_closure.rs).
-    // Surface cargo's stderr so a future failure names its own cause.
+    // --no-deps means no dependency-graph resolution, so cargo never touches
+    // registry or network state:this is the hermeticity source. --lockedand
+    // --offline harden the invocation against future argument changes;the
+    // lockfile is not read by this check (lockfile drift is enforced by the
+    // production-closure drift check, not here). Surface cargo's stderr so a
+    // future failure names its own cause.
     let invoke = |offline: bool| -> Result<std::process::Output, String> {
         let mut command = Command::new(cargo.as_os_str());
         if let Some(home) = &cargo_home {
