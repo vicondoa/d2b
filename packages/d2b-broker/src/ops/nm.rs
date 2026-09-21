@@ -325,6 +325,7 @@ async fn remove_with_reload_using<F>(
 where
     F: for<'a> FnMut(&'a [&'a str]) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>,
 {
+    crate::live_handlers::validate_nm_reload_behavior(&intent.reload_behavior)?;
     path_safe::refuse_world_writable_parent(&intent.file_path)
         .map_err(|err| io_to_live_handler(&intent.file_path, err))?;
     path_safe::refuse_symlink(&intent.file_path)
@@ -545,13 +546,17 @@ mod tests {
         let log = exec.take_log();
         assert_eq!(log.len(), 1);
         match &log[0] {
-            ReconcileOp::WriteAtomicFile {
+            ReconcileOp::WriteAtomicFileWithOwnership {
                 path,
                 contents,
                 mode,
+                owner_uid,
+                owner_gid,
             } => {
                 assert_eq!(path, &PathBuf::from(DEFAULT_NM_CONF_PATH));
                 assert_eq!(*mode, 0o644);
+                assert_eq!(*owner_uid, 0, "declared owner root resolves to uid 0");
+                assert_eq!(*owner_gid, 0, "declared group root resolves to gid 0");
                 assert!(String::from_utf8_lossy(contents).contains("unmanaged-devices"));
             }
             other => panic!("unexpected op: {other:?}"),
@@ -560,5 +565,55 @@ mod tests {
             *reloads.lock().unwrap(),
             vec!["reload NetworkManager".to_owned()]
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn remove_with_reload_refuses_unknown_reload_behavior_before_mutation() {
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "nm-remove-refused-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("00-d2b-unmanaged.conf");
+        let intent = ResolvedNmUnmanagedIntent {
+            intent_id: "nm-unmanaged:host".to_owned(),
+            file_path: path.clone(),
+            contents: String::new(),
+            mode: 0o644,
+            owner: "root".to_owned(),
+            group: "root".to_owned(),
+            reload_behavior: "atomic-reloadd".to_owned(),
+        };
+        let reloaded = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reload_flag = std::sync::Arc::clone(&reloaded);
+
+        let err = remove_with_reload_using(&intent, move |_| {
+            let reload_flag = std::sync::Arc::clone(&reload_flag);
+            Box::pin(async move {
+                reload_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            })
+        })
+        .await
+        .expect_err("a typo'd reload behavior must refuse the removal");
+
+        assert!(matches!(
+            &err,
+            crate::live_handlers::LiveHandlerError::NmReloadBehaviorRefused(value)
+                if value == "atomic-reloadd"
+        ));
+        assert!(
+            !reloaded.load(std::sync::atomic::Ordering::Relaxed),
+            "the refusal must precede any mutation"
+        );
+        tokio::fs::remove_dir_all(&dir).await.ok();
     }
 }
