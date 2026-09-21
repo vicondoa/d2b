@@ -80,6 +80,7 @@ impl ScriptedDiscoveryPort {
     }
 }
 
+#[async_trait::async_trait]
 impl UserDiscoveryEffectPort for ScriptedDiscoveryPort {
     async fn discover(
         &self,

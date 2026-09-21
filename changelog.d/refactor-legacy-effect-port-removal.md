@@ -58,17 +58,16 @@
   construction site, and the daemon-side verifier wiring are deleted in the
   same change; the preserved fail-closed application verifier is now built
   by the family's factory itself.
-- The interaction family's driver effects ended their daemon-built arm too:
-  the family now serves them from its own crate (`d2b-provider-wayland-policy`)
-  through its declared `interaction.d2bus.org/effects` service, hosted per
-  zone by the daemon from the family's registered factory over the
-  composition root's facet set. The display-session admission, the audio
-  controller registry, and the shell pool/session reference checks run inside
-  the crate; the committed interaction identity, the zone's manager-plane
-  reads, and the broker-backed audio mediator cross the boundary as
-  daemon-supplied facets, never derived from caller input. The daemon's
-  `interaction_effects.rs`, `audio_resource_runtime.rs`, and
-  `interaction_child_sources.rs` modules retire in the same change, the
-  display child derivation moves into `d2b-provider-display-wayland`, and
-  each of the six interaction types registers through the generated
+- The user family's driver effects ended their daemon-built arm too: the
+  bounded NSS account probe now runs inside `d2b-provider-user` behind the
+  family's declared `user.d2bus.org/effects` service, hosted per zone by the
+  daemon from the family's registered factory over the composition root's
+  facet set. Every probe input is host state the crate reads itself with the
+  same bounded seats; an account the machine does not resolve still reports
+  the ordinary absent status rather than failing. The user half of the
+  daemon's `system_core_effects.rs` module and the port-shaped injection at
+  the driver construction site end in the same change; the
+  `UserDiscoveryEffectPort` surface became an async-trait port so the probe
+  can ride the hosted service. The probe's family-knowledge row the layout
+  check reported for the daemon module is retired.
   registration table.

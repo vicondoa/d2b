@@ -22,10 +22,10 @@
 //!
 //! Like every Provider, `system-core` performs no privileged mutation. It
 //! resolves no host path, opens no socket, and calls neither NSS nor the
-//! broker. Local User discovery reaches the host only through the injected
-//! [`UserDiscoveryEffectPort`], whose sole implementor is the fixed core
-//! effect adapter; the broker remains the sole privileged executor and
-//! audit owner.
+//! broker. Local User discovery reaches the host through the
+//! [`UserDiscoveryEffectPort`], whose production implementor is the User
+//! provider crate's own bounded probe (U5); the broker remains the sole
+//! privileged executor and audit owner.
 //!
 //! No raw UID, GID, home directory, shell, unit name, cgroup path, or OS
 //! username appears in any type here. Identity travels as an opaque digest

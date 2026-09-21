@@ -32,8 +32,9 @@
 //! yet realized re-checks itself ([`USER_REDISCOVER`]).
 //!
 //! KTD13: the driver has no spawn surface at all. It discovers the local
-//! identity only through the effect port the daemon implements and owns no
-//! Process.
+//! identity through the family's own probe behind the driver effects seam
+//! (U5) - the same implementation value that serves the declared effects
+//! service - and owns no Process.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,6 +54,9 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+
+use crate::effects_service::{USER_EFFECTS_SERVICE, UserEffectsService};
+use crate::facets::UserEffectFacets;
 use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 /// How soon a User discovery that is not `Ready` is re-discovered.
@@ -164,10 +168,11 @@ pub fn user_spec_decoder() -> Arc<dyn SpecDecoder> {
 // Provider effect port
 // ---------------------------------------------------------------------------
 
-/// The discovery surface the User driver needs: the preserved `system-core`
-/// Provider behavior (local NSS discovery over the fixed core adapter)
-/// behind the erased seam driver tests script. The production implementation
-/// lives in the daemon.
+/// The discovery surface the User driver needs, served by this crate's own
+/// [`crate::effects_service::UserEffectsService`] (U5): bounded local NSS
+/// discovery over the facet-carried probe, reconciled through the preserved
+/// `system-core` `UserReconciler`. The erased seam is what driver tests
+/// script.
 #[async_trait]
 pub trait UserDriverEffects: Send + Sync + 'static {
     /// Discover one declared User and compute its public status, or report
@@ -184,18 +189,20 @@ pub trait UserDriverEffects: Send + Sync + 'static {
 // ---------------------------------------------------------------------------
 
 /// [`ResourceDriverFactory`] for the `User` resource type. Construction is
-/// infallible by contract: the effect port carries no fallible setup.
+/// infallible by contract: the effects carry no fallible setup.
 pub struct UserDriverFactory {
     types: [ResourceTypeName; 1],
     effects: Arc<dyn UserDriverEffects>,
 }
 
 impl UserDriverFactory {
-    /// Build the factory over the local-discovery port.
-    pub fn new(effects: Arc<dyn UserDriverEffects>) -> Self {
+    /// Build the factory over the family's own effects implementation
+    /// (U5), constructed from the daemon-supplied facet set: the
+    /// construction site holds no externally built port (R2).
+    pub fn new(facets: UserEffectFacets) -> Self {
         Self {
             types: [ResourceTypeName::new(USER_RESOURCE_TYPE)],
-            effects,
+            effects: Arc::new(UserEffectsService::new(facets)),
         }
     }
 }
@@ -405,8 +412,13 @@ const USER_EXECUTION_DOMAINS: &[&str] = &["host"];
 /// plane opens. The type is not exportable: `ResourceExport` admits only
 /// qualified `*.d2bus.org.*Service` types. The driver serves no broker
 /// operations, creates no children, and reads no other resource: discovery
-/// reaches the local machine through the effect port.
-pub fn user_descriptor(effects: Arc<dyn UserDriverEffects>) -> DriverDescriptor {
+/// reaches the local machine through the family's own probe.
+///
+/// U5: the declaration builds the family's own effects implementation from
+/// the daemon-supplied facet set - no externally built port appears at any
+/// construction site (R2) - and carries the family's declared effects
+/// service, so a zone that cannot host it refuses startup by name (R5).
+pub fn user_descriptor(facets: UserEffectFacets) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::USER,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
@@ -417,9 +429,9 @@ pub fn user_descriptor(effects: Arc<dyn UserDriverEffects>) -> DriverDescriptor 
         operations: &[],
         creations: &[],
         startup: &[],
-        services: &[],
+        services: &[USER_EFFECTS_SERVICE],
         decoder: user_spec_decoder(),
-        factory: Arc::new(UserDriverFactory::new(effects)),
+        factory: Arc::new(UserDriverFactory::new(facets)),
     }
 }
 
@@ -453,12 +465,13 @@ mod tests {
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
-    use crate::test_support::RecordingEffects;
+    use crate::test_support::{RecordingEffects, ScriptedProbe, recording_facets};
 
     use super::{
-        USER_REDISCOVER, UserDriverEffects, UserDriverFactory, UserDriverStatus, user_descriptor,
+        USER_REDISCOVER, UserDriver, UserDriverFactory, UserDriverStatus, user_descriptor,
         user_spec_decoder,
     };
+    use crate::UserEffectFacets;
 
     // -- fakes ---------------------------------------------------------------
 
@@ -633,14 +646,16 @@ mod tests {
     }
 
     async fn build_driver(effects: Arc<RecordingEffects>) -> Box<dyn DynResourceDriver> {
-        UserDriverFactory::new(effects)
-            .create(&ResourceKey::new("work", "User", "alice"))
-            .await
+        // The driver's own typed seam, scripted: production builds the same
+        // seam from the facets (the factory), tests drive the behavior
+        // directly over the recording double.
+        Box::new(UserDriver::new(effects))
     }
 
-    /// The erased port one declaration carries.
-    fn port(effects: Arc<RecordingEffects>) -> Arc<dyn UserDriverEffects> {
-        effects
+    /// The facet set the factory and declaration tests build over: the
+    /// scripted probe double, exactly as the plane's test inputs build it.
+    fn facets() -> UserEffectFacets {
+        recording_facets(ScriptedProbe::new())
     }
 
     async fn user_fixture() -> (
@@ -663,7 +678,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn factory_registers_exactly_the_user_resource_type() {
-        let factory = UserDriverFactory::new(RecordingEffects::new());
+        let factory = UserDriverFactory::new(facets());
         assert_eq!(factory.resource_types().len(), 1);
         assert_eq!(factory.resource_types()[0].as_str(), "User");
         factory
@@ -673,24 +688,40 @@ mod tests {
 
     /// The declaration registers the type and the registry serves the
     /// declared factory, so a User row reaches its driver through the
-    /// registry alone.
+    /// registry alone; the driver's effects come from the crate's own
+    /// implementation over the facet set (U5), so no externally built port
+    /// appears at the construction site. The facets carry the scripted
+    /// probe, so the reconciled outcome is unconditional: the declared
+    /// identity resolves as discovered and the driver publishes Ready on
+    /// any host.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_registry_serves_the_declared_factory_for_a_user_row() {
-        let effects = RecordingEffects::new();
+        let probe = ScriptedProbe::new();
+        let spec = UserSpec::minimal(OsUsername::parse("alice").expect("username"));
+        let base = to_base_object(&spec).expect("user base");
+        let envelope =
+            ResourceSpec::new(None, None, base, None).expect("admitted resource spec");
         let mut providers = ProviderDirectory::new();
         providers
-            .register_driver(&user_descriptor(port(Arc::clone(&effects))))
+            .register_driver(&user_descriptor(recording_facets(probe)))
             .expect("the declaration registers");
 
         let key = ResourceKey::new("work", "User", "alice");
         let mut driver = providers.create_driver(&key).await.expect("the registry serves User");
-        let mut ctx = fixture(row(user_spec_bytes()), RecordingManager::new(), RecordingRequeue::new());
+        let mut ctx = fixture(
+            row(envelope.canonical_bytes().expect("canonical spec bytes")),
+            RecordingManager::new(),
+            RecordingRequeue::new(),
+        );
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("reconcile"),
-            ReconcileOutcome::Satisfied
+            ReconcileOutcome::Satisfied,
+            "the facet-carried probe resolves the declared identity as discovered"
         );
-        assert_eq!(effects.call_order(), vec!["observe-user".to_owned()]);
+        let status = ctx.status::<UserDriverStatus>().expect("status published");
+        assert_eq!(status.report().phase, ResourcePhase::Ready);
+        assert_eq!(status.report().discovery, UserDiscoveryCondition::Discovered);
     }
 
     // -- validate ------------------------------------------------------------

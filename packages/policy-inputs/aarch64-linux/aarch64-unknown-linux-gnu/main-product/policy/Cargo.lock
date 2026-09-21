@@ -2022,11 +2022,15 @@ dependencies = [
  "async-trait",
  "d2b-contracts-resource",
  "d2b-provider-system-core",
+ "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
+ "nix 0.29.0",
  "parking_lot",
  "serde_json",
+ "sha2",
  "tokio",
+ "tracing",
 ]
 
 

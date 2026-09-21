@@ -471,7 +471,6 @@ d2b_rust_test(
 
         "src/guest_effects.rs",
         "src/shared_provider_effects.rs",
-        "src/system_core_effects.rs",
         "src/provider_registry.rs",
     ],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
