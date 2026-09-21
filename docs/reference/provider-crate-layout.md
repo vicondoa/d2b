@@ -79,6 +79,21 @@ grants - beyond the crate's committed scope fails naming the widened fact
 (R12). The declared service facets one method carries (its required
 privileges, state cells, and descriptor-leg type/rights in `operations.json`)
 carry the same committed per-crate bound (U4).
+A second, smaller declaration (`registrations.json`, beside
+`resource-types.json`) names the family's provider/service registration: the
+provider identity the daemon's composition root composes and the
+effect-service ids the family declares. The daemon composes the generated
+registration table instead of naming families, so a new family is registered
+by declaring it in its own crate - no daemon edit and no layout-ratchet row.
+A crate that declares no services carries an empty `services` list:
+
+```json
+{
+  "crate": "d2b-provider-<family>",
+  "provider": "<family>",
+  "services": ["<family>.d2bus.org/<service>"]
+}
+```
 
 
 
@@ -89,6 +104,16 @@ about the resource model:
 
 - `packages/d2b-contracts/src/generated/v3_converted_resource_types.rs` -
   the committed resource-type authority the contracts layer serves.
+
+- `packages/d2bd/src/generated/provider_registrations.rs` - the committed
+  provider/service registration table the daemon composition root composes
+  (`include!`d from `packages/d2bd/src/resource_plane_v3.rs`): one row per
+  declaring family, carrying the provider identity and the declared
+  effect-service ids. The registration authority's parity gate refuses a
+  declared provider that is not the crate's own family, a declared service
+  the crate's sources do not spell, a service the crate spells or registers
+  that the declaration omits, and a service or provider declared by two
+  crates.
 
 - `nixos-modules/generated/resource-types.nix` - the Nix type registry.
 
@@ -180,7 +205,10 @@ synchronous-path reads); everything else is a per-site row with reason.
 1. Move the vocabulary into the family's own crate(s) and declare the crate's
    `resource-types.json`: types with their verbs, execution classes, and
    reads, and the crate's provides, roles, principals, storage, security, and
-   capability rows.
+   capability rows. If the family needs the daemon's composition root to
+   register it, declare its `registrations.json` too: the generated
+   registration table carries the family into the daemon with no daemon
+   edit.
 2. Run `tests/tools/generate-artifacts.sh` so every generated view moves in
    the same change.
 3. Run `xtask check-provider-crate-layout`; if it adds rows to the ratchets,

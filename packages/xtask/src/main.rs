@@ -47,6 +47,7 @@ mod production_closure;
 mod blocking_census;
 mod operation_row_authority;
 mod provider_crate_policy;
+mod provider_registration_authority;
 mod resource_type_authority;
 mod service_catalog;
 mod provider_packaging;
@@ -294,11 +295,14 @@ fn run_provider_crate_layout(args: &[String]) -> std::process::ExitCode {
                 provider_crate_policy::fix(root).and_then(|mut paths| {
                     resource_type_authority::regenerate(root).and_then(|mut generated| {
                         operation_row_authority::regenerate(root).and_then(|rows| {
-                            service_catalog::regenerate(root).map(move |catalog| {
-                                generated.extend(rows);
-                                generated.extend(catalog);
-                                paths.extend(generated);
-                                paths
+                            provider_registration_authority::regenerate(root).and_then(|registrations| {
+                                service_catalog::regenerate(root).map(move |catalog| {
+                                    generated.extend(rows);
+                                    generated.extend(registrations);
+                                    generated.extend(catalog);
+                                    paths.extend(generated);
+                                    paths
+                                })
                             })
                         })
                     })
@@ -307,7 +311,9 @@ fn run_provider_crate_layout(args: &[String]) -> std::process::ExitCode {
                 provider_crate_policy::check(root).and_then(|()| {
                     resource_type_authority::check(root).and_then(|()| {
                         operation_row_authority::check(root).and_then(|()| {
-                            service_catalog::check(root).map(|()| Vec::new())
+                            provider_registration_authority::check(root).and_then(|()| {
+                                service_catalog::check(root).map(|()| Vec::new())
+                            })
                         })
                     })
                 })

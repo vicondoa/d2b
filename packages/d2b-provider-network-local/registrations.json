@@ -1,0 +1,7 @@
+{
+  "crate": "d2b-provider-network-local",
+  "provider": "network-local",
+  "services": [
+    "network.d2bus.org/effects"
+  ]
+}
