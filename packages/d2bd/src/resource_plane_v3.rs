@@ -63,6 +63,10 @@ use d2b_provider_process::{
 };
 use d2b_provider_telemetry_binding::telemetry_binding_descriptor;
 use d2b_provider_telemetry_service::telemetry_service_descriptor;
+// The registered provider families and their declared services, generated
+// from the per-crate `registrations.json` declarations (the composition
+// root composes the table instead of naming families).
+include!("generated/provider_registrations.rs");
 use d2b_provider_volume::{
     VolumeDriverArgs, VolumeDriverEffects, volume_descriptor,
 };
@@ -88,6 +92,7 @@ use d2b_resource_runtime::watch::{
     ChangeSource, DEFAULT_RING_CAPACITY, RevisionExpired, WatchDelivery, WatchHub, WatchRegistration,
     WatchSelector,
 };
+use d2b_resource_types::DriverDescriptor;
 use d2bd_runtime::resource_runtime_support::NewPlaneReadinessState;
 use d2bd_runtime::target_runtime::DaemonMode;
 use rustix::fs::{Mode, OFlags, ResolveFlags, open, openat2};
@@ -2050,24 +2055,43 @@ Box::pin(async move {
                     controller_generation.get(),
                 ),
             ),
-            // U1/U14: the Process and Network families declare their effects
-            // services; the composition root hosts each per zone from the
-            // family's own implementation over this zone's facet set.
-            effect_service_factories: BTreeMap::from([
-                (
-                    PROCESS_EFFECTS_SERVICE.id,
-                    Arc::new(ProcessEffectsServiceFactory::new(process_facets.clone()))
-                        as Arc<dyn EffectServiceFactory>,
-                ),
-                (
-                    NETWORK_EFFECTS_SERVICE.id,
-                    Arc::new(NetworkEffectsServiceFactory::new(network_facets))
-                        as Arc<dyn EffectServiceFactory>,
-                ),
-            ]),
+            // The registered families' declared effects services are hosted
+            // from the families' own implementations over this zone's facet
+            // sets, one entry per service the registration table declares.
+            effect_service_factories: registered_service_factories(
+                &process_facets,
+                &network_facets,
+            ),
             foundation: None,
         })
     }
+}
+
+/// The hosting factories the composition root registers for the services
+/// the registration table declares (U3, R5): one entry per declared service
+/// identity, built from the families' own implementations over this zone's
+/// facet sets. A declared service with no entry still refuses startup by
+/// name.
+fn registered_service_factories(
+    process_facets: &ProcessEffectFacets,
+    network_facets: &NetworkEffectFacets,
+) -> BTreeMap<&'static str, Arc<dyn EffectServiceFactory>> {
+    let mut factories = BTreeMap::new();
+    for registration in PROVIDER_REGISTRATIONS {
+        for &service in registration.services {
+            let factory = if service == PROCESS_EFFECTS_SERVICE.id {
+                Arc::new(ProcessEffectsServiceFactory::new(process_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
+            } else if service == NETWORK_EFFECTS_SERVICE.id {
+                Arc::new(NetworkEffectsServiceFactory::new(network_facets.clone()))
+                    as Arc<dyn EffectServiceFactory>
+            } else {
+                continue;
+            };
+            factories.insert(service, factory);
+        }
+    }
+    factories
 }
 
 /// Production `GuestOwnerIdentitySource` (KTD7): the pre-v3 plane owns `Guest`,
@@ -2270,27 +2294,27 @@ impl ResourcePlaneV3 {
     ///
     /// Each family states its declaration and the drivers it serves; the base
     /// realizes the declared plane facts and then runs the family's own
-    /// attach, which registers the drivers it declared. The order of the
-    /// groups below is the order the registry has been assembled in since the
-    /// family moves landed.
+    /// attach, which registers the drivers it declared. The registered
+    /// families start through the generated registration table first, in
+    /// declaration order; the remaining families are wired below in the
+    /// order the registry has been assembled in since the family moves
+    /// landed.
     fn provider_set(inputs: &ConstructionInputs) -> ProviderSet {
-        // The Process family starts through its driver declarations: one
-        // descriptor per member type, both over the family's shared decoder
-        // and factory. The family's verbs, execution domains, exportability,
-        // and reads travel on the descriptor.
-        let mut set = ProviderSet::new(inputs.zone.clone(), inputs.spec_store_dir.clone()).with(
-            family_declaration("process"),
-            Vec::from(process_family_descriptors(ProcessDriverArgs {
-                zone: inputs.zone.clone(),
-                facets: inputs.process_facets.clone(),
-                zone_uid: inputs.authority.zone_uid.clone(),
-                policy_revision: inputs.authority.policy_revision,
-                provider_assignment_generation: inputs.authority.provider_assignment_generation,
-                controller_generation: inputs.authority.controller_generation,
-                guest_execution: inputs.authority.guest_execution.clone(),
-                mode: crate::process_provider_runtime::execution_mode(inputs.authority.mode),
-            })),
-        );
+        // The registered families start through the generated registration
+        // table: the composition root composes each row's provider identity
+        // and declared services from the table instead of naming the family,
+        // so a new family's registration needs no edit here. The drivers the
+        // daemon wires for the families it carries are the family's own
+        // implementation (the crate reference and family id are the
+        // dependency itself); a registered family the daemon does not carry
+        // yet starts with no drivers until its lane wires them.
+        let mut set = ProviderSet::new(inputs.zone.clone(), inputs.spec_store_dir.clone());
+        for registration in PROVIDER_REGISTRATIONS {
+            set = set.with(
+                family_declaration(registration.provider_ref),
+                Self::registered_drivers(registration, inputs),
+            );
+        }
         // The Volume family states its own declaration; the Binding family
         // states its own. The registry serves each type's decoder and factory
         // from its driver declaration, and the declaration carries the
@@ -2367,21 +2391,11 @@ impl ResourcePlaneV3 {
             family_declaration("telemetry-binding"),
             vec![telemetry_binding_descriptor()],
         );
-        // The Network family starts through its own declaration, the two USB
-        // types through the USB family's, the two security-key types through
-        // the security-key family's, and the Device type (four hardware
-        // Providers) through the Device family's. Each declaration carries its
-        // decoder, so the registry serves it for the type.
-        set = set.with(
-            family_declaration(d2b_provider_network_local::NETWORK_FAMILY_NAME),
-            vec![network_descriptor(NetworkDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
-                controller_generation: inputs.authority.controller_generation,
-                // U14: the driver builds its effects from the declared
-                // facets; no externally built port appears here (R2).
-                facets: inputs.network_facets.clone(),
-            })],
-        );
+        // The two USB types start through the USB family's, the two
+        // security-key types through the security-key family's, and the
+        // Device type (four hardware Providers) through the Device family's.
+        // Each declaration carries its decoder, so the registry serves it
+        // for the type.
         set = set.with(
             family_declaration("device-usbip"),
             Vec::from(usbip_descriptors(UsbipDriverArgs {
@@ -2520,6 +2534,41 @@ impl ResourcePlaneV3 {
                 ShellSession,
             ))],
         )
+    }
+
+    /// The drivers the daemon wires for one registered family: the family's
+    /// own descriptor construction over the daemon-supplied facets (the
+    /// crate reference and family id are the dependency itself). A
+    /// registered family the daemon does not carry yet registers with no
+    /// drivers, so a new family's registration needs no edit here.
+    fn registered_drivers(
+        registration: &ProviderRegistration,
+        inputs: &ConstructionInputs,
+    ) -> Vec<DriverDescriptor> {
+        match registration.provider_ref {
+            // The Process family: one descriptor per member type, both over
+            // the family's shared decoder and factory. The family's verbs,
+            // execution domains, exportability, and reads travel on the
+            // descriptor.
+            "process" => Vec::from(process_family_descriptors(ProcessDriverArgs {
+                zone: inputs.zone.clone(),
+                facets: inputs.process_facets.clone(),
+                zone_uid: inputs.authority.zone_uid.clone(),
+                policy_revision: inputs.authority.policy_revision,
+                provider_assignment_generation: inputs.authority.provider_assignment_generation,
+                controller_generation: inputs.authority.controller_generation,
+                guest_execution: inputs.authority.guest_execution.clone(),
+                mode: crate::process_provider_runtime::execution_mode(inputs.authority.mode),
+            })),
+            // The Network family: the driver builds its effects from the
+            // declared facets; no externally built port appears here (R2).
+            "network-local" => vec![network_descriptor(NetworkDriverArgs {
+                zone: inputs.zone.as_str().to_owned(),
+                controller_generation: inputs.authority.controller_generation,
+                facets: inputs.network_facets.clone(),
+            })],
+            _ => Vec::new(),
+        }
     }
 
     /// Start the zone's providers through the toolkit base.
@@ -3641,7 +3690,9 @@ mod tests {
     }
 
     /// The committed startup order is the order the registry has been
-    /// assembled in since the family moves landed; drain is its mirror.
+    /// assembled in since the family moves landed, with the registered
+    /// families first in the generated table's declaration order; drain is
+    /// its mirror.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn providers_start_in_the_committed_order_and_drain_in_reverse() {
@@ -3650,6 +3701,7 @@ mod tests {
         assert_eq!(
             runtime.startup_order(),
             [
+                "network-local",
                 "process",
                 "volume",
                 "volume-binding",
@@ -3658,7 +3710,6 @@ mod tests {
                 "activation-nixos",
                 "telemetry-service",
                 "telemetry-binding",
-                d2b_provider_network_local::NETWORK_FAMILY_NAME,
                 "device-usbip",
                 "device-security-key",
                 "device",
