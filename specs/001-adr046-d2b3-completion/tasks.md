@@ -82,13 +82,13 @@ awaiting merge; a branch is not the tree.
 | U14 network | Converted and merged; partial | daemon `network_effect_port.rs` deleted; the crate serves `network.d2bus.org/effects`; the network controller's child-port reconcile remains daemon-side in `shared_provider_effects.rs` (`SharedProviderKind::Network`) |
 | U15 process-systemd | Converted on branch, awaiting merge | `refactor/process-systemd-lane2` (b91751cd7), sibling `refactor-process-systemd-family` (086135898); deletes broker `ops/systemd.rs` |
 | U2, U3, U4 enabling | Landed and merged | operation-row declarations, real service payload and capability object, per-crate generation and drift gates on the mainline |
-| U5 host | Converted and merged | the probe serves from `packages/d2b-provider-host/`; the daemon probe modules are deleted |
+| U5 host | Partially converted and merged; residual named | the host probe effect serves from `packages/d2b-provider-host/`; `kernel_module_check.rs` and `pidfs_probe.rs` were renamed into `packages/d2bd-runtime/src/` (never deleted) and the daemon's composition still drives the kernel-module check and the startup pidfs kernel-floor gate |
 | U5 user | Converted on branch, awaiting merge | `refactor/user-family-lane` (07c48b849); deletes `system_core_effects.rs` |
 | U6 endpoint | Converted on branch, awaiting merge | `refactor/endpoint-binding-family` (9be4bd210); deletes `endpoint_effects.rs` |
 | U6 volume-binding | Converted on branch, awaiting merge | the same branch; deletes `binding_effects.rs` |
 | U7 volume | Converted on branch, awaiting merge; partial retirement | `refactor/volume-family-lane` (cf3a3dffd); deletes `volume_effects.rs` and `resource_runtime/volume_effect_adapter.rs`, and retires the neutral volume contract on the branch |
 | U8 credential | Converted on branch, awaiting merge; partial | `refactor/credential-family-lane` (3ae65894e); deletes `credential_effects.rs` and `credential_backend_runtime.rs`; `credential_resource_runtime.rs` stays daemon-side |
-| U9 device | Converted on branch, awaiting merge | `refactor/device-families-lane` (08b6f40a4); deletes `tpm_effect_port.rs` and `usbip_production.rs` |
+| U9 device | Converted on branch, awaiting merge | `refactor/device-families-lane` (08b6f40a4); deletes the implementations `tpm_effect_port.rs` and `usbip_production.rs`; the four device arms (TPM, GPU, security-key, USBIP) remain in `shared_provider_effects.rs` with their reconcile paths, instantiating the crates' declared ports over the daemon-supplied facet sets |
 | U10 guest runtime | Converted on branch, awaiting merge | `refactor/guest-runtime-family-lane` (b436faf1d); deletes `guest_effects.rs` |
 | U11 interaction and desktop | Converted on branch, awaiting merge; partial | `refactor/interaction-desktop-family` (1018ba258); deletes `interaction_effects.rs` and `audio_resource_runtime.rs`; `interaction_composition.rs`, `audio_host_controller.rs`, and `audio_dispatch.rs` stay daemon-side; the frozen stream-plane wire vocabulary stays the KTD9 documented permanent carve-out |
 | U12 activation | Converted on branch, awaiting merge | `refactor/activation-family-lane` (bfbd3005f); deletes `activation_effects.rs` |
@@ -100,9 +100,12 @@ awaiting merge; a branch is not the tree.
 1. The daemon's own Bazel test targets cannot build: `rules_rs` emits two configurations
    for one crate, producing duplicate rlib identities.
 2. The daemon's clippy target fails on a clean state for lints in untouched code.
-3. The process-systemd provider's identity read cannot complete on systemd 260, which no
-   longer serves the main-pid and control-group properties for transient units - a defect
-   in shipped behaviour.
+3. The process-systemd provider's identity read cannot complete under systemd 260: the
+   lane observed the identity binding refusing on both buses and at both privilege levels.
+   The cause is not established; the explanation that systemd 260 removed the main-pid and
+   control-group properties for transient units is ruled out (both properties remain
+   defined on the unit interface at the v260 tag). The failure is a defect in shipped
+   behaviour, not a conversion item.
 
 Each residual and open item is recorded with its site and ownership in
 `implementation-debt.md` section 22; the ledger and the debt register stay consistent with

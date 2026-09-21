@@ -2131,6 +2131,12 @@ rediscover. The ledger (`tasks.md`) mirrors the same list.
   `NetworkResourcePort` for `NetworkChildPort`, with `NetworkReconciler` driven at the two
   reconcile sites). The port moved; the reconcile behaviour stayed behind the runtime
   facet the crate reconciles over.
+- The host family is partially converted on the mainline: the probe effect serves from
+  `packages/d2b-provider-host/`, but the kernel-module check and the pidfs self-probe still
+  live in the daemon runtime crate (`packages/d2bd-runtime/src/kernel_module_check.rs` and
+  `pidfs_probe.rs`, renamed there with the d2bd split, never deleted), are still exported
+  by the crate's module root, and are still driven by the daemon's composition (the
+  startup kernel-module matrix self-check and the startup pidfs kernel-floor gate).
 - `packages/d2bd/src/process_provider_runtime.rs` stays on the mainline by design as the
   declared-facet boundary: it supplies the composed process providers the process crate's
   effects service receives as facets. It is not a conversion residual and is not debt.
@@ -2163,9 +2169,11 @@ rediscover. The ledger (`tasks.md`) mirrors the same list.
    instead.
 2. The daemon's clippy target fails on a clean state for lints in untouched code, so a
    clean clippy run is not currently a usable signal for the daemon crate.
-3. The process-systemd provider's identity read cannot complete on systemd 260: systemd no
-   longer serves the `MainPID` and `ControlGroup` properties for transient units, so the
-   unit identity binding fails on current hosts. Site:
+3. The process-systemd provider's identity read cannot complete under systemd 260. The
+   lane observed the identity binding refusing on both buses and at both privilege levels.
+   The cause is not established: the explanation that systemd 260 removed the `MainPID`
+   and `ControlGroup` properties for transient units is ruled out (both properties remain
+   defined on the unit interface at the v260 tag). Site:
    `packages/d2b-provider-process-systemd/src/operations.rs` on the lane; the mainline's
    broker copy (`packages/d2b-broker/src/ops/systemd.rs`) reads the same two properties.
    This is a defect in shipped behaviour, not a conversion item.

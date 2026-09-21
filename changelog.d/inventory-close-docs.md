@@ -12,5 +12,6 @@
   known-open items: the daemon's Bazel test targets cannot build because
   rules_rs emits two configurations for one crate, the daemon's clippy target
   fails on a clean state for lints in untouched code, and the process-systemd
-  provider's identity read cannot complete on systemd 260, which no longer
-  serves the main-pid and control-group properties for transient units.
+  provider's identity read cannot complete under systemd 260, whose cause is
+  not yet established; the explanation that systemd removed the transient-unit
+  main-pid and control-group properties is ruled out.
