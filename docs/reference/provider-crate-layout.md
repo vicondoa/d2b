@@ -56,11 +56,11 @@ row's optional `providerRef` names the Provider the role resolves to (the
 role-to-provider mapping; a role no Provider serves omits it), and its
 optional `description` is emitted as the generated role vocabulary's variant
 documentation. It does
-not name effects: the families that declare effect services - network-local and
-process - serve their own effect implementation over the declared facets (the
-daemon supplies the facet implementations), while in the remaining family
-crates the production implementation of the declared port still lives in the
-daemon. Either way the declaration names no daemon surface.
+not name effects:the families that declare effect services - activation-nixos,
+host, network-local,and process - serve their own effect implementation over
+the declared facets(the daemon supplies the facet implementations), while in
+the remaining family crates the production implementation of the declared port
+still lives in the daemon. Either way the declaration names no daemon surface.
 
 The resource-type authority (U4) aggregates the declared role vocabulary into
 two committed consumers:
