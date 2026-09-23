@@ -57,7 +57,37 @@ for excluded in $EXCLUDED_PKGS; do
     if [ ! -f "$excluded_build" ]; then
         fail "excluded package $excluded: BUILD.bazel missing (remove it from EXCLUDED_PKGS?)"
     fi
-    if ! grep -q 'name = "all-tests"' "$excluded_build"; then
+    excluded_block=$(awk '
+        {
+            line = $0
+            sub(/#.*/, "", line)
+            opens = gsub(/\(/, "(", line) + 0
+            closes = gsub(/\)/, ")", line) + 0
+        }
+        !in_block && /test_suite\(/ {
+            buf = $0
+            sub(/#.*/, "", buf)
+            depth = opens - closes
+            in_block = 1
+            if (depth <= 0) {
+                if (buf ~ /name = "all-tests"/) print buf
+                in_block = 0
+            }
+            next
+        }
+        in_block {
+            buf = buf "\n" $0
+            depth += opens - closes
+            if (depth <= 0) {
+                if (buf ~ /name = "all-tests"/) print buf
+                in_block = 0
+            }
+        }
+        END {
+            if (in_block && buf ~ /name = "all-tests"/) print buf
+        }
+    ' "$excluded_build")
+    if [ -z "$excluded_block" ]; then
         fail "excluded package $excluded: all-tests aggregate missing (remove it from EXCLUDED_PKGS?)"
     fi
 done
@@ -69,7 +99,42 @@ check_pkg() {
     local pkg=$2
 
     [ -f "$build" ] || return 0
-    if ! grep -q 'name = "all-tests"' "$build"; then
+    # Capture the all-tests rule block (paren-depth based, so a file-final
+    # block, a one-line aggregate, or an indented closing paren all still
+    # emit the block). The aggregate is matched as a rule block, not as a
+    # whole-file substring, so a `name = "all-tests"` string elsewhere in
+    # the file cannot stand in for the rule.
+    block=$(awk '
+        {
+            line = $0
+            sub(/#.*/, "", line)
+            opens = gsub(/\(/, "(", line) + 0
+            closes = gsub(/\)/, ")", line) + 0
+        }
+        !in_block && /test_suite\(/ {
+            buf = $0
+            sub(/#.*/, "", buf)
+            depth = opens - closes
+            in_block = 1
+            if (depth <= 0) {
+                if (buf ~ /name = "all-tests"/) print buf
+                in_block = 0
+            }
+            next
+        }
+        in_block {
+            buf = buf "\n" $0
+            depth += opens - closes
+            if (depth <= 0) {
+                if (buf ~ /name = "all-tests"/) print buf
+                in_block = 0
+            }
+        }
+        END {
+            if (in_block && buf ~ /name = "all-tests"/) print buf
+        }
+    ' "$build")
+    if [ -z "$block" ]; then
         return 0
     fi
     checked=$((checked + 1))
@@ -91,12 +156,10 @@ check_pkg() {
     # Anchor the block on the test_suite( line (not on the name line), so
     # attributes written before `name` stay visible, and strip each line's
     # comment tail BEFORE collapsing newlines, so a comment between `name`
-    # and `tags` cannot delete the rest of the block.
-    block=$(awk '
-        /test_suite\(/ { buf = $0; in_block = 1; next }
-        in_block { buf = buf "\n" $0 }
-        /^\)/ { if (in_block) { if (buf ~ /name = "all-tests"/) print buf; in_block = 0 } }
-    ' "$build")
+    # and `tags` cannot delete the rest of the block. The block capture is
+    # paren-depth based, so a file-final block, a one-line aggregate, or an
+    # indented closing paren all still emit the block (a column-0 close is
+    # not assumed).
     collapsed=$(printf '%s\n' "$block" | sed 's/#.*$//' | tr '\n' ' ')
     tags_attr=$(printf '%s' "$collapsed" | sed -n 's/.*tags = \[\([^]]*\)\].*/\1/p')
     clean=$(printf '%s\n' "$tags_attr" | sed 's/[,;]/\n/g' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
