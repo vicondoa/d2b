@@ -5768,12 +5768,6 @@ const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption]
         retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
     },
     SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/vm-options.nix",
-        class: "role-literal",
-        symbol: "cloud-hypervisor",
-        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
         module: "packages/d2b-bus/src/router.rs",
         class: "type-name-match-arm",
         symbol: "Guest",
