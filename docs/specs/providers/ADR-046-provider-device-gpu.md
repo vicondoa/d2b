@@ -336,7 +336,7 @@ Render-node-only mode:
   `renderNodeOnly=false`.
 
 The render node fd is inherited by the crosvm process via the privileged broker's
-private fd-inheritance protocol (`packages/d2b-priv-broker/src/sys.rs`
+private fd-inheritance protocol (`packages/d2b-broker/src/sys.rs`
 `clone3_spawn_runner`). The fd survives the user-NS pivot without losing access
 semantics because the kernel checks permissions at `openat2` time only.
 
@@ -694,7 +694,7 @@ the **privileged broker** performs:
    passed via fd inheritance.
 
 Source: `nixos-modules/minijail-profiles.nix` `gpu-render-node` profile (lines
-490-545 approximately); `packages/d2b-priv-broker/src/sys.rs`
+490-545 approximately); `packages/d2b-broker/src/sys.rs`
 (`clone3_spawn_runner`); `packages/d2b-core/src/bundle_resolver.rs`
 (test `gpu_render_node_user_namespace_propagates_to_resolved_intent` at line 4419).
 
@@ -1007,7 +1007,7 @@ Full GPU workers run inside a broker-pre-established user namespace where:
 - The worker has zero ambient host capabilities.
 
 Source: ADR 0021; `nixos-modules/minijail-profiles.nix` gpu profile;
-`packages/d2b-priv-broker/src/sys.rs` `clone3_spawn_runner` (privileged broker implementation).
+`packages/d2b-broker/src/sys.rs` `clone3_spawn_runner` (privileged broker implementation).
 
 The render-node-only worker always uses the user-NS model (ADR 0021).
 The full-GPU worker uses it as well (no `userNamespace: null` exception;
@@ -1690,7 +1690,7 @@ disposition contract test passes.
 | Current source | `nixos-modules/assertions.nix` x86_64-linux guard; `packages/d2b-core/src/processes.rs` ProcessRole::Gpu/GpuRenderNode; no existing sysfs probe module |
 | Reuse source | None |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-device-gpu/src/probe.rs` |
+| Destination | `packages/d2b-provider-device-gpu/` |
 | Detailed design | Call `GpuEffectPort::probe_drm_device(selector)` on each `scheduled-observe` trigger; the effect port resolves device presence against the trusted device table and returns a presence/health result without exposing raw sysfs or device paths to the controller. Three-strike failure counter; `observe_interval_secs` (10-60, default 30); emit `DevicePresent` condition and update `lastProbedAt`. |
 | Integration | `scheduled-observe` trigger from reconcile loop calls `probe::check_drm_device` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1708,7 +1708,7 @@ disposition contract test passes.
 | Current source | `packages/d2b-core/src/bundle_resolver.rs` `validate_graphics_vm_invariants` (assertion guard) - `ADR-only` for resource-level arbitration |
 | Reuse source | None |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-device-gpu/src/arbitration.rs` |
+| Destination | `packages/d2b-provider-device-gpu/` |
 | Detailed design | On `spec-generation-changed` and each new claim: check `arbitration` vs `maxConcurrentClaims` vs current `holderRefs` length. Exclusive: reject any second claim with `ClaimConflict` condition, set requesting Device phase `Degraded`. Shared render-node: accept up to `maxConcurrentClaims`. Admission: `shared + renderNodeOnly=false` fails with `shared-arbitration-requires-render-node-only`. |
 | Integration | Tested by `tests/arbitration_conflict.rs`; integration fixture `render_node_shared/` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1726,7 +1726,7 @@ disposition contract test passes.
 | Current source | `packages/d2b-host/src/gpu_argv.rs` (implemented-and-reachable); `packages/d2b-core/src/bundle_resolver.rs` lines 1888-1894 (device token set); `packages/d2b-core/src/processes.rs` `ProcessRole::Gpu`, `ProcessRole::GpuRenderNode` (implemented-and-reachable); `nixos-modules/minijail-profiles.nix` gpu/gpu-render-node profiles (implemented-and-reachable) |
 | Reuse source | `packages/d2b-host/src/gpu_argv.rs` (baseline `b5ddbed`): `GpuArgvInput`, `GpuParams`, `GpuContextType`, `GpuDisplayConfig`; `packages/d2b-core/src/bundle_resolver.rs` device token constant comment |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-device-gpu/src/worker_gpu.rs` |
+| Destination | `packages/d2b-provider-device-gpu/` |
 | Detailed design | Build and commit `Process` resource record with `template: gpu-worker` or `template: render-node-worker`; set `sandbox.seccompClass` (`w1-gpu` or `w1-gpu-render-node`), `sandbox.userNamespace: {mappingClass: process-principal-root}` (uid/gid resolved privately by core from signed worker template - controller does NOT write numeric values), `sandbox.namespaceClasses`, `sandbox.capabilityClasses=[]`, `sandbox.startRoot=false`; set `deviceUsage[{deviceRef,access,purpose}]`, `networkUsage: null`, `endpoints[{name,transport,purpose}]`, `budget` (including `pids` and `fds` bounded limits), `readiness` (with `class`, `initialDelay`, `timeout`, `failureThreshold`, `successThreshold`), and `restartPolicy` (with `class`, `backoffBase`, `backoffMax`, `backoffMultiplierMilli`, `maxRestarts`, `resetAfter`). Provider/system-minijail validates and resolves the LaunchTicket and sends effect requests via `ProcessLaunchEffectPort`; the core EffectPort adapter routes them to the **privileged broker** which performs `SpawnRunner`, `OpenDevice`, `clone3`, `uid_map`/`gid_map` writes, and fd transfer - the device-gpu controller does not have execution authority or fd access. `crossDomainTrusted` gating: the signed descriptor is static; `crossDomainTrusted` is projected from the Device setting into the LaunchTicket by Provider/system-minijail, which omits `GpuContextType::CrossDomain` from runtime argv when false. Primary reuse disposition: `adapt`. Preserved source-plan detail: `extract` argv builder logic into `argv.rs` as re-export from `d2b-host` (used by Provider/system-minijail at LaunchTicket resolution time; the signed component descriptor is static and is not rewritten per Device); `adapt` device allowlist token set from `bundle_resolver.rs` into `worker_gpu.rs` `GPU_DEVICE_ALLOWLIST` constant for `deviceUsage` population. |
 | Integration | `integration/gpu_worker_start/`; `integration/render_node_shared/`; `packages/d2b-contract-tests/tests/minijail_gpu.rs` (reused existing test) |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1744,7 +1744,7 @@ disposition contract test passes.
 | Current source | `packages/d2b-host/src/video_argv.rs` (implemented-and-reachable): `VideoArgvInput`, `VideoBackend`, `wire_contract_snapshot()`; `packages/d2b-contract-tests/tests/video_binary_contract.rs` (implemented-and-reachable); `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` video section (implemented-and-reachable); `nixos-modules/minijail-profiles.nix` video profile (implemented-and-reachable) |
 | Reuse source | `packages/d2b-host/src/video_argv.rs` (baseline `b5ddbed`): argv generator, wire-contract constants, `wire_contract_snapshot()` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-device-gpu/src/worker_video.rs`, `tests/wire_constant_snapshot.rs` |
+| Destination | `packages/d2b-provider-device-gpu/`, `tests/wire_constant_snapshot.rs` |
 | Detailed design | Controller creates `Process/device-<uid-short>-video` only after `GpuWorkerReady=True`. `worker_video.rs` builds `VideoArgvInput` from resolved device spec and signed descriptor binary path. Validates `wire_contract_snapshot()` matches committed golden at startup; fails closed if mismatch (error `device-wire-contract-mismatch`). NVIDIA device gating: include `nvidia-ctl`, `nvidia-device`, `nvidia-uvm` tokens in `deviceUsage[]` entries only when `videoNvidiaDecode=true`; the **privileged broker** opens the fds when executing the effect request from the core EffectPort adapter. Distinct allocator-assigned principal enforced by LaunchTicket (internal invariant; not expressed in the resource spec); `template: video-worker` descriptor declares no Wayland/audio endpoint capability. `sandbox.seccompClass: w1-video`; `sandbox.namespaceClasses` includes `pid`; `userNamespace: null` (explicit, tested invariant). Primary reuse disposition: `adapt`. Preserved source-plan detail: `extract` argv generator (re-export from `argv.rs`); `copy-unchanged` wire-contract constants into `tests/wire_constant_snapshot.rs` golden comparison. |
 | Integration | `integration/video_dependency/`; `packages/d2b-contract-tests/tests/video_binary_contract.rs` (reused); `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` video section (reused) |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |

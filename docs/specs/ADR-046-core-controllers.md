@@ -357,7 +357,7 @@ Keeping handlers in one process does not union arbitrary Provider privilege:
 | Current source | Canonical Host/User resource, bootstrap-order, and Provider-boundary work owned by ADR046-exec-003, ADR046-exec-004, ADR046-exec-005, and ADR046-system-core-001 |
 | Reuse source | The canonical owner work items named above; this item reuses their public contracts but owns no Host/User implementation |
 | Reuse action | adapt |
-| Destination | `packages/d2b-core-controller/tests/system_core_coordination.rs` |
+| Destination | `packages/d2b-core-controller/` |
 | Detailed design | Coordination-only acceptance: prove the fixed core controller loads the manifest/audit boundary from ADR046-system-core-001 and routes Host/User reconciliation to the canonical ADR046-exec-003/004 handlers after ADR046-exec-005 bootstrap ordering. This item defines no schema, handler, status, capability, or `packages/d2b-provider-system-core/src/{host,user}.rs` destination. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt only the integration acceptance. |
 | Integration | After all four canonical owner items are complete, exercise bootstrap Provider/system-core and prove other controllers resolve Host/Guest/User refs without a duplicate core-controller handler |
 | Data migration | New v3 resources from Nix |

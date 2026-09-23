@@ -1477,7 +1477,7 @@ per-test advisory threshold.
 | Dependency/owner | Controller binary area; owned by `d2b-provider-shell-terminal` controller and core Operation ledger integration. |
 | Current source | None - net-new v3 controller; legacy guestd and unsafe-local helper shell paths are not the controller/state authority. |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-terminal-controller.rs` |
+| Destination | `packages/d2b-provider-shell-terminal/` |
 | Detailed design | Implement `d2b-shell-terminal-controller` with pool/session reconcile loops; assert ProviderStateSet is empty; publish bounded non-secret operational state to resource status and the core Operation ledger; no controller Provider state Volume or `/state` mount exists. Primary reuse disposition: `create`. Preserved source-plan detail: net-new controller; preserve status-first ProviderStateSet-empty rule. |
 | Integration | Core ProviderDeployment starts the controller Process; controller reconciles ShellPool/ShellSession resources, writes status, registers routes, and records operations without a Provider state Volume. Integration path: `packages/d2b-provider-shell-terminal/integration/controller-restart/`. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
@@ -1493,7 +1493,7 @@ per-test advisory threshold.
 | Current source | Reuse narrow ring/runtime ideas from `packages/d2b-guestd/src/shell.rs` and adoption-shape ideas from `packages/d2b-unsafe-local-helper/src/runtime.rs`; both legacy authorities are superseded. |
 | Reuse source | `packages/d2b-guestd/src/shell.rs`; `packages/d2b-unsafe-local-helper/src/runtime.rs`. |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-session-supervisor.rs` |
+| Destination | `packages/d2b-provider-shell-terminal/` |
 | Detailed design | Implement `d2b-shell-session-supervisor` as the sole PTY owner for Host and Guest pools. Primary reuse disposition: `adapt`. Preserved source-plan detail: reuse narrow mechanics only; move PTY authority into per-session supervisor and exclude legacy protocols/identities/state storage. |
 | Integration | Controller creates one user-domain supervisor Process per ShellSession; supervisor owns PTY, login shell, ring, attach bookkeeping, and private ComponentSession service. Integration path: `packages/d2b-provider-shell-terminal/integration/supervisor-host-guest/`. |
 | Data migration | Full d2b 3.0 reset; no v2 shell state import; PTY/ring state is live process memory only. |
@@ -1508,7 +1508,7 @@ per-test advisory threshold.
 | Dependency/owner | Process templates area; owned by Nix compiler plus shell-terminal controller. |
 | Current source | Superseded draft templates included pool-wide/system-domain or management-worker concepts; canonical v3 templates are defined in this spec. |
 | Reuse action | replace |
-| Destination | `packages/d2b-provider-shell-terminal/src/process_templates.rs` |
+| Destination | `packages/d2b-provider-shell-terminal/` |
 | Detailed design | Teach the Nix compiler and controller to emit the canonical controller and user-domain supervisor `Process` templates. Primary reuse disposition: `replace`. Preserved source-plan detail: replace incorrect draft templates with canonical controller and user-domain supervisor Process templates. |
 | Integration | Nix compiler emits controller Process/Endpoint resources; controller emits per-session user-domain supervisor Processes; Provider/system-systemd realizes them. Integration path: `packages/d2b-provider-shell-terminal/integration/process-placement/`. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
@@ -1523,7 +1523,7 @@ per-test advisory threshold.
 | Dependency/owner | OpenSession lifecycle area; owned by controller service implementation. |
 | Current source | None - net-new v3 `OpenSession` lifecycle; legacy shell protocols do not create ShellSession resources with inherited-field freeze. |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-shell-terminal/src/service/open_session.rs` |
+| Destination | `packages/d2b-provider-shell-terminal/` |
 | Detailed design | Create sessions from pools, freeze inherited fields, and return `supervisorGeneration` to callers. |
 | Integration | `shell-terminal.v3.OpenSession` validates pool capacity and policy, creates ShellSession and supervisor Process, registers route data, and returns session/supervisor references to clients. Integration path: `packages/d2b-provider-shell-terminal/integration/open-session/`. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |

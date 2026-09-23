@@ -661,7 +661,7 @@ The Rust homes and mapping boundary are frozen by D111.
 `ResourceErrorKind`/`ResourceError` live in
 `packages/d2b-contracts/src/v3/error.rs`;
 `StoreErrorKind`/`StoreError` live in
-`packages/d2b-resource-store/src/error.rs`; and the total one-way store-to-API
+`packages/d2b-resource-store-redb-redb-redb-redb-redb-redb/src/error.rs`; and the total one-way store-to-API
 mapping lives in `packages/d2b-resource-api/src/error.rs`. The resource set is
 the exact 31 strings above. The store set adds only
 `store-integrity-failure`, `store-backpressure`, and `store-quarantined`.
@@ -703,7 +703,7 @@ process data, and terminal bytes.
 | Dependency/owner | W0; resource API integrator |
 | Current source | `packages/d2b-contracts/src/public_wire.rs`, `broker_wire.rs`; `d2b-daemon-access/src/lib.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-contracts/src/generated/d2b_resource_v3.rs`; `packages/d2b-resource-api/src/generated/`, `service.rs`, `client.rs`, `error.rs`; `packages/xtask/src/main.rs` codegen commands |
+| Destination | `packages/d2b-contracts/`; `packages/d2b-contracts/`; `packages/d2b-resource-api/src/generated/`, `service.rs`, `client.rs`, `error.rs`; `packages/xtask/src/main.rs` codegen commands |
 | Detailed design | Freeze the service as `d2b.resource.v3.ResourceService` and the D100 typed message set with one canonical-JSON bytes carrier. `xtask gen-resource-proto` emits message-only pure-Rust bindings into `d2b-contracts` from a service-stripped proto; `xtask gen-resource-ttrpc` emits async service/client bindings into `d2b-resource-api`. No `build.rs`, `google.protobuf.Any`, dynamically typed `oneof`, or domain error in transport status. Implement async methods, contexts, admitted-mutation preconditions, D112 contract constants, typed resource errors, status/finalizer separation, and batch API. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | d2b-bus exact service → Zone auth → redb actor |
 | Data migration | None; v3 clean break |
@@ -719,7 +719,7 @@ process data, and terminal bytes.
 | Dependency/owner | ADR046-api-001; authorization integrator |
 | Current source | `d2bd` public admission; `d2b-daemon-access` policy evidence; `d2b-realm-core/src/access.rs`, `audit.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-api/src/authz.rs`, `packages/d2b-core-controller/src/rbac.rs` |
+| Destination | `packages/d2b-resource-api/src/authz.rs`, `packages/d2b-core-controller/` |
 | Detailed design | `packages/d2b-resource-api/src/authz.rs` defines ComponentSession subject mapping, parent-Zone access, canonical resource/session verb admission including ZoneLink-scoped `relay`, and independent per-hop relay plus target-verb checks. The W0 `packages/d2b-core-controller/src/rbac.rs` surface is limited to the stored-policy evaluator skeleton, cache keying, and revision invalidation; it defines no concrete Role or RoleBinding schema, which lands with the Zone-control work items in W5. |
 | Integration | Every resource/runtime method invokes one native evaluator before structural checks |
 | Data migration | Generate initial Roles/Bindings from Nix v3 config |

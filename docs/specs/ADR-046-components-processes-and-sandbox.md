@@ -452,7 +452,7 @@ pre-start effects, fine-grained ACL/device policy, or restart semantics.
 | Current source | `d2b-core/src/{processes,process_builder,minijail_profile}.rs`; `d2bd/src/supervisor/*`; broker `spawn_runner.rs` |
 | Reuse source | Useful main ProviderSupervisor/session/process code named by sub-items |
 | Reuse action | adapt |
-| Destination | `packages/d2b-process/src/`, `packages/d2b-provider-supervisor/src/` |
+| Destination | `packages/d2b-provider-process/src/`, `packages/d2b-provider-supervisor/src/` |
 | Detailed design | Common spec/status/tickets/pidfd/adoption/naming/cgroup/fast path Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Process Provider controllers → supervisor/broker/systemd → async status |
 | Data migration | Full reset; no role snapshot import |
@@ -469,7 +469,7 @@ pre-start effects, fine-grained ACL/device policy, or restart semantics.
 | Current source | unsafe-local helper runtime/systemd; guest exec systemd-run; broker SpawnRunner/minijail |
 | Reuse source | Main process/session helpers if selected by exact sub-items |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-systemd/`, `packages/d2b-provider-system-minijail/` |
+| Destination | `packages/d2b-provider-process-systemd/`, `packages/d2b-provider-process-minijail/` |
 | Detailed design | Two Process/EphemeralProcess implementations, pidfd/wait ownership, system/user domains Primary reuse disposition: `adapt`. Preserved source-plan detail: extract/adapt. |
 | Integration | Zone-installed Providers/controller instances per Host/Guest |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |

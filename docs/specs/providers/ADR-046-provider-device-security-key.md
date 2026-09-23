@@ -1667,7 +1667,7 @@ inventory, not the service authority.
 
 **Preserved reusable semantics** (grounded in
 `packages/d2bd/src/security_key.rs` and
-`packages/d2b-priv-broker/src/ops/security_key.rs`): sole hidraw opener (Core via
+`packages/d2b-broker/src/ops/security_key.rs`): sole hidraw opener (Core via
 `SecurityKeyOpenDevice`/`live_open_hidraw_security_key`); post-open double
 `fstat` + FIDO usage-page (0xF1D0) + HID raw-info revalidation on the pre-opened
 `O_RDWR|O_NONBLOCK|O_NOFOLLOW` fd; async cancellation-safe fd relay I/O;
@@ -2006,7 +2006,7 @@ class.
 | Dependency/owner | ADR-046 provider-device-security-key session/relay owner; depends on ADR046-security-key-008 and the ComponentSession/Process contracts. |
 | Current source | `packages/d2bd/src/security_key.rs` - baseline internal `SecurityKeyState` (renamed `RelaySessionTable` in v3 so state terminology remains reserved for Resource status), `LeaseState`, `LeaseId`, `CidTranslator`, `try_acquire_lease`, `release_lease`, `CEREMONY_TIMEOUT`, `QUEUE_WAIT_TIMEOUT` (implemented-and-reachable) |
 | Reuse action | adapt |
-| Destination | Move to `packages/d2b-provider-device-security-key/src/session.rs` and `cid.rs`; adapt to Provider Process model (remove daemon Mutex wrapping, add async relay protocol) |
+| Destination | Move to `packages/d2b-provider-device-security-key/` and `cid.rs`; adapt to Provider Process model (remove daemon Mutex wrapping, add async relay protocol) |
 | Detailed design | Extract the baseline lease/session constants and CID mapping into provider-local modules. Preserve `LeaseId` stale-release protection, cancel-all-active-CIDs, `CEREMONY_TIMEOUT`, `QUEUE_WAIT_TIMEOUT`, and bounded fair queue semantics; remove daemon-global `Mutex` ownership; keep the authority relay's DeviceGrant/OFD lease for its lifetime. Ceremony rows remain high-churn session records, never Resources. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | ADR046-security-key-010 owns the relay loop; ADR046-security-key-011/ADR046-security-key-012 consume this extracted foundation; ADR046-security-key-009 consumes lifecycle events and writes bounded Service/Binding observations; ComponentSession/encrypted named streams carry CTAPHID bytes. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
@@ -2052,14 +2052,14 @@ class.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Core LaunchTicket/privileged broker reuse owner; depends on ADR-046-resources-device and ADR046-security-key-013 probe/device-token population. |
-| Current source | `packages/d2b-priv-broker/src/ops/security_key.rs` - `live_open_hidraw_security_key`, FIDO usage page revalidation, group validation, `ALLOWED_GROUPS` (implemented-and-reachable) |
+| Current source | `packages/d2b-broker/src/ops/security_key.rs` - `live_open_hidraw_security_key`, FIDO usage page revalidation, group validation, `ALLOWED_GROUPS` (implemented-and-reachable) |
 | Reuse action | adapt |
 | Destination | Preserve revalidation logic; update `SecurityKeyOpenDevice` to use bundle device table `device_token` as sole open target (no iterative sysfs scan); add zone-field handling; remove sysfs fallback. **Core's LaunchTicket calls this internally; the Provider does not call it.** |
 | Detailed design | Keep the FIDO usage-page and post-open revalidation logic, but make the trusted private bundle `device_token` the only open target. Add Zone-aware request handling, reject path/sysfs fallback inputs, and keep the operation internal to Core LaunchTicket DeviceGrant resolution rather than callable by the Provider controller. |
 | Integration | Provider activation records label-to-`device_token` mappings; Core LaunchTicket resolves `deviceUsage` for the relay Process; broker opens and revalidates the hidraw fd; relay receives only an inherited fd; Core emits path-free `device-grant` audit. |
 | Data migration | Full d2b 3.0 reset; no v2 device state import |
-| Validation | `packages/d2b-priv-broker/tests/security_key_broker.rs` updates for bundle table lookup and zone-field round trip; `device_grant_no_path.rs` proves Provider code does not call the broker and sees no device path; audit tests prove path-free grant records. |
-| Removal proof | The superseded iterative sysfs scan/fallback behavior in `packages/d2b-priv-broker/src/ops/security_key.rs` is removed once bundle-token lookup and revalidation tests pass. |
+| Validation | `packages/d2b-broker/tests/security_key_broker.rs` updates for bundle table lookup and zone-field round trip; `device_grant_no_path.rs` proves Provider code does not call the broker and sees no device path; audit tests prove path-free grant records. |
+| Removal proof | The superseded iterative sysfs scan/fallback behavior in `packages/d2b-broker/src/ops/security_key.rs` is removed once bundle-token lookup and revalidation tests pass. |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
@@ -2168,7 +2168,7 @@ class.
 | Dependency/owner | Relay ceremony-session foundation owner; depends on ADR046-security-key-001 and ADR046-security-key-008. |
 | Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-device-security-key/src/session.rs` |
+| Destination | `packages/d2b-provider-device-security-key/` |
 | Detailed design | `SessionStateMachine` with Idle/Queued/Active/Completed/TimedOut, bounded FIFO queue, monotonic LeaseId stale-release guard, per-Binding session ring, timeout/cancel, and ring eviction. Ceremony rows are non-Resource records; DeviceGrant remains held for relay lifetime. |
 | Integration | ADR046-security-key-010 consumes it; controller receives lifecycle messages; Service/Binding status receives aggregates only; session query/audit consumes bounded non-secret rows. |
 | Data migration | Full d2b 3.0 reset; no session ring import |
@@ -2184,7 +2184,7 @@ class.
 | Dependency/owner | Relay CID-translation foundation owner; depends on ADR046-security-key-001 and ADR046-security-key-008. |
 | Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-device-security-key/src/cid.rs` |
+| Destination | `packages/d2b-provider-device-security-key/` |
 | Detailed design | CID translator: per-active-ceremony u32→u64 host-CID allocation, bimap, cancel-all-active-CIDs, and eviction on ceremony end |
 | Integration | Relay rewrites frontend CTAPHID CIDs before sending to hidraw fd and reverses responses before writing the ComponentSession named stream; session teardown drops the map. |
 | Data migration | Full d2b 3.0 reset; CID maps are transient and not imported |
@@ -2200,7 +2200,7 @@ class.
 | Dependency/owner | Probe/effect-port and activation owner; depends on ADR046-security-key-025 effect port and Core private bundle device table support. |
 | Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-device-security-key/src/probe.rs`; Provider activation/Core private bundle device table population for label → `device_token` |
+| Destination | `packages/d2b-provider-device-security-key/`; Provider activation/Core private bundle device table population for label → `device_token` |
 | Detailed design | hidraw probe: `probe.rs` - calls `SecurityKeyEffectPort::observe_inventory(&device_id, &policy_id)` with opaque types injected by Core; interprets `InventoryObservation`; never reads `/sys/class/hidraw/` directly; bundle device table population at activation time (Provider activation resolves label → `device_token` via Core; stored in private bundle) |
 | Integration | Controller scheduled-observe invokes `probe.rs`; Core adapter implements `SecurityKeyEffectPort`; Nix activation emits private label-to-token bundle entries; Device status receives `DevicePresent` and phase updates. |
 | Data migration | Full d2b 3.0 reset; no v2 probe state import |
@@ -2216,7 +2216,7 @@ class.
 | Dependency/owner | ComponentSession/security descriptor contract owner; depends on ADR046-security-key-008, ADR046-security-key-005, and ADR-046-componentsession-and-bus. |
 | Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-device-security-key/src/descriptor.rs` |
+| Destination | `packages/d2b-provider-device-security-key/` |
 | Detailed design | Declare relay↔controller service and relay↔Binding-frontend `d2b.security-key.v3` fingerprints, Noise profiles, canonical Service/Binding subject pairing, bounded encrypted-stream records, and descriptor validation; no ambient path or raw vsock CID. |
 | Integration | Provider descriptor declares services and fingerprints; LaunchTicket injects internal channel and Endpoint transport; relay/controller/frontend validate descriptors and peer authority before exchanging messages. |
 | Data migration | Full d2b 3.0 reset; no v2 transport/session state import |
@@ -2408,7 +2408,7 @@ class.
 | Dependency/owner | `d2b-contracts` neutral effect-port foundation owner; depends on ADR046-security-key-008 and ADR-046-resources-device. |
 | Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
-| Destination | `d2b-contracts` neutral `SecurityKeyEffectPort` trait/types; `packages/d2b-provider-device-security-key/src/effect_port.rs` re-export; Core adapter implementation in `d2b-provider` or `d2b-provider-toolkit` |
+| Destination | `d2b-contracts` neutral `SecurityKeyEffectPort` trait/types; `packages/d2b-provider-device-security-key/` re-export; Core adapter implementation in `d2b-provider` or `d2b-provider-toolkit` |
 | Detailed design | Define/re-export the opaque redacting `SecurityKeyEffectPort` types in the neutral contract crate and implement the Core adapter; inject per physical Device into the Provider controller; relay and projection Service do not receive the port. |
 | Integration | Core resolves Zone/label to opaque IDs and injects the port into the controller; controller scheduled-observe calls the trait; Provider crate depends only on the neutral contract/re-export; relay path is unaffected. |
 | Data migration | Full d2b 3.0 reset; no v2 effect-port state import |
@@ -2490,7 +2490,7 @@ class.
 | Dependency/owner | Test-suite migration/removal owner; depends on ADR046-security-key-006 and ADR046-security-key-007 provider-crate successor tests. |
 | Current source | `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` and `packages/d2b-contract-tests/tests/usb_sk_contract.rs` |
 | Reuse action | delete-after-cutover |
-| Destination | Removed from `packages/d2b-contract-tests/tests/`; successor tests live in `packages/d2b-provider-device-security-key/tests/` |
+| Destination | Removed from `packages/d2b-contract-tests/`; successor tests live in `packages/d2b-provider-device-security-key/tests/` |
 | Detailed design | Remove target `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` and `packages/d2b-contract-tests/tests/usb_sk_contract.rs` after ADR046-security-key-006/ADR046-security-key-007 tests are in Provider crate and cover all prior assertions. Primary reuse disposition: `delete-after-cutover`. Preserved source-plan detail: delete after move/adapt. |
 | Integration | D094 disposition updates closed gate manifests, layer1 jobs, pins, ledgers, and CI shards so only the provider-crate successor suite remains. |
 | Data migration | None - test-only move/delete; no runtime state |
@@ -2538,7 +2538,7 @@ class.
 | Dependency/owner | Cross-Zone adapter owner; depends on ADR046-security-key-024, ADR046-security-key-026, ADR046-security-key-029, ADR046-zone-control-019, and ADR046-zone-control-020. |
 | Current source | None - net-new ADR 0046 cross-Zone sharing (D096) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-device-security-key/src/share_adapter.rs` |
+| Destination | `packages/d2b-provider-device-security-key/` |
 | Detailed design | Signed adapters admit ResourceExport only when `resourceRef` names an authority SecurityKeyService, `serviceType` is `security-key.d2bus.org.SecurityKeyService`, and `projectionSchemaFingerprint` plus `factoryFingerprint` match the signed semantic factory. ResourceImport must supply the corresponding `expectedServiceType`, `expectedProjectionSchemaFingerprint`, and `expectedFactoryFingerprint`; its `exportKey` identifies the ResourceExport. The Service's relay Endpoint stays a Service-owned implementation child and is never an Export field. Core invokes the factory to create one projection SecurityKeyService with `ownerRef: ResourceImport/<name>`, `providerRef`, semantic base/import fields, and no `spec.provider`; route selection comes from the signed local descriptor and ResourceImport record. The semantic factory fingerprint binds factory metadata plus projection-protocol version only, while adapter identity is authenticated separately by the signed Provider descriptor. They never project Device or auto-create Binding. Route Binding ceremonies over bounded encrypted named streams to the single authority fair queue; no FD/USBIP/hidraw/ref crosses Zones. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new (implement the signed security-key export/import adapter). |
 | Integration | Core export/import routing/projection lifecycle; ADR046-security-key-029 authority; ADR046-security-key-024 Endpoint streams; Nix/operator-authored Binding consumes the same-Zone projection. |
 | Data migration | Full d2b 3.0 reset; no cross-Zone sharing state |
@@ -2552,7 +2552,7 @@ class.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | D097 authority foundation owner; depends on ADR046-security-key-001, ADR046-security-key-002, ADR046-security-key-003, ADR046-security-key-004, ADR046-security-key-018, ADR046-security-key-026, ADR046-zone-control-024, and the D097 authority contract. |
-| Current source | `packages/d2bd/src/security_key.rs` (`CidTranslator`, `SecurityKeyState`, `LeaseId`/`LeaseState`, `CEREMONY_TIMEOUT` 120 s, `QUEUE_WAIT_TIMEOUT` 15 s, `parse_ctaphid_report`/`build_cancel_packet`); `packages/d2b-priv-broker/src/ops/security_key.rs` (`live_open_hidraw_security_key`, double `fstat` + FIDO usage-page 0xF1D0 + HID raw-info revalidation, `O_RDWR\|O_NONBLOCK\|O_NOFOLLOW`); `packages/d2b-sk-frontend/src/{main,uhid,vsock,framing}.rs` (UHID FIDO2 CTAPHID frontend, 64-byte report relay) |
+| Current source | `packages/d2bd/src/security_key.rs` (`CidTranslator`, `SecurityKeyState`, `LeaseId`/`LeaseState`, `CEREMONY_TIMEOUT` 120 s, `QUEUE_WAIT_TIMEOUT` 15 s, `parse_ctaphid_report`/`build_cancel_packet`); `packages/d2b-broker/src/ops/security_key.rs` (`live_open_hidraw_security_key`, double `fstat` + FIDO usage-page 0xF1D0 + HID raw-info revalidation, `O_RDWR\|O_NONBLOCK\|O_NOFOLLOW`); `packages/d2b-sk-frontend/src/{main,uhid,vsock,framing}.rs` (UHID FIDO2 CTAPHID frontend, 64-byte report relay) |
 | Reuse source | Same baseline daemon/broker/frontend symbols |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-device-security-key/src/{authority,relay,streams}.rs`; D097 `AuthorityDescriptor` on authority SecurityKeyService |
@@ -2630,7 +2630,7 @@ per-test advisory threshold.
 | --- | --- |
 | `packages/d2b-contract-tests/tests/usb_sk_contract.rs` | Move to `packages/d2b-provider-device-security-key/tests/` as part of ADR046-security-key-006; update v3 type imports; retain all existing assertions |
 | `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` | Move to `packages/d2b-provider-device-security-key/tests/` as part of ADR046-security-key-007; update for the v3 Process resource sandbox; retain zero-`capabilityClasses` and `seccompClass` assertions |
-| `packages/d2b-priv-broker/tests/security_key_broker.rs` | Retain in broker crate; update for v3 bundle table lookup path; add zone-field round-trip test |
+| `packages/d2b-broker/tests/security_key_broker.rs` | Retain in broker crate; update for v3 bundle table lookup path; add zone-field round-trip test |
 
 ## Nix option migration
 
@@ -2655,11 +2655,11 @@ authority cannot bypass the shared tuple.
 
 - `packages/d2bd/src/security_key.rs` - baseline relay implementation (implemented-and-reachable)
 - `packages/d2b-sk-frontend/src/` - baseline guest frontend binary (implemented-and-reachable)
-- `packages/d2b-priv-broker/src/ops/security_key.rs` - broker hidraw open op (implemented-and-reachable)
+- `packages/d2b-broker/src/ops/security_key.rs` - broker hidraw open op (implemented-and-reachable)
 - `packages/d2b-contracts/src/security_key.rs` - public and broker wire DTOs (implemented-and-reachable)
 - `packages/d2b-contract-tests/tests/usb_sk_contract.rs` - existing contract tests (implemented-and-reachable)
 - `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` - existing minijail contract tests (implemented-and-reachable)
-- `packages/d2b-priv-broker/tests/security_key_broker.rs` - existing broker tests (implemented-and-reachable)
+- `packages/d2b-broker/tests/security_key_broker.rs` - existing broker tests (implemented-and-reachable)
 - `docs/specs/ADR-046-resources-device.md` §Provider: device-security-key - Device ResourceType contract and key invariants
 - `docs/specs/ADR-046-componentsession-and-bus.md` - ComponentSession Noise profiles, descriptor validation, attachments
 - `docs/specs/ADR-046-provider-model-and-packaging.md` - Provider crate boundary, component descriptors

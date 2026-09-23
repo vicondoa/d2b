@@ -9,7 +9,7 @@
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Main reuse | `a1cc0b2da4a08ca3240a770a972fe4da6f912bef` |
 | Normative | Yes |
-| Owners | `packages/d2b-provider-runtime-azure-container-apps/` |
+| Owners | `packages/d2b-provider-guest-azure-container-apps/` |
 | Depends on | `ADR-046-provider-model-and-packaging`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-credential`, `ADR-046-componentsession-and-bus`, `ADR-046-provider-state`, `ADR-046-telemetry-audit-and-support`, `ADR-046-nix-configuration` |
 | Supersedes | `packages/d2b-provider-aca/` (`AcaWorkloadProvider`, `GuestControlEndpointProvider`), `AcaRelayTransportConfig`, direct vsock guest-control path |
 
@@ -22,7 +22,7 @@
 | Provider name | `runtime-azure-container-apps` |
 | ResourceRef | `Provider/runtime-azure-container-apps` |
 | Implementation ID | `azure-container-apps` |
-| Crate | `packages/d2b-provider-runtime-azure-container-apps/` |
+| Crate | `packages/d2b-provider-guest-azure-container-apps/` |
 | Implements | `Guest` ResourceType; standard semantic `Endpoint` resources for Provider services |
 | Domain | `system` only |
 | Placement | System-domain Processes inside the dedicated gateway Guest |
@@ -638,7 +638,7 @@ The ACA controller drives all Azure API operations exclusively through two injec
 ### 8.1 `AcaCredentialLeaseClient`
 
 ```rust
-// packages/d2b-contracts/src/provider_effects/aca.rs
+// packages/d2b-contracts/
 // Shared d2b-contracts provider-effects module; no separate d2b-aca-contracts crate.
 pub trait AcaCredentialLeaseClient: Send + Sync {
     fn descriptor(&self) -> ProviderDescriptor;
@@ -654,7 +654,7 @@ Returns opaque `AcaCredentialLease` - no token bytes are returned. `AcaCredentia
 ### 8.2 `AcaControl`
 
 ```rust
-// packages/d2b-contracts/src/provider_effects/aca.rs
+// packages/d2b-contracts/
 // Shared d2b-contracts provider-effects module; no separate d2b-aca-contracts crate.
 pub trait AcaControl: Send + Sync {
     async fn health(
@@ -1443,21 +1443,21 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | --- | --- | --- | --- | --- |
 | `AcaWorkloadProvider` + `GuestControlEndpointProvider impl` | `packages/d2b-provider-aca/src/lib.rs` | production-reachable | REPLACE | `d2b-provider-runtime-azure-container-apps/src/controller.rs` - new async `Guest` reconcile loop; vsock path retired |
 | `AcaRelayTransportConfig` | `packages/d2b-provider-aca/src/lib.rs` (relay transport config) | production-reachable | ADAPT | Relay-private fields move to `Provider/transport-azure-relay`; ACA retains only `sandboxTransportAlias` and its semantic Endpoint/session contract (§§12, 15.4) |
-| `AcaControl` trait (9 methods) | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs` (shared provider-effects module; no new crate); no direct provider implementation dependency from core; adapt `OperationBinding` to v3 `ProviderOperationContext` contract |
-| `AcaCredentialLeaseClient` trait | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs`; adapt `CredentialLease` to v3 Credential resource model; provider crate remains one package |
-| `AcaRuntimeConfig` / `AcaSandboxProfile` / bounds constants | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Adapt to v3 `spec.provider.settings` schema fields; all bounds constants preserved |
-| `AcaResourceBinding` / `AcaWorkloadQuery` | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | ADAPT | Replace `RealmId`/`WorkloadId` fields with v3 `Zone`/`Guest` resource UID; retain redacted Debug |
-| Operation ledger (`CompletedOperation`, `OperationLedger`) | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | ADAPT | Adapt operation ID type to v3; delegate to the core Operation ledger adapter (it owns in-flight operation/requeue truth); the provider declares no state Volume - bounded non-secret sandbox binding/adoption metadata lives in `Guest.status` (D087) |
-| Lease cleanup job/executor pattern | `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | RETAIN | Retain `LeaseCleanupJob`/`LeaseCleanupExecutor`/`TracingLeaseCleanupObserver` verbatim; target tracing key unchanged |
-| Retry/backoff (`AcaControlErrorKind` + `RetryClass`) | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN | Retain all error kind/diagnostic variants and `MAX_ACA_RETRY_AFTER_MS` |
+| `AcaControl` trait (9 methods) | `packages/d2b-provider-guest-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs` (shared provider-effects module; no new crate); no direct provider implementation dependency from core; adapt `OperationBinding` to v3 `ProviderOperationContext` contract |
+| `AcaCredentialLeaseClient` trait | `packages/d2b-provider-guest-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Move to `packages/d2b-contracts/src/provider_effects/aca.rs`; adapt `CredentialLease` to v3 Credential resource model; provider crate remains one package |
+| `AcaRuntimeConfig` / `AcaSandboxProfile` / bounds constants | `packages/d2b-provider-guest-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | RETAIN+ADAPT | Adapt to v3 `spec.provider.settings` schema fields; all bounds constants preserved |
+| `AcaResourceBinding` / `AcaWorkloadQuery` | `packages/d2b-provider-guest-azure-container-apps/src/types.rs` (main) | test-only at v3 baseline | ADAPT | Replace `RealmId`/`WorkloadId` fields with v3 `Zone`/`Guest` resource UID; retain redacted Debug |
+| Operation ledger (`CompletedOperation`, `OperationLedger`) | `packages/d2b-provider-guest-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | ADAPT | Adapt operation ID type to v3; delegate to the core Operation ledger adapter (it owns in-flight operation/requeue truth); the provider declares no state Volume - bounded non-secret sandbox binding/adoption metadata lives in `Guest.status` (D087) |
+| Lease cleanup job/executor pattern | `packages/d2b-provider-guest-azure-container-apps/src/provider.rs` (main) | test-only at v3 baseline | RETAIN | Retain `LeaseCleanupJob`/`LeaseCleanupExecutor`/`TracingLeaseCleanupObserver` verbatim; target tracing key unchanged |
+| Retry/backoff (`AcaControlErrorKind` + `RetryClass`) | `packages/d2b-provider-guest-azure-container-apps/src/control.rs` (main) | test-only at v3 baseline | RETAIN | Retain all error kind/diagnostic variants and `MAX_ACA_RETRY_AFTER_MS` |
 | Provider agent process entry point | `packages/d2b-gateway-runtime/src/provider_agent.rs` (main) | production-reachable at main | COPY/ADAPT (partial) | Adapt `ProviderAgentProcess`/`run_registered`/`run` as deployment service binary skeleton; exclude `aca_workload.rs` |
 | `AzureRelayTransportProvider` | `packages/d2b-provider-relay/src/lib.rs` (v3 baseline) | production-reachable | REPLACE | Moved to `Provider/transport-azure-relay` as carriage-only capability; ACA Provider owns semantic Endpoint and authenticated service/session |
-| v3 `d2b-provider-aca/src/tests.rs` | `packages/d2b-provider-aca/src/tests.rs` | test-only | EXTRACT+PORT | Port all test coverage to `packages/d2b-provider-runtime-azure-container-apps/tests/` |
+| v3 `d2b-provider-aca/src/tests.rs` | `packages/d2b-provider-aca/src/tests.rs` | test-only | EXTRACT+PORT | Port all test coverage to `packages/d2b-provider-guest-azure-container-apps/tests/` |
 
 **Excluded from reuse:**
 
 - `packages/d2b-gateway-runtime/src/aca_workload.rs` - ACA-specific workload lifecycle using the main ACA Provider V2 registration path; not compatible with v3 resource model.
-- `packages/d2b-daemon-access/src/relay.rs` (main) - relay credential format and
+- `packages/d2b-unsafe-local-helper/src/relay.rs` (main) - relay credential format and
   ownership changed; v3 transport carriage is supplied by
   `Provider/transport-azure-relay` and ACA semantics remain in this Provider.
 - `packages/d2b-gateway/` orchestrator - uses main's Zone model; excluded.
@@ -1475,9 +1475,9 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-provider-001; runtime-aca owner |
-| Current source | `packages/d2b-provider-aca/src/lib.rs`: `AcaWorkloadProvider`, 2841 lines production-reachable; `packages/d2b-provider-runtime-azure-container-apps/src/provider.rs`: `AzureContainerAppsRuntimeProvider`, 2796 lines (test-only at v3 baseline) |
+| Current source | `packages/d2b-provider-aca/src/lib.rs`: `AcaWorkloadProvider`, 2841 lines production-reachable; `packages/d2b-provider-guest-azure-container-apps/src/provider.rs`: `AzureContainerAppsRuntimeProvider`, 2796 lines (test-only at v3 baseline) |
 | Reuse action | replace |
-| Destination | `packages/d2b-provider-runtime-azure-container-apps/src/controller.rs` |
+| Destination | `packages/d2b-provider-guest-azure-container-apps/src/controller.rs` |
 | Detailed design | Async `Guest` reconcile loop: `describe` → `validateSpec` → `plan` → `reconcile` → `observe` → `finalize`. Adoption before first `RuntimeEnsure`; operation/requeue truth remains in the core Operation ledger and no Provider state Volume is created. Credential lease acquire/revoke per call. The controller creates a same-Zone Provider-owned semantic sandbox-agent Endpoint (`ownerRef` remains the Guest lifecycle edge), resolves opaque transport carriage, and performs Noise KK enrollment for the ACA Provider service/session. `providerPhase` and `guestIdentityDigest` stay in `status.provider.details`; Endpoint readiness/generation/availability stay only in Endpoint status; no raw endpoint/path, cross-Zone ref, route cursor, transport handle, or authority appears in status. **ProviderDeployment creates both static Processes; ACA controller never instantiates its own Processes and never writes Provider status directly. All Processes run inside the gateway Guest. The managed sandbox remains a Guest in the owning Zone and is not a Zone. No Host Process, no Host Credential, no Host Azure HTTP socket. Long-running cloud ops return `progressing`/`requeue-at` immediately; never block watch loop.** Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (old) + ADAPT (main types/traits). |
 | Integration | Zone ResourceClient → ProviderDeployment → Process launch inside gateway Guest → d2b-bus → deployment service |
 | Data migration | Full d2b 3.0 reset; no v2 provider state compatibility |
@@ -1509,7 +1509,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Dependency/owner | ADR046-aca-001; deployment service owner |
 | Current source | `packages/d2b-gateway-runtime/src/provider_agent.rs` (main) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-runtime-azure-container-apps/src/deployment_service.rs` |
+| Destination | `packages/d2b-provider-guest-azure-container-apps/` |
 | Detailed design | `ProviderAgentProcess`-shaped binary; bounded dispatch (64 in-flight); bounded audit ring (1024 capacity); shutdown within 5 s; serves `d2b.aca.v3.deployment` service schema including `GuestHealth` (health probing folded in from former health worker). All ACA API calls go through the injected `AcaControl` port - no ambient network call, no SDK default chain. Long-running ops return `progressing`/`requeue-at` to the caller; no blocking on Azure API completion. Primary reuse disposition: `adapt`. Preserved source-plan detail: COPY/ADAPT (partial); exclude `aca_workload.rs`. |
 | Integration | ProviderDeployment spawns service; d2b-bus routes GuestProvision/Start/Stop/Destroy/Adopt/Inspect/Health methods |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1523,9 +1523,9 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-aca-001; credential integration owner |
-| Current source | `packages/d2b-provider-runtime-azure-container-apps/src/control.rs` (main): `AcaCredentialLeaseClient`, `AcaCredentialLease`, `AcaCredentialLeaseRequest`, `AcaCredentialPurpose` |
+| Current source | `packages/d2b-provider-guest-azure-container-apps/src/control.rs` (main): `AcaCredentialLeaseClient`, `AcaCredentialLease`, `AcaCredentialLeaseRequest`, `AcaCredentialPurpose` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/src/provider_effects/aca.rs` (shared `d2b-contracts` provider-effects module; no new crate; provider crate remains one package) |
+| Destination | `packages/d2b-contracts/` (shared `d2b-contracts` provider-effects module; no new crate; provider crate remains one package) |
 | Detailed design | `AcaCredentialLeaseClient`, `AcaCredentialLease`, `AcaCredentialLeaseRequest`, and `AcaCredentialPurpose` live in the shared `d2b-contracts` provider-effects module. Adapt `CredentialLease` to v3 Credential resource opaque lease handle. `AcaCredentialPurpose` maps to `allowedOperations` check against `Credential.spec`. Lease expiry capped at call deadline. Cleanup job pattern retained verbatim. Primary reuse disposition: `adapt`. Preserved source-plan detail: RETAIN+ADAPT. |
 | Integration | Controller acquires lease per reconcile step via injected `AcaCredentialLeaseClient`; raw token delivered only via Noise KK E2E channel through `d2b.credential.v3.AcquireToken` method |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1555,9 +1555,9 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-aca-001; state/migration owner |
-| Current source | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` (main): `AcaRuntimeConfig`, `AcaSandboxProfile`, `AcaResourceBinding`, `AcaWorkloadQuery` - test-only at v3 baseline |
+| Current source | `packages/d2b-provider-guest-azure-container-apps/src/types.rs` (main): `AcaRuntimeConfig`, `AcaSandboxProfile`, `AcaResourceBinding`, `AcaWorkloadQuery` - test-only at v3 baseline |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-runtime-azure-container-apps/src/types.rs` |
+| Destination | `packages/d2b-provider-guest-azure-container-apps/` |
 | Detailed design | Replace `RealmId`/`WorkloadId` with v3 owning-`Zone`/`Guest` UID types. `AcaResourceBinding` keys the adoption query but never names a child Zone. The provider declares **no** Provider state Volume: bounded, non-secret sandbox binding/adoption metadata lives in `Guest.status` (latest bounded observed handle digests) and in-flight operation/requeue truth lives in the core Operation ledger (D087). Neither Process mounts a state Volume; there is no `sandbox-state`/`service-state` Volume, no `User/d2b-aca-controller`/`User/d2b-aca-deployment-service` state-layout principal, and no empty identity-only Volume. On restart the controller re-derives observed binding from `Guest.status`, the core Operation ledger, and an external `find_sandboxes` query, ensures the Provider-owned Endpoint, resolves fresh transport carriage, and authenticates a fresh Provider session, treating all status as observation and never authority. Host never holds cloud binding, admission, PSK, operation, Endpoint, or session state. Primary reuse disposition: `adapt`. Preserved source-plan detail: RETAIN+ADAPT. |
 | Integration | No Provider state Volume is created before Processes start; the controller writes bounded observed binding/adoption metadata to `Guest.status`, writes only standard Endpoint observations to Endpoint status, reads in-flight operation state from the core Operation ledger adapter, and retains no transport or ZoneLink cursor across restart |
 | Data migration | None - no state Volume at v3 `1.0` |
@@ -1573,7 +1573,7 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Dependency/owner | ADR046-aca-001; Nix/telemetry owner |
 | Current source | `nixos-modules/options-realms-workloads.nix`: `kind = "ProviderManaged"` → ACA; `packages/d2b-provider-aca/src/lib.rs`: tracing fields |
 | Reuse action | replace |
-| Destination | `nixos-modules/` (generated Guest resource options); `packages/d2b-provider-runtime-azure-container-apps/src/{audit,metrics}.rs` |
+| Destination | `nixos-modules/` (generated Guest resource options); `packages/d2b-provider-guest-azure-container-apps/src/{audit,metrics}.rs` |
 | Detailed design | Eval-time assertions for ACA-specific invariants (§15.7), including rejection of ZoneLink/child-Zone fields for an ordinary sandbox and exact same-Zone sandbox-agent Endpoint template ownership. Closed OTEL label set (§13.4). Audit event schema (§13.3). Tracing target constant `d2b_provider_runtime_azure_container_apps::credential_lease_cleanup` retained. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (Nix emitter) + ADAPT (metric/audit shapes). |
 | Integration | Nix eval gate; `observability-otel` Provider OTEL pipeline |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1610,7 +1610,7 @@ per-test advisory threshold.
 The only required file is:
 
 ```
-packages/d2b-provider-runtime-azure-container-apps/
+packages/d2b-provider-guest-azure-container-apps/
   src/
     tests/
       integration/
@@ -1631,7 +1631,7 @@ Every test in `tests/` must:
 
 ### 19.3 Integration README
 
-`packages/d2b-provider-runtime-azure-container-apps/integration/README.md` must document:
+`packages/d2b-provider-guest-azure-container-apps/integration/README.md` must document:
 
 - how to run the mock Azure integration tests: `cargo test -p d2b-provider-runtime-azure-container-apps --test integration mock_azure`;
 - how to run the provider system tests: `cargo test -p d2b-provider-runtime-azure-container-apps --test integration provider_system`;

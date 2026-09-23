@@ -56,7 +56,7 @@ capability matrix plus provider-neutral `unsupported-capability`.
 | Field | Value |
 | --- | --- |
 | `providerRef` | `Provider/system-minijail` |
-| Crate | `packages/d2b-provider-system-minijail/` |
+| Crate | `packages/d2b-provider-process-minijail/` |
 | Package identity | `system-minijail.d2bus.org` |
 | Publisher | `d2bus.org` (first-party) |
 | Implemented ResourceTypes | `Process`, `EphemeralProcess` |
@@ -81,7 +81,7 @@ attempted. There is no PID/PGID fallback on older kernels.
 The Provider crate mandatory layout:
 
 ```
-packages/d2b-provider-system-minijail/
+packages/d2b-provider-process-minijail/
   src/                  # controller logic, sandbox_compiler, launch, adoption, pidfd observation/status relay, user_ns
   tests/                # hermetic Cargo integration tests
   integration/          # container/Host/Guest/broker integration scenarios
@@ -1576,13 +1576,13 @@ The baseline is `b5ddbed67867d9244bf33390868101bd9b053e49`.
 
 | Current symbol / path | Evidence class | Action | Destination |
 | --- | --- | --- | --- |
-| `packages/d2b-core/src/processes.rs` - `ProcessRole` (18 variants), `ProcessNode`, `RoleProfile`, `NamespaceSet`, `MountPolicy`, `CgroupPlacement`, `ReadinessPredicate` | production-reachable | EXTRACT/ADAPT | `packages/d2b-provider-system-minijail/src/sandbox_compiler.rs` - namespace/cap/mount class compilation; `packages/d2b-process/src/` - common spec types |
-| `packages/d2b-core/src/minijail_profile.rs` - `MinijailProfile`, `UserNamespaceProfile`, `NamespaceSet`, `MountPolicy`, `BindMount`, `CgroupPlacement` | production-reachable | EXTRACT/ADAPT | `packages/d2b-provider-system-minijail/src/sandbox_compiler.rs` - compiled plan types; preserve typed fail-closed profile verification |
-| `packages/d2b-core/src/process_builder.rs` | production-reachable | ADAPT | Core/ProviderSupervisor LaunchTicket builder; `packages/d2b-provider-system-minijail/src/launch.rs` submits only opaque launch requests through ProcessLaunchEffectPort |
-| `packages/d2b-priv-broker/src/ops/spawn_runner.rs` | production-reachable | ADAPT | Broker-side: retained as internal broker op invoked by `ProcessLaunchEffectPort` implementation (owned by core/ProviderSupervisor); Provider-side: `packages/d2b-provider-system-minijail/src/launch.rs` calls `ProcessLaunchEffectPort` with opaque IDs; Provider crate imports no broker service/client/DTO |
-| `packages/d2bd/src/supervisor/pidfd_table.rs` - `PidfdTable`, `PidfdEntry`, `PidfdRegistration`, `WaitTermination`, `BrokerReapLog` | production-reachable | EXTRACT/ADAPT | Broker-side wait/reap remains in `d2b-priv-broker`; core/ProviderSupervisor alone polls verified duplicates and requests exact-main signaling; the Provider consumes only identity-bound typed observations and terminal results |
-| `packages/d2bd/src/supervisor/*.rs` - `DagExecutor`, `NodeOutcome`, `NodeHistory`, `NodeBudget`, `SplitReadinessMode` | production-reachable | ADAPT | Core effect adapter performs `/proc`/cgroup discovery; `packages/d2b-provider-system-minijail/src/adoption.rs` applies adoption/quarantine semantics to its opaque typed observations |
-| `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` - user namespace uid_map/gid_map write sequence | production-reachable | ADAPT | Broker and core ProcessLaunchEffectPort adapter retain the pre-establishment sequence, pipe sync, O_NOFOLLOW, and re-validation; Provider `user_ns.rs` validates only the opaque request contract |
+| `packages/d2b-core/src/processes.rs` - `ProcessRole` (18 variants), `ProcessNode`, `RoleProfile`, `NamespaceSet`, `MountPolicy`, `CgroupPlacement`, `ReadinessPredicate` | production-reachable | EXTRACT/ADAPT | `packages/d2b-provider-process-minijail/src/sandbox_compiler.rs` - namespace/cap/mount class compilation; `packages/d2b-process/src/` - common spec types |
+| `packages/d2b-core/src/minijail_profile.rs` - `MinijailProfile`, `UserNamespaceProfile`, `NamespaceSet`, `MountPolicy`, `BindMount`, `CgroupPlacement` | production-reachable | EXTRACT/ADAPT | `packages/d2b-provider-process-minijail/src/sandbox_compiler.rs` - compiled plan types; preserve typed fail-closed profile verification |
+| `packages/d2b-core/src/process_builder.rs` | production-reachable | ADAPT | Core/ProviderSupervisor LaunchTicket builder; `packages/d2b-provider-process-minijail/src/launch.rs` submits only opaque launch requests through ProcessLaunchEffectPort |
+| `packages/d2b-broker/src/ops/spawn_runner.rs` | production-reachable | ADAPT | Broker-side: retained as internal broker op invoked by `ProcessLaunchEffectPort` implementation (owned by core/ProviderSupervisor); Provider-side: `packages/d2b-provider-process-minijail/src/launch.rs` calls `ProcessLaunchEffectPort` with opaque IDs; Provider crate imports no broker service/client/DTO |
+| `packages/d2bd/src/pidfd_table.rs` - `PidfdTable`, `PidfdEntry`, `PidfdRegistration`, `WaitTermination`, `BrokerReapLog` | production-reachable | EXTRACT/ADAPT | Broker-side wait/reap remains in `d2b-priv-broker`; core/ProviderSupervisor alone polls verified duplicates and requests exact-main signaling; the Provider consumes only identity-bound typed observations and terminal results |
+| `packages/d2bd/src/*.rs` - `DagExecutor`, `NodeOutcome`, `NodeHistory`, `NodeBudget`, `SplitReadinessMode` | production-reachable | ADAPT | Core effect adapter performs `/proc`/cgroup discovery; `packages/d2b-provider-process-minijail/src/adoption.rs` applies adoption/quarantine semantics to its opaque typed observations |
+| `packages/d2b-broker/src/ops/swtpm_dir.rs` - user namespace uid_map/gid_map write sequence | production-reachable | ADAPT | Broker and core ProcessLaunchEffectPort adapter retain the pre-establishment sequence, pipe sync, O_NOFOLLOW, and re-validation; Provider `user_ns.rs` validates only the opaque request contract |
 | `packages/d2b-realm-core/src/ids.rs` - `RealmId`, `WorkloadId`, `PrincipalId` | production-reachable | ADAPT | Use v3 `ZoneId`, `ResourceRef`, `UserRef` from `d2b-contracts/src/v3/identity.rs` (ADR046-identities-001) |
 | `packages/d2b-realm-core/src/workload.rs` - `WorkloadProviderKind`, `IsolationPosture`, `WorkloadExecutionPosture` | production-reachable | DELETE at cutover | Replaced by `Host`/`Guest`/`ExecutionPolicy`; evidence for `UnsafeLocal` → user-only Host mapping retained in migration map |
 | `packages/d2b-core/src/storage.rs` - `StoragePathSpec` | production-reachable | Not consumed | Provider/system-minijail declares no state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); no state-Volume creation or reconciliation on any path |
@@ -1608,7 +1608,7 @@ delivery assumptions are not copied.
 | Dependency/owner | `ADR046-process-001` (common spec/status types); `ADR046-provider-001` (toolkit/contracts); system-minijail Provider owner |
 | Current source | `d2b-core/src/minijail_profile.rs`; `d2b-core/src/processes.rs` (NamespaceSet, MountPolicy, CgroupPlacement); `d2b-priv-broker/src/ops/spawn_runner.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-minijail/src/sandbox_compiler.rs` |
+| Destination | `packages/d2b-provider-process-minijail/` |
 | Detailed design | Accept `SandboxSpec` from common contracts; compile NamespaceClass/CapabilityClass/SeccompClass/UserNamespaceSpec/mount/environment/rlimit/umask into a versioned `CompiledSandboxPlan`; compute `sandboxRevisionDigest`; all rejection conditions from §12.1; no raw bitmask/BPF/argv/path in any output type; golden round-trip test vectors Primary reuse disposition: `adapt`. Preserved source-plan detail: EXTRACT/ADAPT. |
 | Integration | LaunchTicket builder (ADR046-minijail-002); effect port integration (ADR046-minijail-003) |
 | Data migration | Full reset; current `MinijailProfile` not import-compatible with v3 SandboxSpec |
@@ -1624,7 +1624,7 @@ delivery assumptions are not copied.
 | Dependency/owner | ADR046-minijail-001; common `LaunchTicket` contract |
 | Current source | `d2b-core/src/process_builder.rs`; `d2bd/src/supervisor/*.rs` (ticket generation) |
 | Reuse action | adapt |
-| Destination | Provider-side opaque request builder in `packages/d2b-provider-system-minijail/src/launch.rs`; LaunchTicket construction and verification in core/ProviderSupervisor |
+| Destination | Provider-side opaque request builder in `packages/d2b-provider-process-minijail/src/launch.rs`; LaunchTicket construction and verification in core/ProviderSupervisor |
 | Detailed design | Provider submits opaque Process/profile/budget/mount digest IDs through ProcessLaunchEffectPort. Core constructs the LaunchTicket, verifies it on ProviderSupervisor receipt, performs the `d2b.supervisor.v3/IssueLaunchTicket` service call, and rejects expired/revoked/malformed tickets without exposing ticket internals or broker DTOs to the Provider. |
 | Integration | `ProviderSupervisor` local adapter; minijail controller (ADR046-minijail-005) |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1640,7 +1640,7 @@ delivery assumptions are not copied.
 | Dependency/owner | ADR046-minijail-001; broker integration owner |
 | Current source | `d2b-priv-broker/src/ops/spawn_runner.rs`; `d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner`, user namespace setup) |
 | Reuse action | adapt |
-| Destination | Broker-side: `d2b-priv-broker` retains `SpawnRunner` and user-namespace pre-establishment; core/ProviderSupervisor owns the `ProcessLaunchEffectPort` implementation; Provider-side `packages/d2b-provider-system-minijail/src/launch.rs` calls the trait with opaque Process/profile/policy IDs and `user_ns.rs` validates only semantic request constraints |
+| Destination | Broker-side: `d2b-priv-broker` retains `SpawnRunner` and user-namespace pre-establishment; core/ProviderSupervisor owns the `ProcessLaunchEffectPort` implementation; Provider-side `packages/d2b-provider-process-minijail/src/launch.rs` calls the trait with opaque Process/profile/policy IDs and `user_ns.rs` validates only semantic request constraints |
 | Detailed design | Linux ≥5.14 and delegated-leaf `cgroup.kill` platform gate; `clone3(CLONE_PIDFD | CLONE_INTO_CGROUP)` with pre-declared cgroup leaf FD; broker retained as child parent and sole `waitid(P_PIDFD)`/reap/exit-status owner; verified duplicate returned privately to ProviderSupervisor for poll/readiness and exact-main `pidfd_send_signal`; anchored `cgroup.kill` write for unambiguous intentional teardown; user namespace pre-establishment sequence (§7.7) when `userNamespace` set; host UID 0 rejection; parent name-to-inode re-validation; zero-host-capability invariant (ADR 0021); `ProcessLaunchEffectPort` privately maps opaque IDs to SpawnRunner/OpenDevice/clone3/uid-map/FD effects; Provider crate imports no broker service/client/DTO |
 | Integration | ADR046-minijail-002 (core-owned LaunchTicket); real cgroup/broker fixtures exercise the core adapter in `integration/clone3_pidfd/` and `integration/user_namespace/`, while the Provider observes only typed EffectPort results |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1656,7 +1656,7 @@ delivery assumptions are not copied.
 | Dependency/owner | ADR046-minijail-003; wait/pidfd owner |
 | Current source | `d2bd/src/supervisor/pidfd_table.rs` (PidfdTable, WaitTermination, BrokerReapLog) |
 | Reuse action | adapt |
-| Destination | Broker-side parent wait/reap and typed terminal relay in `packages/d2b-priv-broker/src/`; pidfd observation and signaling in core/ProviderSupervisor; typed outcome consumption in `packages/d2b-provider-system-minijail/src/effect_result.rs` |
+| Destination | Broker-side parent wait/reap and typed terminal relay in `packages/d2b-broker/src/`; pidfd observation and signaling in core/ProviderSupervisor; typed outcome consumption in `packages/d2b-provider-process-minijail/` |
 | Detailed design | Broker that called `clone3` alone calls `waitid(P_PIDFD)`, collects exit status, and reaps exactly once; ProviderSupervisor `AsyncFd` readability is a hint only and never a wait/status source; controller consumes the identity-bound broker relay and holds no raw pidfd; ProviderSupervisor duplicate reacquisition is dispatched through a bounded blocking adapter with explicit timeout; pidfd never serialized; verified broker/ProviderSupervisor holder retains exact-main `pidfd_send_signal`; no PID/PGID fallback; graceful deadline followed by mandatory anchored leaf `cgroup.kill`; empty-leaf proof before rmdir; exit class classification (clean-exit/crash/signal/timeout/unknown) Primary reuse disposition: `adapt`. Preserved source-plan detail: EXTRACT/ADAPT. |
 | Integration | Controller restart → adoption (ADR046-minijail-005); finalize (§8.6) |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1672,7 +1672,7 @@ delivery assumptions are not copied.
 | Dependency/owner | All of ADR046-minijail-001 through ADR046-minijail-004; ComponentSession/d2b-bus (ADR046-session-001, ADR046-bus-001); bootstrap authz |
 | Current source | `d2bd/src/supervisor/*.rs` (DagExecutor, NodeOutcome); `d2bd/src/supervisor/pidfd_table.rs`; `d2b-realm-core/src/allocator_engine.rs` (adoption/identity concepts) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-minijail/src/` - controller binary entry point; reconcile loop; adoption; quarantine; bootstrap authz; health/status; restart; finalize |
+| Destination | `packages/d2b-provider-process-minijail/src/` - controller binary entry point; reconcile loop; adoption; quarantine; bootstrap authz; health/status; restart; finalize |
 | Detailed design | Full Process/EphemeralProcess reconcile algorithm (§8); fast path ≤5/≤20 ms gates; spawn via `ProcessLaunchEffectPort` (opaque IDs; no broker DTO imported); adoption algorithm (§8.5) consumes typed core-adapter observations after core performs `/proc` reads, cgroup enumeration, and original-broker-parent verification; quarantine on ambiguity; quarantine reuse blocked until externally established process-absence proof or full Zone reset; no stop request for quarantined/ambiguous identity; restart/backoff driven only by identity-bound typed terminal status; finalize (§8.6) requests graceful exact-main stop, bounded grace, mandatory subtree stop, broker wait/reap, and empty-leaf proof through the EffectPort, with no pidfd, PID, PGID, cgroup path, or kernel handle entering the Provider; EphemeralProcess continuation recovery (§9); bootstrap authz scope (§3); post-bootstrap RBAC; metric label closed-set enforcement (no `zone` label); controller writes status only on Process/EphemeralProcess resources; Provider resource status aggregated by core; the controller declares no Provider state Volume and mounts none - its bounded non-secret operational state lives in `status`/the core Operation ledger (§5.1, D087) and running units are re-adopted from core-reported observations on restart |
 | Integration | Zone runtime startup (bootstrap); all v3 ResourceClient/bus/session paths |
 | Data migration | Full reset; current DAG/role snapshot import not required |

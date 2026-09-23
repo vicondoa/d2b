@@ -733,7 +733,7 @@ The following are not standalone ResourceTypes:
 | Dependency/owner | W0 shared contract root; `d2b-contracts` |
 | Current source | `packages/d2b-realm-core/src/ids.rs`, `workload.rs`, `error.rs`; `packages/d2b-core/src/storage.rs`, `processes.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/src/v3/resource.rs`, `resource_status.rs`, `resource_schema.rs`, `error.rs` |
+| Destination | `packages/d2b-contracts/`, `resource_status.rs`, `resource_schema.rs`, `error.rs` |
 | Detailed design | Implement strict ResourceEnvelope, metadata, the three-layer spec shape (universal envelope + ResourceType base `spec.*` incl. `spec.providerRef` + optional canonical `spec.provider` `{ schemaId, schemaVersion, settings }`), and the three-layer status shape: universal base plus always-present `status.resource` (serializing as `{}` when the type has no common fields) plus optional `status.provider`, which is absent when unset. Implement phase/condition/outcome with D108's exact scalars, the integer-only `d2b-cjson/v1` profile and domain-separated digests, per-layer bounds/redaction, and ownerRef/UID fields. Define the codec-neutral `ResourceErrorKind`/`ResourceError` pair in `v3/error.rs`; do not extend `d2b-core::error::Kind` or encode domain errors as transport status. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Store/API/SDK/Nix/codegen consume one contract |
 | Data migration | Full d2b 3.0 reset; no v2 resource import |
@@ -749,11 +749,11 @@ The following are not standalone ResourceTypes:
 | Dependency/owner | ADR046-object-001; native resource store |
 | Current source | `packages/d2b-realm-core/src/allocator_engine.rs`, `d2b-realm-router/src/lib.rs` shared ownership/idempotency precedents |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-store-redb/src/ownership.rs`, `packages/d2b-controller-toolkit/src/owner_hints.rs` |
+| Destination | `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/ownership.rs`, `packages/d2b-controller-toolkit/` |
 | Detailed design | `ownership.rs` implements singular ownerRef resolution/UID binding, cycle/depth property checks, and the reverse index. The W0 `owner_hints.rs` surface contains only the bounded `owned-resource-changed` hint DTO, its coalescing contract, and the trait seam emitted by the store dispatcher; it contains no queue, reconcile loop, or controller runtime. |
 | Integration | Every store mutation updates the owner index and emits through the owner-hint trait seam atomically; later toolkit/controller work owns queueing, reconciliation, and child-first runtime deletion |
 | Data migration | None after reset |
 | Validation | Property tests for cycles/reparent/name reuse; store-dispatch tests for bounded hint coalescing and atomic index-plus-hint emission through a fake trait implementation |
 | Removal proof | Not applicable |
 | Implementation state | Merged |
-| Evidence | Both destinations are present: `packages/d2b-resource-store-redb/src/ownership.rs` and `packages/d2b-controller-toolkit/src/owner_hints.rs`, with ownership and bounded-hint tests. |
+| Evidence | Both destinations are present: `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/ownership.rs` and `packages/d2b-controller-toolkit/src/owner_hints.rs`, with ownership and bounded-hint tests. |

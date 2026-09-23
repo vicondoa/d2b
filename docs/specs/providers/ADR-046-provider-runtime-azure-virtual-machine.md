@@ -68,7 +68,7 @@ implementation reuse source (D041).
 | Internal implementation ID | `azure-vm` |
 | ResourceTypes implemented | `Guest` |
 | Component types | 1 controller, 1 service |
-| Crate | `packages/d2b-provider-runtime-azure-virtual-machine/` |
+| Crate | `packages/d2b-provider-guest-azure-virtual-machine/` |
 | Package | `d2b-provider-runtime-azure-virtual-machine` |
 | Nix artifact ID | `provider-runtime-azure-vm` |
 
@@ -77,7 +77,7 @@ implementation reuse source (D041).
 ## Crate layout
 
 ```text
-packages/d2b-provider-runtime-azure-virtual-machine/
+packages/d2b-provider-guest-azure-virtual-machine/
   src/
     main_controller.rs       # azure-vm-controller binary entry point
     main_bootstrap.rs        # azure-vm-bootstrap-svc binary entry point

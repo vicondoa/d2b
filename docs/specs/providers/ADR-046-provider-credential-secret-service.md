@@ -1269,7 +1269,7 @@ All controller handlers are async. The reconcile loop follows
 | Dependency/owner | Dependency for ADR046-cred-ss-003; owner: `packages/d2b-contracts` Credential ResourceType contract |
 | Current source | `packages/d2b-realm-provider/src/provider.rs:CredentialProvider`; `packages/d2b-realm-provider/src/credential.rs` opaque credential refs and `OpaqueAzureRef` helpers |
 | Reuse action | adapt |
-| Destination | packages/d2b-contracts/src/v3/credential.rs |
+| Destination | packages/d2b-contracts/ |
 | Detailed design | Contract types: define `CredentialSpec`, `CredentialStatus`, `CredentialLeaseHandle`, `OperationClass`, `PlacementBinding`, `CredentialConditionType`, and serde/validation/redaction helpers. Reuse `OpaqueAzureRef` from the v3 baseline. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt current credential/status concepts into v3 ResourceType DTOs; reuse `OpaqueAzureRef` directly where applicable. |
 | Integration | Nix compiler emits these DTOs; ResourceAPI stores them; credential-secret-service controller/service consumes them; CLI and conformance tests validate base Credential spec/status behavior. |
 | Data migration | Full d2b 3.0 reset; no v2 CredentialProvider status/config import |
@@ -1292,7 +1292,7 @@ directly from v3 `d2b-realm-provider/src/credential.rs`. Full detail in
 | Dependency/owner | Dependency for ADR046-cred-ss-003; owner: credential service contract/codegen |
 | Current source | None - net-new v3 `d2b.credential.v3` service; no pre-ADR45 baseline service proto equivalent |
 | Reuse action | create |
-| Destination | packages/d2b-contracts/proto/v3/credential.proto; packages/d2b-credential-service/ |
+| Destination | packages/d2b-contracts/; packages/d2b-provider-credential-secret-service/ |
 | Detailed design | Service proto: define the `d2b.credential.v3` protobuf/ttrpc service and generate typed client/server code. Full detail remains in `ADR-046-resources-credential` §Implementation work items. Primary reuse disposition: `create`. Preserved source-plan detail: net-new service contract replacing the v2 in-process `CredentialProvider` trait. |
 | Integration | d2b-bus routes Credential service calls to credential-secret-service Process instances; generated client/server types bind the controller/service implementation to ComponentSession delivery. |
 | Data migration | Full d2b 3.0 reset; no v2 service state import |
@@ -1303,7 +1303,7 @@ directly from v3 `d2b-realm-provider/src/credential.rs`. Full detail in
 
 Defines `d2b.credential.v3` protobuf/ttrpc service in
 `packages/d2b-contracts/proto/v3/credential.proto` and generates typed
-client/server in `packages/d2b-credential-service/`. Full detail in
+client/server in `packages/d2b-provider-credential-secret-service/`. Full detail in
 `ADR-046-resources-credential` §Implementation work items.
 
 ### ADR046-cred-ss-004 (dependency: controller toolkit)

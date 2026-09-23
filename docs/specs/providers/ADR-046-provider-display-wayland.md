@@ -1837,7 +1837,7 @@ produces the guest binary (see §19 removal table).
 | Dependency/owner | `ADR046-display-001`; telemetry/audit owner |
 | Current source | `packages/d2b-wayland-proxy/src/diag.rs` (rate-limited bounded diagnostics) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-display-wayland/src/audit.rs`, `packages/d2b-provider-display-wayland/src/metrics.rs` |
+| Destination | `packages/d2b-provider-display-wayland/`, `packages/d2b-provider-display-wayland/` |
 | Detailed design | Implement audit record types for all events in §14.1; implement OTEL metric counters/gauges in §14.2; adapt `DiagRateLimiter` to use closed semantic label sets with no Zone UID/name or resource-name-derived key; retain Zone identity in `d2b.zone` resource attributes; validate that no socket path, user identity, window title, or app-id appears in any log/audit/metric surface. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Providers emit via Zone telemetry emitter; audit records committed before operation completion |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |

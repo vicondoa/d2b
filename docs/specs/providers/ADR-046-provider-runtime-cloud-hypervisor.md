@@ -9,7 +9,7 @@
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Main reuse | Permitted; exact commit and selected behavior named per work item |
 | Normative | Yes |
-| Owners | `packages/d2b-provider-runtime-cloud-hypervisor/` (future crate) |
+| Owners | `packages/d2b-provider-guest-cloud-hypervisor/` (future crate) |
 | Depends on | `ADR-046-resource-object-model`, `ADR-046-resource-reconciliation`, `ADR-046-components-processes-and-sandbox`, `ADR-046-provider-model-and-packaging`, `ADR-046-provider-state`, `ADR-046-resources-host-guest-process-user`, `ADR-046-resources-network`, `ADR-046-resources-volume`, `ADR-046-resources-device`, `ADR-046-componentsession-and-bus`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-primitive-resource-composition` |
 | Supersedes | `packages/d2b-host/src/runtime_provider.rs` `CloudHypervisorRuntimeProvider`; `packages/d2bd/src/` VM lifecycle paths; `d2b-host-providers` adapter; `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm`; systemd unit `d2b-<vm>-vm.service`; `SwtpmDir` broker op |
 
@@ -48,7 +48,7 @@ This Provider does **not**:
 ## 2 Crate and package boundary
 
 ```text
-packages/d2b-provider-runtime-cloud-hypervisor/
+packages/d2b-provider-guest-cloud-hypervisor/
   src/
   tests/
   integration/
@@ -1735,18 +1735,18 @@ resolves private launch inputs and owns the broker effect.
 | Current symbol / path | Evidence class | Current callers | Reuse action | v3 destination |
 | --- | --- | --- | --- | --- |
 | `d2b-host/src/ch_argv.rs::ChArgvInput`, `generate_ch_argv` | historical | `d2b-host/src/runtime_provider.rs` | RETIRED | The converged Guest controller has no VMM argv adapter; the Process Provider owns private launch-input resolution and broker handoff |
-| `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeProvider` | production-reachable | `d2b-host-providers/src/lib.rs`; `d2bd/src/lib.rs` | REPLACE | `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`; new controller owns reconcile loop, not a `RuntimeProvider` trait implementation |
+| `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeProvider` | production-reachable | `d2b-host-providers/src/lib.rs`; `d2bd/src/lib.rs` | REPLACE | `packages/d2b-provider-guest-cloud-hypervisor/src/controller.rs`; new controller owns reconcile loop, not a `RuntimeProvider` trait implementation |
 | `d2b-host/src/runtime_provider.rs::CloudHypervisorRuntimeControl` trait | production-reachable | `d2bd`; supervisor test seams | REPLACE | Supervisor ticket passed through `Provider/system-minijail` LaunchTicket; no ambient trait |
-| `d2bd/src/provider_shutdown.rs::CloudHypervisorShutdown` | production-reachable | `d2bd` graceful shutdown | ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/src/shutdown.rs`; integrates with Process finalizer drain handler |
+| `d2bd/src/provider_shutdown.rs::CloudHypervisorShutdown` | production-reachable | `d2bd` graceful shutdown | ADAPT | `packages/d2b-provider-guest-cloud-hypervisor/src/shutdown.rs`; integrates with Process finalizer drain handler |
 | `d2b-core/src/processes.rs::ProcessRole::CloudHypervisor` | production-reachable | Broker `SpawnRunner`; process DAG | REPLACE | `cloud-hypervisor-runner` Process template; old ProcessRole variant deleted after integration |
 | `d2b-core/src/processes.rs::ProcessRole::Swtpm` | production-reachable | Broker `SpawnRunner{role: Swtpm}`; swtpm_dir provisioning | MOVE | Owned by `Provider/device-tpm`; work item `ADR046-device-tpm-001` |
 | `d2b-core/src/processes.rs::ProcessRole::NetVm` | production-reachable | Auto net VM bootstrap | REPLACE | `Guest/<network-name>-net-vm` resource created by network-local controller; VMM process is a `cloud-hypervisor-runner` Process |
 | `d2b-host/src/swtpm_argv.rs` | production-reachable | `d2bd` swtpm start | MOVE | `packages/d2b-provider-device-tpm/src/swtpm_argv.rs`; no work item for this Provider dossier |
 | `d2b-host/src/virtiofsd_argv.rs` | production-reachable | `d2bd` virtiofsd start | MOVE | `packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs` |
-| `nixos-modules/processes-json.nix` (CloudHypervisor/Swtpm/NetVm node emitters) | nix-emitted | Bundle artifact consumer | REPLACE | `packages/d2b-provider-runtime-cloud-hypervisor/` Nix builder per `ADR-046-nix-configuration`; current emitters deleted after integration |
+| `nixos-modules/processes-json.nix` (CloudHypervisor/Swtpm/NetVm node emitters) | nix-emitted | Bundle artifact consumer | REPLACE | `packages/d2b-provider-guest-cloud-hypervisor/` Nix builder per `ADR-046-nix-configuration`; current emitters deleted after integration |
 | `nixos-modules/store.nix` | nix-emitted | Per-VM hardlink farm setup | REPLACE | `Provider/volume-local` owns Volume with `VolumeKind: state` for store farm; the controller watches Volume readiness via ResourceClient before creating the VMM Process - no EphemeralProcess preflight |
 | `tests/golden/runner-shape/cloud-hypervisor-argv-*.txt` | historical | `tests/virtiofsd-argv-shape.sh`, `tests/video-contract-eval.sh` | RETIRED | VMM argv golden coverage belongs to the Process Provider; no controller-side argv fixture remains |
-| `tests/video-sidecar-hardening-eval.sh` | test-only | `make test-policy` | ADAPT | `packages/d2b-provider-runtime-cloud-hypervisor/integration/video_sidecar_integration_test.rs`; device-gpu Provider must also have a corresponding test |
+| `tests/video-sidecar-hardening-eval.sh` | test-only | `make test-policy` | ADAPT | `packages/d2b-provider-guest-cloud-hypervisor/integration/video_sidecar_integration_test.rs`; device-gpu Provider must also have a corresponding test |
 | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_*` with `vm=` label) | production-reachable | Current Prometheus hand-roll | REPLACE | `d2b_runtime_ch_*` metrics from §18.3; `vm=` label removed from metric labels; VM identity stays in OTEL resource attributes only |
 
 ---
@@ -1779,7 +1779,7 @@ per-test advisory threshold.
 | Dependency/owner | Provider toolkit / system-minijail; W1 spike owner |
 | Current source | `d2b-host/src/runtime_provider.rs`; `d2b-host/src/ch_argv.rs`; `d2bd/src/supervisor/dag.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs`; `tests/host-integration/runtime-cloud-hypervisor-guest-preflight.nix`; the `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-preflight` discovery/build recipe in `Makefile` |
+| Destination | `packages/d2b-provider-guest-cloud-hypervisor/src/controller.rs`; `tests/host-integration/runtime-cloud-hypervisor-guest-preflight.nix`; the `vmChecks.x86_64-linux.runtime-cloud-hypervisor-guest-preflight` discovery/build recipe in `Makefile` |
 | Detailed design | End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources at any step. The host-integration case boots the real Provider-owned Cloud Hypervisor process through KVM, establishes the authenticated guest-control session, and observes ready Guest state. This item is the first W6 writer of the shared `Makefile` acceptance-recipe surface; active local T604 is dependency-ordered after this item and owns only its distinct resource-operator and daemon-restart recipes. Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt. |
 | Integration | Zone ResourceClient + system-minijail Process Provider + fake ProcessLaunchEffectPort; `runtime-cloud-hypervisor-guest-preflight` is discovered through the public heavy-gated target and exercises real-KVM Guest adoption only when nested TAP/cgroup prerequisites are available |
 | Data migration | None (spike) |
@@ -1795,7 +1795,7 @@ per-test advisory threshold.
 | Dependency/owner | Depends on `ADR046-ch-001` and `ADR046-network-005`; owner: cloud-hypervisor bootstrap-graph integration |
 | Current source | `d2b-core/src/processes.rs`; `nixos-modules/processes-json.nix`; `d2b-priv-broker/src/ops/swtpm_dir.rs`; `d2b-host/src/swtpm_argv.rs` |
 | Reuse action | replace |
-| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/bootstrap_graph.rs` |
+| Destination | `packages/d2b-provider-guest-cloud-hypervisor/src/bootstrap_graph.rs` |
 | Detailed design | Single owned VMM Process resource; synchronous ResourceClient dependency check (Device/kvm + all declared Devices, Networks, virtiofs Volumes); immediate Process creation when all deps ready; no EphemeralProcess resources; conditional net-VM Guest creation; per-dependency readiness tracking in reconcile loop. For each Network attachment the launch resolution carries only an opaque ref; network-local declares the semantic effect, the Core-owned `NetworkEffectPort` adapter performs `CreatePersistentTap → SetBridgePortFlags`, and `ProviderSupervisor` receives the connected CLOEXEC `OwnedFd` directly for LaunchTicket inheritance. The runtime controller receives no fd or broker operation. Primary reuse disposition: `replace`. Preserved source-plan detail: EXTRACT and REPLACE. |
 | Integration | Depends on `Provider/volume-virtiofs`, `Provider/device-tpm`, `Provider/device-kvm`, `Provider/network-local` ResourceType readiness, the ADR046-network-005 effect chain, and direct ProviderSupervisor LaunchTicket fd handoff |
 | Data migration | v3 reset; no v2 process graph migration |
@@ -1816,7 +1816,7 @@ per-test advisory threshold.
 | Integration | Provider/system-minijail and the broker-owned SpawnRunner path |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Process Provider ticket and broker launch tests cover the private effect path; Guest controller tests cover Resource API-only behavior and redaction |
-| Removal proof | `packages/d2b-provider-runtime-cloud-hypervisor/src/vmm_argv.rs` and `tests/vmm_argv_golden_test.rs` are absent; no current caller exports the old adapter |
+| Removal proof | `packages/d2b-provider-guest-cloud-hypervisor/src/vmm_argv.rs` and `tests/vmm_argv_golden_test.rs` are absent; no current caller exports the old adapter |
 | Implementation state | Retired by U13 |
 | Evidence | U13 package convergence removed the duplicate controller-side effect surface and retained the Process Provider as the sole launch owner. |
 
@@ -1827,7 +1827,7 @@ per-test advisory threshold.
 | Dependency/owner | ADR046-ch-002; nix-configuration foundation (`ADR046-identities-002`) |
 | Current source | `nixos-modules/options-realms-workloads.nix`; `nixos-modules/options-vms.nix`; `nixos-modules/processes-json.nix`; `nixos-modules/store.nix` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/nix/` (Nix emitter); `nixos-modules/` option extension for `runtime-cloud-hypervisor` Guest schema |
+| Destination | `packages/d2b-provider-guest-cloud-hypervisor/nix/` (Nix emitter); `nixos-modules/` option extension for `runtime-cloud-hypervisor` Guest schema |
 | Detailed design | `d2b.zones.<z>.resources.<n>` with `type = "Guest"` and `spec.provider.settings` validated against signed Provider schema; `spec.systemArtifactId` top-level field; artifact catalog `type = "nixos-system"` enforced by rule 17; Guest-control `Endpoint` resource emitted without raw locator; `make test-drift` gate for schema/Nix drift Primary reuse disposition: `adapt`. Preserved source-plan detail: ADAPT and REPLACE. |
 | Integration | Zone resource bundle emission; private artifact catalog; `xtask gen-resource-nix-options` for auto-generated Nix option types |
 | Data migration | `d2b.vms.<vm>` → `d2b.zones.<z>.resources.<n>` documented in migration guide |
@@ -1843,7 +1843,7 @@ per-test advisory threshold.
 | Dependency/owner | ADR046-ch-001; ComponentSession/d2b-bus (`ADR046-session-001`) |
 | Current source | `packages/d2bd/src/provider_shutdown.rs::GracefulVmShutdown`; `packages/d2b-host/src/runtime_provider.rs::RuntimeProvider::plan_guest_update` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/health.rs`; `src/adoption.rs` |
+| Destination | `packages/d2b-provider-guest-cloud-hypervisor/src/health.rs`; `src/adoption.rs` |
 | Detailed design | Authenticated KK ComponentSession health check over vsock; adoption verification (pid/cgroup/executable/generation) within `adoptionWindow`; ambiguity → Unknown/Degraded, never broad kill; graceful shutdown via guest-control session before SIGTERM |
 | Integration | ComponentSession enrolled KK; guest bootstrap credential from `d2b-gctl` virtiofs share; `GuestReachable` condition write |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1859,7 +1859,7 @@ per-test advisory threshold.
 | Dependency/owner | ADR046-ch-001; telemetry foundation (`ADR046-telem-001`) |
 | Current source | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_*`); `packages/d2b-contract-tests/tests/policy_observability.rs` |
 | Reuse action | replace |
-| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/metrics.rs`; `src/audit.rs` |
+| Destination | `packages/d2b-provider-guest-cloud-hypervisor/`; `src/audit.rs` |
 | Detailed design | `d2b_runtime_ch_*` metrics from §18.3 with closed semantic labels and no `vm`, `zone`, `zone_id`, `zone_uid`, or resource-name-derived key; bounded durable audit records from §17.3; no path/argv/socket in any field; identity retained in the closed OTEL resource-attribute allowlist extended per §18.4 |
 | Integration | Zone lightweight bounded emitter; `Provider/observability-otel` forwarding |
 | Data migration | `d2b_daemon_vm_*` metrics retired; consumers must update dashboards |
@@ -1875,7 +1875,7 @@ per-test advisory threshold.
 | Dependency/owner | ADR046-ch-001; `ADR046-pstate-001` (common status types) |
 | Current source | `packages/d2b-core/src/storage.rs` (`StoragePathSpec`, `SensitivityClass`) - to be retired |
 | Reuse action | replace |
-| Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/state.rs`; `packages/d2b-provider-runtime-cloud-hypervisor/tests/state_status_test.rs` |
+| Destination | `packages/d2b-provider-guest-cloud-hypervisor/src/state.rs`; `packages/d2b-provider-guest-cloud-hypervisor/tests/state_status_test.rs` |
 | Detailed design | `state.rs` owns the controller's bounded non-secret operational-state projection into the owning resource's `status` subresource (reconcile stage, per-Guest launch/adoption observations, bounded counters, closed-enum error detail) - the controller declares no Provider state Volume and mounts no `/state`; on restart it re-derives observed state from the Zone resource store, the core Operation ledger, and external observation (running VMM/virtiofsd re-adopted from cgroup leaves + fresh pidfds), treating `status` as observation, never authority (D087); status writes occur only on material change and stay within the status bounds. The superseded state-Volume integration, migration, validation, and removal rows are rejected: this Provider has no state Volume, state mount, or `StateEnvelope` startup path. Primary reuse disposition: `replace`. Preserved source-plan detail: REPLACE (storage.rs). |
 | Integration | The controller reads Volume/Device/Network dependency status through its ComponentSession/ResourceClient and writes its own bounded `status`; no Provider state Volume is provisioned or mounted |
 | Data migration | v3 reset; no v2 state storage migration |
@@ -1888,7 +1888,7 @@ Per `ADR-046-provider-model-and-packaging` and `ADR-046-nix-configuration`, the
 workspace policy gate rejects the crate unless all four paths exist:
 
 ```text
-packages/d2b-provider-runtime-cloud-hypervisor/
+packages/d2b-provider-guest-cloud-hypervisor/
   src/
     lib.rs                       # crate root; re-exports controller, config, and lifecycle helpers
     controller.rs                # async ResourceReconciler, describe/validate/plan/reconcile/finalize/observe

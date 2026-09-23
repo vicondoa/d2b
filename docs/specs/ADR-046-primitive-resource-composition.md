@@ -425,7 +425,7 @@ systemd unit/minijail state; they write Process status.
 | Dependency/owner | W0; resource contracts |
 | Current source | `packages/d2b-core/src/processes.rs`, `minijail_profile.rs`, `storage.rs`; `d2b-contracts/src/broker_wire.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/src/v3/host.rs`, `guest.rs`, `execution_policy.rs`, `process.rs`, `volume.rs`, `user.rs`, `network.rs`, `device.rs`, `credential.rs` |
+| Destination | `packages/d2b-contracts/`, `guest.rs`, `execution_policy.rs`, `process.rs`, `volume.rs`, `user.rs`, `network.rs`, `device.rs`, `credential.rs` |
 | Detailed design | Complete minimal ResourceType schemas and shared execution/Volume sub-schemas Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Provider dossiers/controller descriptors bind exact types |
 | Data migration | Full reset |
@@ -441,14 +441,14 @@ systemd unit/minijail state; they write Process status.
 | Dependency/owner | Process contracts; system Provider slices |
 | Current source | broker SpawnRunner/pidfd; d2bd supervisor; unsafe-local helper; guest exec runner |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-systemd/`, `packages/d2b-provider-system-minijail/`, shared neutral process conformance library |
+| Destination | `packages/d2b-provider-process-systemd/`, `packages/d2b-provider-process-minijail/`, shared neutral process conformance library |
 | Detailed design | Common Process/EphemeralProcess, provider-specific launch/pidfd/wait/adoption/status Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Process controller registration under Host/Guest; d2b-bus ResourceClient/status |
 | Data migration | Current ProcessRoles converted by exact disposition table |
 | Validation | Shared conformance plus Host/Guest/user integration |
 | Removal proof | Role branches removed only after successor Provider tests |
 | Implementation state | Merged |
-| Evidence | Both Destination crates are present, `packages/d2b-provider-system-systemd/` and `packages/d2b-provider-system-minijail/`, alongside the shared neutral conformance library `packages/d2b-process-conformance/`. Each Provider crate carries `tests/conformance.rs` running the shared suite (`shared_conformance_holds`) plus provider-specific cells for wait/reap ownership, identity, adoption, and pid-reuse quarantine. Caveat: the shared Host/Guest/user integration obligation is not met. Both conformance suites instantiate the Provider over `ScriptedEffectPort` in `packages/d2b-process-conformance/src/testing.rs`, a hermetic scripted effect port, and neither crate has a production caller. The `ProcessLaunchEffectPort` production adapter is `ADR046-process-001` in W4; the three-domain integration obligation is re-owed against that adapter. |
+| Evidence | Both Destination crates are present, `packages/d2b-provider-process-systemd/` and `packages/d2b-provider-process-minijail/`, alongside the shared neutral conformance library `packages/d2b-process-conformance/`. Each Provider crate carries `tests/conformance.rs` running the shared suite (`shared_conformance_holds`) plus provider-specific cells for wait/reap ownership, identity, adoption, and pid-reuse quarantine. Caveat: the shared Host/Guest/user integration obligation is not met. Both conformance suites instantiate the Provider over `ScriptedEffectPort` in `packages/d2b-process-conformance/src/testing.rs`, a hermetic scripted effect port, and neither crate has a production caller. The `ProcessLaunchEffectPort` production adapter is `ADR046-process-001` in W4; the three-domain integration obligation is re-owed against that adapter. |
 
 ### ADR046-primitives-003
 

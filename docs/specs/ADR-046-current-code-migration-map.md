@@ -1104,8 +1104,8 @@ with TLS/relay; main adds the ComponentSession path).
 
 | File (a1cc0b2d) | Symbols to Copy/Adapt | Selected Behavior | v3 Destination | Excluded Assumptions |
 |----------------|----------------------|------------------|----------------|----------------------|
-| `d2b-daemon-access/src/component_session.rs` | `LocalDaemonSession`, `daemon()`, `guest(workload)` | Authenticated ComponentSession construction for local Unix socket; wraps `HostSocketConnector` + session engine; exposes `DaemonClient` and `GuestClient` | `packages/d2b-daemon-access/src/component_session.rs` | `guest(workload: &str)` - `workload` is a `WorkloadName` string; adapt to `ResourceRef<Guest>` address format |
-| `d2b-daemon-access/src/lib.rs` additions | `LocalUnixAdmissionSource`, `RemoteDaemonAccessAdmissionSource`, `RelayDaemonAccessAdmissionSource`, `LOCAL_UNIX_DAEMON_ACCESS_TRANSPORT_ID`, admission credential types | Admission source abstraction: local unix vs relay vs TLS; `LocalUnixAdmissionSource` is the primary v3 path | `packages/d2b-daemon-access/src/lib.rs` | Do NOT copy `direct_tls.rs` or `relay.rs` from main - those reference main's certificate infrastructure and relay credentials not present on v3 |
+| `d2b-daemon-access/src/component_session.rs` | `LocalDaemonSession`, `daemon()`, `guest(workload)` | Authenticated ComponentSession construction for local Unix socket; wraps `HostSocketConnector` + session engine; exposes `DaemonClient` and `GuestClient` | `packages/d2b-unsafe-local-helper/src/component_session.rs` | `guest(workload: &str)` - `workload` is a `WorkloadName` string; adapt to `ResourceRef<Guest>` address format |
+| `d2b-daemon-access/src/lib.rs` additions | `LocalUnixAdmissionSource`, `RemoteDaemonAccessAdmissionSource`, `RelayDaemonAccessAdmissionSource`, `LOCAL_UNIX_DAEMON_ACCESS_TRANSPORT_ID`, admission credential types | Admission source abstraction: local unix vs relay vs TLS; `LocalUnixAdmissionSource` is the primary v3 path | `packages/d2b-unsafe-local-helper/src/lib.rs` | Do NOT copy `direct_tls.rs` or `relay.rs` from main - those reference main's certificate infrastructure and relay credentials not present on v3 |
 
 ---
 

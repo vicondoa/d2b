@@ -10,7 +10,7 @@
 | Normative | Yes |
 | Owners | `d2b-provider-volume-virtiofs` crate, volume-virtiofs controller, virtiofsd worker, VolumeBinding serving status projection |
 | Depends on | `ADR-046-resources-volume`, `ADR-046-provider-model-and-packaging`, `ADR-046-components-processes-and-sandbox`, `ADR-046-provider-state`, `ADR-046-componentsession-and-bus`, `ADR-046-resource-api-and-authorization`, `ADR-046-resource-reconciliation`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-resources-host-guest-process-user` |
-| Supersedes | `nixos-modules/processes-json.nix` virtiofsdRunner block; `nixos-modules/minijail-profiles.nix` virtiofsdProfiles; `packages/d2b-host/src/virtiofsd_argv.rs`; `ProcessRole::Virtiofsd` dag nodes in `packages/d2bd/src/supervisor/dag.rs` |
+| Supersedes | `nixos-modules/processes-json.nix` virtiofsdRunner block; `nixos-modules/minijail-profiles.nix` virtiofsdProfiles; `packages/d2b-host/src/virtiofsd_argv.rs`; `ProcessRole::Virtiofsd` dag nodes in `packages/d2bd/src/dag.rs` |
 | ADR 0021 | Accepted invariant; fully governs virtiofsd sandbox; no exception or partial closure permitted |
 
 ---
@@ -1391,9 +1391,9 @@ retained as dated baseline evidence and use the model names of their time.]
 | `nixos-modules/minijail-profiles.nix`: `virtiofsdProfiles`; principals `d2b-<vm>-runner`, `d2b-<vm>-gctlfs`; ADR 0021 user-NS exception | `generated-or-eval-contract` | Becomes `virtiofsd-worker` Process sandbox spec; ADR 0021 invariants fully preserved; principals → typed `User/<name>` ResourceRefs; no numeric form |
 | `nixos-modules/processes-json.nix`: `virtiofsdRunner` shape; `roStoreSharedDir` redirect sentinel `share.source == "/nix/store"` → `store-view/live` | `generated-or-eval-contract` | Replaced by an Export-owned Process resource reconciled by volume-virtiofs; `store-view/live` redirect preserved in resource compiler |
 | `packages/d2b-core/src/processes.rs`: `ProcessRole::Virtiofsd`, `VmProcessDag` virtiofsd entry | `generated-or-eval-contract` | Replaced by Process resource template `virtiofsd-worker` owned by virtiofs Export |
-| `packages/d2b-priv-broker/src/ops/spawn_runner.rs`: `SpawnRunnerPlanInput`, `RunnerIsolationSpec`, `adr_carve_out` virtiofsd path | `implemented-and-reachable` | `SpawnRunnerPlanInput` → v3 `LaunchTicket` with typed sandbox spec; `adr_carve_out` field removed; ADR 0021 is no longer a carve-out but the normal path; broker invocation is mediated by system-minijail effect port, not called directly by volume-virtiofs |
-| `packages/d2b-priv-broker/src/sys.rs`: `clone3_spawn_runner` user-NS pre-establishment | `implemented-and-reachable` | Remains in broker; exposed to system-minijail effect port adapter; volume-virtiofs never calls it directly; `user_ns.rs` in volume-virtiofs crate contains conformance kit only |
-| `packages/d2bd/src/supervisor/dag.rs`: `ProcessRole::Virtiofsd` dag node supervised as entry under `WorkloadId`-keyed `VmProcessDag` | `implemented-and-reachable` | Replaced by Export controller lifecycle in v3; dag node retired after controller parity |
+| `packages/d2b-broker/src/ops/spawn_runner.rs`: `SpawnRunnerPlanInput`, `RunnerIsolationSpec`, `adr_carve_out` virtiofsd path | `implemented-and-reachable` | `SpawnRunnerPlanInput` → v3 `LaunchTicket` with typed sandbox spec; `adr_carve_out` field removed; ADR 0021 is no longer a carve-out but the normal path; broker invocation is mediated by system-minijail effect port, not called directly by volume-virtiofs |
+| `packages/d2b-broker/src/sys.rs`: `clone3_spawn_runner` user-NS pre-establishment | `implemented-and-reachable` | Remains in broker; exposed to system-minijail effect port adapter; volume-virtiofs never calls it directly; `user_ns.rs` in volume-virtiofs crate contains conformance kit only |
+| `packages/d2bd/src/dag.rs`: `ProcessRole::Virtiofsd` dag node supervised as entry under `WorkloadId`-keyed `VmProcessDag` | `implemented-and-reachable` | Replaced by Export controller lifecycle in v3; dag node retired after controller parity |
 | `packages/d2b-contract-tests/tests/storage_sync_contracts.rs`: virtiofsd argv shape gate | `implemented-and-reachable` | Adapted to Process sandbox spec gate in `d2b-provider-volume-virtiofs/tests/schema_conformance.rs` |
 | `tests/tools/gen-migration-ledger.sh` → `virtiofsd-argv-shape` gate | `implemented-and-reachable` | Adapted to validate Process template argv golden vector |
 | `tests/tools/gen-migration-ledger.sh` → `minijail-validator-virtiofsd` gate | `implemented-and-reachable` | Adapted to enforce Process sandbox spec ADR 0021 invariants |
@@ -1421,7 +1421,7 @@ planning records and use the model names of their time.]
 | Dependency/owner | ADR046-volume-001 (Volume contract types); ADR046-vvfs-export-001 (Export type); W1; volume-virtiofs Provider owner |
 | Current source | `packages/d2b-host/src/virtiofsd_argv.rs` (VirtiofsdArgvInput, generate_virtiofsd_argv, 14 unit tests, golden argv.txt); `packages/d2b-host/src/lib.rs` (module declaration) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs`; `packages/d2b-provider-volume-virtiofs/tests/argv_golden.rs` |
+| Destination | `packages/d2b-provider-volume-virtiofs/`; `packages/d2b-provider-volume-virtiofs/` |
 | Detailed design | Create crate skeleton with mandatory `src/`, `tests/`, `integration/`, `README.md`. Extract `VirtiofsdArgvInput` and `generate_virtiofsd_argv` with these changes: (1) replace `extra_args: Vec<String>` with nothing (removed); (2) replace `socket_path: String` with `socket_path: SocketPath` newtype backed by `socket_path.rs`; (3) add `shared_dir_fd: i32` replacing `shared_dir: String` (FD-based); (4) replace `socket_group: Option<u32>` with `socket_group: Option<Gid>`. Implement `socket_path.rs`: private path using SHA-256 of `<zone>\x00<volume>\x00<guest>`, truncated 8 hex chars, formatted as `<zone-runtime-dir>/vms/<guest>/vol-<hash>.vfd.sock`. Assert path length ≤ 108 bytes. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | volume-virtiofs controller `export.rs` calls virtiofsd_argv.rs at spawn time; LaunchTicket carries resolved socket path as opaque sealed field |
 | Data migration | v3.0 reset; socket path format changes |
@@ -1437,7 +1437,7 @@ planning records and use the model names of their time.]
 | Dependency/owner | ADR046-volume-001; W1; volume-virtiofs Provider owner |
 | Current source | No analog; new ResourceType |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-volume-virtiofs/src/export.rs`; `packages/d2b-contracts/src/v3/virtiofs_export.rs` |
+| Destination | `packages/d2b-provider-volume-virtiofs/`; `packages/d2b-contracts/` |
 | Detailed design | Declare `virtiofs.d2bus.org.Export` ResourceType in `d2b-contracts`. Base fields: `providerRef`, `volumeRef`, `executionRef`, `view`, `access`, `mountPath`; virtiofs tunables live under `spec.provider.settings` (as in §4.2). Status fields: top-level `phase`/`conditions`, `status.resource.exportReady`, `status.resource.guestMountReady`, and `status.provider.details.workerProcessRef`. Strict serde `deny_unknown_fields`. Implement the conformance test fixture that validates schema fingerprint stability. The Export spec JSON schema and provider status extension schema are signed and included in the Provider package. |
 | Integration | `d2b-contracts` exports the Export DTO; volume-virtiofs controller and volume-local both import it for ResourceClient typed operations |
 | Data migration | None; new type |
@@ -1451,9 +1451,9 @@ planning records and use the model names of their time.]
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-vvfs-001; ADR046-volume-001; W1; broker/spawn owner |
-| Current source | `packages/d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner`, user-NS pre-establishment block); `packages/d2b-priv-broker/src/ops/spawn_runner.rs` (`SpawnRunnerPlanInput.user_namespace`, `RunnerIsolationSpec.user_namespace`); ADR 0021 implementation contract |
+| Current source | `packages/d2b-broker/src/sys.rs` (`clone3_spawn_runner`, user-NS pre-establishment block); `packages/d2b-broker/src/ops/spawn_runner.rs` (`SpawnRunnerPlanInput.user_namespace`, `RunnerIsolationSpec.user_namespace`); ADR 0021 implementation contract |
 | Reuse action | extract |
-| Destination | `packages/d2b-provider-volume-virtiofs/src/user_ns.rs` (conformance kit); `packages/d2b-provider-volume-virtiofs/tests/adr021_invariant.rs` |
+| Destination | `packages/d2b-provider-volume-virtiofs/` (conformance kit); `packages/d2b-provider-volume-virtiofs/` |
 | Detailed design | `user_ns.rs` contains only the conformance check and template descriptor assertion: verify that the virtiofsd-worker Process template declares `capabilityClasses: []`, `startRoot: false`, `noNewPrivileges: true`, `readOnlyRoot: true`, and `sandbox.userNamespace.mappingClass: process-principal-root`. `hostUid`/`hostGid` are NOT set by the controller - system-minijail resolves the mapping from the `User/vol-<vol>-vfd` principal when building the LaunchTicket via the effect port. The conformance check rejects any template mutation that adds host capability classes, sets `startRoot: true`, disables `noNewPrivileges`, or disables `readOnlyRoot`. The user-NS pre-establishment code itself remains in `d2b-priv-broker/src/sys.rs` and is invoked via the system-minijail effect port. Primary reuse disposition: `extract`. Preserved source-plan detail: extract conformance kit only; pre-establishment code stays in broker. |
 | Integration | volume-virtiofs controller calls conformance check before emitting any Process Create; system-minijail requests launch through ProcessLaunchEffectPort and the core/ProviderSupervisor adapter invokes the broker spawn path |
 | Data migration | v3.0 reset; current `adr_carve_out` field in `SpawnRunnerPlanInput` removed; ADR 0021 path is now the default |
@@ -1467,9 +1467,9 @@ planning records and use the model names of their time.]
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-vvfs-001, ADR046-vvfs-002, ADR046-vvfs-export-001; ADR046-volume-001; W2; volume-virtiofs controller owner |
-| Current source | `packages/d2bd/src/supervisor/dag.rs` (ProcessRole::Virtiofsd dag node); `nixos-modules/processes-json.nix` (virtiofsdRunner block; attachment-to-Process mapping) |
+| Current source | `packages/d2bd/src/dag.rs` (ProcessRole::Virtiofsd dag node); `nixos-modules/processes-json.nix` (virtiofsdRunner block; attachment-to-Process mapping) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-volume-virtiofs/src/controller.rs`; `packages/d2b-provider-volume-virtiofs/src/export.rs` |
+| Destination | `packages/d2b-provider-volume-virtiofs/src/controller.rs`; `packages/d2b-provider-volume-virtiofs/` |
 | Detailed design | Implement volume-virtiofs-controller reconcile loop using toolkit ResourceClient. Watch selector: `virtiofs.d2bus.org.Export` resources (all in zone), owned Process resources, owned User resources, Volume resources (read-only for view/vcpu resolution), Guest resources (read-only for vcpu count). On `spec-generation-changed` for an Export: (1) resolve View from Volume; (2) check store-view marker if applicable; (3) resolve threadPoolSize from Guest vcpus; (4) ensure User/vol-<vol>-vfd; (5) diff against current Process; (6) emit Create/UpdateSpec. On `owned-resource-changed` for a Process: update Export status. On `deletionRequestedAt` for Export: two-phase teardown (§6.2). Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | volume-virtiofs controller registered by core ProviderDeployment; receives owned-resource-changed trigger from Export; emits Process resources consumed by system-minijail |
 | Data migration | Current `ProcessRole::Virtiofsd` dag nodes replaced by Export → Process resource lifecycle |
@@ -1485,7 +1485,7 @@ planning records and use the model names of their time.]
 | Dependency/owner | ADR046-vvfs-003; guest-control integration owner; W2 |
 | Current source | `packages/d2bd/src/vm_readiness.rs` (`ReadinessKind::UnixSocketExists`); guest-control vsock health protocol |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-volume-virtiofs/src/readiness.rs`; `packages/d2b-provider-volume-virtiofs/integration/guest_mount_readiness/` |
+| Destination | `packages/d2b-provider-volume-virtiofs/`; `packages/d2b-provider-volume-virtiofs/` |
 | Detailed design | `unix-socket-exists` readiness: check file existence at the private socket path via a bounded blocking adapter (e.g., `tokio::task::spawn_blocking` wrapping `fstatat(2)` relative to the zone runtime `OwnedFd`, or an async-safe fd-relative equivalent); no blocking syscall on the async executor thread. Probe period 1 s; timeout 30 s. On socket present → set `Export.status.exportReady: true`. Guest-mount readiness: send `VirtioFsMountReady?` probe to guest-control health endpoint over vsock. Response `MountReady` sets `guestMountReady: true`. Response `MountAbsent` or timeout sets `guestMountReady: false`. The vsock health probe is async-native. If Guest is down, set Export `phase: Unknown`. All readiness probes (unix-socket-exists, guest-mount health) use bounded blocking adapters or async-safe fd-relative equivalents; no blocking I/O on the reconcile executor thread. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `readiness.rs` called from `controller.rs` reconcile loop; uses toolkit health probe client |
 | Data migration | Current `UnixSocketExists` readiness kind adapted to FD-based path resolution |
@@ -1501,7 +1501,7 @@ planning records and use the model names of their time.]
 | Dependency/owner | ADR046-vvfs-003, ADR046-vvfs-004; ADR046-volume-002 (store-view Volume); W3 |
 | Current source | `packages/d2b-host/src/hardlink_farm.rs` (`live_dir()`, marker `live/.d2b-marker-<vm>`, zero-length); `nixos-modules/processes-json.nix` (`roStoreSharedDir` sentinel `share.source == "/nix/store"` → `store-view/live`); `nixos-modules/store.nix` (per-VM hardlink farm) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-volume-virtiofs/src/controller.rs` (pre-launch prerequisite check); `packages/d2b-provider-volume-virtiofs/integration/store_view_readonly/` |
+| Destination | `packages/d2b-provider-volume-virtiofs/src/controller.rs` (pre-launch prerequisite check); `packages/d2b-provider-volume-virtiofs/` |
 | Detailed design | Before issuing Process Create for a store-view virtiofs Export, check that `live/.d2b-marker-<guest>` exists (zero-length, correct mode) via a bounded blocking adapter (e.g., `tokio::task::spawn_blocking` wrapping `fstatat(2)` relative to the zone runtime directory, or an async-safe fd-relative equivalent); no blocking syscall on the async executor thread directly. If absent, requeue with exponential backoff. Assert `--shared-dir` resolves to `store-view/live` (the `ro-store` View path), never to `/nix/store`. Validate in `integration/store_view_readonly/` that virtiofsd serves only paths under `store-view/live`. |
 | Integration | Pre-launch check in controller.rs; store-view Export recognized by `view == "ro-store"` and `access == "read-only"` |
 | Data migration | Current `roStoreSharedDir` redirect in `processes-json.nix` replaced by `ro-store` View definition in the store-view Volume resource |
@@ -1580,8 +1580,8 @@ pre-cutover model, since replaced by `VolumeBinding` in the clean-break cutover;
 | `packages/d2b-host/src/virtiofsd_argv.rs` | ADR046-vvfs-001 parity confirmed; argv-shape gate adapted | `packages/d2b-provider-volume-virtiofs/src/virtiofsd_argv.rs` |
 | `nixos-modules/minijail-profiles.nix` virtiofsdProfiles block | ADR046-vvfs-006; Process template sandbox spec passes broker-caps gate | `packages/d2b-provider-volume-virtiofs/src/` Process template descriptor |
 | `nixos-modules/processes-json.nix` virtiofsdRunner block and `roStoreSharedDir` sentinel | ADR046-vvfs-005, ADR046-vvfs-006; VmProcessDag parity gate passes | Export-owned Process resources reconciled by volume-virtiofs |
-| `packages/d2bd/src/supervisor/dag.rs` `ProcessRole::Virtiofsd` branch | ADR046-vvfs-003; Export controller lifecycle covers all virtiofsd spawn/adopt/stop paths | volume-virtiofs Export lifecycle controller |
-| `packages/d2b-priv-broker/src/ops/spawn_runner.rs` `adr_carve_out` virtiofsd field | ADR046-vvfs-002; v3 LaunchTicket handles all virtiofsd spawn cases without carve-out | Process spec `sandbox.namespaceClasses: [user]` + system-minijail effect port |
+| `packages/d2bd/src/dag.rs` `ProcessRole::Virtiofsd` branch | ADR046-vvfs-003; Export controller lifecycle covers all virtiofsd spawn/adopt/stop paths | volume-virtiofs Export lifecycle controller |
+| `packages/d2b-broker/src/ops/spawn_runner.rs` `adr_carve_out` virtiofsd field | ADR046-vvfs-002; v3 LaunchTicket handles all virtiofsd spawn cases without carve-out | Process spec `sandbox.namespaceClasses: [user]` + system-minijail effect port |
 | `packages/d2b-core/src/processes.rs` `ProcessRole::Virtiofsd` enum variant | All volume-virtiofs work items complete; no remaining consumer | Process resource template `virtiofsd-worker` (owned by Export) |
 
 No current path is removed until its resource/controller/Provider successor is integrated,
