@@ -138,18 +138,6 @@ W3_ROWS = {
         "Runner argv diverges from tests/golden/runner-shape/* baseline.",
         "Regenerate the runner-shape baseline via the documented xtask or revert the drifted change.",
     ),
-    ("host-check", "single-writer-conflict"): (
-        "host-check-error", 78,
-        "Whether legacy systemd units and the W3 daemon are both writing the host.",
-        "Both `d2b-legacy.service` and `d2bd.service` are active on a Tier-0 mixed host.",
-        "Stop the legacy units before starting the daemon; consult docs/explanation/host-prepare.md#mixed-tier-0.",
-    ),
-    ("host-check", "tier-0-legacy-uses-nixos-module"): (
-        "host-check-error", 78,
-        "Whether a Tier-0 all-legacy host is configured via the W3 daemon path.",
-        "host.tier == 0 / legacy but d2bd.service was reached.",
-        "Use the NixOS module on Tier-0 all-legacy hosts; the W3 daemon path is for Tier 1+.",
-    ),
     ("host-check", "host-lan-cidr-ambiguous"): (
         "host-check-error", 1,
         "Whether the host LAN CIDR can be uniquely inferred from the live routing table.",
@@ -211,18 +199,6 @@ W3_ROWS = {
         "Apply phase observed the same firewallCoexistence drift as the read-only probe.",
         "See remediation for host-check#firewall-coexistence-mismatch; re-run apply after the fix.",
     ),
-    ("host-prepare", "tier-0-legacy-uses-nixos-module"): (
-        "host-prepare-apply-error", 78,
-        "Whether a Tier-0 all-legacy host is invoking the W3 apply path.",
-        "host.tier == 0 / legacy but d2bd.service was asked to mutate the host.",
-        "Use the NixOS module on Tier-0 all-legacy hosts; the W3 daemon path is for Tier 1+.",
-    ),
-    ("host-prepare", "single-writer-conflict"): (
-        "host-prepare-apply-error", 78,
-        "Whether legacy + daemon writers are both targeting host state at apply time.",
-        "Both legacy units and d2bd.service hold an exclusive writer claim.",
-        "Stop legacy units before running `host prepare --apply` on a Tier-0 mixed host.",
-    ),
     ("host-prepare", "legacy-no-prepare-apply"): (
         "host-prepare-apply-error", 78,
         "Whether the legacy bash dispatch attempted a mutating prepare apply.",
@@ -235,12 +211,6 @@ W3_ROWS = {
         "Whether all VMs in the bundle are stopped before `host destroy --apply`.",
         "At least one VM is still running (cloud-hypervisor process detected).",
         "Stop the listed VMs with `d2b down <vm>` then retry `host destroy --apply`.",
-    ),
-    ("host-destroy", "tier-0-legacy-uses-nixos-module"): (
-        "host-destroy-apply-error", 78,
-        "Whether a Tier-0 all-legacy host is invoking the W3 destroy path.",
-        "host.tier == 0 / legacy but d2bd.service was asked to tear the host down.",
-        "Use the NixOS module path on Tier-0 all-legacy hosts.",
     ),
     ("host-destroy", "legacy-no-destroy-apply"): (
         "host-destroy-apply-error", 78,
