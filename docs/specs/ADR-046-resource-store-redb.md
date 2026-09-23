@@ -145,7 +145,7 @@ Unknown table/encoding/schema versions fail closed.
 
 `ResourceErrorKind` and `ResourceError` live in
 `packages/d2b-contracts/src/v3/error.rs`. `StoreErrorKind` and `StoreError`
-live in `packages/d2b-resource-store/src/error.rs`. The store set is closed at
+live in `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb/src/error.rs`. The store set is closed at
 exactly 34 serialized lower-kebab strings: the exact 31
 `ResourceErrorKind` strings enumerated by
 `ADR-046-resource-api-and-authorization` section "Errors", plus exactly:
@@ -503,32 +503,32 @@ storage-row source contract.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Resource-object contracts; store contract integrator |
-| Current source | `packages/d2b-core/src/storage.rs`, `sync.rs`; `packages/d2bd/src/supervisor/state.rs`, `daemon_audit.rs`; `d2b-realm-router/src/lib.rs` |
+| Current source | `packages/d2b-core/src/storage.rs`, `sync.rs`; `packages/d2bd/src/state.rs`, `daemon_audit.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/src/v3/error.rs`; `packages/d2b-resource-store/src/lib.rs`, `error.rs`; `packages/d2b-resource-store-redb/src/schema.rs`, `keys.rs`, `values.rs` |
+| Destination | `packages/d2b-contracts/`; `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb/src/lib.rs`, `error.rs`; `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/schema.rs`, `keys.rs`, `values.rs` |
 | Detailed design | Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`; use generic test fakes without trait objects or `async-trait`; freeze the closed error set, store-neutral request/response/trait/transaction types, engine-neutral ten-table names, `d2bkey/v1` and `d2bval/v1` codecs and discriminants, decode rejection rules, and literal golden vectors. The exact redb dependency remains isolated to the disposable proof workspace until the backend feasibility gate passes. `ResourceService` consumes the evaluator's verifier and store-identity binding exactly once into a private checked store. A mutating call can reach `commit_verified` only after that store matches both authorities, consumes the admitted mutation, and prepares its final identity and digest. This prevents a caller from forging admission or replaying it against another store, but it does not constrain the backend after verification. The backend is trusted to mutate only from the supplied `VerifiedMutation`, recheck captured policy/API-catalog/active-configuration/controller revisions inside the same transaction, preserve structural and atomicity checks, expose no independent mutation path, never evaluate RBAC, and never auto-retry a failed recheck. Production registration therefore requires security review and backend conformance tests. This contract item makes no scale, latency, RSS, crash-recovery, or production-suitability claim and has no feasibility dependency. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Resource API consumes the typed contract; production backend wiring belongs to ADR046-store-004 |
 | Data migration | None - contract only |
 | Validation | Literal codec golden vectors and decode-rejection cases; hermetic small-scale transaction semantics that make no scale claim; compile tests for `Send` futures and generic fake injection; proof-origin, single-owner binding, cross-store rejection, and in-transaction revision-recheck tests for sealed admission evidence; policy test forbidding resource-store dependency on API/RBAC symbols; engine-neutral table-descriptor assertion |
 | Removal proof | Existing ledgers removed only by owning future work items |
 | Implementation state | Merged |
-| Evidence | Every destination is present: `packages/d2b-contracts/src/v3/error.rs`, `packages/d2b-resource-store/src/{lib,error}.rs`, and `packages/d2b-resource-store-redb/src/{schema,keys,values}.rs`, with literal vectors, rejection tests, generic fake tests, sealed admission tests, and engine-neutral table descriptors. The main workspace has no redb dependency. |
+| Evidence | Every destination is present: `packages/d2b-contracts/src/v3/error.rs`, `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb/src/{lib,error}.rs`, and `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/{schema,keys,values}.rs`, with literal vectors, rejection tests, generic fake tests, sealed admission tests, and engine-neutral table descriptors. The main workspace has no redb dependency. |
 
 ### ADR046-store-004
 
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-store-001; ADR046-feasibility-001; store backend integrator |
-| Current source | `packages/d2b-core/src/storage.rs`, `sync.rs`; `packages/d2bd/src/supervisor/state.rs`, `daemon_audit.rs`; `d2b-realm-router/src/lib.rs` |
+| Current source | `packages/d2b-core/src/storage.rs`, `sync.rs`; `packages/d2bd/src/state.rs`, `daemon_audit.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-store-redb/src/lib.rs`, `actor.rs`, `transaction.rs` |
+| Destination | `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/lib.rs`, `actor.rs`, `transaction.rs` |
 | Detailed design | Adopt the already-pinned redb API only behind the failed-spike correction and rerun gate. Implement the redb engine, owned-fd database open, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, crash recovery, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, and read lifetime 250 ms. Revision replay range-seeks the big-endian revision key, streams only rows after `afterRevision`, and never decodes older complete envelopes. Live delivery shares one immutable decoded ChangeBatch across matching watchers instead of cloning each envelope. The global admission budget and slow-watcher policy belong to `ADR046-store-002`, not this backend. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone runtime owns the concrete backend; resource API is the sole caller through ADR046-store-001 |
 | Data migration | Full reset; logical backup belongs to ADR046-store-005 |
-| Validation | Production whole-process RSS evidence measured on `packages/d2b-resource-store-redb` itself, passing the unchanged <=24 MiB gate with no baseline subtraction; the disposable proof's gated rerun does not discharge this row; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; backend-signal tests for revision range seeks, replay rows scanned and decoded, shared immutable batches, fan-out references, and writer queue depth/capacity; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint |
+| Validation | Production whole-process RSS evidence measured on `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb` itself, passing the unchanged <=24 MiB gate with no baseline subtraction; the disposable proof's gated rerun does not discharge this row; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; backend-signal tests for revision range seeks, replay rows scanned and decoded, shared immutable batches, fan-out references, and writer queue depth/capacity; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint |
 | Removal proof | Existing ledgers remain until their owning migration work items land |
 | Implementation state | Planned |
-| Evidence | `packages/d2b-resource-store-redb/src/actor.rs` and `transaction.rs` are absent. The superseded SPIKE-01 RSS failure is replaced by a passing gated proof rerun, but the production backend's own whole-process RSS evidence is still unrun, so the existing `lib.rs` remains contract-only and no production backend is accepted. |
+| Evidence | `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/actor.rs` and `transaction.rs` are absent. The superseded SPIKE-01 RSS failure is replaced by a passing gated proof rerun, but the production backend's own whole-process RSS evidence is still unrun, so the existing `lib.rs` remains contract-only and no production backend is accepted. |
 
 ### ADR046-store-002
 
@@ -537,23 +537,23 @@ storage-row source contract.
 | Dependency/owner | ADR046-store-004; ADR046-feasibility-001; watch/reconciliation integrator |
 | Current source | `packages/d2b-realm-core/src/mux.rs`, `d2b-realm-router/src/mux_session.rs`, `route_engine.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-store-redb/src/revision_log.rs`, `packages/d2b-resource-api/src/watch.rs` |
+| Destination | `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/revision_log.rs`, `packages/d2b-resource-api/src/watch.rs` |
 | Detailed design | Implement replay/live no-gap watch, cursors, owner hints, compaction floor, and expired relist around one global bounded watch-admission budget. Registrations retain only small cursor/filter/accounting state. Budget exhaustion returns typed backpressure before registration; deterministic slow-watcher eviction releases its budget and resumes from the last acknowledged cursor. Export current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work with closed non-sensitive labels. Range-seek replay, streaming decode, and shared immutable ChangeBatch fan-out are supplied by `ADR046-store-004`. |
 | Integration | d2b-bus named streams; controller toolkit |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-02 latency evidence and production whole-process RSS evidence measured on the production backend, passing the unchanged <=24 MiB gate with no baseline subtraction; the disposable proof's gated rerun does not discharge this row; deterministic watch/compaction/disconnect/fan-in tests; global-budget exhaustion and typed-admission-backpressure tests; deterministic slow-watcher eviction/resume tests; saturation-signal tests for current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work |
 | Removal proof | Not applicable |
 | Implementation state | Planned |
-| Evidence | Both destinations are absent: `packages/d2b-resource-store-redb/src/revision_log.rs` and `packages/d2b-resource-api/src/watch.rs`. SPIKE-02 passed and the corrected SPIKE-01 proof rerun passed, but the production backend's own whole-process RSS evidence is still unrun; production watch integration remains blocked pending it. |
+| Evidence | Both destinations are absent: `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/revision_log.rs` and `packages/d2b-resource-api/src/watch.rs`. SPIKE-02 passed and the corrected SPIKE-01 proof rerun passed, but the production backend's own whole-process RSS evidence is still unrun; production watch integration remains blocked pending it. |
 
 ### ADR046-store-003
 
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-store-001; storage-row contract integrator |
-| Current source | `nixos-modules/storage-json.nix`, `packages/d2b-priv-broker/src/ops/storage_contract.rs`, existing marker/ownership tests |
+| Current source | `nixos-modules/storage-json.nix`, `packages/d2b-broker/src/ops/storage_contract.rs`, existing marker/ownership tests |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; `packages/d2b-contract-tests/tests/zone_storage_contract.rs` |
+| Destination | `packages/d2b-contracts/`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; `packages/d2b-contract-tests/` |
 | Detailed design | Freeze the closed `ZoneStoreStorageRow`: opaque zone-store and parent-directory ids plus required ownership, filesystem, locking, marker, replacement-detection, fsync, and publication invariants, never a host path |
 | Integration | Generated storage-row contract is consumed by the broker storage owner and ADR046-store-005 |
 | Data migration | None - contract only |
@@ -567,9 +567,9 @@ storage-row source contract.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-store-003; ADR046-store-004; ADR046-feasibility-001; storage/broker backend integrator |
-| Current source | `nixos-modules/storage-json.nix`, `packages/d2b-priv-broker/src/ops/storage_contract.rs`, existing marker/ownership tests |
+| Current source | `nixos-modules/storage-json.nix`, `packages/d2b-broker/src/ops/storage_contract.rs`, existing marker/ownership tests |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`; `packages/d2b-contracts/src/broker_wire.rs` (`OpenZoneStore` request/response); `packages/d2b-priv-broker/src/ops/zone_store.rs`, `live_handlers.rs`, `fd_passing.rs`; `packages/d2b-priv-broker/tests/zone_store.rs` |
+| Destination | `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/backup.rs`, `migration.rs`; `packages/d2b-contracts/` (`OpenZoneStore` request/response); `packages/d2b-broker/`, `live_handlers.rs`, `fd_passing.rs`; `packages/d2b-broker/` |
 | Detailed design | Consume the D115 storage-row contract for fd-backed provision/open and marker identity; implement logical backup, staged restore/upgrade, crash-safe publication, replacement detection, and corruption quarantine. Add a typed broker `OpenZoneStore` operation that accepts only opaque storage-row ids, resolves and validates the signed row, provisions or opens the database without a caller path, and returns exactly one owned descriptor with atomic close-on-exec receipt. |
 | Integration | Broker storage owner passes the owned database File to the Zone runtime backend from ADR046-store-004 |
 | Data migration | Destructive v3 bootstrap; v3-to-v3 logical restore |

@@ -8,7 +8,7 @@
 | Version | 1 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
-| Owners | `d2b-provider-system-systemd` crate, Process contracts |
+| Owners | `d2b-provider-process-systemd` crate, Process contracts |
 | Depends on | `ADR-046-provider-model-and-packaging`, `ADR-046-components-processes-and-sandbox`, `ADR-046-resources-host-guest-process-user`, `ADR-046-componentsession-and-bus`, `ADR-046-nix-configuration`, `ADR-046-telemetry-audit-and-support`, `ADR-046-current-code-migration-map` |
 | Supersedes | Current `d2b-unsafe-local-helper` systemd scope runtime; current `d2bd` `supervisor/` VM process management; broker `SpawnRunner` (systemd-owned roles) |
 
@@ -20,8 +20,8 @@
 | --- | --- |
 | Canonical ResourceRef | `Provider/system-systemd` |
 | ProviderType axis | Process, EphemeralProcess |
-| Crate path | `packages/d2b-provider-system-systemd/` |
-| Primary binary | `d2b-provider-system-systemd` (controller) |
+| Crate path | `packages/d2b-provider-process-systemd/` |
+| Primary binary | `d2b-provider-process-systemd` (controller) |
 | Nix artifact type | `"provider"` |
 
 `Provider/system-systemd` is one of two first-party Process Provider
@@ -153,7 +153,7 @@ configuration using `spec.artifactId`:
 
 ```nix
 d2b.artifacts.system-systemd = {
-  package = pkgs.d2b-provider-system-systemd;
+  package = pkgs.d2b-provider-process-systemd;
   type    = "provider";
 };
 
@@ -205,7 +205,7 @@ cascade reconcile of all active Processes using this Provider.
 | --- | --- |
 | Component ID | `systemd-controller` |
 | Type | `controller` |
-| Binary | `d2b-provider-system-systemd` |
+| Binary | `d2b-provider-process-systemd` |
 | Execution domain | `system` |
 | executionRef placement | one controller instance per execution target (e.g., `Host/<name>` or `Guest/<name>`) |
 | Cgroup leaf | `z-<zone-id>/controller/executions/e-<exec-id>/system/providers/p-<provider-id>/components/c-systemd-controller/process/` |
@@ -1015,13 +1015,13 @@ opaque resource UID.
 
 ```nix
 d2b.artifacts.system-systemd = {
-  package = pkgs.d2b-provider-system-systemd;
+  package = pkgs.d2b-provider-process-systemd;
   type    = "provider";
 };
 ```
 
-`pkgs.d2b-provider-system-systemd` is the Nix derivation built from
-`packages/d2b-provider-system-systemd/`. It is the only place where the build
+`pkgs.d2b-provider-process-systemd` is the Nix derivation built from
+`packages/d2b-provider-process-systemd/`. It is the only place where the build
 output appears; no store path enters any ResourceSpec, status, audit, or
 telemetry field.
 
@@ -1293,7 +1293,7 @@ assumptions. Copied behavior is independently re-tested against v3
 | Current source | `packages/d2b-unsafe-local-helper/src/systemd.rs` - `SystemdUserScopeManager`, `VerifiedScope`; `packages/d2bd/src/supervisor/` - pidfd adoption, restart backoff |
 | Reuse source | Main `a1cc0b2d`: `d2b-session/src/engine.rs`, `d2b-session-unix/src/adapter.rs` (effect port test double session/transport) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (opaque launch requests via effect port), `src/adoption.rs` (typed adoption outcomes), `src/sandbox.rs` (semantic SandboxSpec validation); production DBus/pidfd/systemd-property implementation in core/ProviderSupervisor |
+| Destination | `packages/d2b-provider-process-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (opaque launch requests via effect port), `src/lifecycle.rs` (typed adoption outcomes), `src/sandbox.rs` (semantic SandboxSpec validation); production DBus/pidfd/systemd-property implementation in core/ProviderSupervisor |
 | Detailed design | Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 drain (effect port `stop`/`kill`); §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Core ProviderDeployment creates the controller Process via Provider/system-minijail with no state Volume or `/state` mount; the controller issues no Volume CRUD operations, watches Process/EphemeralProcess, and persists bounded non-secret observations only in owning-resource status and the core Operation ledger; ProviderSupervisor calls LaunchProcess; effect port implementation is injected by the core supervisor spec |
 | Data migration | No state migration; controller relists and adopts on restart |
@@ -1310,7 +1310,7 @@ assumptions. Copied behavior is independently re-tested against v3
 | Dependency/owner | `ADR046-systemd-001`; Nix/package integrator |
 | Current source | `nixos-modules/unsafe-local-helper.nix`; `nixos-modules/processes-json.nix` |
 | Reuse action | adapt |
-| Destination | `nixos-modules/` (Provider ResourceSpec emission for `system-systemd`); `packages/d2b-provider-system-systemd/` package derivation and catalog entry |
+| Destination | `nixos-modules/` (Provider ResourceSpec emission for `system-systemd`); `packages/d2b-provider-process-systemd/` package derivation and catalog entry |
 | Detailed design | §16 Nix configuration; `d2b.artifacts.system-systemd` catalog entry; Provider and Process ResourceSpec emission; eval/build validation rules; drift gate update (`xtask gen-nix-options` + `make test-drift`) |
 | Integration | Zone configuration activates Provider/system-systemd; Process resources reference it via `spec.providerRef = "Provider/system-systemd"` |
 | Data migration | No configuration compatibility path; full reset at v3 cutover |
@@ -1327,9 +1327,9 @@ assumptions. Copied behavior is independently re-tested against v3
 | Dependency/owner | `ADR046-systemd-001`; conformance kit / test infrastructure |
 | Current source | `packages/d2bd/src/supervisor/` (existing process lifecycle tests); `packages/d2b-unsafe-local-helper/src/systemd.rs` (existing scope tests) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-systemd/tests/conformance.rs`, `tests/fault.rs`, `tests/ephemeral.rs`, `tests/sandbox_compile.rs`; `integration/host_scenario.rs`, `integration/guest_scenario.rs` |
+| Destination | `packages/d2b-provider-process-systemd/tests/conformance.rs`, `tests/fault.rs`, `tests/ephemeral.rs`, `tests/sandbox_compile.rs`; `integration/host_scenario.rs`, `integration/guest_scenario.rs` |
 | Detailed design | Full §19 test/integration requirements Primary reuse disposition: `adapt`. Preserved source-plan detail: copy/adapt. |
-| Integration | `cargo test -p d2b-provider-system-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
+| Integration | `cargo test -p d2b-provider-process-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All conformance vectors pass; all fault injection scenarios reach expected phase/condition; all §19 Host and Guest test scenarios pass |
 | Removal proof | No removal; tests are permanent |
@@ -1340,10 +1340,10 @@ assumptions. Copied behavior is independently re-tested against v3
 
 ## 19. Required crate layout and test/integration requirements
 
-The crate at `packages/d2b-provider-system-systemd/` must contain exactly:
+The crate at `packages/d2b-provider-process-systemd/` must contain exactly:
 
 ```
-packages/d2b-provider-system-systemd/
+packages/d2b-provider-process-systemd/
 ├── src/
 │   ├── main.rs                     # controller binary entry point
 │   ├── controller.rs               # async reconcile loop, watch, dispatch
@@ -1371,7 +1371,7 @@ packages/d2b-provider-system-systemd/
 └── README.md                       # §20 Provider README (see below)
 ```
 
-Workspace policy rejects any `packages/d2b-provider-system-systemd/` crate
+Workspace policy rejects any `packages/d2b-provider-process-systemd/` crate
 missing any of the four top-level paths (`src/`, `tests/`, `integration/`,
 `README.md`). It does not enforce specific file names within those directories;
 the file names listed above are spec-required for implementation completeness
@@ -1379,7 +1379,7 @@ but are not workspace-policy-checked.
 
 ### test/ requirements
 
-Every file in `tests/` is invoked by `cargo test -p d2b-provider-system-systemd`.
+Every file in `tests/` is invoked by `cargo test -p d2b-provider-process-systemd`.
 No container daemon, real Host, or real Guest is required; all tests use mocks
 and `FakeProvider` fixtures from `d2b-provider-toolkit`:
 
@@ -1413,7 +1413,7 @@ unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
 and parallel-safe: an individual normal test has an advisory wall-clock p95
 diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
 process CPU only. There is no wall-clock
-sleep, and `cargo test -p d2b-provider-system-systemd --lib --tests` completes in ≤3 s warm-cache
+sleep, and `cargo test -p d2b-provider-process-systemd --lib --tests` completes in ≤3 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
 and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM
@@ -1438,21 +1438,21 @@ Old and new suites never run in parallel indefinitely.
 
 ## 20. Provider README.md required content
 
-The `packages/d2b-provider-system-systemd/README.md` must contain all sections
+The `packages/d2b-provider-process-systemd/README.md` must contain all sections
 listed in the crate layout requirement (`ADR-046-current-code-migration-map` §0.3
 and `ADR-046-provider-model-and-packaging` Provider dossier requirement):
 
 | Section | Required content |
 | --- | --- |
-| Provider identity | `Provider/system-systemd`; ProviderType axis: Process, EphemeralProcess; crate path `packages/d2b-provider-system-systemd/` |
+| Provider identity | `Provider/system-systemd`; ProviderType axis: Process, EphemeralProcess; crate path `packages/d2b-provider-process-systemd/` |
 | Nix config schema | `d2b.zones.<zone>.resources.<name>` snippet with `spec.artifactId` and the four `spec.config.*` fields (`launchTimeoutSec`, `terminationGraceSec`, `userManagerCheckTimeout`, `maxConcurrentLaunches`); rendered canonical JSON; no unit-name or user-manager-enable fields (unit names are fixed hash-derived; user-manager verification is mandatory); no credential field (no `credentialRef: true` markers in this Provider) |
 | ResourceTypes | Table: `Process` (phases Pending→Launching→Ready→Degraded→Failed, owner field, finalizer `process-system-systemd.d2bus.org/cleanup`); `EphemeralProcess` (phases Pending→Ready→Succeeded\|Failed, finalizer) |
-| Controllers/services/workers/binaries | Binary `d2b-provider-system-systemd`; `systemd-controller` component (one instance per execution target); core ProviderDeployment creates controller Process via Provider/system-minijail; no user supervisor binary or entry point inside this crate; cgroup placement per §5.1 |
+| Controllers/services/workers/binaries | Binary `d2b-provider-process-systemd`; `systemd-controller` component (one instance per execution target); core ProviderDeployment creates controller Process via Provider/system-minijail; no user supervisor binary or entry point inside this crate; cgroup placement per §5.1 |
 | Placement | Valid Host and Guest execution targets; `allowedDomains: [system, user]`; required `providerRef` chain (Provider/system-systemd must be Ready before any Process uses it); system and user domain both dispatched through injected `ProcessLaunchEffectPort`; effect port implementation is core-owned |
 | Dependencies and RBAC | Required RoleBinding verbs per §12.1 (no User RoleBindings; UID verification is effect port responsibility); no broker operations; ComponentSession on d2b-bus for ProviderSupervisor integration; no internal socketpair service |
 | Security and state | No capabilities claimed; no secrets or credential leases; no direct DBus connections (all systemd interactions through injected effect port); the controller declares no Provider state Volume - bounded non-secret operational state lives in `status`/the core Operation ledger (D087); core-owned pidfds and controller-held opaque effect handles are ephemeral and not persisted; core re-adopts running units from cgroup leaves + fresh pidfds; no OFD locks; no raw systemd property fragments enter the Provider |
 | Telemetry | Metric instruments per §15.1; span catalog per §15.2; audit `ProcessEffect` record per §15.3; `no_isolation=true` on user-only Host child ProcessEffect records only |
-| Build/test/integration commands | `cargo test -p d2b-provider-system-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
+| Build/test/integration commands | `cargo test -p d2b-provider-process-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
 | Standalone-repo future usage | Crate depends only on published crates and the d2b provider SDK subset (`d2b-contracts`, `d2b-provider-toolkit`); may be extracted to its own repository without copying daemon internals |
 
 ---
@@ -1465,7 +1465,7 @@ and `ADR-046-provider-model-and-packaging` Provider dossier requirement):
 | Evidence class | production-reachable (both anchors) |
 | Behavior retained | Core EffectPort implementation retains DBus transient unit creation, InvocationID/ControlGroup/MainPID/ExecMainStartTimestamp binding, pidfd open and re-verification, and scope identity verification; Provider retains semantic restart/backoff decisions over opaque outcomes |
 | Required delta | Process/EphemeralProcess ResourceType and status schema; LaunchTicket/ProviderSupervisor integration; sandboxRevisionDigest/processIdentityDigest; async reconcile loop; d2b-bus ComponentSession service; `ProcessLaunchEffectPort` trait + test double (core implementation); no Provider state Volume (bounded non-secret operational state in status/core ledger, D087); conformance tests |
-| Reuse path | `SystemdUserScopeManager`/`VerifiedScope` inform the core effect adapter contract and Provider fake; `d2bd/src/supervisor/` backoff logic informs Provider `src/adoption.rs` and `src/controller.rs`, while raw discovery and pidfd logic remain core-owned |
+| Reuse path | `SystemdUserScopeManager`/`VerifiedScope` inform the core effect adapter contract and Provider fake; `d2bd/src/supervisor/` backoff logic informs Provider `src/lifecycle.rs` and `src/controller.rs`, while raw discovery and pidfd logic remain core-owned |
 | Replacement/deletion | `d2b-unsafe-local-helper` binary and `unsafe_local_wire.rs` protocol types retained until user-domain Host Process launch parity via effect port confirmed; `VmProcessDag` roles removed per per-role disposition table after each process type achieves conformance |
 | Feasibility proof | `SystemdUserScopeManager` demonstrates transient user scope + InvocationID binding is production-tested; pidfd adoption in `d2bd/src/supervisor/` demonstrates identity-mismatch quarantine path |
 | Future owner | `ADR046-systemd-001` through `ADR046-systemd-003` |

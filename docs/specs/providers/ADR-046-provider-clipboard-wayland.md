@@ -1412,7 +1412,7 @@ Process. Responsibilities:
 | Dependency/owner | ADR046-clipboard-001 and ADR046-clipboard-003; picker worker owner |
 | Current source | packages/d2b-clipd/src/picker.rs subprocess flow is replacement context only; picker-session worker is net-new |
 | Reuse action | adapt |
-| Destination | packages/d2b-provider-clipboard-wayland/src/picker_session/ and picker-session binary |
+| Destination | packages/d2b-provider-clipboard-wayland/ and picker-session binary |
 | Detailed design | Implement picker-session as a user-domain worker EphemeralProcess with minimal environment, metadata over inherited ComponentSession named stream, restricted WAYLAND_SOCKET FD from display-wayland presentation portal, GTK4 closure-contained runtime, one Select or Cancel response, no clipboard FDs, no clipboard bytes, no compositor credentials, no socket paths, and typed PickerStartFailed on install or start failure instead of bypass. Primary reuse disposition: `adapt`. Preserved source-plan detail: rewrite as EphemeralProcess worker. |
 | Integration | clipboard-controller creates picker EphemeralProcess per paste request; ProviderSupervisor pre-opens restricted Wayland FD; picker returns result to controller which notifies clipd-host. |
 | Data migration | Full d2b 3.0 reset; picker state is per-operation EphemeralProcess status only |
@@ -1520,7 +1520,7 @@ Implement the d2b Nix module for `Provider/clipboard-wayland`:
 | Dependency/owner | ADR046-clipboard-003; clipboard RBAC owner |
 | Current source | None - net-new Zone RBAC resources for clipboard-wayland; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
-| Destination | packages/d2b-provider-clipboard-wayland/src/controller/rbac.rs or equivalent controller reconcile module |
+| Destination | packages/d2b-provider-clipboard-wayland/ or equivalent controller reconcile module |
 | Detailed design | Controller creates Role/clipboard-admin, Role/clipboard-viewer, Role/clipboard-bridge-peer, Role/clipboard-picker-worker and RoleBindings display-wayland-bridge, host-admin-clipboard, picker-session-worker, all Zone-scoped, owned by Process/clipboard-controller, selector-bound for Process/picker-*, and cleaned up when Provider is deleted. |
 | Integration | Resource API stores RBAC resources; ComponentSession authorization checks consume Roles and RoleBindings for management, bridge, and picker worker services. |
 | Data migration | Full d2b 3.0 reset; no v2 RBAC state import |
@@ -1549,7 +1549,7 @@ deleted.
 | Dependency/owner | ADR046-clipboard-002; ADR-046-telemetry-audit-and-support; clipboard observability owner |
 | Current source | packages/d2b-clipd/src/audit.rs and policy types from packages/d2b-clipd/src/policy.rs |
 | Reuse action | adapt |
-| Destination | packages/d2b-provider-clipboard-wayland/src/service/audit.rs and packages/d2b-provider-clipboard-wayland/src/service/metrics.rs |
+| Destination | packages/d2b-provider-clipboard-wayland/ and packages/d2b-provider-clipboard-wayland/ |
 | Detailed design | Implement ClipboardAuditEvent and fail-closed Zone audit queue by porting baseline audit code, renaming realm fields to source_zone_id and dest_zone_id, making ReasonCode a closed enum with unknown protobuf fields rejected, replacing exact byte counts with SizeBucket, emitting to d2b.audit.v3, and adding closed-semantic-label OTEL metrics and spans from the dossier tables. Metric descriptors carry no Zone/resource-name-derived identity; `d2b.zone` remains a resource attribute. Primary reuse disposition: `adapt`. Preserved source-plan detail: port and adapt audit plus resource-name-free metrics and redaction changes. |
 | Integration | clipd-host emits audit events to the Zone audit sink and OTEL metrics/spans to the observability Provider pipeline during clipboard operations. |
 | Data migration | Full d2b 3.0 reset; audit stream is v3 Zone-local and no v2 audit records are imported |
@@ -1661,7 +1661,7 @@ fake wayland-proxy bridge client. They do not require a live Wayland compositor.
 | Dependency/owner | ADR046-clipboard-005; packages/d2b-contract-tests owner |
 | Current source | packages/d2b-contract-tests/tests/policy_clipboard.rs |
 | Reuse action | adapt |
-| Destination | packages/d2b-contract-tests/tests/policy_clipboard.rs |
+| Destination | packages/d2b-contract-tests/ |
 | Detailed design | Add contract tests for d2b.clipboard.bridge.v3 and d2b.clipboard.picker-coord.v3 wire formats, ReasonCode numeric stability, and attachment class descriptor names while removing tests that assume shared filesystem bridge paths or SO_PEERCRED config. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt contract tests and delete obsolete filesystem bridge assumptions. |
 | Integration | Contract test suite consumes generated service descriptors and guards downstream ComponentSession consumers. |
 | Data migration | None - docs/tooling only; no runtime state |

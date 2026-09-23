@@ -587,7 +587,8 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
     check_generated_provenance(&repo_root)?;
     check_broker_manifest(&repo_root)?;
     check_banned_api_allows(&repo_root)?;
-    check_dangling_citations(&repo_root)
+    check_dangling_citations(&repo_root)?;
+    check_dossier_dangling_citations(&repo_root)
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
@@ -6835,6 +6836,243 @@ fn check_broker_manifest(repo_root: &Path) -> Result<(), String> {
         })
         .collect::<Vec<_>>()
         .join("\n"))
+}
+
+
+/// The dossier corpus the extended dangling-citation scan covers.
+///
+/// Provider dossiers under `docs/specs/providers/*.md` and their
+/// `docs/specs/ADR-046-*.md` siblings carry the same crate and file-tree
+/// citations as the Provider matrix rows, so the corpus glob is the gate
+/// glob: a dossier outside it is not this check's to resolve, and a dossier
+/// inside it that cites a path the tree no longer has fails the policy gate.
+const DOSSIER_CORPUS_GLOBS: &[&str] = &[
+    "docs/specs/providers/*.md",
+    "docs/specs/ADR-046-*.md",
+];
+
+/// The table fields whose value is a normative file-tree or crate-path
+/// citation: a `Destination` row, a `Reuse path` row, or a file-tree
+/// reference. A row whose field names the current or baseline tree (a
+/// `Current source`, `Current anchor`, `Current symbol / path`, `Current
+/// artifact`, `Reuse source`, `Evidence`, or `Baseline` row) is behind an
+/// explicit historical marker and stays legal - it describes the tree at a
+/// pinned baseline commit, not the tree the dossier must cite today.
+/// Dossier fields whose citation corpus the corpus's own normative
+/// structure markers keep behind the legal marker rule (R1/KTD8):
+/// a Destination / Reuse path / file-tree row that sits inside a work-item
+/// table whose bearing rows carry `Implementation state | Planned`,
+/// `Implementation state | Merged (historical)`, `Implementation state |
+/// Baseline`, or the dossier's own `Current-state note` blockquote stays
+/// legal - the corpus documents where the work will land, and the
+/// historical-marker rule keeps that planned/current-code corpus legal.
+const HISTORICAL_MARKER_BEARING_FIELDS: &[&str] = &[
+    "Implementation state",
+    "Implementation state (baseline)",
+];
+const NORMATIVE_DOSSIER_FIELDS: &[&str] = &[
+    "Destination",
+    "Reuse path",
+    "v3 Destination",
+    "v3 destination",
+    "Crate path",
+    "Crate layout",
+];
+
+/// A dossier citation of a `packages/...` path that no longer resolves.
+#[derive(Debug, Clone)]
+struct DanglingDossierCitation {
+    /// Repository-relative dossier path.
+    module: String,
+    /// One-based line inside the dossier.
+    line: usize,
+    /// The citation exactly as the dossier writes it.
+    token: String,
+    /// The table field that carried the citation.
+    field: String,
+}
+
+/// Fail on every `packages/...` citation in a dossier `Destination`,
+/// `Reuse path`, or file-tree reference that does not resolve against the
+/// tree. Mentions behind an explicit historical marker (a current-code or
+/// baseline field row) stay legal.
+fn check_dossier_dangling_citations(repo_root: &Path) -> Result<(), String> {
+    let citations = dossier_dangling_citations(repo_root)?;
+    if citations.is_empty() {
+        return Ok(());
+    }
+    Err(citations
+        .iter()
+        .map(render_dossier_citation_diagnostic)
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// Render one dangling dossier citation as canonical JSON.
+fn render_dossier_citation_diagnostic(citation: &DanglingDossierCitation) -> String {
+    serde_json::json!({
+        "error": "dossier-dangling-citation",
+        "module": &citation.module,
+        "line": citation.line,
+        "field": &citation.field,
+        "citation": &citation.token,
+    })
+    .to_string()
+}
+
+/// Every dangling dossier citation in the corpus globs.
+fn dossier_dangling_citations(repo_root: &Path) -> Result<Vec<DanglingDossierCitation>, String> {
+    let mut citations = Vec::new();
+    for glob in DOSSIER_CORPUS_GLOBS {
+        let glob_path = repo_root.join(glob);
+        let directory = glob_path.parent().unwrap_or(repo_root);
+        let pattern = glob_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(glob)
+            .split('*')
+            .next()
+            .unwrap_or_default();
+        let entries = fs::read_dir(directory)
+            .map_err(|_| "provider-crate-layout-dossier-corpus-unreadable".to_owned())?;
+        let mut files = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|_| "provider-crate-layout-dossier-corpus-unreadable".to_owned())?;
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("md") {
+                continue;
+            }
+            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+            if !name.starts_with(pattern) {
+                continue;
+            }
+            files.push(path);
+        }
+        files.sort();
+        for path in files {
+            collect_dossier_citations(repo_root, &path, &mut citations)?;
+        }
+    }
+    citations.sort_by(|left, right| {
+        left.module
+            .cmp(&right.module)
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.token.cmp(&right.token))
+    });
+    Ok(citations)
+}
+
+/// The dangling citations in one dossier: `packages/...` tokens in
+/// `Destination` / `Reuse path` / file-tree rows that do not resolve.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn collect_dossier_citations(
+    repo_root: &Path,
+    path: &Path,
+    citations: &mut Vec<DanglingDossierCitation>,
+) -> Result<(), String> {
+    let text = fs::read_to_string(path)
+        .map_err(|_| "provider-crate-layout-dossier-unreadable".to_owned())?;
+    let relative = path
+        .strip_prefix(repo_root)
+        .map_err(|_| "provider-crate-layout-dossier-outside-root".to_owned())?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let lines: Vec<&str> = text.lines().collect();
+    let mut in_fence = false;
+    for (offset, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        // A file-tree reference can live outside a fence as a bare
+        // `packages/...` run on its own line.
+        if !in_fence && trimmed.starts_with("packages/") {
+            push_dossier_citation(repo_root, &relative, offset + 1, "file-tree", trimmed, citations);
+            continue;
+        }
+        if in_fence {
+            for token in packages_tokens(line) {
+                push_dossier_citation(repo_root, &relative, offset + 1, "file-tree", &token, citations);
+            }
+            continue;
+        }
+        let Some(field) = table_field(line) else {
+            continue;
+        };
+        if !NORMATIVE_DOSSIER_FIELDS.contains(&field.as_str()) {
+            continue;
+        }
+        for token in packages_tokens(line) {
+            push_dossier_citation(repo_root, &relative, offset + 1, &field, &token, citations);
+        }
+    }
+    Ok(())
+}
+
+/// The first cell of a markdown table row, when the line is one.
+fn table_field(line: &str) -> Option<String> {
+    let rest = line.strip_prefix('|')?;
+    let (field, _) = rest.split_once('|')?;
+    let field = field.trim().trim_matches('`').trim();
+    if field.is_empty() || field.contains("---") {
+        return None;
+    }
+    Some(field.to_owned())
+}
+
+/// The `packages/<crate>/...` runs in one line.
+fn packages_tokens(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut search = line;
+    while let Some(index) = search.find("packages/") {
+        let rest = &search[index..];
+        let mut end = 0;
+        let bytes = rest.as_bytes();
+        while end < bytes.len()
+            && (bytes[end].is_ascii_alphanumeric()
+                || matches!(bytes[end], b'/' | b'_' | b'-' | b'.'))
+        {
+            end += 1;
+        }
+        tokens.push(rest[..end].to_owned());
+        search = &rest[end..];
+    }
+    tokens
+}
+
+/// Record one citation when its path does not resolve, skipping template and
+/// glob shapes (`packages/d2b-provider-<base>-<implementation>/`,
+/// `packages/d2b-provider-*/`) that name a family, not a file.
+fn push_dossier_citation(
+    repo_root: &Path,
+    module: &str,
+    line: usize,
+    field: &str,
+    token: &str,
+    citations: &mut Vec<DanglingDossierCitation>,
+) {
+    if token.contains('*')
+        || token.contains('<')
+        || token.contains('>')
+        || token.contains('{')
+        || token.contains('}')
+        || token.len() <= "packages/".len()
+    {
+        return;
+    }
+    let candidate = token.trim_end_matches(|ch: char| {
+        matches!(ch, '.' | ',' | ';' | ')' | ']' | '}' | '`' | '\'' | '"')
+    });
+    if repo_root.join(candidate).exists() {
+        return;
+    }
+    citations.push(DanglingDossierCitation {
+        module: module.to_owned(),
+        line,
+        token: token.to_owned(),
+        field: field.to_owned(),
+    });
 }
 
 /// One comment citation in a monitored root whose target no longer exists.

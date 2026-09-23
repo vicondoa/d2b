@@ -1439,7 +1439,7 @@ download, or PATH scan.
 | Dependency/owner | ADR046-transport-relay-001; reconnect contract; child Zone's ZoneLink handler |
 | Current source | None (new; core drives reconnect, not the transport Provider) |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-transport-azure-relay/src/reconnect.rs` |
+| Destination | `packages/d2b-provider-transport-azure-relay/` |
 | Detailed design | Relay service responds to `CloseTransport`+`OpenTransport` cycle from core; core owns reconnect policy and backoff scheduling; relay service tears down the current WebSocket when core calls `CloseTransport` and establishes a new WebSocket connection when core calls `OpenTransport`; relay service does not maintain a backoff state machine or independently retry - it starts a new WebSocket on demand and emits the connect result via `ObserveTransport`; listener and sender are long-lived service processes that do not re-spawn on reconnect |
 | Integration | `ObserveTransport` delivers `TransportObservation::Disconnected` to core; core drives reconnect via `CloseTransport` then `OpenTransport` after applying its own backoff |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1503,7 +1503,7 @@ download, or PATH scan.
 | Dependency/owner | Provider crate owner; integration test owner |
 | Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-transport-azure-relay/src/tests/integration/README` |
+| Destination | `packages/d2b-provider-transport-azure-relay/` |
 | Detailed design | Required content: fake relay server setup and teardown using the injected fake Relay effect port; how to run hermetic integration tests without a live Azure service; how to configure the injected fake Credential effect port for credential delivery tests; the fixture declares compiler-only `k2.parentZone = "local-root"` and puts the exact-shape ZoneLink, selected Provider, Network, Credentials, Process, and Endpoint resources only in K2; local-root's store is asserted to contain no reciprocal ZoneLink or Provider; how to run with a real Azure namespace (requires same-child-Zone `Credential` resources listed in `spec.transportCredentials`, not environment-variable credential paths); integration test scenarios and expected outcomes; CI/local execution instructions |
 | Integration | `make test-integration` invokes `tests/integration/containers/` scenarios which inject the fake relay and credential port implementations from `src/tests/integration/fake_relay_server.rs` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |

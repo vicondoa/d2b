@@ -453,7 +453,7 @@ core Operation ledger, and independent external observation.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | W0/W1a; controller toolkit owner |
-| Current source | `packages/d2b-realm-router/src/lib.rs`, `mux_session.rs`, `session_lifecycle.rs`; `packages/d2bd/src/supervisor/dag.rs` |
+| Current source | `packages/d2b-realm-router/src/lib.rs`, `mux_session.rs`, `session_lifecycle.rs`; `packages/d2bd/src/dag.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-controller-toolkit/src/lib.rs`, `runner.rs`, `queue.rs`, `context.rs`, `result.rs` |
 | Detailed design | Async ResourceReconciler, watch receiver, coalescing, per-resource serialization, parallel tasks, retry/checkpoint/finalize; expedited priority lane and `CommittedRevisionProof`-gated effects (D090); `assess_update`/`plan_upgrade`/`execute_upgrade` methods serialized in the same single-flight (D091) Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
@@ -471,7 +471,7 @@ core Operation ledger, and independent external observation.
 | Dependency/owner | Store/API + ADR046-reconcile-001; core controller |
 | Current source | `d2b-realm-core/src/route_engine.rs`, `allocator_engine.rs`; `d2b-realm-router/tests/transport_topology_harness.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-core-controller/src/hints.rs`, `dependencies.rs`, `owner_reconcile.rs` |
+| Destination | `packages/d2b-core-controller/`, `dependencies.rs`, `owner_reconcile.rs` |
 | Detailed design | Watch-plan validation, indexes, suppression, owner/dependency hints, leases, startup relist, fair admission |
 | Integration | Store post-commit dispatcher → d2b-bus controller streams |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -487,7 +487,7 @@ core Operation ledger, and independent external observation.
 | Dependency/owner | ADR046-store-002; Process Providers + benchmark owner |
 | Current source | `d2bd/src/supervisor/dag.rs`, `pidfd.rs`, unsafe-local blocked supervisor, guest exec runner |
 | Reuse action | adapt |
-| Destination | `packages/d2b-controller-toolkit/benches/reaction.rs`, Process Provider integration tests |
+| Destination | `packages/d2b-controller-toolkit/`, Process Provider integration tests |
 | Detailed design | Commit-to-handler/launch fast path, nonblocking watch, parallel ready resources |
 | Integration | Resource store → bus/session → controller → Process effect/status |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |

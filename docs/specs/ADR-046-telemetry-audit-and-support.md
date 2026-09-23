@@ -60,7 +60,7 @@ Zone/core processes (Zone runtime, core-controller, mandatory Providers) use
 push telemetry frames over a private local Unix datagram socket. They carry no
 `opentelemetry_sdk` or `opentelemetry-otlp` dependency. This matches the current
 v3 baseline (`d2bd` uses only `tracing` crate; no OTEL SDK present at
-`packages/d2bd/src/lib.rs` or `packages/d2b-priv-broker/src/runtime.rs`).
+`packages/d2bd/src/lib.rs` or `packages/d2b-broker/src/runtime.rs`).
 
 `Provider/observability-otel` is an **ordinary optional Process** that runs the
 full OTEL SDK with an OTLP/gRPC exporter. It owns the per-Zone OTLP receiver
@@ -77,7 +77,7 @@ is an optional non-bootstrap Process:
 
 Current-code evidence: `d2bd` uses `tracing` crate exclusively for structured
 logging/tracing (`packages/d2bd/src/lib.rs` lines 720+,
-`packages/d2b-priv-broker/src/runtime.rs` lines 34-35). No `opentelemetry_sdk`
+`packages/d2b-broker/src/runtime.rs` lines 34-35). No `opentelemetry_sdk`
 crate exists in the v3 baseline. Hand-rolled Prometheus registry in
 `packages/d2bd/src/metrics.rs` (no OTEL SDK). This resolved design requires no
 ADR-046-resource-store-redb budget revision.
@@ -613,7 +613,7 @@ operations (adapts existing `d2b-realm-core/src/routing.rs` route propagation).
 
 Each component emits structured OTEL log records for lifecycle transitions.
 Records use `tracing` macros (already present in d2bd:
-`packages/d2bd/src/lib.rs` and `packages/d2b-priv-broker/src/runtime.rs`).
+`packages/d2bd/src/lib.rs` and `packages/d2b-broker/src/runtime.rs`).
 The existing policy `startup_tracing_avoids_host_path_fields` in
 `packages/d2b-contract-tests/tests/policy_observability.rs` is extended to
 all v3 component startup paths.
@@ -621,7 +621,7 @@ all v3 component startup paths.
 Current startup tracing fields (implemented-and-reachable):
 
 ```rust
-// packages/d2b-priv-broker/src/runtime.rs lines 689-717
+// packages/d2b-broker/src/runtime.rs lines 689-717
 config_source = "realm-controllers",  // → v3: "zone-config"
 config_present = true,
 ```
@@ -1028,12 +1028,12 @@ The v3 baseline has three separate audit implementations:
    `daemon-events-YYYY-MM-DD.jsonl`, structured `DaemonEvent` variants
    covering VM start/stop/degraded, DetachedExec, Shell, OtelHostBridge.
 
-2. **Broker audit** (`packages/d2b-priv-broker/src/audit.rs`): rate-limited
+2. **Broker audit** (`packages/d2b-broker/src/audit.rs`): rate-limited
    O_APPEND JSONL; `AuditWriteClass::{Privileged,Unprivileged}`;
    `AuditDropSummary` counting `privileged_rate_limited` /
    `unprivileged_rate_limited`; `DEFAULT_AUDIT_WRITES_PER_SECOND = 4096`;
    `OpAuditRecord` variants per broker op
-   (`packages/d2b-priv-broker/src/ops/audit_op.rs`).
+   (`packages/d2b-broker/src/ops/audit_op.rs`).
 
 3. **Gateway/realm-core audit** (`packages/d2b-gateway/src/audit.rs`,
    `packages/d2b-gateway-runtime/src/audit_jsonl.rs`): `GatewayAuditKind`
@@ -1234,7 +1234,7 @@ ResourceType/resource names, arbitration internals, or `exportKey`.
 ```
 
 Adapts existing `OpAuditRecord` from
-`packages/d2b-priv-broker/src/ops/audit_op.rs`. No raw paths, device
+`packages/d2b-broker/src/ops/audit_op.rs`. No raw paths, device
 identifiers, or broker operation arguments. Current `SwtpmDirAudit` fields
 (`base_dir_hash`, `result`, `mode`, `owner_uid`, `marker_result`) are
 preserved by encoding them into `resource_context_digest` plus a
@@ -1312,7 +1312,7 @@ re-versioned in v3 with `zone: String` replacing `realm` and `node` dropped.
 
 Privileged records are never rate-limited. Unprivileged records follow the
 existing `DEFAULT_AUDIT_WRITES_PER_SECOND = 4096` rate limit from
-`packages/d2b-priv-broker/src/audit.rs` (`AuditWriteClass::Unprivileged` path).
+`packages/d2b-broker/src/audit.rs` (`AuditWriteClass::Unprivileged` path).
 
 ### Segmentation and retention
 
@@ -1333,7 +1333,7 @@ authoritative Zone audit).
   resource authority. The service itself performs the bounded authoritative
   segment read after method admission.
 - Adapts `ExportBrokerAuditOk` response contract from
-  `packages/d2b-priv-broker/tests/broker_export_audit.rs`.
+  `packages/d2b-broker/tests/broker_export_audit.rs`.
 - Hash chain breaks reported inline in output stream.
 - No plaintext resource names, paths, argv, or credential bytes.
 
@@ -1450,7 +1450,7 @@ When the audit segment file cannot be opened or written:
 4. Doctor: `audit: { "phase": "unavailable" }`.
 5. Rate-limited records: privileged records are never rate-limited (adapts
    existing `AuditWriteClass::Privileged` invariant from
-   `packages/d2b-priv-broker/src/audit.rs`).
+   `packages/d2b-broker/src/audit.rs`).
 
 On audit file descriptor loss (rotation/restart): Zone runtime re-opens the
 segment file with `O_APPEND | O_CREAT` before the next write, mirroring the
@@ -1745,7 +1745,7 @@ New `packages/d2b-audit/tests/`:
   `packages/d2b-gateway-runtime/src/audit_jsonl.rs`.
 - `audit_rate_limit_privileged_never_dropped`: adapted from
   `AuditWriteClass::Privileged` invariant in
-  `packages/d2b-priv-broker/src/audit.rs`.
+  `packages/d2b-broker/src/audit.rs`.
 - `audit_unavailable_blocks_privileged`: verifies `audit-unavailable` error.
 
 ### Doctor contract tests
@@ -1844,7 +1844,7 @@ New `packages/d2b-provider-observability-otel/tests/`:
 ### Export audit tests
 
 New `packages/d2b-audit/tests/export_audit.rs` (adapts
-`packages/d2b-priv-broker/tests/broker_export_audit.rs` pattern):
+`packages/d2b-broker/tests/broker_export_audit.rs` pattern):
 
 - Admin-only `audit-export` verb is enforced.
 - NDJSON output only.
@@ -1949,7 +1949,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 
 | Item | Treatment |
 | --- | --- |
-| Current anchor | (1) `packages/d2bd/src/metrics.rs`: 16-metric hand-rolled Prometheus registry; `vm` name labels; `VM_START_BUCKETS_SECONDS`, `BROKER_REQUEST_BUCKETS_SECONDS`, `ACTIVATION_PHASE_BUCKETS_SECONDS`. (2) `packages/d2bd/src/daemon_audit.rs`: hash-chain JSONL; `DaemonEvent` variants; `VmStartRunnerExitReason`, `RunnerExitKind`, `VmShutdownProvider` enums. **No** `DaemonEvent` for unsafe-local launches - this is a gap documented in the ProcessEffect section. (3) `packages/d2b-priv-broker/src/audit.rs`: `AuditWriteClass`, `AuditDropSummary`, rate-limit, O_APPEND, rotation. (4) `packages/d2b-realm-core/src/audit.rs`: `AuditHash`, `AuditChainLink`, `AuditChainRecord{realm: RealmPath, node: NodeId}`, `AuditStreamKind::{Gateway,RemoteNode,Daemon}`, `AuditEnvelope{realm, node, workload, principal}`, `AuditSinkHealth`. (5) `packages/d2b-realm-core/src/trace_context.rs`: `TraceContext{trace_id, span_id}`. (6) `packages/d2b-realm-core/src/ids.rs`: `RealmId`, `WorkloadId`, `NodeId`, `PrincipalId`, `OperationId`, `CorrelationId`. (7) `packages/d2b-gateway/src/audit.rs`: `GatewayAuditEvent`, `GatewayAuditKind`. (8) `packages/d2b-gateway-runtime/src/audit_jsonl.rs`: `JsonlGatewayAudit`, `DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS`. (9) `packages/d2b-priv-broker/src/ops/audit_op.rs`: `OpAuditRecord`, `SwtpmDirAudit`. (10) `packages/d2b-host/src/otel_host_bridge_argv.rs`, `packages/d2bd/src/otel_host_bridge_readiness.rs`. (11) `nixos-modules/components/observability/{host,stack,guest}.nix`: `scrapeJournal`, `identityName`/`vmName`, `vm.name`/`vm.env`/`vm.role` OTEL resource attributes, SigNoz stack. (12) `packages/d2b-contract-tests/tests/{policy_observability,policy_metrics,minijail_relay_otel}.rs`. (13) `packages/d2b/tests/{audit_contract,host_doctor_contract}.rs`. (14) `packages/d2b-priv-broker/tests/broker_export_audit.rs`. (15) **unsafe-local sources**: `packages/d2b-core/src/unsafe_local_workloads.rs` (`UnsafeLocalWorkloadsJson`, `UnsafeLocalWorkload`, `UnsafeLocalLauncherItem`, `UnsafeLocalExecItem`, `UnsafeLocalShellItem`, `UnsafeLocalShellPolicy`, `UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION`, `MAX_UNSAFE_LOCAL_WORKLOADS`); `packages/d2b-contracts/src/unsafe_local_wire.rs` (`HelperHello`, `HelperLaunchRequest`, `HelperShellRequest`, `HelperFailureCode`, `HelperScopeKind`, `DaemonToUnsafeLocalHelper`, `UnsafeLocalHelperToDaemon`); `packages/d2bd/src/unsafe_local_helper.rs` (`HelperRegistry`, `HelperConnection`, `dispatch_launch`, `allowed_uids`, `bind_helper_socket`); `packages/d2b-unsafe-local-helper/src/{main,protocol,runtime,systemd}.rs` (`HelperClient`, `ScopeRuntime`, `run_scope_supervisor`, `SystemdUserScopeManager`); `nixos-modules/options-realms-workloads.nix` (lines 221, 233-235, 264-275: `kind = "unsafe-local"`, null `stateDir`/`runDir`); `nixos-modules/unsafe-local-workloads-json.nix`; `nixos-modules/unsafe-local-helper.nix`. |
+| Current anchor | (1) `packages/d2bd/src/metrics.rs`: 16-metric hand-rolled Prometheus registry; `vm` name labels; `VM_START_BUCKETS_SECONDS`, `BROKER_REQUEST_BUCKETS_SECONDS`, `ACTIVATION_PHASE_BUCKETS_SECONDS`. (2) `packages/d2bd/src/daemon_audit.rs`: hash-chain JSONL; `DaemonEvent` variants; `VmStartRunnerExitReason`, `RunnerExitKind`, `VmShutdownProvider` enums. **No** `DaemonEvent` for unsafe-local launches - this is a gap documented in the ProcessEffect section. (3) `packages/d2b-broker/src/audit.rs`: `AuditWriteClass`, `AuditDropSummary`, rate-limit, O_APPEND, rotation. (4) `packages/d2b-realm-core/src/audit.rs`: `AuditHash`, `AuditChainLink`, `AuditChainRecord{realm: RealmPath, node: NodeId}`, `AuditStreamKind::{Gateway,RemoteNode,Daemon}`, `AuditEnvelope{realm, node, workload, principal}`, `AuditSinkHealth`. (5) `packages/d2b-realm-core/src/trace_context.rs`: `TraceContext{trace_id, span_id}`. (6) `packages/d2b-realm-core/src/ids.rs`: `RealmId`, `WorkloadId`, `NodeId`, `PrincipalId`, `OperationId`, `CorrelationId`. (7) `packages/d2b-gateway/src/audit.rs`: `GatewayAuditEvent`, `GatewayAuditKind`. (8) `packages/d2b-gateway-runtime/src/audit_jsonl.rs`: `JsonlGatewayAudit`, `DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS`. (9) `packages/d2b-broker/src/ops/audit_op.rs`: `OpAuditRecord`, `SwtpmDirAudit`. (10) `packages/d2b-host/src/otel_host_bridge_argv.rs`, `packages/d2bd/src/otel_host_bridge_readiness.rs`. (11) `nixos-modules/components/observability/{host,stack,guest}.nix`: `scrapeJournal`, `identityName`/`vmName`, `vm.name`/`vm.env`/`vm.role` OTEL resource attributes, SigNoz stack. (12) `packages/d2b-contract-tests/tests/{policy_observability,policy_metrics,minijail_relay_otel}.rs`. (13) `packages/d2b/tests/{audit_contract,host_doctor_contract}.rs`. (14) `packages/d2b-broker/tests/broker_export_audit.rs`. (15) **unsafe-local sources**: `packages/d2b-core/src/unsafe_local_workloads.rs` (`UnsafeLocalWorkloadsJson`, `UnsafeLocalWorkload`, `UnsafeLocalLauncherItem`, `UnsafeLocalExecItem`, `UnsafeLocalShellItem`, `UnsafeLocalShellPolicy`, `UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION`, `MAX_UNSAFE_LOCAL_WORKLOADS`); `packages/d2b-contracts/src/unsafe_local_wire.rs` (`HelperHello`, `HelperLaunchRequest`, `HelperShellRequest`, `HelperFailureCode`, `HelperScopeKind`, `DaemonToUnsafeLocalHelper`, `UnsafeLocalHelperToDaemon`); `packages/d2bd/src/unsafe_local_helper.rs` (`HelperRegistry`, `HelperConnection`, `dispatch_launch`, `allowed_uids`, `bind_helper_socket`); `packages/d2b-unsafe-local-helper/src/{main,protocol,runtime,systemd}.rs` (`HelperClient`, `ScopeRuntime`, `run_scope_supervisor`, `SystemdUserScopeManager`); `nixos-modules/options-realms-workloads.nix` (lines 221, 233-235, 264-275: `kind = "unsafe-local"`, null `stateDir`/`runDir`); `nixos-modules/unsafe-local-workloads-json.nix`; `nixos-modules/unsafe-local-helper.nix`. |
 | Evidence class | (1) Hand-rolled metrics: implemented-and-reachable (no OTEL SDK). (2-4) Audit JSONL/hash/rate-limit: implemented-and-reachable. (5-6) TraceContext/IDs: implemented-and-reachable. (7-9) Gateway/broker/op audit: implemented-and-reachable. (10) OtelHostBridge runner: implemented-and-reachable. (11) Nix OTEL pipeline: implemented-and-reachable for the v1 daemon; the v3 `observability-otel` Provider is ADR-only. (12-14) Tests: implemented-and-reachable. (15) unsafe-local: implemented-and-reachable; **gap**: no `DaemonEvent` for unsafe-local launch/stop in current daemon. |
 | Behavior retained | SHA-256 hash chain `prev_hash`/`record_hash`; O_APPEND JSONL segment files; privileged-never-dropped audit rate-limit invariant; `TraceContext` opaque bounded fields; SigNoz backend + OTEL Collector pipeline shape; `vm.name`/`vm.env`/`vm.role` OTEL resource attributes (advisory); journald scrape option; startup-tracing-avoids-host-path policy; `loki_native_otel_resource_attributes` closed allowlist; `broker_export_audit` admin-only / path-free / NDJSON contract; `UnsafeLocalWorkload` private-bundle-only argv/shell policy; `HelperRegistry::allowed_uids` per-UID isolation |
 | Required delta | Lightweight `BoundedEmitter` crate (no OTEL SDK in core); v3 metrics with no `vm`-name labels; traces with `d2b.zone`/`d2b.provider` resource attributes; v3 resource/RBAC/session/route/state-reset audit records; `zone` field replacing `realm: RealmPath` in all audit records; per-Zone emitter socket; `observability-otel` Provider (full OTEL SDK in its own Process only); `d2b zone doctor`/`support-bundle` CLI; performance histogram benchmarks; **user-only Host resource `isolationPosture: "none"` status field**; **ProcessEffect `no_isolation: true` for all user-only Host (unsafe-local successor) process launches and stops** (gap fill); **CLI/UI isolation warning for user-only Host only**; `isolation-posture-declared` doctor check |
@@ -1985,7 +1985,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Dependency/owner | ADR046-telem-001 + ADR046-store-001; store owner |
 | Current source | `packages/d2bd/src/metrics.rs` (`MetricDescriptor`, `MetricKind`, `VM_START_BUCKETS_SECONDS`, `BROKER_REQUEST_BUCKETS_SECONDS`, `ACTIVATION_PHASE_BUCKETS_SECONDS` - for bucket pattern reference only; the `vm` labels are not reused) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-store-redb/src/metrics.rs`, `packages/d2b-resource-store-redb/src/tracing.rs` |
+| Destination | `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/metrics.rs`, `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/tracing.rs` |
 | Detailed design | Instrument the store actor, write/read/group-commit paths with the metric inventory from this spec via `d2b-telemetry` `BoundedEmitter`. Emit `d2b.store.*` spans. The p95 `d2b_store_write_duration_seconds` hard target (≤10 ms) feeds the benchmark fixture. No `vm` label; `resource_type` label only from closed catalog. No OTEL SDK in the store crate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt bucket boundary constants (rename; remove `vm` labels); replace hand-rolled `Registry` with `d2b-telemetry` `BoundedEmitter` meter API. |
 | Integration | Store actor calls `d2b-telemetry` meter/tracer via `BoundedEmitter`; spans linked to API request spans via `TraceContext` |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
@@ -2002,7 +2002,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Dependency/owner | ADR046-telem-001 + ADR046-session-001 + ADR046-bus-001; session/bus owner |
 | Current source | `packages/d2b-realm-core/src/ids.rs` (`OperationId`, `CorrelationId`); `packages/d2b-realm-codec-protobuf/src/lib.rs` (`encode_trace_context`, `decode_trace_context` for v3 codec adaptation); `packages/d2b-realm-router/src/mux_session.rs`, `route_engine.rs` (current implemented-but-unwired generic routing) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-api/src/metrics.rs`, `packages/d2b-session/src/metrics.rs`, `packages/d2b-bus/src/metrics.rs` |
+| Destination | `packages/d2b-resource-api/`, `packages/d2b-session/src/metrics.rs`, `packages/d2b-bus/src/metrics.rs` |
 | Detailed design | Instrument resource API verb dispatch, watch delivery, bus route resolution, and session handshake/reconnect per the metric/span catalog in this spec. Propagate `TraceContext` from incoming bus request to store write transaction span as child context. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt `TraceContext` protobuf codec for v3 resource API framing; adapt routing metrics patterns. |
 | Integration | ResourceClient → bus → API → store span chain via `TraceContext` |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
@@ -2019,7 +2019,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Dependency/owner | ADR046-telem-001 + ADR046-core-001; core-controller owner |
 | Current source | `packages/d2bd/src/metrics.rs` (`BROKER_REQUEST_BUCKETS_SECONDS` for reference; `d2b_daemon_broker_request_duration_seconds` labels `["op"]` as a cardinality-safe example); `packages/d2b-realm-core/src/allocator_engine.rs` (field `trace: Option<TraceContext>` at line 873 - existing trace context wiring pattern) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-core-controller/src/metrics.rs`, `packages/d2b-core-controller/src/tracing.rs` |
+| Destination | `packages/d2b-core-controller/`, `packages/d2b-core-controller/` |
 | Detailed design | Emit `d2b.controller.hint` span at the instant the post-commit dispatcher fires; emit `d2b.controller.reconcile` child span at handler entry. Interval = p95 ≤5 ms target. `handler` label from closed set; no resource name labels. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt bucket patterns; adapt trace-context-in-reconcile pattern from `allocator_engine.rs`. |
 | Integration | Post-commit dispatcher creates hint span; handler creates child reconcile span via `TraceContext` |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
@@ -2034,9 +2034,9 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | --- | --- |
 | Work item ID | `ADR046-telem-005` |
 | Dependency/owner | ADR046-telem-001 + ADR046-process-001; Process Provider owner |
-| Current source | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_start_duration_seconds` `VM_START_BUCKETS_SECONDS`; `d2b_daemon_vm_shutdown_duration_seconds` `VM_SHUTDOWN_BUCKETS_SECONDS`; `d2b_daemon_vm_shutdown_total` labels `["vm", "vmm", "outcome"]` - `vmm` = current `RunnerRole` → v3 `provider`); `packages/d2bd/src/supervisor/pidfd.rs` (pidfd adoption/launch call sites); `packages/d2b-contracts/src/broker_wire.rs::RunnerRole` (`CloudHypervisor`, `QemuMedia`, `OtelHostBridge` etc. → v3 `provider` label values) |
+| Current source | `packages/d2bd/src/metrics.rs` (`d2b_daemon_vm_start_duration_seconds` `VM_START_BUCKETS_SECONDS`; `d2b_daemon_vm_shutdown_duration_seconds` `VM_SHUTDOWN_BUCKETS_SECONDS`; `d2b_daemon_vm_shutdown_total` labels `["vm", "vmm", "outcome"]` - `vmm` = current `RunnerRole` → v3 `provider`); `packages/d2bd/src/pidfd.rs` (pidfd adoption/launch call sites); `packages/d2b-contracts/src/broker_wire.rs::RunnerRole` (`CloudHypervisor`, `QemuMedia`, `OtelHostBridge` etc. → v3 `provider` label values) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-supervisor/src/metrics.rs`, `packages/d2b-provider-supervisor/src/tracing.rs` |
+| Destination | `packages/d2b-provider-supervisor/`, `packages/d2b-provider-supervisor/` |
 | Detailed design | `d2b_process_launch_duration_seconds`: start = instant Process controller receives commit-to-Ready hint; end = first OS spawn call (clone3 or systemd unit start). This implements p95 ≤20 ms. `provider` label replaces `vmm`/`RunnerRole` with the closed set `{minijail,systemd}`. No `vm` name label. A separate `d2b_process_ready_duration_seconds` histogram covers launch-attempt → readiness signal (not a hard target). Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt launch histogram bucket constants; rename `vm` label to no label (process identity in resource attributes); rename `vmm`/`RunnerRole` → `provider` closed enum. |
 | Integration | Process Provider controller start handler → supervisor ticket delivery → first spawn call |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
@@ -2068,7 +2068,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | --- | --- |
 | Work item ID | `ADR046-audit-001` |
 | Dependency/owner | W0/W1a; audit crate owner |
-| Current source | `packages/d2b-realm-core/src/audit.rs` (`AuditHash::parse`, `AuditChainLink::new`/`verify`, `AuditChainRecord{stream: AuditStreamKind, realm: RealmPath, node: NodeId}`, `AuditStreamKind::{Gateway,RemoteNode,Daemon}`, `AuditSinkHealth`, `AuditRetentionFloorStatus`); `packages/d2bd/src/daemon_audit.rs` (hash-chain append algorithm, `prev_hash`/`record_hash` SHA-256 pattern, daily segment files `daemon-events-YYYY-MM-DD.jsonl`, `DaemonEvent` additive contract); `packages/d2b-priv-broker/src/audit.rs` (`AuditWriteClass::{Privileged,Unprivileged}`, `AuditDropSummary`, `DEFAULT_AUDIT_WRITES_PER_SECOND = 4096`, O_APPEND CLOEXEC file open, `AuditDropWarningState`); `packages/d2b-gateway-runtime/src/audit_jsonl.rs` (`JsonlGatewayAudit`, `DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS = 14`, `prune_old` rotation algorithm); `packages/d2b-priv-broker/src/ops/audit_op.rs` (`OpAuditRecord`, `SwtpmDirAudit`, `SwtpmDirResult`, `SwtpmMarkerResult`); `packages/d2b-realm-core/src/ids.rs` (`OperationId`, `CorrelationId`, `PrincipalId` - `PrincipalId` becomes `subject_digest`); `packages/d2b/tests/audit_contract.rs`; `packages/d2b-priv-broker/tests/broker_export_audit.rs` |
+| Current source | `packages/d2b-realm-core/src/audit.rs` (`AuditHash::parse`, `AuditChainLink::new`/`verify`, `AuditChainRecord{stream: AuditStreamKind, realm: RealmPath, node: NodeId}`, `AuditStreamKind::{Gateway,RemoteNode,Daemon}`, `AuditSinkHealth`, `AuditRetentionFloorStatus`); `packages/d2bd/src/daemon_audit.rs` (hash-chain append algorithm, `prev_hash`/`record_hash` SHA-256 pattern, daily segment files `daemon-events-YYYY-MM-DD.jsonl`, `DaemonEvent` additive contract); `packages/d2b-broker/src/audit.rs` (`AuditWriteClass::{Privileged,Unprivileged}`, `AuditDropSummary`, `DEFAULT_AUDIT_WRITES_PER_SECOND = 4096`, O_APPEND CLOEXEC file open, `AuditDropWarningState`); `packages/d2b-gateway-runtime/src/audit_jsonl.rs` (`JsonlGatewayAudit`, `DEFAULT_GATEWAY_AUDIT_RETENTION_DAYS = 14`, `prune_old` rotation algorithm); `packages/d2b-broker/src/ops/audit_op.rs` (`OpAuditRecord`, `SwtpmDirAudit`, `SwtpmDirResult`, `SwtpmMarkerResult`); `packages/d2b-realm-core/src/ids.rs` (`OperationId`, `CorrelationId`, `PrincipalId` - `PrincipalId` becomes `subject_digest`); `packages/d2b/tests/audit_contract.rs`; `packages/d2b-broker/tests/broker_export_audit.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-audit/src/{hash_chain.rs,segment.rs,rate_limit.rs,record_types.rs,sink.rs,export.rs}` |
 | Detailed design | `d2b-audit` provides: typed record structs per class; canonical serialization with `zone` replacing `realm: RealmPath`; SHA-256 hash chain (extracted from `daemon_audit.rs`); segment writer (O_APPEND CLOEXEC, 64 MiB / UTC-midnight rotation); 30-day compaction (adapts `prune_old` from `JsonlGatewayAudit`); `AuditWriteClass::{Privileged,Standard,BestEffort}` (extends current `{Privileged,Unprivileged}`); rate-limit with privileged-never-dropped invariant; export iterator with inline hash-break reporting. `AuditStreamKind` re-versioned: `Daemon→Zone`, `Gateway→ZoneLink`, `RemoteNode→RemoteZone`. `AuditChainRecord` re-versioned: `{zone: String}` replaces `{realm: RealmPath, node: NodeId}`. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract unchanged: `AuditHash`, `AuditChainLink` from `d2b-realm-core/src/audit.rs`; copy hash-chain append algorithm from `daemon_audit.rs`; copy `AuditWriteClass`/rate-limit/rotation/prune from broker `audit.rs`; adapt `JsonlGatewayAudit` segment writer; adapt `OpAuditRecord` to `BrokerEffect` record class. |
@@ -2085,9 +2085,9 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | --- | --- |
 | Work item ID | `ADR046-audit-002` |
 | Dependency/owner | ADR046-audit-001 + ADR046-store-001; store/authz owner |
-| Current source | `packages/d2b-priv-broker/src/ops/audit_op.rs` (`OpAuditRecord` structural pattern - operation, peer_uid, decision, result fields); `packages/d2b-realm-core/src/audit.rs::AuditEnvelope{principal: PrincipalId, scope: AuthorizationScope, decision: AuthzDecision}` (principal → v3 `subject_digest`) |
+| Current source | `packages/d2b-broker/src/ops/audit_op.rs` (`OpAuditRecord` structural pattern - operation, peer_uid, decision, result fields); `packages/d2b-realm-core/src/audit.rs::AuditEnvelope{principal: PrincipalId, scope: AuthorizationScope, decision: AuthzDecision}` (principal → v3 `subject_digest`) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-store-redb/src/audit.rs`, `packages/d2b-core-controller/src/authz_audit.rs` |
+| Destination | `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb-redb/src/audit.rs`, `packages/d2b-core-controller/` |
 | Detailed design | `ResourceMutation` records emitted by the store actor inside the write transaction before commit returns. The audit sink must durably fsync the audit record before returning the commit success (privileged durability class). `RBACChange` emitted by the authz handler in the same write transaction. `subject_digest` = SHA-256 of normalized canonical subject string from v3 `AuthenticatedSubjectContext` (ADR-046-componentsession-and-bus). Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt `OpAuditRecord` structural pattern for `ResourceMutation` / `RBACChange` record classes; adapt `PrincipalId` → `subject_digest` derivation. |
 | Integration | Store write transaction → `d2b-audit` sink → fsync → commit result |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
@@ -2119,7 +2119,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | --- | --- |
 | Work item ID | `ADR046-audit-004` |
 | Dependency/owner | ADR046-audit-001; CLI owner |
-| Current source | `packages/d2b/tests/audit_contract.rs` (`d2b audit --strict` returns 78; `auditResponse` relay; `authz-audit-requires-admin` denial; daemon-down exit 1 without bash fallback); `packages/d2b-priv-broker/tests/broker_export_audit.rs` (`export_audit_requires_admin_and_exports_op_audit_records`: admin-only, path-free, NDJSON `ExportBrokerAuditOk` shape, `peer_uid` field, `ApplyNftables` operation name in records) |
+| Current source | `packages/d2b/tests/audit_contract.rs` (`d2b audit --strict` returns 78; `auditResponse` relay; `authz-audit-requires-admin` denial; daemon-down exit 1 without bash fallback); `packages/d2b-broker/tests/broker_export_audit.rs` (`export_audit_requires_admin_and_exports_op_audit_records`: admin-only, path-free, NDJSON `ExportBrokerAuditOk` shape, `peer_uid` field, `ApplyNftables` operation name in records) |
 | Reuse action | adapt |
 | Destination | `packages/d2b/src/zone_audit.rs` (new `d2b zone audit export` subcommand); `packages/d2b/tests/zone_audit_contract.rs` |
 | Detailed design | `d2b zone audit export` opens segments read-only (shared flock), streams NDJSON to stdout, validates hash chain inline, reports breaks as inline error records, and invokes only `d2b.audit.v3.AuditService/Export` under the admin-only `audit-export` session verb (same `SO_PEERCRED`/Role check as current `ExportBrokerAuditOk`). The session grant provides no Zone resource authority. Assert no `realm`, `node`, `workload_id` fields in exported records. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt audit CLI contract test (daemon-down/exit behavior); adapt broker export test to new `zone` field and v3 record schema. |
@@ -2189,7 +2189,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Dependency/owner | ADR046-telem-001; policy/contract-tests owner |
 | Current source | `packages/d2b-contract-tests/tests/policy_observability.rs` (`loki_native_otel_resource_attributes` allowlist: `["deployment.environment","host.name","service.name","service.namespace","source","vm.env","vm.name","vm.role"]`; `tempo_stack_signoz_backend_and_collector` SigNoz-only assertion; `startup_tracing_avoids_host_path_fields` forbidden fields); `packages/d2b-contract-tests/tests/policy_metrics.rs` (`EXPECTED_METRICS` table parity with `docs/reference/daemon-metrics.md`) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new); updated `policy_observability.rs`; updated `policy_metrics.rs` |
+| Destination | `packages/d2b-contract-tests/` (new); updated `policy_observability.rs`; updated `policy_metrics.rs` |
 | Detailed design | (1) Extend `loki_native_otel_resource_attributes` allowlist to include `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add redaction lint: scan all v3 instrumentation call sites for `realm`, `workload_id`, `node_id`, `vm` (as label key), `path`, `socket`, `argv`, `pid`, `exe`. (3) Add structural metric-label policy lint: parse every v3 `MetricDescriptor`, require each label key and value domain to exist in the closed `METRIC_LABEL_POLICY`, reject exact keys `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `network`, `network_name`, and `link_name_hash`, reject resource-name-derived key suffixes `*_name`, `*_name_hash`, `*_name_digest`, and `*_uid`, and prove `metadata.name`, UID, ResourceRef, and resource-identity canaries never enter label values. Fixed semantic labels remain allowed only with closed domains. (4) Prove the observability Provider's Unix-emitter, OTLP-Unix, OTLP/vsock, and import-stream adapters all invoke that validator before queue/batch/export; assert whole-frame rejection, bounded non-echoing error classes/quarantine, and policy-before-capacity backpressure. (5) Assert the `d2b.zone` Resource attribute remains present and audit is unchanged. (6) Add bucket boundary gates for 5 ms and 20 ms. (7) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = "realm-controllers"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend; keep existing tests; add new policy gates. |
 | Integration | Contract-tests run in workspace check and `make test-drift` |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
@@ -2206,7 +2206,7 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Dependency/owner | ADR046-audit-001 + ADR046-core-001; `Provider/system-core` owner |
 | Current source | `packages/d2b-core/src/unsafe_local_workloads.rs` (`UnsafeLocalWorkloadsJson`, `UnsafeLocalWorkload`, `UnsafeLocalLauncherItem`, `UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION = "v2"`, `MAX_UNSAFE_LOCAL_WORKLOADS = 256`); `packages/d2b-contracts/src/unsafe_local_wire.rs` (`HelperHello.uid: u32`, `HelperLaunchRequest`, `HelperShellRequest`, `HelperScopeKind::{Exec,Shell}`, `DaemonToUnsafeLocalHelper`, `UnsafeLocalHelperToDaemon`); `packages/d2bd/src/unsafe_local_helper.rs` (`HelperRegistry::new(daemon_uid, allowed_uids)`, `dispatch_launch`, `bind_helper_socket`); `packages/d2b-unsafe-local-helper/src/{main,protocol,runtime,systemd}.rs` (`HelperClient`, `ScopeRuntime`, `run_scope_supervisor`, `SystemdUserScopeManager`); `nixos-modules/options-realms-workloads.nix` (lines 221, 233-235 `kind = "unsafe-local"` description; lines 264-275 null `stateDir`/`runDir`); `nixos-modules/unsafe-local-workloads-json.nix` (`runtimeKind = "unsafe-local"`, `providerId = "unsafe-local"`); `nixos-modules/unsafe-local-helper.nix` (service unit) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-core/src/{host_reconciler.rs,host_status.rs,host_process_audit.rs}`; adapted `nixos-modules/unsafe-local-workloads-json.nix`; `packages/d2b-provider-system-core/tests/host_posture_contract.rs` |
+| Destination | `packages/d2b-provider-system-core/src/{host_reconciler.rs,host_status.rs,host_process_audit.rs}`; adapted `nixos-modules/unsafe-local-workloads-json.nix`; `packages/d2b-provider-system-core/` |
 | Detailed design | `Provider/system-core` reconciler: (1) On user-only `Host` resource creation (`defaultDomain=user`, `allowedDomains=[user]`), set `status.isolationPosture = "none"` and `status.isolationPostureMessage = "..."` unconditionally; reject any operator-supplied value for these fields. Host resources with other execution policies do not receive `isolationPosture`. (2) On every user-only Host process launch: emit `ProcessEffect{event:"launch", provider:"system-core-user", domain:"user", no_isolation:true, ...}` audit record. (3) On every user-only Host process stop: emit `ProcessEffect{event:"stop", ...}`. (4) `d2b zone list`/`inspect` CLI renders `⚠ no isolation boundary (user domain)` annotation only for `Host` resources with `isolationPosture: "none"`; annotation is not suppressible. (5) `isolation-posture-declared` doctor check: passes when user-only `Host` resource status has `isolationPosture: "none"`; omitted when Zone has no user-only `Host` resources. (6) `no_isolation=true` is emitted in `ProcessEffect` records only; it does not appear in any OTEL span attribute, log field, or metric label. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt `UnsafeLocalWorkload` private-bundle contract for the `Host` resource spec payload; adapt `HelperRegistry::allowed_uids` constraint as `defaultUserRef=User/<name>` validation; adapt Nix `unsafe-local-workloads-json.nix` emitter for the new Host resource shape; gap-fill: add `ProcessEffect{no_isolation:true}` at `dispatch_launch` / stop call sites. |
 | Integration | `Provider/system-core` reconciler → `d2b-audit` sink; `d2b zone doctor` → resource status check; `d2b zone list`/`inspect` → CLI output renderer |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
@@ -2359,14 +2359,14 @@ excluded or adapted.
 | Dependency/owner | ADR046-reuse-004 + ADR046-reuse-006; core-controller routing owner |
 | Current source | Main commit source row below: `packages/d2bd/` routing/provider effects files and tests at `a1cc0b2d`. |
 | Reuse action | adapt |
-| Destination | `packages/d2b-bus/src/service_router.rs` and `packages/d2b-core-controller/src/provider_effects.rs`. |
+| Destination | `packages/d2b-bus/src/service_router.rs` and `packages/d2b-core-controller/`. |
 | Detailed design | Closed-set service.package route gates, provider lifecycle effect-adapter composition, closed-set error mapping, fixed local policy invariants, and bootstrap/enrolled credential binding shape. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt route-gate and ProviderLifecycleDispatch patterns; exclude daemon-embedded effect composition and route through v3 bus/provider processes.. |
 | Data migration | Full d2b 3.0 reset; no v2 daemon routing/provider-effects state import |
 | Removal proof | ADR45 daemon-embedded effect adapters and realm child supervisor assumptions are excluded; v3 bus/provider effects own the adapted behavior. |
 | Main commit source | `packages/d2bd/` at `a1cc0b2d`. Key files: `src/provider_registry.rs` (full `ProviderCompositionError` mapping, factory composition, `DaemonEffectAdapters` wiring), `src/provider_effects.rs` (`ProviderLifecycleDispatch`, `DaemonEffectAdapterError`, effect adapter structs per domain: `DeviceEffectAdapter`, `AudioEffectAdapter`, etc.), `src/control_services/provider.rs` (`owns`: `service.package == "d2b.provider.v2"` route gate), `src/control_services/daemon.rs` (daemon service route gate), `src/realm_child_supervisor.rs` (realm supervisor with pidfd adoption), `src/realm_stubs.rs`. Tests: `tests/daemon_service_v2.rs` (`every_generated_daemon_method_has_one_typed_adapter`, `local_daemon_policy_is_fixed_and_has_no_negotiation_or_fd_surface`, `public_daemon_handshake_rejects_daemon_or_guest_proxy_schema_mismatch`, `daemon_uses_shared_bootstrap_and_enrolled_guest_credential_bindings`, `shared_guest_session_credential_rejects_zero_authority`, `daemon_guest_paths_do_not_call_broker_signing_or_define_a_private_codec`), `tests/realm_child_supervisor_v2.rs`, `tests/realm_service_v2.rs`. |
 | Selected behavior | `service.package == "d2b.provider.v2"` route gate pattern (closed-set package matching without reflection); `ProviderLifecycleDispatch` effect-adapter composition; `DaemonEffectAdapterError` closed-set; `local_daemon_policy_is_fixed` test invariant (no negotiation surface, no fd surface on local policy); bootstrap/enrolled credential binding shape. |
 | Excluded ADR45 assumptions | `DaemonEffectAdapters` is daemon-embedded effect composition - v3 effect adapters are per-Provider-process, not daemon-embedded. `control_services/provider.rs::owns` routes to the ADR45 `d2bd` daemon service; v3 routes through `d2b-bus`. `RealmPath as ProviderRealmPath`/`WorkloadId` imports are ADR45 realm concepts - excluded from v3 bus routing. `realm_child_supervisor.rs` uses `RealmId`/`WorkloadId` to supervise child realm processes - v3 replaces with Zone resource UID supervision. `realm_stubs.rs` stubs out ADR45 realm creation - excluded. |
-| v3 Destination | `packages/d2b-bus/src/service_router.rs` (adapts route-gate pattern); `packages/d2b-core-controller/src/provider_effects.rs` (adapts `ProviderLifecycleDispatch`); route-gate policy tests adapted from `daemon_service_v2.rs` invariants. |
+| v3 Destination | `packages/d2b-bus/src/service_router.rs` (adapts route-gate pattern); `packages/d2b-core-controller/` (adapts `ProviderLifecycleDispatch`); route-gate policy tests adapted from `daemon_service_v2.rs` invariants. |
 | Integration | Bus service router uses `service.package` closed-set matching from route-gate pattern; `ProviderLifecycleDispatch` feeds `d2b_provider_component_phase` metric. |
 | Validation | Port `local_daemon_policy_is_fixed_and_has_no_negotiation_or_fd_surface` invariant to v3 bus local policy test; port `every_generated_daemon_method_has_one_typed_adapter` to v3 bus method adapter completeness test. |
 | Implementation state | Planned |
@@ -2380,14 +2380,14 @@ excluded or adapted.
 | Dependency/owner | ADR046-reuse-001; contract-tests owner |
 | Current source | Main commit source row below: ComponentSession vector/conformance tests at `a1cc0b2d`. |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contract-tests/tests/component_session_v2_vectors.rs` and `tests/noise_vectors.rs` copied verbatim. |
+| Destination | `packages/d2b-contract-tests/` and `tests/noise_vectors.rs` copied verbatim. |
 | Detailed design | Pinned Noise KAT vectors, transcript/PSK mutation rejection, typed bootstrap admission fixture, and public-key corruption rejection remain the session wire security ground truth. Primary reuse disposition: `adapt`. Preserved source-plan detail: Copy the vector and conformance tests verbatim; add v3 constant gate for ComponentSession major/minor version.. |
 | Data migration | None - docs/tooling only; no runtime state |
 | Removal proof | None - net-new; no prior owner to remove |
 | Main commit source | `packages/d2b-contract-tests/tests/component_session_v2_vectors.rs` at `a1cc0b2d` (`committed_noise_vectors_verify_with_pinned_snow`, `declared_noise_public_key_corruption_is_rejected`, `bootstrap_fixture_mutations_execute_typed_admission_state`, `transcript_and_psk_mutations_are_rejected`). `packages/d2b-contracts/tests/component_session_v2.rs` at `a1cc0b2d`. `packages/d2b-session/tests/noise_vectors.rs` (pinned KAT vectors). |
 | Selected behavior | Pinned Noise KAT vectors against the exact `snow` version; transcript+PSK mutation rejection; bootstrap fixture typed-admission state machine; public-key corruption detection. These tests are the ground-truth for session wire security. |
 | Excluded ADR45 assumptions | None - these tests have no topology dependency. They test only the cryptographic layer. |
-| v3 Destination | `packages/d2b-contract-tests/tests/component_session_v2_vectors.rs` copied verbatim. `tests/noise_vectors.rs` copied verbatim. Neither file requires modification. |
+| v3 Destination | `packages/d2b-contract-tests/` copied verbatim. `tests/noise_vectors.rs` copied verbatim. Neither file requires modification. |
 | Integration | These tests run in `make test-rust` / `cargo test -p d2b-contract-tests` and `cargo test -p d2b-session`. They are gating for any Noise library update. |
 | Validation | These tests are self-validating. Add one gate: assert `COMPONENT_SESSION_MAJOR = 2` and `COMPONENT_SESSION_MINOR = 0` constants are unchanged in v3 contract. |
 | Implementation state | Planned |
@@ -2437,9 +2437,9 @@ excluded or adapted.
 | --- | --- |
 | Work item ID | `ADR046-telem-010` |
 | Dependency/owner | ADR046-telem-009 + ADR046-telem-006 + ADR046-store-001; schema/validation owner |
-| Current source | `packages/d2b-contract-tests/tests/policy_observability.rs::startup_tracing_avoids_host_path_fields` (forbidden-field pattern enforcement - adapt as bundle forbidden-field gate); `packages/d2b-contract-tests/tests/policy_metrics.rs` (metric inventory policy test pattern); `packages/d2b-priv-broker/src/runtime.rs` (current runtime schema load/verify pattern); `packages/d2b-contracts/src/provider_registry_v2.rs::ProviderBindingV2` (non-exhaustive signed schema contract) |
+| Current source | `packages/d2b-contract-tests/tests/policy_observability.rs::startup_tracing_avoids_host_path_fields` (forbidden-field pattern enforcement - adapt as bundle forbidden-field gate); `packages/d2b-contract-tests/tests/policy_metrics.rs` (metric inventory policy test pattern); `packages/d2b-broker/src/runtime.rs` (current runtime schema load/verify pattern); `packages/d2b-contracts/src/provider_registry_v2.rs::ProviderBindingV2` (non-exhaustive signed schema contract) |
 | Reuse action | adapt |
-| Destination | `nixos-modules/resources-bundle.nix` (build-time validation step 4 in the `resources-bundle` derivation); `packages/d2b-core-controller/src/configuration.rs` (runtime activation checks) |
+| Destination | `nixos-modules/resources-bundle.nix` (build-time validation step 4 in the `resources-bundle` derivation); `packages/d2b-core-controller/` (runtime activation checks) |
 | Detailed design | Build-time: (1) For each `Provider` resource, fetch the `resourceTypeSchema` output from the package; validate `settings` JSON against the JSON Schema; fail the build on schema mismatch or unknown fields. (2) Assert no resource spec field contains a bare secret/path/argv (forbidden-field pattern from `startup_tracing_avoids_host_path_fields`). Runtime: (3) Core-controller re-validates Provider package identity (per ADR-046-provider-model-and-packaging) against the installed package; resolves Credential refs; checks conflict/bounds; rejects with closed-enum `generation-rejected` reason on any failure; no partial activation. (4) Provider schema mismatch between the bundle's schema and the installed Provider's live schema → reject, emit `generation-rejected{reason="package-identity-mismatch"}`. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt `startup_tracing_avoids_host_path_fields` forbidden-field pattern for bundle schema gate; adapt `ProviderBindingV2` non-exhaustive contract for Provider-specific settings schema fingerprint. |
 | Integration | Nix `resources-bundle.nix` derivation gate + core-controller `configuration.rs` activation path |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
@@ -2454,7 +2454,7 @@ excluded or adapted.
 | --- | --- |
 | Work item ID | `ADR046-telem-011` |
 | Dependency/owner | ADR046-telem-009 + ADR046-telem-010 + ADR046-audit-001 + ADR046-store-001; core-controller owner |
-| Current source | `packages/d2bd/src/daemon_audit.rs` (hash-chain `ResourceMutation`-like append pattern - adapt for cleanup audit records); `packages/d2b-priv-broker/src/audit.rs` (`AuditWriteClass::{Standard,Unprivileged}` - cleanup audit records use `Standard` durability); `packages/d2b-realm-core/src/audit.rs::AuditChainLink::new` (hash-chain append for cleanup audit records); `nixos-modules/manifest.nix` (prior-generation retention pattern in the current bundle contract) |
+| Current source | `packages/d2bd/src/daemon_audit.rs` (hash-chain `ResourceMutation`-like append pattern - adapt for cleanup audit records); `packages/d2b-broker/src/audit.rs` (`AuditWriteClass::{Standard,Unprivileged}` - cleanup audit records use `Standard` durability); `packages/d2b-realm-core/src/audit.rs::AuditChainLink::new` (hash-chain append for cleanup audit records); `nixos-modules/manifest.nix` (prior-generation retention pattern in the current bundle contract) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/{configuration.rs, ownership.rs}` |
 | Detailed design | (1) On new generation activation, every stored `managedBy=configuration` resource absent from the new configured set receives `deletionRequestedAt` plus `deletion-pending`; controller/API-managed resources are untouched. (2) Activation returns after durable intent queueing and does not wait for cleanup. (3) The ownership handler drives child-before-parent finalizers. (4) When finalizers clear, one atomic store transaction writes the `Deleted` revision/change event and removes the row and indexes. After commit, the audit subsystem appends `ResourceMutation{event="deleted", trigger="config-cleanup"}` from that revision using a dedup/exactly-once recovery key; audit append is not part of the store transaction. (5) Stall detection sets `cleanup-stalled` without force-removing finalizers. (6) Prior generations use count retention, default 3 and range 1..16, with no TTL. (7) Core sets `managedBy`/`configurationGeneration` in persisted resources; input bundles omit both. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt hash-chain append from `daemon_audit.rs` for `ResourceMutation{trigger="config-cleanup"}` records; adapt prior-generation retention window from `manifest.nix` pattern. |

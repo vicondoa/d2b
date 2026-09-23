@@ -2505,7 +2505,7 @@ On controller binary upgrade:
 | Field | Value |
 | --- | --- |
 | Dependency/owner | `ADR046-transport-unix-006`; Core; broker/core contract work consumed by ADR046-nl-001. The transport item is the dependency-ordered prior writer of the shared broker wire, privilege, audit, runtime, and dispatch surfaces; this item is their later Network-operation writer. |
-| Current source | Existing broker wire has related ApplyNftables, ApplyRoute, ApplySysctl, ApplyNmUnmanaged, UpdateHostsFile, SeedDnsmasqLease, and `CreatePersistentTap` operations, but no paired `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, or `ApplyNftablesProjection` v3 ops. The shipped `ApplyNftables` op discards `ownership_id` and does a whole-table `delete table ...; table ...` replace (`packages/d2b-priv-broker/src/ops/nft.rs`), so it cannot express per-Network projection mutation; `ApplyNftablesProjection` is authored to replace that mapping for `apply_host_firewall`/`remove_host_firewall` (D-NETWORK-004 in `ADR-046-resources-network.md`). |
+| Current source | Existing broker wire has related ApplyNftables, ApplyRoute, ApplySysctl, ApplyNmUnmanaged, UpdateHostsFile, SeedDnsmasqLease, and `CreatePersistentTap` operations, but no paired `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, or `ApplyNftablesProjection` v3 ops. The shipped `ApplyNftables` op discards `ownership_id` and does a whole-table `delete table ...; table ...` replace (`packages/d2b-broker/src/ops/nft.rs`), so it cannot express per-Network projection mutation; `ApplyNftablesProjection` is authored to replace that mapping for `apply_host_firewall`/`remove_host_firewall` (D-NETWORK-004 in `ADR-046-resources-network.md`). |
 | Reuse action | adapt |
 | Destination | Broker wire contract and broker/core adapter operation table for `DeletePersistentTap`, `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, and `ApplyNftablesProjection`. |
 | Detailed design | Add canonical closed `DeletePersistentTap` paired with `CreatePersistentTap`, plus `CreateBridge`, `DeleteBridge`, `ReadNftablesDigest`, `ReadSysctlState`, `ReadBridgePortFlags`, and `ApplyNftablesProjection`. `DeletePersistentTapRequest` contains only an opaque attachment ID and expected Network/attachment generations. `ApplyNftablesProjectionRequest` contains only an opaque `bundle_nft_projection_ref`, a closed `NftProjectionAction { Apply, Remove }`, an `expected_generation_id` fence, and an optional `tracing_span_id`; the broker resolves the projection (ownership marker + rule set) from the private bundle, mutates only that marker's rules inside `inet d2b`, byte-preserves every other Network and device-usbip marker, never whole-table replaces, treats validated absence as success, rejects foreign markers without deletion, and emits a path-free post-effect audit with a projection-scoped digest. The broker resolves trusted realization state, validates generations and ownership marker, treats validated absence as success, rejects foreign markers without deletion, and emits path-free post-effect audit. No request accepts an IfName, path, inline rule text, or caller-authored marker. Primary reuse disposition: `adapt`. Preserved source-plan detail: extend broker wire with net-new operations and reuse existing closed broker-operation dispatch shape. |
@@ -2583,7 +2583,7 @@ On controller binary upgrade:
 | Dependency/owner | Provider; owns net-agent ComponentSession service and depends on ComponentSession/bus and net-VM Process lifecycle. |
 | Current source | None - net-new v3 NetworkAgentService; v1 net-VM behavior was encoded in NixOS services and scripts under `nixos-modules/net.nix`. |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-network-local/src/process_specs.rs` agent template plus agent service implementation in the net-VM artifact. |
+| Destination | `packages/d2b-provider-network-local/` agent template plus agent service implementation in the net-VM artifact. |
 | Detailed design | Implement `NetworkAgentService` Noise-KK vsock ComponentSession (Reload + ReadinessQuery methods). Agent reconnect policy: if the controller cannot reach the agent vsock (Guest restart in progress), it retries with exponential backoff up to `drainTimeout` of the agent Process; after timeout it deletes and re-creates the agent Process resource. Primary reuse disposition: `create`. Preserved source-plan detail: net-new service; preserve semantic nftables/routes reload behavior from v1 net VM configuration. |
 | Integration | Controller writes config Volume content, resolves `Endpoint/net-<networkName>-agent-service`, calls `Reload(config_digest)`, and uses readiness predicates to set Network conditions. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
@@ -2599,7 +2599,7 @@ On controller binary upgrade:
 | Current source | Reuse semantics from `nixos-modules/net.nix` lines 168-296 for nftables and lines 302-441 for dnsmasq; runtime volume model is net-new. |
 | Reuse source | `nixos-modules/net.nix` dnsmasq, nftables, routing, and attachment configuration semantics. |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-network-local/src/config_volume.rs`. |
+| Destination | `packages/d2b-provider-network-local/`. |
 | Detailed design | Implement config Volume content rendering (dnsmasq.conf, nftables.rules, routing.conf, attachments.json). Primary reuse disposition: `adapt`. Preserved source-plan detail: port and render into bounded config Volume files. |
 | Integration | Controller creates `Volume/net-<networkName>-config`, writes four files through the Volume service, attaches the read-only view to the net VM, and triggers agent reload plus dnsmasq restart. |
 | Data migration | Full d2b 3.0 reset; config Volume is runtime tmpfs content regenerated from Network spec. |
@@ -2614,7 +2614,7 @@ On controller binary upgrade:
 | Dependency/owner | Provider; Process resource builders owned by `d2b-provider-network-local`. |
 | Current source | v1 dnsmasq and mDNS process shape came from `nixos-modules/net.nix` and static NixOS services; no v3 Process builder exists. |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-network-local/src/process_specs.rs`. |
+| Destination | `packages/d2b-provider-network-local/`. |
 | Detailed design | Implement canonical Process spec builders for agent, dnsmasq, mdns-reflector, mdns-dnsbridge. Primary reuse disposition: `adapt`. Preserved source-plan detail: port service semantics into canonical Process resource specs. |
 | Integration | Controller creates agent service, dnsmasq worker, and optional mDNS workers as owned Process resources on the net VM; Process Provider reports readiness and lifecycle status. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
@@ -2676,7 +2676,7 @@ On controller binary upgrade:
 | Dependency/owner | Tests; owned by `d2b-provider-network-local` hermetic test suite. |
 | Current source | Reusable semantic assertions come from §25.1 IfName/CIDR reuse inventory and Network schema defined in this spec. |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-network-local/tests/schema_roundtrip.rs`, `tests/ifname_derive.rs`, and `tests/cidr_overlap.rs`. |
+| Destination | `packages/d2b-provider-network-local/`, `tests/ifname_derive.rs`, and `tests/cidr_overlap.rs`. |
 | Detailed design | Conformance suite: NetworkSpec round-trip, IfName derivation, CIDR validation matrix. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt existing IfName/CIDR assertions into provider conformance tests. |
 | Integration | Test suite runs under `cargo test -p d2b-provider-network-local --lib --tests` and validates provider schema before integration gates. |
 | Data migration | None - docs/tooling only; no runtime state. |
@@ -2691,7 +2691,7 @@ On controller binary upgrade:
 | Dependency/owner | Tests; depends on ADR046-nl-006 controller and fake `NetworkEffectPort` from `d2b-contracts`. |
 | Current source | None - net-new v3 controller state-machine test; v1 shell/Nix gates are not a controller-reconcile equivalent. |
 | Reuse action | create |
-| Destination | `packages/d2b-provider-network-local/tests/controller_state.rs`. |
+| Destination | `packages/d2b-provider-network-local/`. |
 | Detailed design | Controller state-machine unit tests with fake `NetworkEffectPort` (from d2b-contracts mock) and deterministic clock, including attachment removal/finalizer calls to generation-fenced `DeletePersistentTap`. |
 | Integration | Hermetic fake effect port drives reconcile, observe, finalizer, and adoption transitions without real broker, systemd, container, or network dependencies. |
 | Data migration | None - docs/tooling only; no runtime state. |

@@ -1724,7 +1724,7 @@ applies here exactly as everywhere else in the repository).
 | Current source | `packages/d2bd/src/storage_lifecycle.rs` (`run_startup_contract_check`, bundle-versioned contract validation pattern); `packages/d2bd/src/ownership_preflight.rs` (`EntrySpec`, legacy-recovery-artifact optionality); `packages/d2b/src/lib.rs` `build_storage_migration_plan`/`storage_migration_checkpoint_id` |
 | Reuse source | None from main; this is a v3-only cross-cutting concern with no main-branch equivalent |
 | Reuse action | adapt |
-| Destination | `packages/d2b-cutover/src/{inventory,snapshot,checkpoint}.rs` |
+| Destination | `packages/d2b-reset-and-cutover-dossier/src/{inventory,snapshot,checkpoint}.rs` |
 | Detailed design | Implement the seven closed inventories of [Authoritative inventories](#authoritative-inventories); the `checkpoint_id` digest algorithm of [Preflight and immutable snapshot](#preflight-and-immutable-snapshot); the atomic snapshot-write sequence (temp file, fsync, rename, parent fsync, post-rename immutability) Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `d2b host cutover preflight`/`plan` CLI commands consume this crate exclusively; no other crate re-implements inventory walking |
 | Data migration | New; no prior inventory/snapshot format exists |
@@ -1742,7 +1742,7 @@ applies here exactly as everywhere else in the repository).
 | Current source | `nixos-modules/bundle-artifacts.nix`, `nixos-modules/assertions.nix` (existing eval-time validation precedent); `ADR-046-nix-configuration` "Bundle and generation emission" |
 | Reuse source | None from main |
 | Reuse action | adapt |
-| Destination | `packages/d2b-cutover/src/{bundle_validate,trust_preflight}.rs` |
+| Destination | `packages/d2b-reset-and-cutover-dossier/src/{bundle_validate,trust_preflight}.rs` |
 | Detailed design | Independent legacy-flake-check gate; candidate v3 bundle schema/cross-ref/determinism validation per [Config/artifact/schema validation](#configartifactschema-validation); Provider trust preflight per `ADR-046-provider-model-and-packaging` "Trust" |
 | Integration | Invoked by `preflight` before the snapshot is written; failures block `plan` from being offered |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1760,7 +1760,7 @@ applies here exactly as everywhere else in the repository).
 | Current source | `packages/d2b/src/lib.rs` `require_explicit_mutation_flag`, `cmd_host_destroy` (dry-run/apply precondition pattern); [ADR 0040](../adr/0040-graceful-vm-shutdown.md) graceful shutdown path |
 | Reuse source | None from main |
 | Reuse action | adapt |
-| Destination | `packages/d2b-cutover/src/{consent,drain,disposition}.rs` |
+| Destination | `packages/d2b-reset-and-cutover-dossier/src/{consent,drain,disposition}.rs` |
 | Detailed design | Exact-consent-phrase gate bound to `checkpoint_id`; Phase 3 drain algorithm (§ [Old daemon/unit/process drain](#old-daemonunitprocess-drain)); the [Disposition framework](#disposition-framework)'s Adopt/Preserve/Destroy executor, delegating every Adopt to ADR046-reset-004 Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `d2b host cutover apply` orchestrates drain then disposition execution then hands off to Phase 5 (ADR046-reset-005) |
 | Data migration | Destructive; this is where Phase 3/4 boundary-of-no-return-approach begins (rollback still open through end of Phase 4) |
@@ -1775,10 +1775,10 @@ applies here exactly as everywhere else in the repository).
 | --- | --- |
 | Work item ID | `ADR046-reset-004` |
 | Dependency/owner | ADR046-reset-003; `ADR-046-provider-state` owner; `device-tpm`/`volume-local` Provider owners |
-| Current source | `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` (marker fail-closed pattern); `packages/d2b-host/src/hardlink_farm.rs` (same-filesystem rename pattern) |
+| Current source | `packages/d2b-broker/src/ops/swtpm_dir.rs` (marker fail-closed pattern); `packages/d2b-host/src/hardlink_farm.rs` (same-filesystem rename pattern) |
 | Reuse source | None from main |
 | Reuse action | adapt |
-| Destination | `packages/d2b-cutover/src/adopt.rs`, thin wrapper invoking `ADR-046-provider-state`'s migration `EphemeralProcess` prepare/stage/commit/rollback machinery with cutover-specific source paths |
+| Destination | `packages/d2b-reset-and-cutover-dossier/src/adopt.rs`, thin wrapper invoking `ADR-046-provider-state`'s migration `EphemeralProcess` prepare/stage/commit/rollback machinery with cutover-specific source paths |
 | Detailed design | One Adopt invocation per matrix row tagged `Adopt` in the [migration/disposition matrix](#migrationdisposition-matrix); marker re-validation before every step; new-marker-before-old-removal ordering; idempotent re-run safety per [Crash/power-loss/retry/idempotency journals](#crashpower-lossretryidempotency-journals) |
 | Integration | Called by ADR046-reset-003's disposition executor for every Adopt row; writes to the state Volumes ADR046-device-tpm-004/ADR046-vl-004/ADR046-vl-006 define |
 | Data migration | This work item *is* the data migration mechanism for TPM/store-view/disk-image/unsafe-local-scope bytes |
@@ -1796,7 +1796,7 @@ applies here exactly as everywhere else in the repository).
 | Current source | None (bootstrap sequencing over Zone runtime startup, which is itself ADR-only) |
 | Reuse source | None |
 | Reuse action | create |
-| Destination | `packages/d2b-cutover/src/{store_bootstrap,provider_sequence}.rs` |
+| Destination | `packages/d2b-reset-and-cutover-dossier/src/{store_bootstrap,provider_sequence}.rs` |
 | Detailed design | Phase 5 store creation per [Resource-store initialization](#resource-store-initialization); Phase 6 topological Provider install per [Provider install/topological start](#provider-installtopological-start), including the fixed staged default order and cycle-rejection check |
 | Integration | Invoked immediately after ADR046-reset-003/004 complete; hands off to Phase 7 (ADR046-reset-006) |
 | Data migration | Destructive v3 bootstrap; no v2 resource import (per `ADR046-store-005`, `ADR046-object-001`) |
@@ -1814,7 +1814,7 @@ applies here exactly as everywhere else in the repository).
 | Current source | ADR 0032 gateway guest custody evidence (`d2b-realm-router/src/service_v2.rs` `CredentialCustody`); frozen target model in `ADR-046-resources-zone-control` §3.1/§10.3 and `ADR-046-nix-configuration` "Zone declaration"/"ZoneLink" |
 | Reuse source | None from main |
 | Reuse action | adapt |
-| Destination | `packages/d2b-cutover/src/{zonelink_cutover,guest_activation}.rs` |
+| Destination | `packages/d2b-reset-and-cutover-dossier/src/{zonelink_cutover,guest_activation}.rs` |
 | Detailed design | Phase 7 translation from `EntrypointMode::GatewayBacked`/`HostResident` per [Zone/ZoneLink cutover](#zonezonelink-cutover): the child authors/stores one local uplink with self-matching `childZoneName`; compiler-only `parentZone` selects the allocator; the parent retains only sealed allocator/route state and owns no reciprocal row or ZoneLink handler. Phase 8 follows Network→Volume→Device→Guest ordering per [Guest/runtime/network/store view activation](#guestruntimenetworkstore-view-activation). The parent inventory never enumerates gateway-guest-internal credential/audit state |
 | Integration | Consumes Providers installed by ADR046-reset-005; hands off to ADR046-reset-007 (verification) |
 | Data migration | None (the child-local ZoneLink is ordinary Nix-authored configuration, `parentZone` is recompiled into sealed allocator state, and neither is migrated credential material) |
@@ -1832,7 +1832,7 @@ applies here exactly as everywhere else in the repository).
 | Current source | ADR 0034 degraded-state ledger taxonomy and repair-never-trusts-ledger-paths invariant |
 | Reuse source | None from main |
 | Reuse action | adapt |
-| Destination | `packages/d2b-cutover/src/{verify,doctor,degraded}.rs` |
+| Destination | `packages/d2b-reset-and-cutover-dossier/src/{verify,doctor,degraded}.rs` |
 | Detailed design | The ten `verify` checks in [Post-cutover verification](#post-cutover-verification); the `cutover-quarantined` degraded class and `doctor` reporting in [Failure/quarantine/manual recovery](#failurequarantinemanual-recovery); audit chain closure/genesis-record cross-check (check 9) Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `d2b host cutover verify`/`doctor` CLI commands; consumed by the Phase 10 finalize gate table |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1850,7 +1850,7 @@ applies here exactly as everywhere else in the repository).
 | Current source | `ADR-046-cli-and-operations` "Removal notes" (live-successor-before-deletion criterion) |
 | Reuse source | None |
 | Reuse action | create |
-| Destination | `packages/d2b-cutover/src/finalize.rs` |
+| Destination | `packages/d2b-reset-and-cutover-dossier/src/finalize.rs` |
 | Detailed design | Per-candidate independent gate evaluation exactly as tabled in [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates); separate consent phrase from `apply`; never partial-destroys a candidate |
 | Integration | `d2b host cutover finalize` CLI command; reads gate status from ADR046-reset-007's verify results plus each named policy-lint/integration test's pass/fail recorded in CI |
 | Data migration | This work item is where every previously-Preserved legacy artifact is finally Destroyed, one gate at a time |
@@ -1868,7 +1868,7 @@ applies here exactly as everywhere else in the repository).
 | Current source | ADR 0034 "dry-run and preflight output print the checkpoint id and exact rollback command before any apply step begins" |
 | Reuse source | None from main |
 | Reuse action | adapt |
-| Destination | `packages/d2b-cutover/src/{journal,rollback,hold}.rs` |
+| Destination | `packages/d2b-reset-and-cutover-dossier/src/{journal,rollback,hold}.rs` |
 | Detailed design | Append-only journal per [Crash/power-loss/retry/idempotency journals](#crashpower-lossretryidempotency-journals); [Rollback boundary](#rollback-boundary) enforcement (`cutover-rollback-window-closed` past phase 4); cutover-wide incident hold per [Incident hold (cutover-wide)](#incident-hold-cutover-wide) |
 | Integration | `d2b host cutover rollback`/`hold` CLI commands; consulted by ADR046-reset-003's disposition executor and ADR046-reset-008's finalize gate before every mutating step |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -1886,7 +1886,7 @@ applies here exactly as everywhere else in the repository).
 | Current source | `ADR-046-resources-zone-control` §2.6 (`core.zone-drain` finalizer algorithm), §9.4 (out-of-band destructive reset, uid=0 authentication) |
 | Reuse source | None from main |
 | Reuse action | adapt |
-| Destination | `packages/d2b-cutover/src/reset_scope.rs`; `d2b host reset` CLI command |
+| Destination | `packages/d2b-reset-and-cutover-dossier/src/reset_scope.rs`; `d2b host reset` CLI command |
 | Detailed design | The three reset scopes and their comparison table in [Full Zone reset vs Provider reset vs Guest reset](#full-zone-reset-vs-provider-reset-vs-guest-reset); durable-Volume preserve-by-default with explicit `--destroy-durable-volumes`/`--destroy-volumes` opt-in; OS-level authentication for the zone scope only |
 | Integration | Standalone from the cutover Phases 0-10 above; usable at any later time as a recovery/maintenance lever once a Zone exists |
 | Data migration | None (this is a post-cutover recovery operation, not part of the cutover data migration itself) |

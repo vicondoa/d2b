@@ -1986,7 +1986,7 @@ close. Each maps to the attacker class it is scoped against.
 
 | Item | Treatment |
 | --- | --- |
-| v3 current anchor | `packages/d2b-priv-broker/src/{sys.rs,ops/*}` (broker sole-executor, cgroup/namespace pre-establishment); `packages/d2b-core/src/{storage,processes,privileges,minijail_profile}.rs` (typed process DAG/minijail profiles/broker effects); `packages/d2b-contracts/src/v3/*`, `packages/d2b-resource-store*`, and `packages/d2b-resource-api` (strict resource DTOs/codecs, engine-neutral store contracts, native RBAC, single-owner checked store binding, service wiring, and `UnregisteredBusAdapter`); `packages/d2b-realm-core/src/workload.rs` (`IsolationPosture::UnsafeLocal`); `packages/d2bd/src/{exec_session.rs,realm_access_resolver.rs}`; `nixos-modules/{assertions.nix,net.nix,manifest.nix,bundle-artifacts.nix}`; `SECURITY.md` (disclosure policy, v1/v2 trust-boundary deltas) |
+| v3 current anchor | `packages/d2b-broker/src/{sys.rs,ops/*}` (broker sole-executor, cgroup/namespace pre-establishment); `packages/d2b-core/src/{storage,processes,privileges,minijail_profile}.rs` (typed process DAG/minijail profiles/broker effects); `packages/d2b-contracts/src/v3/*`, `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb*`, and `packages/d2b-resource-api` (strict resource DTOs/codecs, engine-neutral store contracts, native RBAC, single-owner checked store binding, service wiring, and `UnregisteredBusAdapter`); `packages/d2b-realm-core/src/workload.rs` (`IsolationPosture::UnsafeLocal`); `packages/d2bd/src/{exec_session.rs,realm_access_resolver.rs}`; `nixos-modules/{assertions.nix,net.nix,manifest.nix,bundle-artifacts.nix}`; `SECURITY.md` (disclosure policy, v1/v2 trust-boundary deltas) |
 | v3 evidence class | Mixed. Broker sole-executor, cgroup/namespace pre-establishment, TPM/USBIP device hardening, and Nix eval-time assertions are `implemented-and-reachable`. Resource DTOs/codecs, native RBAC, the checked service/store boundary, and the authenticated ttrpc adapter are `implemented-but-unwired`: `UnregisteredBusAdapter` has no production d2b-bus or Zone dispatch, and no production redb backend has passed the required vetting and conformance gate. ComponentSession production routing, every standard ResourceType implementation, and every frozen Provider remain planned (no `Provider/*` crate exists in the protected v3 baseline; see `ADR-046-current-code-migration-map.md` §8.3 disposition table) |
 | Main reuse source | main `a1cc0b2d`: `d2b-session`/`d2b-session-unix` (ComponentSession Noise/record/attachment machinery), `d2b-contracts/src/{public_wire.rs,provider_registry_v2.rs}` (typed RPC/registry shape), `d2b-priv-broker/src/ops/{swtpm_dir.rs,storage_contract.rs}` (fail-closed marker/quarantine pattern) |
 | Behavior retained | Broker-as-sole-privileged-executor; fail-closed typed errors; pidfd/InvocationID adoption identity; positive-capability provider traits; argv/secret/path redaction discipline; OTEL/audit architectural separation; quarantine-not-kill on ambiguous adoption (ADR 0034 continuation) |
@@ -2006,7 +2006,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | `packages/d2b-contract-tests/tests/policy_observability.rs` (existing v3 cardinality/label policy gate) |
 | Reuse source | None (new cross-cutting gate; no equivalent exists in main) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` |
+| Destination | `packages/d2b-contract-tests/` |
 | Detailed design | One policy test enumerating every forbidden metric-label/audit-field value from §21 and the content-secrecy table in §20 (store paths, `no_isolation`, credential bytes, raw paths/argv/PID/cgroup, CTAP/clipboard/terminal/notification content) and asserting, by static scan of instrumentation call sites plus a redaction-guard runtime test, that no `ADR046-*` Provider crate emits any of them Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Runs as part of `make test-lint`/`make test-rust`; every Provider crate's own redaction test (e.g. `tests/stream_redaction.rs`) is a per-Provider instance of the same closed list |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2024,7 +2024,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | main `a1cc0b2d`: `d2b-session/tests/noise_vectors.rs`, `d2b-session/tests/component_session.rs`, `d2b-session-unix/tests/unix_session.rs` |
 | Reuse source | Same main commit/paths |
 | Reuse action | adapt |
-| Destination | `packages/d2b-session/tests/noise_conformance.rs`, `packages/d2b-session/fuzz/fuzz_targets/{handshake_offer,record_frame}.rs` |
+| Destination | `packages/d2b-session/`, `packages/d2b-session/{handshake_offer,record_frame}.rs` |
 | Detailed design | Property/fuzz test suite over the three Noise profiles (§7): exact NN/KK/IKpsk2 vectors and rejection mutations (copied), plus new `cargo-fuzz` targets mutating the canonical handshake offer, preface, and encrypted record frame to assert no panic/UB and that every malformed input is a typed rejection (never a partial accept) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | Wired into `make test-rust` (vectors) and a separate `make test-fuzz` target (new; time-boxed nightly run, not part of the PR-blocking gate) |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2042,7 +2042,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | `packages/d2bd/src/admission.rs` (`verb_requires_admin()` baseline verb table) |
 | Reuse source | None beyond the verb-table adaptation already tracked by `ADR046-zone-control-004` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-store/tests/rbac_property.rs` |
+| Destination | `packages/d2b-resource-store-redb-redb-redb-redb-redb-redb/tests/rbac_property.rs` |
 | Detailed design | Property test asserting, for a randomly generated Role/RoleBinding/request corpus: (1) no request whose payload sets a subject/role field ever changes the resolved `AuthenticatedSubjectContext.subjectRef`; (2) no non-core Role with a wildcard grant is ever admitted; (3) `scopeNarrowing` never widens beyond the referenced Role; (4) RoleBinding deletion never leaves an observable intermediate state under concurrent readers; (5) `relay` is accepted only as the canonical ZoneLink-scoped session verb with core-generated or explicit admin-policy provenance and exact target bounds; and (6) every forwarding hop independently requires relay plus the target verb Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Runs against the real redb-backed resource store test harness, not a mock |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2060,7 +2060,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | None (v3 ZoneLink relay is `ADR-only`) |
 | Reuse source | None |
 | Reuse action | adapt |
-| Destination | `packages/d2b-bus/fuzz/fuzz_targets/zonelink_frame.rs`, `packages/d2b-bus/tests/zonelink_structural_rejection.rs` |
+| Destination | `packages/d2b-bus/`, `packages/d2b-bus/` |
 | Detailed design | Fuzz + property suite asserting that no mutation of a ZoneLink-bound frame (attachment count, credential-shaped byte runs, path-shaped strings, PID-shaped integers) is ever forwarded - every such mutation is rejected at serialization with `attachment-not-permitted-over-zone-link` or the transport-specific equivalent, never silently dropped or partially forwarded Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design copied from `ADR-046-zone-routing.md` structural-rejection sections). |
 | Integration | `make test-fuzz`; a companion container test (`tests/integration/containers/zonelink-cross-zone.rs`) runs two real Zone runtime containers connected by a real ZoneLink and asserts the same property end to end over the wire, not just in the frame-serialization unit |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2078,7 +2078,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | None (compile-time dependency audit does not exist yet; per-Provider "imports no broker DTO" claims are currently prose-only in each dossier) |
 | Reuse source | `cargo-deny`/`cargo tree`-style dependency graph tooling already used by `nix flake check`'s `rust-deny`/`rust-audit` derivations (`AGENTS.md` "Disk hygiene contract") |
 | Reuse action | adapt |
-| Destination | `packages/xtask/src/effectport_boundary_check.rs`, wired into `make test-policy` |
+| Destination | `packages/xtask/`, wired into `make test-policy` |
 | Detailed design | For every crate under `packages/d2b-provider-*`, walk its `Cargo.toml` dependency graph and fail the build if it transitively depends on `d2b-priv-broker` or any crate exposing a raw broker client/DTO type; separately, grep-scan for direct syscalls forbidden per dossier (e.g. `socket(AF_VSOCK` in `transport-vsock`, `Command::new("systemctl"` in `system-systemd`) |
 | Integration | `make test-policy`; blocks any PR adding a forbidden dependency edge or forbidden syscall string to a Provider crate |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2093,10 +2093,10 @@ close. Each maps to the attacker class it is scoped against.
 | --- | --- |
 | Work item ID | `ADR046-security-006` |
 | Dependency/owner | `ADR046-minijail-002`/`ADR046-minijail-003` (LaunchTicket/EffectPort implementation) |
-| Current source | `packages/d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner` user-namespace path); `packages/d2b-host/src/virtiofsd_argv.rs` |
+| Current source | `packages/d2b-broker/src/sys.rs` (`clone3_spawn_runner` user-namespace path); `packages/d2b-host/src/virtiofsd_argv.rs` |
 | Reuse source | Same v3 paths (already `implemented-and-reachable` per the migration map) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-minijail/tests/launchticket_toctou.rs` |
+| Destination | `packages/d2b-provider-process-minijail/` |
 | Detailed design | Fault-injection test that issues a `LaunchTicket`, then mutates the referenced `CompiledSandboxPlan` digest (simulating a race between issue and exec) before the broker execs, and asserts the spawn fails closed rather than launching with the old plan; a companion test kills the broker mid-`clone3` and asserts no half-initialized process (missing cgroup placement, non-zero host capabilities) is ever observable by a concurrent reader |
 | Integration | `make test-rust` (unit-level fault injection via a fake clock/fault-injecting `EffectPort` test double); a host/KVM integration test (`tests/host-integration/launchticket-toctou.nix`) repeats the same scenario against the real broker and real `clone3(2)` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2111,10 +2111,10 @@ close. Each maps to the attacker class it is scoped against.
 | --- | --- |
 | Work item ID | `ADR046-security-007` |
 | Dependency/owner | `ADR046-minijail-005`, `ADR046-systemd-002`, `ADR046-aca-001`, `ADR046-volume-001` (every quarantine-on-ambiguity implementation) |
-| Current source | `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` (existing fail-closed marker/quarantine pattern, `implemented-and-reachable`) |
+| Current source | `packages/d2b-broker/src/ops/swtpm_dir.rs` (existing fail-closed marker/quarantine pattern, `implemented-and-reachable`) |
 | Reuse source | Same v3 path, generalized |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contract-tests/tests/quarantine_not_kill_matrix.rs` |
+| Destination | `packages/d2b-contract-tests/` |
 | Detailed design | One parameterized fault-injection matrix test, run once per adoption-capable Provider (`system-minijail`, `system-systemd`, `runtime-cloud-hypervisor`, `runtime-azure-container-apps`, `volume-local`), that restarts the controller with a deliberately ambiguous adoption candidate (duplicate InvocationID, mismatched marker inode, stale ACA operation handle) and asserts: (a) the resource transitions to `Degraded`/`Quarantined`, never `Deleted` or silently re-adopted; (b) no signal is sent to the ambiguous candidate process; (c) a `runtime-security-violation`-class audit record is emitted Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `make test-rust` for the in-process cases; `make test-host-integration` for the real-pidfd/real-cgroup cases (`tests/host-integration/quarantine-not-kill.nix`) |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2132,7 +2132,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | `packages/d2b-contracts/src/public_wire.rs:267` (`WorkloadPublicSummary.execution_posture`, `implemented-and-reachable`); `packages/d2bd/src/unsafe_local_helper.rs` (`HelperRegistry::dispatch_launch`, current gap: does not emit a `ProcessEffect`-class event) |
 | Reuse source | Same v3 paths |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-core/tests/no_isolation_propagation.rs` |
+| Destination | `packages/d2b-provider-system-core/` |
 | Detailed design | Integration test that creates a user-only `Host`, launches a Process on it, and asserts all three non-suppressible surfaces simultaneously: `status.isolationPosture == "none"` in JSON output; the unconditional stderr warning string is present with `--json` and non-JSON CLI invocation and cannot be suppressed by any combination of flags; the corresponding `ProcessEffect` audit record carries `no_isolation: true`; and a companion negative assertion that `no_isolation` never appears in any OTEL metric/span emitted during the same test run |
 | Integration | `make test-rust` (CLI/status/audit assertions) plus a Nix eval test (`tests/unit/nix/cases/no-isolation-null-posture-rejected.nix`) asserting the D042/D067 bidirectional-rejection eval assertions fire |
 | Data migration | None (closes the current `HelperRegistry::dispatch_launch` audit gap noted in `ADR-046-telemetry-audit-and-support.md`) |
@@ -2150,7 +2150,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | `tests/unit/nix/cases/per-vm-state-ownership.nix` (existing v3 ownership test, adapted target) |
 | Reuse source | None new |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-volume-local/tests/marker_tamper_fault_injection.rs` |
+| Destination | `packages/d2b-provider-volume-local/` |
 | Detailed design | Fault-injection test that provisions a Volume, then out-of-band (as a simulated attacker with filesystem access) replaces the marker file, swaps the backing directory for a different inode on the same `st_dev`, and deletes the marker entirely - three separate scenarios - and asserts each transitions the Volume to `Failed` with `markerStatus: missing`/`replaced` respectively, never a silent re-provision, and that operator-only remediation is the only recovery path exercised |
 | Integration | `make test-rust`; a host-integration variant (`tests/host-integration/volume-marker-tamper.nix`) repeats the inode-swap scenario against the real broker-maintained marker root on a real filesystem |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2168,7 +2168,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | None (zero-secret invariant has no existing automated gate) |
 | Reuse source | None |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contract-tests/tests/zero_secret_invariant.rs` |
+| Destination | `packages/d2b-contract-tests/` |
 | Detailed design | Static + dynamic gate: (1) static - every DTO type reachable from a `Credential`-adjacent module must implement a hand-written redacted `Debug` and must not derive `Debug`, enforced by a `#[forbid(clippy::derive_debug_ambient)]`-style custom lint or an `xtask` AST scan; (2) dynamic - a property test that generates random `Credential` delivery sessions and asserts the delivered token/`SignChallenge` byte sequence never appears, byte-for-byte, in any captured audit record, OTEL span, log line, or resource-store row taken during the same test run Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design from `ADR-046-resources-credential.md` §1.1). |
 | Integration | `make test-lint` (static scan) and `make test-rust` (dynamic property test) |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2204,7 +2204,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | `packages/d2bd/src/daemon_audit.rs` (existing audit-write path, adapted target) |
 | Reuse source | Same v3 path |
 | Reuse action | adapt |
-| Destination | `packages/d2b-audit/tests/privileged_fail_closed.rs` |
+| Destination | `packages/d2b-audit/` |
 | Detailed design | Fault-injection test that makes the audit sink's fsync fail (simulated ENOSPC/EIO) during a privileged `ResourceMutation`/`RBACChange`/`StateReset` write, and asserts the originating operation itself fails with `audit-unavailable` rather than completing with a lost audit record; a companion test floods `Standard`/`Best-effort` records past `DEFAULT_AUDIT_WRITES_PER_SECOND` and asserts privileged records are never dropped or delayed by the resulting backpressure |
 | Integration | `make test-rust` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2222,7 +2222,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | None new; ceiling values are already enumerated in `ADR-046-zone-routing.md`/`ADR-046-cli-and-operations.md` |
 | Reuse source | main `a1cc0b2d`: `d2b-session` credit-accounting/priority-scheduling tests, copied for the checked-arithmetic/priority-ordering assertions |
 | Reuse action | adapt |
-| Destination | `packages/d2b-bus/tests/dos_ceiling_fault_injection.rs` |
+| Destination | `packages/d2b-bus/` |
 | Detailed design | Fault-injection/load test suite: (1) attachment-credit exhaustion at each of the six scopes (Packet/Request/Operation/Session/Process/Host), asserting typed rejection never a panic; (2) reconnect-storm exceeding `MAX_RECONNECT_ATTEMPTS`/`MAX_RECONNECT_WINDOW_MS`, asserting the session fails closed rather than looping; (3) ZoneLink hop-count/route-advertisement replay flood, asserting `hop-limit-exceeded`/`zone-advertisement-replay` rather than unbounded forwarding; (4) a stalled data stream under load, asserting control/cancellation traffic is never starved (priority-scheduling property) Primary reuse disposition: `adapt`. Preserved source-plan detail: copy and adapt. |
 | Integration | `make test-rust`; item (4) additionally runs as a container load test (`tests/integration/containers/backpressure-priority.rs`) with a real slow consumer |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2240,7 +2240,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | None (both commands are `ADR-only`) |
 | Reuse source | None |
 | Reuse action | adapt |
-| Destination | `packages/d2b/src/commands/{doctor,support_bundle}.rs` |
+| Destination | `packages/d2b/{doctor,support_bundle}.rs` |
 | Detailed design | `d2b zone doctor` performs read-only status/audit-hash-chain checks with the redaction rules from §21 enforced on every field it prints; `d2b zone support-bundle` assembles a bounded archive of metadata+status (never spec bytes or `metadata.name`) and sets `bundle_completeness: "partial"` when any Provider in scope is quarantined, rather than omitting the gap silently Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (design from `ADR-046-telemetry-audit-and-support.md`). |
 | Integration | `make test-rust` (CLI integration tests); a container test (`tests/integration/containers/support-bundle-quarantined.rs`) runs a real Zone with one quarantined Provider and asserts the bundle correctly reports `partial` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
@@ -2258,7 +2258,7 @@ close. Each maps to the attacker class it is scoped against.
 | Current source | Historical main ADR 0045 factory-reset design (`a1cc0b2d^:docs/adr/0045-provider-and-transport-framework.md`, reset process overview and apply-command verification steps) - reused only as a design precedent for atomicity/fail-closed sequencing, not as v3 architecture (see [Reset boundary](#reset-boundary) for the explicitly excluded assumptions) |
 | Reuse source | Same historical commit, sequencing pattern only (no code reuse; historical implementation was bash/systemd-generation-based and does not exist in any Rust crate) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-core-controller/src/reset.rs`, `packages/d2b-core-controller/tests/reset_atomicity.rs` |
+| Destination | `packages/d2b-core-controller/`, `packages/d2b-core-controller/` |
 | Detailed design | Implements the `scope` (`zone`, `provider`, `host`, or `guest`) `StateReset` flow from §25: quiesce via `EmergencyPolicy`, revoke open Credential leases in scope, destroy Volumes in scope (key-shred first), commit the `StateReset` audit record durably, and only then report the reset complete. A crash-recovery path re-derives "was this reset already committed?" solely from the durable `StateReset` record, never from partial filesystem state Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt (pattern only). |
 | Integration | `make test-rust` (unit-level state machine); a host/KVM integration test (`tests/host-integration/reset-atomicity.nix`) kills the process mid-reset at each of the four phases (quiesce, credential revoke, Volume destroy, audit commit) and asserts recovery never double-destroys, never silently completes without the audit record, and never leaves an orphaned sealed-Volume-without-key state |
 | Data migration | None (v3-native; no v1/v2 reset-generation state to migrate) |
@@ -2327,10 +2327,10 @@ close. Each maps to the attacker class it is scoped against.
 | --- | --- |
 | Work item ID | `ADR046-security-019` |
 | Dependency/owner | `ADR046-exec-003`/`ADR046-exec-007` and `ADR046-minijail-003` through `ADR046-minijail-005`; system-minijail/broker integration owner |
-| Current source | `packages/d2bd/src/supervisor/pidfd_table.rs` (`BrokerReapLog`) and `packages/d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner`) |
+| Current source | `packages/d2bd/src/pidfd_table.rs` (`BrokerReapLog`) and `packages/d2b-broker/src/sys.rs` (`clone3_spawn_runner`) |
 | Reuse source | Same v3 paths, adapted to the corrected ownership contract |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contract-tests/tests/minijail_process_ownership.rs`; `tests/host-integration/minijail-cgroup-kill.nix` |
+| Destination | `packages/d2b-contract-tests/`; `tests/host-integration/minijail-cgroup-kill.nix` |
 | Detailed design | Hermetic contract test proves only the broker that called `clone3` can produce the identity-bound `BrokerTerminalResult`; a non-parent poll-readable pidfd cannot be converted to status, while a verified duplicate holder can still request exact-main `pidfd_send_signal`. Host integration launches an owned descendant that calls `setsid(2)` plus an unrelated recycled-PGID decoy, performs graceful exact-main stop followed by anchored leaf `cgroup.kill`, and proves the owned leaf reaches `populated 0`, the broker reaps exactly once, the decoy survives, and rmdir/finalizer clearing wait for both proofs. Negative cases prove ambiguous adoption emits no signal/`cgroup.kill`, and Linux <5.14 or missing/unwritable `cgroup.kill` fails before spawn. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Hermetic contract test in `make test-rust`; real pidfd/cgroup scenario in `make test-host-integration` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |

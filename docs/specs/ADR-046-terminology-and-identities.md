@@ -282,7 +282,7 @@ cgroup/scope, and provider-specific process identity.
 | Dependency/owner | W0 shared contract root; `d2b-contracts` |
 | Current source | `packages/d2b-realm-core/src/ids.rs`, `realm.rs`, `target.rs`, `workload.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/src/v3/identity.rs`, `packages/d2b-contracts/src/v3/resource_ref.rs` |
+| Destination | `packages/d2b-contracts/`, `packages/d2b-contracts/` |
 | Detailed design | Add ZoneId, ResourceTypeName, ResourceName, ResourceUid, ResourceRef, generation/revision newtypes, exact parsing/serde/Debug/redaction, and golden vectors. `ResourceUid` is store-generated canonical lowercase UUIDv4 only. ResourceType uses the exact standard/qualified 63-byte segment and 137-byte total bounds; ResourceRef is bounded to 201 bytes. Define `AuthenticatedSubjectContext` and its validated component newtypes/enums exactly as frozen in D109: no `Deserialize`, no public field mutation, whole-struct redacted `Debug`, four closed evidence classes, bounded `SessionPurpose`/`ServiceName`, typed locality/binding digest, nonzero reconnect/controller generations, and redacted transcript hash. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Resource API/store/controllers/SDK/Nix import only these canonical types |
 | Data migration | Destructive d2b 3.0 reset; no RealmRef parser compatibility |
