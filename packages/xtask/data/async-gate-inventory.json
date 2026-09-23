@@ -1158,7 +1158,7 @@
     },
     {
       "file": "packages/d2bd/src/resource_plane_v3.rs",
-      "line": 6763,
+      "line": 6762,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -1168,47 +1168,47 @@
     },
     {
       "file": "packages/d2bd/src/resource_runtime.rs",
-      "line": 7714,
+      "line": 7716,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/resource_runtime.rs",
-      "line": 8963,
+      "line": 8965,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 1550,
+      "line": 1585,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 1598,
+      "line": 1633,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 1623,
+      "line": 1658,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 2058,
+      "line": 2093,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 2445,
+      "line": 2480,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 2478,
+      "line": 2513,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/shared_provider_effects.rs",
-      "line": 2534,
+      "line": 2569,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
