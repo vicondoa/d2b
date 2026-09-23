@@ -3227,13 +3227,12 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             if let Err(refusal) = invocation {
                 tracing::warn!(
                     broker_operation = "OwnershipMatrixCheck",
-                    invocation_id = %refusal.invocation_id,
                     refusal = %refusal.code,
                     "ownership-matrix preflight refused through the envelope"
                 );
                 return Err(BrokerError::LiveHandler(format!(
-                    "OwnershipMatrixCheck refused: {} (invocation {})",
-                    refusal.code, refusal.invocation_id
+                    "OwnershipMatrixCheck refused: {}",
+                    refusal.code
                 )));
             }
             // The success path records the preflight as an allowed entry

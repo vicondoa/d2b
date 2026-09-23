@@ -13,6 +13,7 @@ const REQUIRED_AGGREGATE_JOBS: &[&str] = &[
     "nix-aarch64",
     "fixtures-proofs",
     "census",
+    "security-scan",
 ];
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -106,6 +107,32 @@ fn pr_suites_start_concurrently_and_aggregate_preserves_required_failures() {
     assert!(
         performance.contains("continue-on-error: true"),
         "performance budgets must remain advisory"
+    );
+
+    // The aggregate `check` job is itself a live required status check
+    // under the branch protection, so it must never set job-level
+    // continue-on-error either: GitHub reads the job result of such a
+    // job as success, so the PR would merge even when the aggregate
+    // failed - the gate would be silently defeated while this contract
+    // test stays green. Job-level keys sit at 4-space indent;
+    // step-level continue-on-error (deeper indent) is allowed elsewhere.
+    for job in REQUIRED_AGGREGATE_JOBS.iter().copied().chain(["check"]) {
+        let block = job_block(&workflow, job);
+        assert!(
+            !block.lines().any(|line| line.starts_with("    continue-on-error:")),
+            "{job} is a required aggregate job and must not set job-level continue-on-error: needs.*.result would read it as success and defeat the gate"
+        );
+    }
+
+    // The security-scan job is the pinned gate for the redaction
+    // discipline, so not even its scan step may set step-level
+    // continue-on-error: GitHub reads a step that set it as success, so
+    // the planted finding step would be read as success and the gate
+    // would be silently defeated while this contract test stays green.
+    let security_scan = job_block(&workflow, "security-scan");
+    assert!(
+        !security_scan.lines().any(|line| line.trim().starts_with("continue-on-error:")),
+        "security-scan is the pinned gate and its scan step must not set continue-on-error: GitHub would read the failed scan step as success and defeat the redaction gate"
     );
 
     let aggregate = job_block(&workflow, "check");

@@ -205,6 +205,66 @@ settings; it does not change GitHub settings or claim atomic base binding.
 direct push. PR bodies record the change, validation evidence, and substantive
 review outcomes only. Never include AI, tool, or model attribution.
 
+## Security scan gate
+
+Every pull request to `v3` runs the `security-scan` job in
+[`.github/workflows/pr-l1-static-fast.yml`](../../.github/workflows/pr-l1-static-fast.yml).
+The job is in the aggregate `check` job's `needs` list, and the
+`security-scan` context is a required status check on both protected
+branches, so a finding on changed lines blocks the merge path (issue
+#586). `main` carries the same required context, but the producing job
+only exists once the workflow lands there via a `v3`-derived promotion;
+until then, pull requests to `main` show the check as Expected rather
+than running it. In-flight pull requests to `v3` opened before this
+workflow merged into `v3` likewise stay Expected until the base gains
+the job on merge.
+
+The scan is the repository's deterministic in-tree implementation of the
+ADR 0010/0028 redaction discipline: no opaque correlation identifier is
+written into a log. It is a grep-based scanner
+([`tests/tools/security-scan.sh`](../../tests/tools/security-scan.sh))
+with a pinned contract:
+
+- Scope: added lines of in-tree Rust source files (vendored `pkgs/` code
+  is third-party and excluded). On pull requests the base is
+  `github.event.pull_request.base.sha`; on pushes it is
+  `github.event.before`; a manual `workflow_dispatch` run scans the whole
+  tree. The changed-line diff is taken from the merge base against the
+  working tree (two-dot), so a local run also sees uncommitted lines;
+  the diff keeps rename/copy statuses (`--diff-filter=ACMR`), so a
+  violation that arrives with a rename or copy is still a finding. An
+  all-zeros base (a first push) is rejected with exit 2 - a changed-line
+  scan against it cannot prove the rule, and a scan that could not run
+  is never reported clean.
+- Rule: a log-emitting macro invocation (`tracing::*!`, `log::*!`, bare
+  `trace!`/`debug!`/`info!`/`warn!`/`error!`, or
+  `println!`/`eprintln!`/`print!`/`eprint!`) that references one of the
+  pinned opaque correlation identifiers (`invocation_id`,
+  `root_invocation_id`, `operation_id`, `session_id`, `audit_id`,
+  `trace_id`) fails the scan. Identifiers the tree legitimately logs
+  (`vm_id`, `role_id`, `request_id`, `stream_id`) are not in the pinned
+  set.
+- The rule is evaluated against the whole macro invocation: the scanner
+  buffers from the log-macro opening line until the invocation's closing
+  `);` and matches the identifier anywhere in the record, including a
+  mention in message text. A multi-line record (macro opened on one
+  line, fields on continuation lines) is therefore a finding when any
+  part of the record references a pinned identifier. A false positive is
+  resolved by rewording the record, never by allowlisting.
+- The scanner engine pinned here is the deterministic rule above; the
+  external scanner that produced the original findings remains
+  owner-confirmed. When the owner names that engine, this job is updated
+  to pin it.
+
+Run it locally:
+
+```bash
+tests/tools/security-scan.sh                          # full-tree scan
+D2B_SCAN_BASE_SHA=<base-sha> tests/tools/security-scan.sh  # changed-line scan
+```
+The changed-line local run diffs the merge base against the working
+tree, so uncommitted lines are scanned too.
+
 ## Contributor orchestration boundary
 
 Contributor orchestration is owned by
