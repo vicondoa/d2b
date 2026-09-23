@@ -111,6 +111,25 @@ const MANAGER_DESTINATION: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const MANAGER_INTERFACE: &str = "org.freedesktop.systemd1.Manager";
 const UNIT_INTERFACE: &str = "org.freedesktop.systemd1.Unit";
+// ControlGroup and MainPID are defined on the unit-kind interfaces
+// (Service for the family's transient service units), not on Unit; the
+// identity read must address them through this interface (issue #587).
+const SERVICE_INTERFACE: &str = "org.freedesktop.systemd1.Service";
+
+/// The systemd object interface a unit-identity property is defined on.
+///
+/// `ControlGroup` and `MainPID` are defined on `org.freedesktop.systemd1.Service`
+/// (the family's transient service units), not on `Unit`; reading them through
+/// the Unit proxy fails every read with `UnknownProperty` and the identity can
+/// never bind (issue #587). `ActiveState` and `InvocationID` are defined on
+/// `org.freedesktop.systemd1.Unit`. `read_identity` routes every property read
+/// through this selection.
+fn identity_property_interface(property: &str) -> &'static str {
+    match property {
+        "ControlGroup" | "MainPID" => SERVICE_INTERFACE,
+        _ => UNIT_INTERFACE,
+    }
+}
 const METHOD_TIMEOUT: Duration = Duration::from_secs(5);
 const IDENTITY_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const IDENTITY_RETRY_INTERVAL: Duration = Duration::from_millis(20);
@@ -440,6 +459,28 @@ async fn unit_proxy<'a>(manager: &Proxy<'a>, name: &str) -> Result<OwnedObjectPa
     })
 }
 
+/// Reads one unit-identity property through the proxy the selection seam
+/// names for it (issue #587: Service-owned properties must be addressed
+/// through `org.freedesktop.systemd1.Service`).
+async fn unit_identity_property(
+    connection: &Connection,
+    unit_path: &str,
+    property: &'static str,
+) -> Result<zbus::zvariant::OwnedValue, &'static str> {
+    let proxy = Proxy::new(
+        connection,
+        MANAGER_DESTINATION,
+        unit_path,
+        identity_property_interface(property),
+    )
+    .await
+    .map_err(|_| UNIT_QUERY_FAILED)?;
+    proxy
+        .get_property::<zbus::zvariant::OwnedValue>(property)
+        .await
+        .map_err(|_| UNIT_QUERY_FAILED)
+}
+
 fn cgroup_identity(
     control_group: &str,
     name: &str,
@@ -521,35 +562,27 @@ async fn read_identity(
         Err(UNIT_BUNDLE_INTENT) => return Ok(None),
         Err(error) => return Err(error),
     };
-    let unit = Proxy::new(
-        connection,
-        MANAGER_DESTINATION,
-        unit_path.as_str(),
-        UNIT_INTERFACE,
-    )
-    .await
-    .map_err(|_| UNIT_QUERY_FAILED)?;
-    let active_state: String = unit
-        .get_property("ActiveState")
-        .await
+    let active_state: String = unit_identity_property(connection, unit_path.as_str(), "ActiveState")
+        .await?
+        .try_into()
         .map_err(|_| UNIT_QUERY_FAILED)?;
     if !matches!(active_state.as_str(), "active" | "activating" | "reloading") {
         return Ok(None);
     }
-    let invocation: Vec<u8> = unit
-        .get_property("InvocationID")
-        .await
-        .map_err(|_| UNIT_QUERY_FAILED)?;
+    let invocation: Vec<u8> = unit_identity_property(connection, unit_path.as_str(), "InvocationID")
+        .await?
+        .try_into()
+        .map_err(|_| UNIT_IDENTITY_MISMATCH)?;
     let invocation_id: [u8; 16] = invocation.try_into().map_err(|_| UNIT_IDENTITY_MISMATCH)?;
-    let control_group: String = unit
-        .get_property("ControlGroup")
-        .await
+    let control_group: String = unit_identity_property(connection, unit_path.as_str(), "ControlGroup")
+        .await?
+        .try_into()
         .map_err(|_| UNIT_QUERY_FAILED)?;
     let cgroup_identity = cgroup_identity(&control_group, name, request.domain, intent.uid)?;
-    let main_pid: u32 = unit
-        .get_property("MainPID")
-        .await
-        .map_err(|_| UNIT_QUERY_FAILED)?;
+    let main_pid: u32 = unit_identity_property(connection, unit_path.as_str(), "MainPID")
+        .await?
+        .try_into()
+        .map_err(|_| UNIT_IDENTITY_MISMATCH)?;
     let main_pid = NonZeroU32::new(main_pid).ok_or(UNIT_IDENTITY_MISMATCH)?;
     let start_time_ticks = read_proc_stat_start_time(main_pid.get() as i32).await?;
     Ok(Some(UnitIdentity {
@@ -1032,7 +1065,7 @@ use d2b_contracts_broker::broker_wire::UnitRequest;
 /// hash the request's content identity matches.
 #[cfg(test)]
 pub(crate) fn fixture_resolver() -> BundleResolver {
-    fixture_resolver_with_execution("Host/vm")
+    fixture_resolver_with_execution("Host/vm", 1000)
 }
 
 /// The trusted bundle whose runner targets a Guest execution reference:
@@ -1040,11 +1073,11 @@ pub(crate) fn fixture_resolver() -> BundleResolver {
 /// exercises.
 #[cfg(test)]
 pub(crate) fn fixture_guest_resolver() -> BundleResolver {
-    fixture_resolver_with_execution("Guest/vm")
+    fixture_resolver_with_execution("Guest/vm", 1000)
 }
 
 #[cfg(test)]
-fn fixture_resolver_with_execution(execution_ref: &str) -> BundleResolver {
+fn fixture_resolver_with_execution(execution_ref: &str, uid: u32) -> BundleResolver {
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::{
@@ -1108,9 +1141,9 @@ fn fixture_resolver_with_execution(execution_ref: &str) -> BundleResolver {
     )
     .expect("manifest fixture parses");
     // The unit tests never reach the manager leg (the gate tests refuse
-    // before it), so a fixed runner uid is fine here; the d2bd end-to-end
-    // test uses the real test uid where the handler drives the user bus.
-    let uid = 1000_u32;
+    // before it), so the fixed runner uid is fine for the execution
+    // fixture wrappers; the live-uid twin substitutes the test process's
+    // own uid so the manager leg drives the test user's own bus.
     BundleResolver::from_artifacts_with_zone_resource_bundles(
         Bundle {
             bundle_version: 1,
@@ -1136,7 +1169,7 @@ fn fixture_resolver_with_execution(execution_ref: &str) -> BundleResolver {
                     id: NodeId("role".to_owned()),
                     execution_ref: Some(execution_ref.to_owned()),
                     execution_domain: Some(ProcessExecutionDomain::User),
-                    user_ref: Some("User/user-1000".to_owned()),
+                    user_ref: Some(format!("User/user-{uid}")),
                     role: ProcessRole::Audio,
                     unit: None,
                     binary_path: Some("/run/current-system/sw/bin/sleep".to_owned()),
@@ -1408,5 +1441,29 @@ mod tests {
                 "Operation/stop-systemd-unit".to_owned(),
             ]
         );
+    }
+
+    /// Hermetic pin for the identity read's interface selection (issue
+    /// #587): Service-owned properties (ControlGroup, MainPID) must be
+    /// addressed through `org.freedesktop.systemd1.Service`; reading them
+    /// through the Unit proxy fails every read with UnknownProperty and the
+    /// identity can never bind. Unit-owned identity properties
+    /// (ActiveState, InvocationID) stay on the Unit interface.
+    #[test]
+    fn identity_reads_select_the_service_interface_for_service_owned_properties() {
+        assert_eq!(
+            identity_property_interface("ControlGroup"),
+            SERVICE_INTERFACE,
+            "ControlGroup is defined on org.freedesktop.systemd1.Service; the Unit \
+             proxy can never bind it"
+        );
+        assert_eq!(
+            identity_property_interface("MainPID"),
+            SERVICE_INTERFACE,
+            "MainPID is defined on org.freedesktop.systemd1.Service; the Unit \
+             proxy can never bind it"
+        );
+        assert_eq!(identity_property_interface("ActiveState"), UNIT_INTERFACE);
+        assert_eq!(identity_property_interface("InvocationID"), UNIT_INTERFACE);
     }
 }

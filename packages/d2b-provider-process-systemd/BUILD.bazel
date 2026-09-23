@@ -90,6 +90,7 @@ d2b_rust_test(
     name = "d2b_provider_process_systemd_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_provider_process_systemd",
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 
