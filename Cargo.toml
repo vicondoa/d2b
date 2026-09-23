@@ -157,9 +157,10 @@ await_holding_lock = "deny"
 # named entry), documented synchronous-path boundaries (R11 inventory), and
 # cfg(test) helper allows for test scaffolding - all tracked by the crate
 # policy check and the per-crate census. Keep the census visible:
-#   cargo clippy --workspace --all-targets --message-format=json -- \
+#   cargo clippy --locked --workspace --all-targets --message-format=json -- \
 #     -W warnings -W clippy::disallowed_methods -W clippy::await_holding_lock \
 #     -W clippy::await_holding_refcell_ref
+# (the census runs it with RUSTFLAGS cleared and CARGO_TERM_COLOR=never)
 disallowed_methods = "deny"
 
 [workspace.lints.rust]
