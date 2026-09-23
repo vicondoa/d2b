@@ -111,6 +111,10 @@ const MANAGER_DESTINATION: &str = "org.freedesktop.systemd1";
 const MANAGER_PATH: &str = "/org/freedesktop/systemd1";
 const MANAGER_INTERFACE: &str = "org.freedesktop.systemd1.Manager";
 const UNIT_INTERFACE: &str = "org.freedesktop.systemd1.Unit";
+// ControlGroup and MainPID are defined on the unit-kind interfaces
+// (Service for the family's transient service units), not on Unit; the
+// identity read must address them through this interface (issue #587).
+const SERVICE_INTERFACE: &str = "org.freedesktop.systemd1.Service";
 const METHOD_TIMEOUT: Duration = Duration::from_secs(5);
 const IDENTITY_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const IDENTITY_RETRY_INTERVAL: Duration = Duration::from_millis(20);
@@ -529,6 +533,14 @@ async fn read_identity(
     )
     .await
     .map_err(|_| UNIT_QUERY_FAILED)?;
+    let service = Proxy::new(
+        connection,
+        MANAGER_DESTINATION,
+        unit_path.as_str(),
+        SERVICE_INTERFACE,
+    )
+    .await
+    .map_err(|_| UNIT_QUERY_FAILED)?;
     let active_state: String = unit
         .get_property("ActiveState")
         .await
@@ -541,12 +553,12 @@ async fn read_identity(
         .await
         .map_err(|_| UNIT_QUERY_FAILED)?;
     let invocation_id: [u8; 16] = invocation.try_into().map_err(|_| UNIT_IDENTITY_MISMATCH)?;
-    let control_group: String = unit
+    let control_group: String = service
         .get_property("ControlGroup")
         .await
         .map_err(|_| UNIT_QUERY_FAILED)?;
     let cgroup_identity = cgroup_identity(&control_group, name, request.domain, intent.uid)?;
-    let main_pid: u32 = unit
+    let main_pid: u32 = service
         .get_property("MainPID")
         .await
         .map_err(|_| UNIT_QUERY_FAILED)?;
@@ -1408,5 +1420,84 @@ mod tests {
                 "Operation/stop-systemd-unit".to_owned(),
             ]
         );
+    }
+
+    /// Live regression for the identity read (issue #587): the family's
+    /// transient service units expose ControlGroup and MainPID on the
+    /// Service interface, not on Unit, so reading them through the Unit
+    /// proxy fails every read with UnknownProperty and the identity can
+    /// never bind. The test starts a real transient service on the session
+    /// bus and runs the production `read_identity` against it; it fails on
+    /// any host with a reachable user bus while the reads are bound to the
+    /// wrong interface, and skips in hermetic sandboxes without one.
+    #[tokio::test]
+    async fn transient_service_identity_reads_live_against_the_user_manager() {
+        let connection = match connection::Builder::session() {
+            Ok(builder) => match builder.method_timeout(METHOD_TIMEOUT).build().await {
+                Ok(connection) => connection,
+                Err(_) => {
+                    eprintln!("skipping live identity read: session bus unreachable");
+                    return;
+                }
+            },
+            Err(_) => {
+                eprintln!("skipping live identity read: no session bus address");
+                return;
+            }
+        };
+        let manager = match manager_proxy(&connection).await {
+            Ok(manager) => manager,
+            Err(_) => {
+                eprintln!("skipping live identity read: systemd user manager absent");
+                return;
+            }
+        };
+
+        let bundle = fixture_resolver();
+        let request = fixture_unit_request();
+        let intent = validate_request(&bundle, &request).expect("fixture request validates");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let name = format!(
+            "d2b-process-{:016x}-{:04x}.service",
+            nanos,
+            std::process::id() & 0xffff
+        );
+        let exec_start = vec![(
+            intent.binary_path.to_string_lossy().into_owned(),
+            intent.argv.clone(),
+            false,
+        )];
+        let properties = vec![
+            ("Type", Value::from("exec")),
+            ("ExecStart", Value::from(exec_start)),
+            ("Environment", Value::from(intent.env.clone())),
+            ("Slice", Value::from("app.slice")),
+            ("KillMode", Value::from("control-group")),
+            ("CollectMode", Value::from("inactive-or-failed")),
+            ("NoNewPrivileges", Value::from(true)),
+            ("ProtectSystem", Value::from("strict")),
+        ];
+        let auxiliary: Vec<(&str, Vec<(&str, Value<'_>)>)> = Vec::new();
+        let _: OwnedObjectPath = manager
+            .call(
+                "StartTransientUnit",
+                &(name.as_str(), "replace", properties, auxiliary),
+            )
+            .await
+            .expect("transient service starts");
+
+        let observed = read_identity(&request, &intent, &connection, &name).await;
+        let _: Result<OwnedObjectPath, zbus::Error> =
+            manager.call("StopUnit", &(name.as_str(), "replace")).await;
+
+        let identity = observed
+            .expect("the live identity read succeeds against a transient service")
+            .expect("the transient service reaches an active identity");
+        assert_eq!(identity.invocation_id.len(), 16);
+        assert!(identity.main_pid > 0);
+        assert!(identity.start_time_ticks > 0);
     }
 }

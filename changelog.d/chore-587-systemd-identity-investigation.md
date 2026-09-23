@@ -1,0 +1,3 @@
+### Fixed
+
+- Fixed the process-systemd identity read, which queried `ControlGroup` and `MainPID` through the `org.freedesktop.systemd1.Unit` interface even though systemd defines those properties on the unit-kind interfaces (`org.freedesktop.systemd1.Service` for the family's transient service units). Every such read failed with `org.freedesktop.DBus.Error.UnknownProperty` and refused the unit start with `unit-query-failed`, so the InvocationID + cgroup + MainPID + start-time binding could never be established. The identity read now addresses the two properties through the Service interface, and a live regression test starts a real transient service and runs the production identity read against it.
