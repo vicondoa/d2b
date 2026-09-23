@@ -1638,7 +1638,6 @@ dependencies = [
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "nix 0.29.0",
  "serde",
  "serde_json",
  "sha2",

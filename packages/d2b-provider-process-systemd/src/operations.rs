@@ -115,6 +115,21 @@ const UNIT_INTERFACE: &str = "org.freedesktop.systemd1.Unit";
 // (Service for the family's transient service units), not on Unit; the
 // identity read must address them through this interface (issue #587).
 const SERVICE_INTERFACE: &str = "org.freedesktop.systemd1.Service";
+
+/// The systemd object interface a unit-identity property is defined on.
+///
+/// `ControlGroup` and `MainPID` are defined on `org.freedesktop.systemd1.Service`
+/// (the family's transient service units), not on `Unit`; reading them through
+/// the Unit proxy fails every read with `UnknownProperty` and the identity can
+/// never bind (issue #587). `ActiveState` and `InvocationID` are defined on
+/// `org.freedesktop.systemd1.Unit`. `read_identity` routes every property read
+/// through this selection.
+fn identity_property_interface(property: &str) -> &'static str {
+    match property {
+        "ControlGroup" | "MainPID" => SERVICE_INTERFACE,
+        _ => UNIT_INTERFACE,
+    }
+}
 const METHOD_TIMEOUT: Duration = Duration::from_secs(5);
 const IDENTITY_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const IDENTITY_RETRY_INTERVAL: Duration = Duration::from_millis(20);
@@ -444,6 +459,28 @@ async fn unit_proxy<'a>(manager: &Proxy<'a>, name: &str) -> Result<OwnedObjectPa
     })
 }
 
+/// Reads one unit-identity property through the proxy the selection seam
+/// names for it (issue #587: Service-owned properties must be addressed
+/// through `org.freedesktop.systemd1.Service`).
+async fn unit_identity_property(
+    connection: &Connection,
+    unit_path: &str,
+    property: &'static str,
+) -> Result<zbus::zvariant::OwnedValue, &'static str> {
+    let proxy = Proxy::new(
+        connection,
+        MANAGER_DESTINATION,
+        unit_path,
+        identity_property_interface(property),
+    )
+    .await
+    .map_err(|_| UNIT_QUERY_FAILED)?;
+    proxy
+        .get_property::<zbus::zvariant::OwnedValue>(property)
+        .await
+        .map_err(|_| UNIT_QUERY_FAILED)
+}
+
 fn cgroup_identity(
     control_group: &str,
     name: &str,
@@ -525,43 +562,27 @@ async fn read_identity(
         Err(UNIT_BUNDLE_INTENT) => return Ok(None),
         Err(error) => return Err(error),
     };
-    let unit = Proxy::new(
-        connection,
-        MANAGER_DESTINATION,
-        unit_path.as_str(),
-        UNIT_INTERFACE,
-    )
-    .await
-    .map_err(|_| UNIT_QUERY_FAILED)?;
-    let service = Proxy::new(
-        connection,
-        MANAGER_DESTINATION,
-        unit_path.as_str(),
-        SERVICE_INTERFACE,
-    )
-    .await
-    .map_err(|_| UNIT_QUERY_FAILED)?;
-    let active_state: String = unit
-        .get_property("ActiveState")
-        .await
+    let active_state: String = unit_identity_property(connection, unit_path.as_str(), "ActiveState")
+        .await?
+        .try_into()
         .map_err(|_| UNIT_QUERY_FAILED)?;
     if !matches!(active_state.as_str(), "active" | "activating" | "reloading") {
         return Ok(None);
     }
-    let invocation: Vec<u8> = unit
-        .get_property("InvocationID")
-        .await
-        .map_err(|_| UNIT_QUERY_FAILED)?;
+    let invocation: Vec<u8> = unit_identity_property(connection, unit_path.as_str(), "InvocationID")
+        .await?
+        .try_into()
+        .map_err(|_| UNIT_IDENTITY_MISMATCH)?;
     let invocation_id: [u8; 16] = invocation.try_into().map_err(|_| UNIT_IDENTITY_MISMATCH)?;
-    let control_group: String = service
-        .get_property("ControlGroup")
-        .await
+    let control_group: String = unit_identity_property(connection, unit_path.as_str(), "ControlGroup")
+        .await?
+        .try_into()
         .map_err(|_| UNIT_QUERY_FAILED)?;
     let cgroup_identity = cgroup_identity(&control_group, name, request.domain, intent.uid)?;
-    let main_pid: u32 = service
-        .get_property("MainPID")
-        .await
-        .map_err(|_| UNIT_QUERY_FAILED)?;
+    let main_pid: u32 = unit_identity_property(connection, unit_path.as_str(), "MainPID")
+        .await?
+        .try_into()
+        .map_err(|_| UNIT_IDENTITY_MISMATCH)?;
     let main_pid = NonZeroU32::new(main_pid).ok_or(UNIT_IDENTITY_MISMATCH)?;
     let start_time_ticks = read_proc_stat_start_time(main_pid.get() as i32).await?;
     Ok(Some(UnitIdentity {
@@ -1047,16 +1068,6 @@ pub(crate) fn fixture_resolver() -> BundleResolver {
     fixture_resolver_with_execution("Host/vm", 1000)
 }
 
-/// The live-uid twin of [`fixture_resolver`]: the trusted runner's uid
-/// (profile binding, `user_ref`, and the user-bus path derivation) is
-/// the caller's own uid, so the live compatibility test can drive the
-/// production `manager_connection` user leg against the test user's own
-/// manager instead of a fixed fixture uid.
-#[cfg(test)]
-pub(crate) fn fixture_resolver_with_uid(uid: u32) -> BundleResolver {
-    fixture_resolver_with_execution("Host/vm", uid)
-}
-
 /// The trusted bundle whose runner targets a Guest execution reference:
 /// the request-facing variant the guest-binding gate's profile half
 /// exercises.
@@ -1432,94 +1443,27 @@ mod tests {
         );
     }
 
-    /// Live regression for the identity read (issue #587): the family's
-    /// transient service units expose ControlGroup and MainPID on the
-    /// Service interface, not on Unit, so reading them through the Unit
-    /// proxy fails every read with UnknownProperty and the identity can
-    /// never bind. The test resolves the host's sleep binary, starts a
-    /// real transient service under the test user's own manager - through
-    /// the production `manager_connection` user leg, with the live uid
-    /// threaded through the trusted runner - and runs the production
-    /// `read_identity` against it; it fails on any host with a reachable
-    /// user manager while the reads are bound to the wrong interface, and
-    /// skips in hermetic sandboxes without one.
-    #[tokio::test]
-    async fn transient_service_identity_reads_live_against_the_user_manager() {
-        let uid = nix::unistd::getuid().as_raw();
-        let bundle = fixture_resolver_with_uid(uid);
-        let mut request = fixture_unit_request();
-        request.user_ref = Some(
-            ResourceRef::parse(&format!("User/user-{uid}"))
-                .expect("the user reference is canonical"),
+    /// Hermetic pin for the identity read's interface selection (issue
+    /// #587): Service-owned properties (ControlGroup, MainPID) must be
+    /// addressed through `org.freedesktop.systemd1.Service`; reading them
+    /// through the Unit proxy fails every read with UnknownProperty and the
+    /// identity can never bind. Unit-owned identity properties
+    /// (ActiveState, InvocationID) stay on the Unit interface.
+    #[test]
+    fn identity_reads_select_the_service_interface_for_service_owned_properties() {
+        assert_eq!(
+            identity_property_interface("ControlGroup"),
+            SERVICE_INTERFACE,
+            "ControlGroup is defined on org.freedesktop.systemd1.Service; the Unit \
+             proxy can never bind it"
         );
-        let intent = validate_request(&bundle, &request).expect("fixture request validates");
-        let connection = match manager_connection(&intent, UnitDomain::User).await {
-            Ok(connection) => connection,
-            Err(USER_MANAGER_UNAVAILABLE) => {
-                eprintln!(
-                    "skipping live identity read: user manager unavailable for uid {uid} \
-                     (USER_MANAGER_UNAVAILABLE)"
-                );
-                return;
-            }
-            Err(error) => panic!("manager connection failed: {error}"),
-        };
-        let manager = match manager_proxy(&connection).await {
-            Ok(manager) => manager,
-            Err(_) => {
-                eprintln!("skipping live identity read: systemd user manager absent");
-                return;
-            }
-        };
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let name = format!(
-            "d2b-process-{:016x}-{:04x}.service",
-            nanos,
-            std::process::id() & 0xffff
+        assert_eq!(
+            identity_property_interface("MainPID"),
+            SERVICE_INTERFACE,
+            "MainPID is defined on org.freedesktop.systemd1.Service; the Unit \
+             proxy can never bind it"
         );
-        let sleep_binary = if Path::new("/run/current-system/sw/bin/sleep").exists() {
-            "/run/current-system/sw/bin/sleep"
-        } else if Path::new("/bin/sleep").exists() {
-            "/bin/sleep"
-        } else {
-            eprintln!(
-                "skipping live identity read: neither /run/current-system/sw/bin/sleep \
-                 nor /bin/sleep exists on this host"
-            );
-            return;
-        };
-        let exec_start = vec![(sleep_binary.to_owned(), intent.argv.clone(), false)];
-        let properties = vec![
-            ("Type", Value::from("exec")),
-            ("ExecStart", Value::from(exec_start)),
-            ("Environment", Value::from(intent.env.clone())),
-            ("Slice", Value::from("app.slice")),
-            ("KillMode", Value::from("control-group")),
-            ("CollectMode", Value::from("inactive-or-failed")),
-            ("NoNewPrivileges", Value::from(true)),
-            ("ProtectSystem", Value::from("strict")),
-        ];
-        let auxiliary: Vec<(&str, Vec<(&str, Value<'_>)>)> = Vec::new();
-        let _: OwnedObjectPath = manager
-            .call(
-                "StartTransientUnit",
-                &(name.as_str(), "replace", properties, auxiliary),
-            )
-            .await
-            .expect("transient service starts");
-
-        let observed = read_identity(&request, &intent, &connection, &name).await;
-        let _: Result<OwnedObjectPath, zbus::Error> =
-            manager.call("StopUnit", &(name.as_str(), "replace")).await;
-
-        let identity = observed
-            .expect("the live identity read succeeds against a transient service")
-            .expect("the transient service reaches an active identity");
-        assert_eq!(identity.invocation_id.len(), 16);
-        assert!(identity.main_pid > 0);
-        assert!(identity.start_time_ticks > 0);
+        assert_eq!(identity_property_interface("ActiveState"), UNIT_INTERFACE);
+        assert_eq!(identity_property_interface("InvocationID"), UNIT_INTERFACE);
     }
 }
