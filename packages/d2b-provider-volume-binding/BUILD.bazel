@@ -39,12 +39,12 @@ d2b_rust_library(
     crate_name = "d2b_provider_volume_binding",
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint_test_support",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
-        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
         "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -56,9 +56,9 @@ d2b_rust_test(
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
         ":d2b_provider_volume_binding_test_support",
-        "//packages/d2b-provider-endpoint:d2b_provider_endpoint",
+        "//packages/d2b-provider-endpoint:d2b_provider_endpoint_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

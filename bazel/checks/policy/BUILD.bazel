@@ -33,7 +33,10 @@ test_suite(
 
 test_suite(
     name = "workspace_lock",
-    tests = ["//tests/unit/meta:w0_dep_direction"],
+    tests = [
+        "//tests/unit/meta:w0_dep_direction",
+        "//tests/unit/meta:rust_main_packages_suite_guard",
+    ],
 )
 
 test_suite(

@@ -60,7 +60,7 @@ d2b_rust_library(
     ],
     crate_name = "d2b_provider_guest_cloud_hypervisor",
     deps = [
-        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",

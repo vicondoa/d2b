@@ -718,6 +718,7 @@ fn spawn_anchor_subscription(
     ))
 }
 
+    #[allow(clippy::too_many_arguments)]
 /// Run the anchor projection subscription: drain each registration's
 /// retained replay, then its live stream, coalescing Desired notices into
 /// one bounded re-materialization per drain, and relist on the hub's
@@ -729,6 +730,7 @@ fn spawn_anchor_subscription(
 /// is a *retryable* failure rather than a permanent one - the row's actor
 /// requeues it, on the delay the driver named or on its own ladder, and the
 /// anchor this subscription registers is there by the next pass.
+#[allow(clippy::too_many_arguments)]
 async fn run_anchor_subscription(
     hub: Arc<WatchHub>,
     selector: WatchSelector,
@@ -773,11 +775,13 @@ async fn run_anchor_subscription(
     }
 }
 
+    #[allow(clippy::too_many_arguments)]
 /// One registration and its live phase: drains the retained replay, then
 /// the live stream, coalescing Desired notices into one bounded
 /// re-materialization per drain. Returns the revision the next phase must
 /// relist from when the stream ends (a terminal missed-data signal or the
 /// hub reaping the subscriber) or the registration is Expired.
+#[allow(clippy::too_many_arguments)]
 async fn anchor_subscription_phase(
     hub: &WatchHub,
     selector: &WatchSelector,
@@ -795,10 +799,11 @@ async fn anchor_subscription_phase(
             // registration, and the projection must reflect it (R1).
             let mut keys: Vec<ResourceKey> = Vec::new();
             for change in replay {
-                if change.source == ChangeSource::Desired && selector.matches(&change.key) {
-                    if !keys.contains(&change.key) {
-                        keys.push(change.key);
-                    }
+                if change.source == ChangeSource::Desired
+                    && selector.matches(&change.key)
+                    && !keys.contains(&change.key)
+                {
+                    keys.push(change.key);
                 }
             }
             if !keys.is_empty() {
@@ -873,12 +878,11 @@ async fn anchor_subscription_phase(
                         match stream.try_recv() {
                             Some(WatchDelivery::Change(change)) => {
                                 if change.source == ChangeSource::Desired
-                                    && selector.matches(&change.key)
-                                {
-                                    if !keys.contains(&change.key) {
+                                        && selector.matches(&change.key)
+                                        && !keys.contains(&change.key)
+                                    {
                                         keys.push(change.key);
                                     }
-                                }
                             }
                             Some(WatchDelivery::Missed { last_delivered }) => {
                                 return last_delivered;
@@ -1192,10 +1196,10 @@ impl EndpointSocketSource for PlaneEndpointSocketSource {
         let path = self.path_for(producer_ref).await;
         let deadline = tokio::time::Instant::now() + SOCKET_BIND_BUDGET;
         loop {
-            if let Some(path) = path.as_deref() {
-                if socket_is_present(path).await {
-                    return Ok(());
-                }
+            if let Some(path) = path.as_deref()
+                && socket_is_present(path).await
+            {
+                return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err("virtiofsd socket not bound within its realize budget".to_owned());
@@ -2223,11 +2227,13 @@ Arc::new(DaemonAudioMediatorSource {
     }
 }
 
+    #[allow(clippy::too_many_arguments)]
 /// The hosting factories the composition root registers for the services
 /// the registration table declares (U3, R5): one entry per declared service
 /// identity, built from the families' own implementations over this zone's
 /// facet sets. A declared service with no entry still refuses startup by
 /// name.
+#[allow(clippy::too_many_arguments)]
 fn registered_service_factories(
     process_facets: &ProcessEffectFacets,
     network_facets: &NetworkEffectFacets,

@@ -254,6 +254,16 @@ filegroup(
 )
 
 # keep
+# keep
+filegroup(
+    name = "package_build_sources",
+    srcs = glob(
+        ["packages/*/BUILD.bazel"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "tests_root_sources",
     srcs = glob(
