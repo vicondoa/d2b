@@ -116,14 +116,14 @@ W3_ROWS = {
     ),
     ("host-check", "modprobe-denied-not-in-matrix"): (
         "host-check-error", 1,
-        "Whether every modprobe target is declared in the W3 kernel-module matrix.",
+        "Whether every modprobe target is declared in the kernel-module matrix.",
         "Broker observed a modprobe request for a module not present in modprobeAllowed.",
         "Add the module to d2b.kernelModules.allowed or remove its consumer.",
     ),
     ("host-check", "minijail-too-old"): (
         "host-check-error", 1,
-        "Whether the nix-built minijail satisfies the W3 minimum version (v17).",
-        "Detected minijail version older than 17; W3 sandbox profiles will not parse.",
+        "Whether the nix-built minijail satisfies the required minimum version (v17).",
+        "Detected minijail version older than 17; the required sandbox profiles will not parse.",
         "Update to the Nix-built minijail v17+ pinned in pkgs/minijail.nix.",
     ),
     ("host-check", "ch-net-handoff-not-supported"): (
@@ -222,8 +222,8 @@ W3_ROWS = {
     ("host-install", "not-yet-implemented"): (
         "host-install-error", 70,
         "Whether `host install` is implemented in this d2b release.",
-        "host install is a W4 deliverable; W3 ships the schema + CLI surface only.",
-        "Use `d2b switch` or the NixOS module integration path until W4 ships.",
+        "host install is not yet implemented; the schema and CLI surface are available.",
+        "Use `d2b switch` or the NixOS module integration path until host install is implemented.",
     ),
     # ---- Inherited W3-relevant onboarding rows (host check) -----------
     ("host-check", "daemon-down"): (
@@ -246,9 +246,9 @@ W3_ROWS = {
     ),
     ("host-check", "unsupported-kernel"): (
         "host-check-error", 1,
-        "Whether the running kernel is >= 6.6 (W3 minimum).",
+        "Whether the running kernel is >= 6.6 (the required minimum).",
         "uname -r reports a kernel older than 6.6.",
-        "Upgrade to a kernel >= 6.6 (Ubuntu 24.04 ships 6.8; see tests/golden/l3-matrix/w3-ubuntu.txt).",
+        "Upgrade to a kernel >= 6.6 (Ubuntu 24.04 ships 6.8; see docs/reference/compatibility.md).",
     ),
     ("host-check", "no-kvm"): (
         "host-check-error", 1,
