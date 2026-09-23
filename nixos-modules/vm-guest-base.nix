@@ -34,7 +34,7 @@ let
   # When writableStoreOverlay is set, the read-only lower is the
   # host-store share mount point; the writable upper lives at
   # `${overlay}/store` and the workdir at `${overlay}/work`.
-  hasOverlay = cfg.writableStoreOverlay != null;
+  hasOverlay = cfg.store.writableOverlay != null;
 
   volumeFileSystems = builtins.listToAttrs (map (volume: {
     name = volume.mountPoint;
@@ -65,7 +65,7 @@ in
     d2b.vms.${name}.runner.kernelParams =
       let
         toplevel =
-          if cfg.storeOnDisk
+          if cfg.store.onDisk
           then builtins.unsafeDiscardStringContext config.system.build.toplevel
           else config.system.build.toplevel;
       in
@@ -137,7 +137,7 @@ in
       # tmpfs and are wiped on every reboot, which defeats the
       # writableStoreOverlay design.
       (lib.optionalAttrs hasOverlay {
-        "${cfg.writableStoreOverlay}" = {
+        "${cfg.store.writableOverlay}" = {
           device = "/dev/disk/by-id/virtio-rootfs";
           fsType = "ext4";
           options = [ "x-initrd.mount" "x-systemd.after=systemd-modules-load.service" ];
@@ -150,8 +150,8 @@ in
           neededForBoot = true;
           overlay = {
             lowerdir = [ (if hostStore != null then hostStore.mountPoint else "/nix/.ro-store") ];
-            upperdir = "${cfg.writableStoreOverlay}/store";
-            workdir = "${cfg.writableStoreOverlay}/work";
+            upperdir = "${cfg.store.writableOverlay}/store";
+            workdir = "${cfg.store.writableOverlay}/work";
           };
         };
       })
@@ -174,7 +174,7 @@ in
             # at /nix/store via the dedicated fileSystems entry above
             # (no-overlay case) or as overlay lowerdir (overlay case).
             if s.source == "/nix/store"
-               || (hasOverlay && s.mountPoint == cfg.writableStoreOverlay)
+               || (hasOverlay && s.mountPoint == cfg.store.writableOverlay)
             then { }
             else {
               "${s.mountPoint}" = {
