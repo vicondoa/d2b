@@ -239,7 +239,7 @@ async fn acquire_handoff_lock(
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .write(true)
+        .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .open(&path)
         .await
         .map_err(HandoffOperationError::Io)?;
@@ -427,7 +427,7 @@ async fn persist(
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .truncate(true)
-        .write(true)
+        .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .open(&tmp)
         .await
         .map_err(HandoffOperationError::Io)?;

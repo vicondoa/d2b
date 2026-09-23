@@ -880,7 +880,7 @@ mod tests {
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
             self.calls
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .expect("calls")
                 .push(format!("view:{}/{}", key.type_name, key.name));
             if self.fail_reads.load(Ordering::SeqCst) {
@@ -891,13 +891,13 @@ mod tests {
 
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.calls.lock().expect("calls").push("delete".to_owned());
+            self.calls.lock().expect("calls").push("delete".to_owned()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             self.rows
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .expect("rows")
                 .retain(|row| row.key != *key);
             self.views
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .expect("views")
                 .retain(|(view_key, _)| view_key != key);
             Ok(())

@@ -799,7 +799,7 @@ mod tests {
             // Record the ensure request first; the commit (this function's
             // row write) happens before the reply, and the spawn
             // notification is recorded only after it.
-            self.log.lock().push(format!("ensure:{id}"));
+            self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             let next = self
                 .next_uid
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -816,7 +816,7 @@ mod tests {
                 metadata: child.metadata,
                 created_at: 0,
             };
-            let mut rows = self.rows.lock();
+            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             let outcome = match rows.iter_mut().find(|existing| existing.key == row.key) {
                 Some(existing) => {
                     if existing.spec == row.spec {
@@ -832,7 +832,7 @@ mod tests {
                 }
             };
             drop(rows);
-            self.log.lock().push(format!("spawned:{id}"));
+            self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(outcome)
         }
 
@@ -840,7 +840,7 @@ mod tests {
             &self,
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned())
+            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         }
 
         async fn view(
@@ -854,9 +854,9 @@ mod tests {
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .push(format!("delete:{}/{}", key.type_name, key.name));
-            self.rows.lock().retain(|row| row.key != *key);
+            self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
         }
 
@@ -1126,7 +1126,7 @@ mod tests {
             .count();
         assert_eq!(binding_ensures, 2, "the adoption pass re-attaches the same binding child");
         assert_eq!(
-            manager.rows.lock().len(),
+            manager.rows.lock().len(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             1,
             "re-attaching the deterministic child never mints a duplicate row"
         );
@@ -1314,7 +1314,7 @@ mod tests {
     #[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_layout_teardown() {
         let manager = RecordingManager::new();
-        manager.rows.lock().push(StoredDesiredResource {
+        manager.rows.lock().push(StoredDesiredResource { // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             key: ResourceKey::new("work", "VolumeBinding", "vol-binding-0"),
             uid: [0x77; 16],
             generation: 1,

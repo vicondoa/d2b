@@ -679,7 +679,7 @@ async fn acquire_sync_lock(farm_root: &Path) -> Result<File, StoreSyncError> {
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .write(true)
+        .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .open(&path)
         .map_err(|err| {
             StoreSyncError::at(

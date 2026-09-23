@@ -977,7 +977,7 @@ pub(crate) mod test_support {
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.deleted.lock().push(key.clone());
+            self.deleted.lock().push(key.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
         }
 
@@ -1244,7 +1244,7 @@ mod tests {
                         assert_eq!(child.type_name, ResourceTypeName::new("Process"));
                         assert_eq!(child.name, "worker-0");
                         calls_stub.fetch_add(1, Ordering::SeqCst);
-                        order_stub.lock().push("persist");
+                        order_stub.lock().push("persist"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                         let row = test_row(&parent.zone, child.type_name.as_str(), &child.name);
                         let _ = reply.send(Ok(EnsureOutcome::Created(row)));
                     }
@@ -1272,7 +1272,7 @@ mod tests {
                 .expect("ensure_child");
             // The driver only proceeds past ensure once the commit ack
             // arrived.
-            order_driver.lock().push("driver-after-commit-ack");
+            order_driver.lock().push("driver-after-commit-ack"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             outcome
         });
 
@@ -1281,7 +1281,7 @@ mod tests {
         stub.await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1, "exactly one persist request");
         assert_eq!(
-            *order.lock(),
+            *order.lock(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             vec!["persist", "driver-after-commit-ack"],
             "the commit is recorded before the driver proceeds"
         );

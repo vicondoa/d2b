@@ -571,7 +571,7 @@ pub async fn persist_persistent_tap_realization(
         deleted: false,
     };
     if let Ok(existing) = tokio::fs::OpenOptions::new()
-        .read(true)
+        .read(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&row_path)
         .await
@@ -605,7 +605,7 @@ pub async fn persist_persistent_tap_realization(
     let bytes =
         serde_json::to_vec(&realization).map_err(|_| NetworkOpError::RealizationUnavailable)?;
     let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
+        .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .create_new(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         // Deliberately unpinned: 0640 is the open-time default and the
@@ -695,7 +695,7 @@ pub async fn remove_persistent_tap_realization(
     let root = realization_root(state_dir).await?;
     let row_path = root.join(format!("{}.json", attachment_id.as_str()));
     let row = match tokio::fs::OpenOptions::new()
-        .read(true)
+        .read(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&row_path)
         .await
@@ -734,7 +734,7 @@ pub async fn mark_persistent_tap_realization_deleted(
     let root = realization_root(state_dir).await?;
     let row_path = root.join(format!("{}.json", attachment_id.as_str()));
     let row = tokio::fs::OpenOptions::new()
-        .read(true)
+        .read(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&row_path)
         .await
@@ -767,7 +767,7 @@ pub async fn mark_persistent_tap_realization_deleted(
         Err(_) => return Err(NetworkOpError::RealizationUnavailable),
     }
     let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
+        .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .create_new(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .mode(0o640)
@@ -898,7 +898,7 @@ pub async fn load_persistent_tap_realization(
     }
     let row = root.join(format!("{}.json", request.attachment_id.as_str()));
     let file = tokio::fs::OpenOptions::new()
-        .read(true)
+        .read(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(row)
         .await

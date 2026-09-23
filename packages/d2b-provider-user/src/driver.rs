@@ -518,7 +518,7 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            self.calls.lock().push("ensure-child");
+            self.calls.lock().push("ensure-child"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
         }
 
@@ -526,7 +526,7 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push("get");
+            self.calls.lock().push("get"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(None)
         }
 
@@ -534,13 +534,13 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            self.calls.lock().push("view");
+            self.calls.lock().push("view"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Err(ResourceError::ManagerRpc("unexpected view".into()))
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.calls.lock().push("delete");
-            let mut owned = self.owned.lock();
+            self.calls.lock().push("delete"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            let mut owned = self.owned.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             if owned.iter().any(|row| row.key == *key) {
                 owned.retain(|row| row.key != *key);
                 Ok(())
@@ -562,12 +562,12 @@ mod tests {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            self.calls.lock().push("register-watch");
+            self.calls.lock().push("register-watch"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(WatchId(1))
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            self.calls.lock().push("cancel-watch");
+            self.calls.lock().push("cancel-watch"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
         }
     }

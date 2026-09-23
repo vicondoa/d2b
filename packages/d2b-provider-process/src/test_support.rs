@@ -224,11 +224,11 @@ impl ProcessProviderRuntime for FakeFacets {
         spec: &ProcessSpec,
         _timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
-        self.calls.lock().push("launch");
+        self.calls.lock().push("launch"); // async-gate-allow: test-support recorder lock
         self.launches
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .push(recorded_launch("Process", &context, spec.execution(), None));
-        self.config.lock().launch.clone().map(launch_identity)
+        self.config.lock().launch.clone().map(launch_identity) // async-gate-allow: test-support recorder lock
     }
 
     async fn launch_ephemeral_resource(
@@ -237,19 +237,19 @@ impl ProcessProviderRuntime for FakeFacets {
         spec: &EphemeralProcessSpec,
         timeout: Duration,
     ) -> Result<ProviderLaunch, String> {
-        self.calls.lock().push("launch-ephemeral");
+        self.calls.lock().push("launch-ephemeral"); // async-gate-allow: test-support recorder lock
         assert_eq!(
             timeout,
             Duration::from_millis(spec.start_deadline().as_millis()),
             "the one-shot launch budget is the spec's startDeadline",
         );
-        self.launches.lock().push(recorded_launch(
+        self.launches.lock().push(recorded_launch( // async-gate-allow: test-support recorder lock
             "EphemeralProcess",
             &context,
             spec.execution(),
             Some(spec.start_deadline().as_millis()),
         ));
-        self.config.lock().launch.clone().map(launch_identity)
+        self.config.lock().launch.clone().map(launch_identity) // async-gate-allow: test-support recorder lock
     }
 
     async fn adopt_resource(
@@ -257,8 +257,8 @@ impl ProcessProviderRuntime for FakeFacets {
         _context: ProcessResourceContext<'_>,
         _spec: &ProcessSpec,
     ) -> Result<ProviderAdoption, String> {
-        self.calls.lock().push("adopt");
-        let mut config = self.config.lock();
+        self.calls.lock().push("adopt"); // async-gate-allow: test-support recorder lock
+        let mut config = self.config.lock(); // async-gate-allow: test-support recorder lock
         Ok(config
             .adoption
             .pop_front()
@@ -270,8 +270,8 @@ impl ProcessProviderRuntime for FakeFacets {
         _context: ProcessResourceContext<'_>,
         _spec: &ProcessSpec,
     ) -> Result<ProviderLiveness, String> {
-        self.calls.lock().push("probe");
-        let mut config = self.config.lock();
+        self.calls.lock().push("probe"); // async-gate-allow: test-support recorder lock
+        let mut config = self.config.lock(); // async-gate-allow: test-support recorder lock
         Ok(config
             .liveness
             .pop_front()
@@ -283,8 +283,8 @@ impl ProcessProviderRuntime for FakeFacets {
         _context: ProcessResourceContext<'_>,
         _spec: &EphemeralProcessSpec,
     ) -> Result<ProviderAdoption, String> {
-        self.calls.lock().push("adopt-ephemeral");
-        let mut config = self.config.lock();
+        self.calls.lock().push("adopt-ephemeral"); // async-gate-allow: test-support recorder lock
+        let mut config = self.config.lock(); // async-gate-allow: test-support recorder lock
         if let Some(error) = config.adopt_error.clone() {
             return Err(error);
         }
@@ -299,8 +299,8 @@ impl ProcessProviderRuntime for FakeFacets {
         _context: ProcessResourceContext<'_>,
         _spec: &EphemeralProcessSpec,
     ) -> Result<ProviderLiveness, String> {
-        self.calls.lock().push("probe-ephemeral");
-        let mut config = self.config.lock();
+        self.calls.lock().push("probe-ephemeral"); // async-gate-allow: test-support recorder lock
+        let mut config = self.config.lock(); // async-gate-allow: test-support recorder lock
         Ok(config
             .liveness
             .pop_front()
@@ -314,8 +314,8 @@ impl ProcessProviderRuntime for FakeFacets {
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String> {
-        self.calls.lock().push("stop");
-        self.stops.lock().push(RecordedStop {
+        self.calls.lock().push("stop"); // async-gate-allow: test-support recorder lock
+        self.stops.lock().push(RecordedStop { // async-gate-allow: test-support recorder lock
             kind: "Process",
             term_timeout,
             kill_timeout,
@@ -330,8 +330,8 @@ impl ProcessProviderRuntime for FakeFacets {
         term_timeout: Duration,
         kill_timeout: Duration,
     ) -> Result<bool, String> {
-        self.calls.lock().push("stop-ephemeral");
-        self.stops.lock().push(RecordedStop {
+        self.calls.lock().push("stop-ephemeral"); // async-gate-allow: test-support recorder lock
+        self.stops.lock().push(RecordedStop { // async-gate-allow: test-support recorder lock
             kind: "EphemeralProcess",
             term_timeout,
             kill_timeout,
@@ -344,7 +344,7 @@ impl ProcessProviderRuntime for FakeFacets {
         _provider_ref: &ResourceRef,
         _candidate: &AdoptionCandidate,
     ) -> Result<(), String> {
-        self.calls.lock().push("stop-stale");
+        self.calls.lock().push("stop-stale"); // async-gate-allow: test-support recorder lock
         Ok(())
     }
 
@@ -352,8 +352,8 @@ impl ProcessProviderRuntime for FakeFacets {
         &self,
         _context: ProcessResourceContext<'_>,
     ) -> Result<(), String> {
-        self.calls.lock().push("finalize");
-        *self.finalizes.lock() += 1;
+        self.calls.lock().push("finalize"); // async-gate-allow: test-support recorder lock
+        *self.finalizes.lock() += 1; // async-gate-allow: test-support recorder lock
         Ok(())
     }
 

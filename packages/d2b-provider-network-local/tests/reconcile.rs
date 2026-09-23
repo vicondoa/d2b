@@ -96,7 +96,7 @@ impl NetworkEffectPort for FakePorts {
     ) -> Result<FirewallDigest, NetworkEffectError> {
         self.inner
             .firewall_generations
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .push(intent.expected_generation_id().as_str().to_owned());
         self.push("firewall-apply")?;
         Ok(FirewallDigest::new([1; 32]))
@@ -176,7 +176,7 @@ impl NetworkResourcePort for FakePorts {
     }
 
     async fn reconcile_mdns(&self, enabled: bool) -> Result<(), NetworkEffectError> {
-        self.inner.mdns_values.lock().push(enabled);
+        self.inner.mdns_values.lock().push(enabled); // async-gate-allow: test-support recorder lock
         self.push("mdns")
     }
 

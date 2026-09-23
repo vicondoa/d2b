@@ -814,8 +814,8 @@ async fn acquire_projection_lock() -> Result<ProjectionLock, ProjectionMutationE
             .map_err(|_| ProjectionMutationError::LockUnavailable)?;
     }
     let file = tokio::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
+        .read(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
+        .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .create(true)
         .truncate(false)
         .mode(0o640)

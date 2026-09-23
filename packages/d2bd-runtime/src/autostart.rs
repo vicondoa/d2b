@@ -784,12 +784,12 @@ mod tests {
 
         let first = execute_autostart(&plan, Arc::clone(&starter), cfg).await;
         assert_eq!(first.started(), 2);
-        let after_first_pass = starter.started_order.lock().unwrap().len();
+        let after_first_pass = starter.started_order.lock().unwrap().len(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
 
         let second = execute_autostart(&plan, Arc::clone(&starter), cfg).await;
         assert_eq!(second.already_running(), 2);
         assert_eq!(second.started(), 0);
-        let after_second_pass = starter.started_order.lock().unwrap().len();
+        let after_second_pass = starter.started_order.lock().unwrap().len(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         assert_eq!(
             after_first_pass, after_second_pass,
             "second pass must not call start() again"

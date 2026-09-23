@@ -40,8 +40,8 @@ impl SecurityKeyDriverEffects for RecordingEffects {
         component: SecurityKeyComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-        self.reconciled.lock().push(component);
-        self.calls.lock().push("reconcile_security_key");
+        self.reconciled.lock().push(component); // async-gate-allow: test-support recorder lock
+        self.calls.lock().push("reconcile_security_key"); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Ready,
         ))
@@ -52,7 +52,7 @@ impl SecurityKeyDriverEffects for RecordingEffects {
         _component: SecurityKeyComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        self.calls.lock().push("finalize");
+        self.calls.lock().push("finalize"); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderFinalize::Complete)
     }
 }
@@ -75,7 +75,7 @@ impl SecurityKeyRuntime for RecordingRuntime {
         component: SecurityKeyComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-        self.reconciled.lock().push(component);
+        self.reconciled.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Ready,
         ))
@@ -86,7 +86,7 @@ impl SecurityKeyRuntime for RecordingRuntime {
         component: SecurityKeyComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        self.finalized.lock().push(component);
+        self.finalized.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderFinalize::Complete)
     }
 }

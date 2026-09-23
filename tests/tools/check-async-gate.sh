@@ -3,10 +3,18 @@
 #
 # The gate scans the broker, the daemon, and every provider crate for denied
 # blocking calls inside async contexts (plan unit U13): a non-yielding handler
-# starves the whole envelope. Its own unit tests pin the fixture side; this
-# script runs it over the whole repository, so a regression anywhere in the
-# tree fails the L1 policy gate rather than a fixture. The deny list lives in
-# clippy.toml; there is no violation allowlist - an entry is never the fix.
+# starves the whole envelope. Since U6 (issue #590) it also flags the
+# conservative method-call lock shape - a `lock()`/`read()`/`write()` method
+# call inside an `async fn` not followed by `.await` - because the production
+# lock shape is the method-call form, invisible to the deny list's qualified
+# paths. Its own unit tests pin the fixture side; this script runs it over the
+# whole repository, so a regression anywhere in the tree fails the L1 policy
+# gate rather than a fixture. The deny list lives in clippy.toml. The escape
+# hatch is the source-level marker `// async-gate-allow: <reason>` on the
+# call's own line, recorded in packages/xtask/data/async-gate-inventory.json:
+# a marker without an inventory entry fails the gate, and an inventory entry
+# without a marked site fails it too, so the hatch cannot drift into an
+# allowlist.
 set -euo pipefail
 
 runfiles="${TEST_SRCDIR:-}/${TEST_WORKSPACE:-}"

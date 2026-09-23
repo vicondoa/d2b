@@ -1636,14 +1636,14 @@ mod tests {
             child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
             self.calls
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .push(format!("ensure:{}/{}", child.type_name.as_str(), child.name));
             let key = ResourceKey::new(
                 parent.zone.clone(),
                 child.type_name.as_str(),
                 child.name.as_str(),
             );
-            let mut rows = self.rows.lock();
+            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             if let Some(existing) = rows.iter().find(|row| row.key == key).cloned() {
                 if existing.spec == child.spec {
                     return Ok(EnsureOutcome::Unchanged(existing));
@@ -1655,8 +1655,8 @@ mod tests {
                 updated.generation += 1;
                 rows.push(updated.clone());
                 drop(rows);
-                self.views.lock().retain(|(view_key, _)| view_key != &key);
-                self.views.lock().push((
+                self.views.lock().retain(|(view_key, _)| view_key != &key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+                self.views.lock().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                     key,
                     ResourceView {
                         key: updated.key.clone(),
@@ -1691,7 +1691,7 @@ mod tests {
             };
             rows.push(row.clone());
             drop(rows);
-            self.views.lock().push((
+            self.views.lock().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 key,
                 ResourceView {
                     key: row.key.clone(),
@@ -1718,33 +1718,33 @@ mod tests {
             &self,
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push(format!("get:{}/{}", key.type_name, key.name));
+            self.calls.lock().push(format!("get:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(ResourceError::ManagerRpc("scripted read failure".into()));
             }
             Ok(self
                 .rows
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .iter()
                 .find(|row| row.key == *key)
                 .cloned())
         }
 
         async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-            self.calls.lock().push(format!("view:{}/{}", key.type_name, key.name));
+            self.calls.lock().push(format!("view:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(ResourceError::ManagerRpc("scripted read failure".into()));
             }
             Ok(self
                 .views
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .iter()
                 .find(|(view_key, _)| view_key == key)
                 .map(|(_, view)| view.clone()))
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.calls.lock().push(format!("delete:{}/{}", key.type_name, key.name));
+            self.calls.lock().push(format!("delete:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             self.drop_row(key);
             Ok(())
         }
@@ -1771,7 +1771,7 @@ mod tests {
             _subscriber: &ResourceKey,
             registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            self.calls.lock().push(format!(
+            self.calls.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 "watch:{}/{}",
                 registration.target.type_name, registration.target.name
             ));
@@ -1779,7 +1779,7 @@ mod tests {
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            self.calls.lock().push("cancel-watch".to_owned());
+            self.calls.lock().push("cancel-watch".to_owned()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
         }
     }

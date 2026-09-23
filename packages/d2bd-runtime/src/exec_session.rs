@@ -1741,7 +1741,7 @@ mod tests {
         ) -> d2b_session::Result<()> {
             self.state
                 .opened
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .unwrap()
                 .push((stream, send_credit, receive_credit));
             Ok(())
@@ -1752,13 +1752,13 @@ mod tests {
             _stream: StreamId,
             bytes: Vec<u8>,
         ) -> d2b_session::Result<()> {
-            self.state.sent.lock().unwrap().push(bytes);
+            self.state.sent.lock().unwrap().push(bytes); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
         }
 
         async fn receive_named_stream(&self) -> d2b_session::Result<StreamEvent> {
             loop {
-                if let Some(event) = self.state.events.lock().unwrap().pop_front() {
+                if let Some(event) = self.state.events.lock().unwrap().pop_front() { // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                     return event;
                 }
                 self.state.event_ready.notified().await;
@@ -1846,11 +1846,11 @@ mod tests {
             .unwrap();
         client.acknowledge_received().await.unwrap();
         assert_eq!(result.next_offset, 2);
-        assert_eq!(driver.state.opened.lock().unwrap().len(), 1);
+        assert_eq!(driver.state.opened.lock().unwrap().len(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         assert!(driver.state.granted.load(Ordering::Acquire) > 0);
-        assert_eq!(driver.state.sent.lock().unwrap().len(), 1);
+        assert_eq!(driver.state.sent.lock().unwrap().len(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         let request: NamedProcessStreamRequestFrame =
-            serde_json::from_slice(&driver.state.sent.lock().unwrap()[0]).unwrap();
+            serde_json::from_slice(&driver.state.sent.lock().unwrap()[0]).unwrap(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         assert_eq!(request.request_id, 1);
         assert!(matches!(
             request.request,
@@ -2191,7 +2191,7 @@ mod tests {
                 .unwrap_err(),
             ExecOpError::Protocol
         );
-        assert!(driver.state.sent.lock().unwrap().is_empty());
+        assert!(driver.state.sent.lock().unwrap().is_empty()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
     }
 
     use d2b_contracts_control::public_wire::{
@@ -2312,7 +2312,7 @@ mod tests {
             self.shared.write_calls.fetch_add(1, Ordering::SeqCst);
             self.shared
                 .op_timeouts
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .unwrap()
                 .push(("write", timeout));
             Ok(self.write_outcome.clone())
@@ -2330,7 +2330,7 @@ mod tests {
             self.shared.read_calls.fetch_add(1, Ordering::SeqCst);
             self.shared
                 .op_timeouts
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .unwrap()
                 .push(("read", timeout));
             if let Some(gate) = &self.read_gate {
@@ -2340,7 +2340,7 @@ mod tests {
                 OutputStreamSel::Stdout => &self.stdout_reads,
                 OutputStreamSel::Stderr => &self.stderr_reads,
             };
-            let outcome = queue.lock().unwrap().pop_front();
+            let outcome = queue.lock().unwrap().pop_front(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(outcome.unwrap_or(ReadOutputOutcome {
                 data: Vec::new(),
                 next_offset: 0,
@@ -2360,7 +2360,7 @@ mod tests {
             self.shared.signal_calls.fetch_add(1, Ordering::SeqCst);
             self.shared
                 .op_timeouts
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .unwrap()
                 .push(("signal", timeout));
             Ok(())
@@ -2376,7 +2376,7 @@ mod tests {
             self.shared.resize_calls.fetch_add(1, Ordering::SeqCst);
             self.shared
                 .op_timeouts
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .unwrap()
                 .push(("resize", timeout));
             Ok(())
@@ -2389,10 +2389,10 @@ mod tests {
         ) -> Result<WaitOutcome, ExecOpError> {
             self.shared
                 .op_timeouts
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .unwrap()
                 .push(("wait", timeout));
-            let outcome = self.waits.lock().unwrap().pop_front();
+            let outcome = self.waits.lock().unwrap().pop_front(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(outcome.unwrap_or(WaitOutcome {
                 running: false,
                 terminal: Some(TerminalKind::Exited(0)),
@@ -2403,7 +2403,7 @@ mod tests {
             self.shared.close_calls.fetch_add(1, Ordering::SeqCst);
             self.shared
                 .op_timeouts
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .unwrap()
                 .push(("close", timeout));
             Ok(())
@@ -2413,7 +2413,7 @@ mod tests {
             self.shared.cancel_calls.fetch_add(1, Ordering::SeqCst);
             self.shared
                 .op_timeouts
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .unwrap()
                 .push(("cancel", timeout));
             Ok(())
@@ -2454,7 +2454,7 @@ mod tests {
             if let Some(error) = self.error {
                 return Err(error);
             }
-            let builder = self.builder.lock().unwrap().take().expect("establish once");
+            let builder = self.builder.lock().unwrap().take().expect("establish once"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(builder())
         }
     }

@@ -1,4 +1,4 @@
-//! Async-discipline gate (U13, KTD9).
+//! Async-discipline gate (U13, KTD9; method-call arming U6, KTD4).
 //!
 //! Rejects blocking calls on Tokio runtime workers. The known blocking
 //! functions are the `clippy.toml` `disallowed-methods` deny list - the same
@@ -27,6 +27,29 @@
 //! * Test code is scanned like production code: `#[tokio::test]` bodies run
 //!   on a runtime, so a blocking call there starves workers too.
 //!
+//! Since U6 (issue #590) the scanner also flags the conservative method-call
+//! lock shape: a `lock()`/`read()`/`write()` method call inside an async
+//! context that is NOT followed by `.await`. The production lock shape is the
+//! method-call form (`mutex.lock()`), invisible to the qualified paths the
+//! deny list names, so the gate was blind to exactly the shape it was built
+//! to catch. The shape is deliberately conservative - the scanner does not
+//! resolve receiver types, so any `.lock()`/`.read()`/`.write()` method call
+//! in an async context matches - and the `.await` exclusion is load-bearing:
+//! an awaited `tokio::sync::Mutex::lock()` site is legitimate (the census
+//! never sees it either, since it counts only `clippy::disallowed_methods`
+//! diagnostics), so only the un-awaited form is flagged.
+//!
+//! The escape hatch for a synchronous lock site that must stay is a
+//! source-level marker: a trailing comment on the call's own line,
+//! `// async-gate-allow: <reason>`, at or after the call. The marker format
+//! and every marked site are recorded in the named hatch inventory
+//! (`packages/xtask/data/async-gate-inventory.json`), and the gate validates
+//! both directions: a marked site that is not recorded fails, and a recorded
+//! site whose file no longer carries the marker (or left the scanned roots)
+//! fails too, so the hatch cannot drift into an allowlist. The marker exempts
+//! only the method-call shape - the qualified form (`std::sync::Mutex::lock`)
+//! and the `X::lock(...)` form have no hatch and always fail.
+//!
 //! Known limitations of the lexical form, all fail-closed or documented:
 //!
 //! * A call through an imported item (`use std::fs::read;` then `read(...)`)
@@ -37,20 +60,54 @@
 //!   indistinguishable from the `std` import form and is reported; the
 //!   house replacement vocabulary is the fully qualified `tokio::fs::read`,
 //!   which never matches.
-//! * A method-call form (`mutex.lock()`) does not match the qualified path
-//!   the deny list names; the qualified form and the `X::lock(...)` form do.
+//! * The method-call shape is receiver-blind: a `.read()`/`.write()` on a
+//!   non-lock receiver (a domain method, an `AsyncReadExt` call) is flagged
+//!   like a mutex lock acquisition, and the marker is the documented way out.
+//!   A method call whose closing paren is followed by `.await` on a later
+//!   line is still exempt (the await decision spans lines).
 //!
 //! The gate is a runnable subcommand (`cargo xtask check-async-gate
-//! [<paths>...]`) with fixture unit tests; wiring it into the enforcement
-//! chain is the final step of U13 on the migrated tree.
+//! [<paths>...]`) with fixture unit tests; it is wired into the enforcement
+//! chain as the Layer-1 policy check `make check-async-gate`.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
 
 use crate::blocking_census::{parse_deny_list, DeniedApi};
 
 /// The named violation class every finding renders under.
 pub const VIOLATION_NAME: &str = "blocking-call-in-async-context";
+
+/// The named hatch inventory (KTD4): records the source-level marker format
+/// and every site the marker exempts, so the hatch cannot drift into an
+/// allowlist. The gate validates both directions - a marked site that is not
+/// recorded fails, and a recorded site without its marker fails.
+pub const HATCH_INVENTORY_PATH: &str = "packages/xtask/data/async-gate-inventory.json";
+
+/// The hatch inventory file's shape: the marker format the scanner honors
+/// (the prefix of the `// async-gate-allow: <reason>` trailing comment) and
+/// the recorded sites.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HatchInventory {
+    /// The source-level marker prefix, e.g. `// async-gate-allow:`.
+    pub marker: String,
+    /// Every marker-honored method-call lock site in the covered roots.
+    pub sites: Vec<HatchSite>,
+}
+
+/// One recorded hatch site.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HatchSite {
+    /// Repository-relative path of the file, as the scanner reports it.
+    pub file: String,
+    /// 1-based line number of the marked method call.
+    pub line: usize,
+    /// Why the synchronous lock stays (the marker's `<reason>`).
+    pub reason: String,
+}
 
 /// The default scan roots: the covered control-plane crates (broker, daemon,
 /// daemon runtime, core, resource runtime) plus every provider crate (the
@@ -98,6 +155,57 @@ impl Violation {
     }
 }
 
+/// One scan's result: the violations found and every marker-honored site.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScanOutcome {
+    /// Blocking calls found on runtime workers.
+    pub violations: Vec<Violation>,
+    /// `(file, line)` of every method-call lock site the hatch marker
+    /// exempted - the sites the inventory must record.
+    pub marker_sites: Vec<(String, usize)>,
+}
+
+/// One whole-run scan result: the per-file outcomes plus the scanned set.
+struct ScanRun {
+    violations: Vec<Violation>,
+    marker_sites: Vec<(String, usize)>,
+    scanned_files: Vec<String>,
+    file_count: usize,
+}
+
+/// A method-call lock shape whose fate (awaited or not) is not yet decided.
+///
+/// The call is pushed when `.lock(`/`.read(`/`.write(` is seen inside an
+/// async context; `depth` counts the call's open parens. When the closing
+/// paren lands, the call's legitimacy is decided by what follows it: `.await`
+/// passes, end of line defers the decision to the next line, anything else
+/// flags.
+#[derive(Debug, Clone)]
+struct PendingCall {
+    /// 1-based line of the `.lock(`/`.read(`/`.write(`.
+    line: usize,
+    /// The method name (`lock`, `read`, `write`).
+    method: String,
+    /// `"async fn"` or `"async block"` - the async context the call sits in.
+    context: &'static str,
+    /// The offending line, trimmed.
+    code: String,
+    /// Open paren depth of the call; 0 when the call is closed.
+    depth: usize,
+}
+
+impl PendingCall {
+    fn into_violation(self, file: &str) -> Violation {
+        Violation {
+            file: file.to_owned(),
+            line: self.line,
+            api: format!(".{}()", self.method),
+            context: self.context,
+            code: self.code,
+        }
+    }
+}
+
 /// What one open brace level is: the worker context its body runs in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BraceKind {
@@ -120,6 +228,12 @@ struct ScanState {
     /// The code since the last `;`, `{`, or `}` - used to recognize `async
     /// fn` signatures and the token before a `{` or `(`.
     segment: String,
+    /// Method-call lock shapes whose closing paren has not landed yet,
+    /// innermost last.
+    open_calls: Vec<PendingCall>,
+    /// A closed method-call lock shape waiting for the next non-space token
+    /// to decide its fate: `.await` passes, anything else flags.
+    await_pending: Option<PendingCall>,
 }
 
 impl ScanState {
@@ -129,28 +243,74 @@ impl ScanState {
             in_block_comment: false,
             raw_hashes: None,
             segment: String::new(),
+            open_calls: Vec::new(),
+            await_pending: None,
         }
     }
 }
 
 /// Scan one source file for blocking calls inside async contexts.
-pub fn scan_source(file: &str, text: &str, entries: &[DeniedApi]) -> Vec<Violation> {
+///
+/// `marker` is the hatch marker prefix from the inventory (or `None` when the
+/// hatch is not configured); a method-call lock shape on a line carrying the
+/// marker is exempt and recorded in the outcome's `marker_sites`.
+pub fn scan_source(
+    file: &str,
+    text: &str,
+    entries: &[DeniedApi],
+    marker: Option<&str>,
+) -> ScanOutcome {
+    let lock_methods = lock_method_names(entries);
     let mut state = ScanState::new();
-    let mut violations = Vec::new();
+    let mut outcome = ScanOutcome::default();
     for (index, line) in text.lines().enumerate() {
-        scan_line(&mut state, file, index + 1, line, entries, &mut violations);
+        scan_line(
+            &mut state,
+            file,
+            index + 1,
+            line,
+            entries,
+            &lock_methods,
+            marker,
+            &mut outcome,
+        );
     }
-    violations
+    outcome
+}
+
+/// The method names of the mutex/rwlock lock-acquisition entries on the deny
+/// list (`std::sync`/`parking_lot` `Mutex::lock`, `RwLock::read`,
+/// `RwLock::write`): the conservative method-call shape the scanner flags
+/// inside async contexts. Derived from the deny list so the list stays the
+/// single source of truth - a new lock entry arms the gate automatically.
+fn lock_method_names(entries: &[DeniedApi]) -> Vec<String> {
+    let mut names = Vec::new();
+    for entry in entries {
+        let segments: Vec<&str> = entry.path.split("::").collect();
+        if segments.len() >= 2
+            && (segments[segments.len() - 2] == "Mutex"
+                || segments[segments.len() - 2] == "RwLock")
+        {
+            let method = segments[segments.len() - 1].to_owned();
+            if !names.contains(&method) {
+                names.push(method);
+            }
+        }
+    }
+    names
 }
 
 /// Scan one line, advancing the scanner state and collecting violations.
+#[allow(clippy::too_many_arguments)]
 fn scan_line(
     state: &mut ScanState,
     file: &str,
     line_no: usize,
     raw: &str,
     entries: &[DeniedApi],
-    out: &mut Vec<Violation>,
+    lock_methods: &[String],
+    marker: Option<&str>,
+    outcome: &mut ScanOutcome,
 ) {
     let code = sanitize(raw, state);
     let bytes = code.as_bytes();
@@ -158,6 +318,23 @@ fn scan_line(
     let mut flagged: Vec<&str> = Vec::new();
     while i < bytes.len() {
         let b = bytes[i];
+        let context = match state.braces.last() {
+            Some(BraceKind::AsyncFn) => Some("async fn"),
+            Some(BraceKind::AsyncBlock) => Some("async block"),
+            _ => None,
+        };
+        // A closed method-call lock shape is decided by the next non-space
+        // token (possibly on a later line): `.await` passes, anything else
+        // flags.
+        if let Some(pending) = state.await_pending.take() {
+            if b.is_ascii_whitespace() {
+                state.await_pending = Some(pending);
+            } else if b == b'.' && starts_with_await(&code[i..]) {
+                // Awaited tokio lock site: legitimate.
+            } else {
+                outcome.violations.push(pending.into_violation(file));
+            }
+        }
         match b {
             b'{' => {
                 state.braces.push(brace_kind(state));
@@ -168,15 +345,59 @@ fn scan_line(
                 state.segment.clear();
             }
             b';' => {
+                flush_pending(state, file, outcome);
                 state.segment.clear();
             }
+            b'(' => {
+                if let Some(top) = state.open_calls.last_mut() {
+                    top.depth += 1;
+                }
+                state.segment.push('(');
+                i += 1;
+                continue;
+            }
+            b')' => {
+                if let Some(top) = state.open_calls.last_mut() {
+                    top.depth -= 1;
+                    if top.depth == 0 {
+                        let pending = state.open_calls.pop().expect("top exists");
+                        let rest = code[i + 1..].trim_start();
+                        if starts_with_await(rest) {
+                            // Awaited tokio lock site: legitimate.
+                        } else if rest.is_empty() {
+                            // The await decision lands on the next line.
+                            state.await_pending = Some(pending);
+                        } else {
+                            outcome.violations.push(pending.into_violation(file));
+                        }
+                    }
+                }
+                state.segment.push(')');
+                i += 1;
+                continue;
+            }
+            b'.' => {
+                if let Some(context) = context
+                    && let Some(method) = method_call_lock_at(&code, i, lock_methods)
+                {
+                    if marker.is_some_and(|marker| line_has_marker(raw, i, marker)) {
+                        outcome.marker_sites.push((file.to_owned(), line_no));
+                    } else {
+                        state.open_calls.push(PendingCall {
+                            line: line_no,
+                            method: method.to_owned(),
+                            context,
+                            code: raw.trim().to_owned(),
+                            depth: 0,
+                        });
+                    }
+                }
+                state.segment.push('.');
+                i += 1;
+                continue;
+            }
             _ => {
-                let context = match state.braces.last() {
-                    Some(BraceKind::AsyncFn) => Some("async fn"),
-                    Some(BraceKind::AsyncBlock) => Some("async block"),
-                    _ => None,
-                };
-let token_start = i == 0 || !is_ident_char(bytes[i - 1]);
+                let token_start = i == 0 || !is_ident_char(bytes[i - 1]);
                 if let Some(context) = context
                     && token_start
                 {
@@ -190,7 +411,7 @@ let token_start = i == 0 || !is_ident_char(bytes[i - 1]);
                         }
                         if matches_at(&code, i, entry) {
                             flagged.push(&entry.path);
-                            out.push(Violation {
+                            outcome.violations.push(Violation {
                                 file: file.to_owned(),
                                 line: line_no,
                                 api: entry.path.clone(),
@@ -208,6 +429,74 @@ let token_start = i == 0 || !is_ident_char(bytes[i - 1]);
         }
         i += 1;
     }
+}
+
+/// Flag every pending method-call lock shape: a statement boundary (`;`)
+/// cannot continue an un-awaited call, and an unclosed call is malformed
+/// code the gate fails closed on.
+fn flush_pending(state: &mut ScanState, file: &str, outcome: &mut ScanOutcome) {
+    if let Some(pending) = state.await_pending.take() {
+        outcome.violations.push(pending.into_violation(file));
+    }
+    while let Some(pending) = state.open_calls.pop() {
+        outcome.violations.push(pending.into_violation(file));
+    }
+}
+
+/// Whether a conservative method-call lock shape starts at byte position `i`
+/// of the sanitized code: `.` followed by one of the lock method names and a
+/// `(`, with a receiver expression before the `.` (skipping whitespace, and
+/// accepting the line start for a method-chain continuation). Returns the
+/// method name when it matches.
+fn method_call_lock_at<'a>(code: &str, i: usize, lock_methods: &'a [String]) -> Option<&'a str> {
+    let bytes = code.as_bytes();
+    let mut j = i;
+    while j > 0 && bytes[j - 1].is_ascii_whitespace() {
+        j -= 1;
+    }
+    if j > 0 {
+        let prev = bytes[j - 1];
+        if !(is_ident_char(prev) || prev == b')' || prev == b']') {
+            return None;
+        }
+    }
+    for method in lock_methods {
+        let after = i + 1;
+        if code[after..].starts_with(method.as_str()) {
+            let call = after + method.len();
+            if bytes.get(call) == Some(&b'(') {
+                return Some(method);
+            }
+        }
+    }
+    None
+}
+
+/// Whether `text` starts with the `.await` postfix at a token boundary:
+/// `.await` followed by a non-identifier character (or end of text), so
+/// `.awaitable()` never passes the await exclusion.
+fn starts_with_await(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix(".await") else {
+        return false;
+    };
+    rest.chars().next().is_none_or(|c| !is_ident_char(c as u8))
+}
+
+/// Whether the hatch marker appears on the raw line at or after byte
+/// position `from` (the call's `.`), with a non-space reason after it (the
+/// documented form is `// async-gate-allow: <reason>`). Sanitized positions
+/// align with raw positions one-to-one, so `from` is valid in both. The
+/// marker is a trailing comment on the call's own line.
+fn line_has_marker(raw: &str, from: usize, marker: &str) -> bool {
+    let Some(pos) = raw[from..].find(marker) else {
+        return false;
+    };
+    let after = from + pos + marker.len();
+    raw[after..]
+        .trim_start()
+        .chars()
+        .next()
+        .is_some_and(|c| !c.is_whitespace())
 }
 
 /// Whether a denied API matches at byte position `i` of the sanitized code.
@@ -522,7 +811,8 @@ fn scan_paths(
     repo_root: &Path,
     paths: &[PathBuf],
     entries: &[DeniedApi],
-) -> Result<(Vec<Violation>, usize), String> {
+    marker: Option<&str>,
+) -> Result<ScanRun, String> {
     let mut files = Vec::new();
     for path in paths {
         if path.is_dir() {
@@ -532,7 +822,12 @@ fn scan_paths(
         }
     }
     files.sort();
-    let mut violations = Vec::new();
+    let mut run = ScanRun {
+        violations: Vec::new(),
+        marker_sites: Vec::new(),
+        scanned_files: Vec::new(),
+        file_count: files.len(),
+    };
     for file in &files {
         let text = fs::read_to_string(file)
             .map_err(|error| format!("async-gate: read {}: {error}", file.display()))?;
@@ -540,9 +835,78 @@ fn scan_paths(
             .strip_prefix(repo_root)
             .map(|relative| relative.display().to_string())
             .unwrap_or_else(|_| file.display().to_string());
-        violations.extend(scan_source(&display, &text, entries));
+        let outcome = scan_source(&display, &text, entries, marker);
+        run.scanned_files.push(display);
+        run.violations.extend(outcome.violations);
+        run.marker_sites.extend(outcome.marker_sites);
     }
-    Ok((violations, files.len()))
+    Ok(run)
+}
+
+/// Load the hatch inventory - the marker format and the recorded sites.
+/// The inventory is mandatory: the gate fails closed when it is missing or
+/// malformed, so the hatch cannot be silently disabled.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn load_inventory(repo_root: &Path) -> Result<HatchInventory, String> {
+    let path = repo_root.join(HATCH_INVENTORY_PATH);
+    let text = fs::read_to_string(&path)
+        .map_err(|_| format!("async-gate: hatch inventory unreadable at {}", path.display()))?;
+    let inventory: HatchInventory = serde_json::from_str(&text)
+        .map_err(|error| format!("async-gate: parse {}: {error}", path.display()))?;
+    if inventory.marker.is_empty() {
+        return Err("async-gate: hatch inventory marker format is empty".to_owned());
+    }
+    Ok(inventory)
+}
+
+/// Validate the hatch inventory against the scan, both directions:
+///
+/// * every marker-honored site must be recorded in the inventory, and
+/// * every recorded site must be a marker-honored site in a scanned file
+///   (a stale entry - a marker removed, or a file that left the covered
+///   roots - fails the gate).
+///
+/// Entries for files outside the scanned set are ignored, so a subset scan
+/// (`check-async-gate <paths>`) stays valid; the full default-roots run
+/// validates every entry.
+fn validate_inventory(
+    inventory: &HatchInventory,
+    marker_sites: &[(String, usize)],
+    scanned_files: &[String],
+) -> Result<(), String> {
+    let recorded: BTreeSet<(&str, usize)> = inventory
+        .sites
+        .iter()
+        .map(|site| (site.file.as_str(), site.line))
+        .collect();
+    let scanned: BTreeSet<&str> = scanned_files.iter().map(String::as_str).collect();
+    let mut errors = Vec::new();
+    for (file, line) in marker_sites {
+        if !recorded.contains(&(file.as_str(), *line)) {
+            errors.push(format!(
+                "{file}:{line}: marker-honored site is not recorded in {HATCH_INVENTORY_PATH}"
+            ));
+        }
+    }
+    for site in &inventory.sites {
+        if scanned.contains(site.file.as_str())
+            && !marker_sites.contains(&(site.file.clone(), site.line))
+        {
+            errors.push(format!(
+                "{}:{}: inventory entry has no marker-honored method-call site",
+                site.file, site.line
+            ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "async-gate: hatch inventory drift ({}):\n{}",
+            errors.len(),
+            errors.join("\n")
+        ))
+    }
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
@@ -565,29 +929,34 @@ fn walk_rs(dir: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
 }
 
 /// Run the gate: scan the default roots (or the given paths) and fail on any
-/// blocking call inside an async context.
+/// blocking call inside an async context or any hatch inventory drift.
 pub fn run(repo_root: &Path, args: &[String]) -> Result<(), String> {
     let entries = load_entries(repo_root)?;
+    let inventory = load_inventory(repo_root)?;
     let paths = if args.is_empty() {
         default_scan_paths(repo_root)?
     } else {
         args.iter().map(PathBuf::from).collect()
     };
-    let (violations, file_count) = scan_paths(repo_root, &paths, &entries)?;
-    if violations.is_empty() {
+    let run = scan_paths(repo_root, &paths, &entries, Some(&inventory.marker))?;
+    validate_inventory(&inventory, &run.marker_sites, &run.scanned_files)?;
+    if run.violations.is_empty() {
         println!(
-            "async gate: {file_count} file(s) scanned, no blocking calls in async contexts"
+            "async gate: {} file(s) scanned, no blocking calls in async contexts",
+            run.file_count
         );
         Ok(())
     } else {
-        let rendered = violations
+        let rendered = run
+            .violations
             .iter()
             .map(Violation::render)
             .collect::<Vec<_>>()
             .join("\n");
         Err(format!(
-            "{} blocking call(s) in async context(s) across {file_count} file(s):\n{rendered}",
-            violations.len()
+            "{} blocking call(s) in async context(s) across {} file(s):\n{rendered}",
+            run.violations.len(),
+            run.file_count
         ))
     }
 }
@@ -600,14 +969,24 @@ mod tests {
         parse_deny_list(include_str!("../../../clippy.toml"))
     }
 
+    /// Scan without the hatch configured.
+    fn scan(file: &str, source: &str) -> Vec<Violation> {
+        scan_source(file, source, &deny_list(), None).violations
+    }
+
+    /// Scan with the hatch marker configured.
+    fn scan_hatched(file: &str, source: &str, marker: Option<&str>) -> ScanOutcome {
+        scan_source(file, source, &deny_list(), marker)
+    }
+
     const ERROR_FIXTURE: &str = "packages/d2b-broker/src/worker.rs";
+    const MARKER: &str = "// async-gate-allow:";
 
     #[test]
     fn flags_blocking_calls_in_async_contexts() {
-        let violations = scan_source(
+        let violations = scan(
             ERROR_FIXTURE,
             include_str!("../tests/fixtures/async-gate/blocking_in_async_fn.rs"),
-            &deny_list(),
         );
         let mut found: Vec<(&str, &str)> = violations
             .iter()
@@ -626,6 +1005,7 @@ mod tests {
             ("std::fs::read", "async fn", 2),
             ("std::fs::write", "async block", 1),
             ("std::sync::Mutex::lock", "async fn", 1),
+            (".lock()", "async fn", 1),
             ("std::thread::sleep", "async fn", 1),
             ("tokio::task::spawn_blocking", "async fn", 1),
         ] {
@@ -643,10 +1023,9 @@ mod tests {
 
     #[test]
     fn violations_render_as_named_json() {
-        let violations = scan_source(
+        let violations = scan(
             ERROR_FIXTURE,
             include_str!("../tests/fixtures/async-gate/blocking_in_async_fn.rs"),
-            &deny_list(),
         );
         let rendered = violations[0].render();
         assert!(rendered.contains("\"violation\":\"blocking-call-in-async-context\""));
@@ -657,10 +1036,9 @@ mod tests {
 
     #[test]
     fn passes_async_contexts_without_blocking_calls() {
-        let violations = scan_source(
+        let violations = scan(
             "packages/d2b-broker/src/clean.rs",
             include_str!("../tests/fixtures/async-gate/clean_async.rs"),
-            &deny_list(),
         );
         assert!(
             violations.is_empty(),
@@ -672,7 +1050,7 @@ mod tests {
     #[test]
     fn sync_functions_are_not_worker_contexts() {
         let source = "pub fn load(path: &Path) -> Vec<u8> {\n    std::fs::read(path).unwrap_or_default()\n}\n";
-        let violations = scan_source("x.rs", source, &deny_list());
+        let violations = scan("x.rs", source);
         assert!(violations.is_empty(), "{violations:?}");
     }
 
@@ -684,7 +1062,7 @@ mod tests {
         // `std::fs::read` and the `tokio::task::spawn_blocking` call must
         // both be flagged in the async fn.
         let source = "pub async fn load(path: &Path) -> Vec<u8> {\n    tokio::task::spawn_blocking(|| std::fs::read(path)).await.unwrap_or_default()\n}\n";
-        let violations = scan_source("x.rs", source, &deny_list());
+        let violations = scan("x.rs", source);
         assert!(
             violations
                 .iter()
@@ -702,21 +1080,21 @@ mod tests {
     #[test]
     fn comment_mentions_do_not_flag() {
         let source = "pub async fn load() {\n    // std::fs::read blocks; tokio::fs::read does not\n    tokio::fs::read(\"/x\").await.unwrap();\n}\n";
-        let violations = scan_source("x.rs", source, &deny_list());
+        let violations = scan("x.rs", source);
         assert!(violations.is_empty(), "{violations:?}");
     }
 
     #[test]
     fn tokio_replacements_do_not_flag() {
         let source = "pub async fn load(m: &tokio::sync::Mutex<u32>) {\n    tokio::fs::read(\"/x\").await.unwrap();\n    tokio::time::sleep(std::time::Duration::from_secs(1)).await;\n    tokio::sync::Mutex::lock(m).await;\n}\n";
-        let violations = scan_source("x.rs", source, &deny_list());
+        let violations = scan("x.rs", source);
         assert!(violations.is_empty(), "{violations:?}");
     }
 
     #[test]
     fn imported_module_calls_flag_via_the_tail() {
         let source = "use std::fs;\n\npub async fn load() {\n    fs::read(\"/x\").unwrap();\n}\n";
-        let violations = scan_source("x.rs", source, &deny_list());
+        let violations = scan("x.rs", source);
         assert!(
             violations.iter().any(|violation| violation.api == "std::fs::read"),
             "imported-module call must flag: {violations:?}"
@@ -726,7 +1104,7 @@ mod tests {
     #[test]
     fn multi_line_async_fn_signatures_stay_async() {
         let source = "pub async fn load(\n    path: &Path,\n) -> Vec<u8> {\n    std::fs::read(path).unwrap_or_default()\n}\n";
-        let violations = scan_source("x.rs", source, &deny_list());
+        let violations = scan("x.rs", source);
         assert!(
             violations.iter().any(|violation| violation.api == "std::fs::read"),
             "a signature split across lines must still be an async context: {violations:?}"
@@ -736,7 +1114,7 @@ mod tests {
     #[test]
     fn nested_blocks_inherit_the_async_context() {
         let source = "pub async fn load(path: &Path) {\n    if path.exists() {\n        std::fs::read(path).unwrap();\n    }\n}\n";
-        let violations = scan_source("x.rs", source, &deny_list());
+        let violations = scan("x.rs", source);
         assert!(
             violations.iter().any(|violation| violation.api == "std::fs::read"),
             "a block nested in an async fn still runs on the worker: {violations:?}"
@@ -746,7 +1124,7 @@ mod tests {
     #[test]
     fn async_fn_pointer_does_not_open_an_async_context() {
         let source = "pub fn make() {\n    let g = async fn_pointer();\n    if g {\n        std::fs::read(\"/x\").unwrap();\n    }\n}\n";
-        let violations = scan_source("x.rs", source, &deny_list());
+        let violations = scan("x.rs", source);
         assert!(violations.is_empty(), "{violations:?}");
     }
 
@@ -757,10 +1135,9 @@ mod tests {
         // d2b-resource-runtime, d2b-core, and d2bd-runtime in the default
         // scan set, so a call in an async fn under one of those roots is a
         // violation (the substrate crates still convert in U4/U5/U17).
-        let violations = scan_source(
+        let violations = scan(
             "packages/d2b-resource-runtime/src/watch.rs",
             include_str!("../tests/fixtures/async-gate/blocking_in_async_fn.rs"),
-            &deny_list(),
         );
         assert!(
             violations.iter().any(|violation| {
@@ -808,7 +1185,7 @@ mod tests {
         // worker's own thread (the loader_worker pattern). It is not an async
         // context, so even a denied API there must not flag.
         let source = "pub fn spawn_spec_writer() {\n    std::thread::spawn(move || {\n        loop {\n            let job = std::sync::mpsc::Receiver::recv(&rx).expect(\"writer gone\");\n            write_job(job);\n        }\n    });\n}\n";
-        let violations = scan_source("x.rs", source, &deny_list());
+        let violations = scan("x.rs", source);
         assert!(
             violations.is_empty(),
             "a worker thread's blocking recv is not an async context: {violations:?}"
@@ -820,12 +1197,278 @@ mod tests {
         // The same recv relocated onto a runtime worker is a violation: R4's
         // allowance is worker-thread-only, never an async context.
         let source = "pub async fn receive() {\n    std::sync::mpsc::Receiver::recv(&rx).unwrap();\n}\n";
-        let violations = scan_source("x.rs", source, &deny_list());
+        let violations = scan("x.rs", source);
         assert!(
             violations
                 .iter()
                 .any(|violation| violation.api == "std::sync::mpsc::Receiver::recv"),
             "a sync recv inside an async fn must flag: {violations:?}"
         );
+    }
+
+    // --- U6: method-call lock detection (issue #590, KTD4) ----------------
+
+    #[test]
+    fn method_call_lock_not_awaited_flags() {
+        // The production lock shape: `m.lock()` on a std::sync mutex inside
+        // an async fn, not followed by `.await`. The qualified-path deny
+        // matching cannot see it; the conservative method-call shape must.
+        let source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m.lock().unwrap();\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.api == ".lock()" && violation.context == "async fn"),
+            "an un-awaited method-call lock inside an async fn must flag: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn read_and_write_method_calls_flag() {
+        // The RwLock acquisition family is part of the conservative shape:
+        // `m.read()` and `m.write()` park the worker the same way.
+        let source = "pub async fn touch(r: &std::sync::RwLock<u32>) {\n    let _a = r.read().unwrap();\n    let _b = r.write().unwrap();\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.api == ".read()"),
+            "an un-awaited method-call read must flag: {violations:?}"
+        );
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.api == ".write()"),
+            "an un-awaited method-call write must flag: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn awaited_method_call_lock_passes() {
+        // The `.await` exclusion is load-bearing: an awaited tokio lock site
+        // is legitimate (the census never sees it either).
+        let source = "pub async fn touch(m: &tokio::sync::Mutex<u32>) {\n    let _guard = m.lock().await;\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
+    fn awaited_method_call_lock_across_lines_passes() {
+        // The await decision spans lines: a chain-formatted tokio lock site
+        // must stay legitimate.
+        let source = "pub async fn touch(m: &tokio::sync::Mutex<u32>) {\n    let _guard = m\n        .lock()\n        .await\n        .unwrap();\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
+    fn await_lookalike_does_not_exempt() {
+        // The await exclusion needs a token boundary: `.awaitable()` is not
+        // `.await`, so the call must flag.
+        let source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m.lock()\n        .awaitable();\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.api == ".lock()"),
+            "an await-lookalike must not exempt the call: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn unawaited_method_call_lock_across_lines_flags() {
+        // The same chain form without the await is a violation, reported at
+        // the call's own line.
+        let source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m\n        .lock()\n        .unwrap();\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.api == ".lock()" && violation.line == 3),
+            "an un-awaited chain-form lock must flag at its call line: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn method_call_lock_in_sync_fn_passes() {
+        // The conservative shape only applies inside async contexts: a
+        // synchronous function is not a runtime worker.
+        let source = "pub fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m.lock().unwrap();\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
+    fn method_call_lock_in_async_block_flags() {
+        // An async block is a worker context like an async fn body.
+        let source = "pub fn make() -> impl std::future::Future<Output = ()> {\n    async {\n        let _guard = m.lock().unwrap();\n    }\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.api == ".lock()" && violation.context == "async block"),
+            "an un-awaited method-call lock inside an async block must flag: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn tokio_test_bodies_are_flagged_like_production() {
+        // `#[tokio::test]` bodies run on a runtime, so a method-call lock
+        // there is flagged like production code (and passes only with the
+        // marker).
+        let source = "#[tokio::test]\nasync fn touch() {\n    let _guard = m.lock().unwrap();\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.api == ".lock()" && violation.context == "async fn"),
+            "a method-call lock inside a tokio::test body must flag: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn qualified_form_still_flags_with_marker_present() {
+        // The marker exempts only the method-call shape: the qualified form
+        // has no hatch and must keep failing.
+        let source = "pub async fn touch(shared: &std::sync::Mutex<u32>) {\n    let _guard = std::sync::Mutex::lock(shared).unwrap(); // async-gate-allow: still forbidden\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(
+            violations
+                .iter()
+                .any(|violation| violation.api == "std::sync::Mutex::lock"),
+            "the qualified form must keep flagging even with a marker: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn marker_exempts_method_call_and_is_recorded() {
+        // The documented hatch: a trailing `// async-gate-allow: <reason>`
+        // comment on the call's own line exempts the site and records it for
+        // the inventory.
+        let source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m.lock().unwrap(); // async-gate-allow: short critical section, no await inside\n}\n";
+        let outcome = scan_hatched("x.rs", source, Some(MARKER));
+        assert!(
+            outcome.violations.is_empty(),
+            "a marked method-call lock must pass: {:?}",
+            outcome.violations.iter().map(Violation::render).collect::<Vec<_>>()
+        );
+        assert_eq!(outcome.marker_sites, vec![("x.rs".to_owned(), 2)]);
+    }
+
+    #[test]
+    fn marker_before_the_call_does_not_exempt() {
+        // The marker must be on the call's own line at or after the call; a
+        // marker on the line above is not the documented form.
+        let source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    // async-gate-allow: not the documented form\n    let _guard = m.lock().unwrap();\n}\n";
+        let outcome = scan_hatched("x.rs", source, Some(MARKER));
+        assert!(
+            outcome
+                .violations
+                .iter()
+                .any(|violation| violation.api == ".lock()"),
+            "a marker on a different line must not exempt: {:?}",
+            outcome.violations.iter().map(Violation::render).collect::<Vec<_>>()
+        );
+        assert!(outcome.marker_sites.is_empty());
+    }
+
+    #[test]
+    fn marker_without_reason_does_not_exempt() {
+        // The marker format requires a reason: `// async-gate-allow:` alone
+        // is not the documented marker.
+        let source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m.lock().unwrap(); // async-gate-allow:\n}\n";
+        let outcome = scan_hatched("x.rs", source, Some(MARKER));
+        assert!(
+            outcome
+                .violations
+                .iter()
+                .any(|violation| violation.api == ".lock()"),
+            "a marker without a reason must not exempt: {:?}",
+            outcome.violations.iter().map(Violation::render).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn method_call_in_string_or_comment_does_not_flag() {
+        // The sanitizer blanks strings and comments, so a `.lock()` mention
+        // in prose or a literal is not a call.
+        let source = "pub async fn touch() {\n    // m.lock() would park the worker\n    let s = \"m.lock() is the blocking shape\";\n    tokio::time::sleep(std::time::Duration::from_secs(1)).await;\n}\n";
+        let violations = scan("x.rs", source);
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
+    fn inventory_validation_accepts_a_consistent_inventory() {
+        let inventory = HatchInventory {
+            marker: MARKER.to_owned(),
+            sites: vec![HatchSite {
+                file: "packages/d2b-broker/src/runtime.rs".to_owned(),
+                line: 10,
+                reason: "short critical section".to_owned(),
+            }],
+        };
+        let marker_sites = vec![("packages/d2b-broker/src/runtime.rs".to_owned(), 10)];
+        let scanned = vec!["packages/d2b-broker/src/runtime.rs".to_owned()];
+        assert!(validate_inventory(&inventory, &marker_sites, &scanned).is_ok());
+    }
+
+    #[test]
+    fn inventory_validation_rejects_an_unrecorded_marker() {
+        let inventory = HatchInventory {
+            marker: MARKER.to_owned(),
+            sites: Vec::new(),
+        };
+        let marker_sites = vec![("packages/d2b-broker/src/runtime.rs".to_owned(), 10)];
+        let scanned = vec!["packages/d2b-broker/src/runtime.rs".to_owned()];
+        let error = validate_inventory(&inventory, &marker_sites, &scanned)
+            .expect_err("an unrecorded marker must fail");
+        assert!(error.contains("not recorded"), "{error}");
+    }
+
+    #[test]
+    fn inventory_validation_rejects_a_stale_entry() {
+        let inventory = HatchInventory {
+            marker: MARKER.to_owned(),
+            sites: vec![HatchSite {
+                file: "packages/d2b-broker/src/runtime.rs".to_owned(),
+                line: 10,
+                reason: "short critical section".to_owned(),
+            }],
+        };
+        let marker_sites = Vec::new();
+        let scanned = vec!["packages/d2b-broker/src/runtime.rs".to_owned()];
+        let error = validate_inventory(&inventory, &marker_sites, &scanned)
+            .expect_err("a stale inventory entry must fail");
+        assert!(error.contains("no marker-honored"), "{error}");
+    }
+
+    #[test]
+    fn inventory_validation_ignores_entries_outside_the_scan() {
+        // A subset scan (`check-async-gate <paths>`) must not fail on
+        // inventory entries for files it did not scan.
+        let inventory = HatchInventory {
+            marker: MARKER.to_owned(),
+            sites: vec![HatchSite {
+                file: "packages/d2b-broker/src/runtime.rs".to_owned(),
+                line: 10,
+                reason: "short critical section".to_owned(),
+            }],
+        };
+        let marker_sites = Vec::new();
+        let scanned = vec!["packages/d2bd/src/composition.rs".to_owned()];
+        assert!(validate_inventory(&inventory, &marker_sites, &scanned).is_ok());
+    }
+
+    #[test]
+    fn lock_method_names_derive_from_the_deny_list() {
+        let entries = deny_list();
+        let names = lock_method_names(&entries);
+        assert!(names.contains(&"lock".to_owned()));
+        assert!(names.contains(&"read".to_owned()));
+        assert!(names.contains(&"write".to_owned()));
+        // The io trait methods are not lock acquisitions and must not arm the
+        // conservative shape.
+        assert!(!names.contains(&"open".to_owned()));
+        assert!(!names.contains(&"recv".to_owned()));
     }
 }

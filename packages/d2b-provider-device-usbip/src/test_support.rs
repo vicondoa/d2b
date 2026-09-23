@@ -43,8 +43,8 @@ impl UsbipDriverEffects for RecordingEffects {
         component: UsbipComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-        self.calls.lock().push("reconcile_usbip");
-        self.reconciled.lock().push(component);
+        self.calls.lock().push("reconcile_usbip"); // async-gate-allow: test-support recorder lock
+        self.reconciled.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Ready,
         ))
@@ -55,8 +55,8 @@ impl UsbipDriverEffects for RecordingEffects {
         component: UsbipComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        self.calls.lock().push("finalize");
-        self.finalized.lock().push(component);
+        self.calls.lock().push("finalize"); // async-gate-allow: test-support recorder lock
+        self.finalized.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderFinalize::Complete)
     }
 }
@@ -79,7 +79,7 @@ impl UsbipRuntime for RecordingRuntime {
         component: UsbipComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-        self.reconciled.lock().push(component);
+        self.reconciled.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Ready,
         ))
@@ -90,7 +90,7 @@ impl UsbipRuntime for RecordingRuntime {
         component: UsbipComponent,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        self.finalized.lock().push(component);
+        self.finalized.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderFinalize::Complete)
     }
 }

@@ -656,7 +656,7 @@ impl RequeueScheduler for RecordingRequeue {
         ] {
             assert!(entries.contains(&expected), "{entries:?}");
         }
-        assert_eq!(*effects.reconciled.lock(), 1);
+        assert_eq!(*effects.reconciled.lock(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
     }
 
     /// The family decoder yields the shared envelope the driver's verbs read.
@@ -756,8 +756,8 @@ impl RequeueScheduler for RecordingRequeue {
         driver.reconcile(&mut ctx).await.expect("network row reconciles");
         driver.delete(&mut ctx).await.expect("network row finalizes");
         assert_eq!(effects.call_order(), vec!["reconcile", "finalize"]);
-        assert_eq!(*effects.reconciled.lock(), 1);
-        assert_eq!(*effects.finalized.lock(), 1);
+        assert_eq!(*effects.reconciled.lock(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        assert_eq!(*effects.finalized.lock(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
     }
 }
 
