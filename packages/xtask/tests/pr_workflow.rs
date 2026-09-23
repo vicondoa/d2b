@@ -13,6 +13,7 @@ const REQUIRED_AGGREGATE_JOBS: &[&str] = &[
     "nix-aarch64",
     "fixtures-proofs",
     "census",
+    "security-scan",
 ];
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
