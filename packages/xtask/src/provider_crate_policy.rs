@@ -6979,11 +6979,25 @@ fn collect_dossier_citations(
         .replace('\\', "/");
     let lines: Vec<&str> = text.lines().collect();
     let mut in_fence = false;
+    let mut marker_seen = false;
+    let mut pending: Vec<DanglingDossierCitation> = Vec::new();
     for (offset, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with("```") {
             in_fence = !in_fence;
             continue;
+        }
+        let in_table = table_field(line).is_some();
+        if !in_table && !pending.is_empty() {
+            // The work-item table ended. Citations in a table whose bearing
+            // rows carry a historical marker (Planned / Merged (historical) /
+            // Baseline) document where planned or historical work lands and
+            // stay legal; a table without such a marker fails.
+            if !marker_seen {
+                citations.append(&mut pending);
+            }
+            pending.clear();
+            marker_seen = false;
         }
         // A file-tree reference can live outside a fence as a bare
         // `packages/...` run on its own line.
@@ -7000,12 +7014,18 @@ fn collect_dossier_citations(
         let Some(field) = table_field(line) else {
             continue;
         };
+        if HISTORICAL_MARKER_BEARING_FIELDS.contains(&field.as_str()) {
+            marker_seen = true;
+        }
         if !NORMATIVE_DOSSIER_FIELDS.contains(&field.as_str()) {
             continue;
         }
         for token in packages_tokens(line) {
-            push_dossier_citation(repo_root, &relative, offset + 1, &field, &token, citations);
+            push_dossier_citation(repo_root, &relative, offset + 1, &field, &token, &mut pending);
         }
+    }
+    if !marker_seen {
+        citations.append(&mut pending);
     }
     Ok(())
 }
@@ -7035,7 +7055,16 @@ fn packages_tokens(line: &str) -> Vec<String> {
         {
             end += 1;
         }
-        tokens.push(rest[..end].to_owned());
+        // A `<...>` immediately after the run marks a naming-template
+        // placeholder (e.g. `packages/d2b-provider-<base>-<implementation>/`),
+        // not a resolvable citation; skip it.
+        if bytes.get(end) == Some(&b'<') {
+            search = &rest[end..];
+            continue;
+        }
+        if end > "packages/".len() {
+            tokens.push(rest[..end].to_owned());
+        }
         search = &rest[end..];
     }
     tokens
