@@ -669,6 +669,7 @@ struct CensusFile {
 
 /// The workspace member paths the root manifest declares, e.g.
 /// `packages/d2b-broker`.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn workspace_member_paths(repo_root: &Path) -> Result<BTreeSet<String>, String> {
     let manifest = fs::read_to_string(repo_root.join("Cargo.toml"))
         .map_err(|error| format!("blocking-census: read root Cargo.toml: {error}"))?;
@@ -702,6 +703,7 @@ fn workspace_member_paths(repo_root: &Path) -> Result<BTreeSet<String>, String> 
 /// Non-member directories under `packages/` (e.g. `d2b-realm-core`) are not
 /// censused: they are not workspace crates, so the workspace-wide clippy run
 /// cannot measure their instance-method classes.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn resolve_crate_dirs(repo_root: &Path, crate_args: &[String]) -> Result<Vec<PathBuf>, String> {
     if crate_args.is_empty() {
         let members = workspace_member_paths(repo_root)?;
@@ -739,6 +741,7 @@ fn resolve_crate_dirs(repo_root: &Path, crate_args: &[String]) -> Result<Vec<Pat
 }
 
 /// The package name a crate directory's manifest declares.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn package_name(crate_dir: &Path) -> Result<String, String> {
     let manifest = fs::read_to_string(crate_dir.join("Cargo.toml"))
         .map_err(|error| format!("blocking-census: read {}: {error}", crate_dir.display()))?;
