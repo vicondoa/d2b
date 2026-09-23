@@ -257,6 +257,19 @@ jobs:
           D2B_CI_FETCH_RETRY_CMD: make check-census
         run: *bazel-fetch-retry
 
+  security-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Identifier-in-log redaction scan
+        env:
+          D2B_SCAN_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: tests/tools/security-scan.sh
+
   test-performance-budgets:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -278,7 +291,7 @@ jobs:
 
   check:
     if: ${{ always() }}
-    needs: [tier0, policy-tooling, rust-main, rust-broker, nix-eval, nix-unit, nix-realized, nix-aarch64, fixtures-proofs, census]
+    needs: [tier0, policy-tooling, rust-main, rust-broker, nix-eval, nix-unit, nix-realized, nix-aarch64, fixtures-proofs, census, security-scan]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

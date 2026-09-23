@@ -150,6 +150,12 @@ settings or claim atomic base binding.
   regenerates committed artifacts through the local Bazel profile.
   `make test-integration` adds the conditional container lane. Do not cite an
   advisory skip as validation evidence.
+- The security scan is a required check: the `security-scan` job in
+  `pr-l1-static-fast.yml` runs the ADR 0010/0028 identifier-in-log
+  redaction rule on every pull request, and its context is required on
+  `main` and `v3`. See
+  [`docs/contributing/workflow.md`](./docs/contributing/workflow.md#security-scan-gate)
+  for the pinned rule and the local run.
 - Never pass a Bazel profile override of your own, and never set
   `D2B_BAZEL_PROFILE` yourself: no `--config=local`, no `--config=remote`, on
   gates or on focused single-target builds alike. Run the documented command
