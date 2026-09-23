@@ -36,7 +36,7 @@ let
   evalVm = name: composedModules:
     import (pkgs.path + "/nixos/lib/eval-config.nix") {
       modules = [
-        (import ./vm-options.nix { inherit name config lib pkgs; })
+        (import ./vm-options.nix { inherit name; })
         ./vm-guest-base.nix
         ./component-session.nix
         ./guest-broker.nix

@@ -18,7 +18,8 @@
 # pipeline generates runner argv in Rust. The owning runtime/device
 # Provider crates plan argv, so the Nix side only needs to surface
 # the option values, not build runner derivations.
-{ name, config, lib, pkgs, ... }:
+{ name }:
+{ config, lib, pkgs, ... }:
 
 let
   inherit (lib) mkOption types;
