@@ -1,0 +1,3 @@
+### Removed
+
+- Removed the retired Tier-0 deployment-shape refusal contract from the docs, the CLI error-code coverage table, the golden generator, and the committed host-verb goldens: `tier-0-legacy-uses-nixos-module` and the CLI refusal variants of `single-writer-conflict` are no longer documented or pinned as codes the CLI can emit. `single-writer-conflict` remains live on the volume-local provider error surface.

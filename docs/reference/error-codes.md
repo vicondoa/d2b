@@ -155,12 +155,6 @@ matches an `#anchor` here. The goldens are the contract.
 | <a id="--read-only-required"></a>`#--read-only-required` | `--read-only-required` | `78` | `host doctor` invocation flags. | `--read-only` flag missing. The current `host doctor` verb is read-only; mutation forms are separate surfaces. |
 | <a id="--apply-or-dry-run-required"></a>`#--apply-or-dry-run-required` | `--apply-or-dry-run-required` | `78` | `host prepare` / `host destroy` / `host install` invocation flags. | Neither `--dry-run` nor `--apply` was provided; these host verbs require one of the two to disambiguate plan vs mutate. |
 
-Note: the `tier-0-legacy-uses-nixos-module` and
-`single-writer-conflict` codes are anchored further down in the
-"host-prepare audit decision codes" catalog because they
-originate as broker-side audit decisions; the CLI re-uses the same
-docs anchors when intercepting them before reaching the broker.
-
 ## Host-check diagnostic codes
 
 `d2b host check` runs a battery of host-posture probes. The current runtime
@@ -310,10 +304,8 @@ recorded.
 | <a id="modprobe-denied-not-in-matrix"></a>`modprobe-denied-not-in-matrix` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) | `ModprobeIfAllowed` | `broker-validation-failed` |
 | <a id="minijail-too-old"></a>`minijail-too-old` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) | runner-shape preflight | `broker-validation-failed` |
 | <a id="path-safety-violation"></a>`path-safety-violation` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md), [0013](../adr/0013-w3-firewall-coexistence-policy.md) | `UpdateHostsFile`, `ApplyNmUnmanaged`, `PrepareStateDir`, `PrepareRuntimeDir` | `broker-validation-failed` |
-| <a id="single-writer-conflict"></a>`single-writer-conflict` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | any host-prepare op when legacy systemd + daemon coexist | `broker-validation-failed` |
 | <a id="ch-net-handoff-not-supported"></a>`ch-net-handoff-not-supported` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) | runner-shape preflight | `broker-validation-failed` |
 | <a id="runner-shape-drift"></a>`runner-shape-drift` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) | runner-shape preflight | `broker-validation-failed` |
-| <a id="tier-0-legacy-uses-nixos-module"></a>`tier-0-legacy-uses-nixos-module` | [0014](../adr/0014-w3-modules-devices-runner-shape.md) | `host prepare --apply` on the legacy NixOS-module path | exit `78` (host-prepare carve-out) |
 
 `host check --apply` summarizes any `denied-refused` / `errored`
 decisions per VM and returns exit `2` (`#host-check-failure`) when

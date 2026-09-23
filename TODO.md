@@ -361,57 +361,18 @@ The comment corpus ("microvm.nix's cloud-hypervisor runner",
 "microvm.nix's generator") was rewritten to name the broker
 `SpawnRunner` path.
 
-## Remove Tier-0 deployment-shape logic; fix bundle.json access
+## Resolved: Tier-0 deployment-shape logic removed
 
-**Symptom.** `d2b host prepare --apply` and several other CLI verbs
-short-circuit with `tier-0-legacy-uses-nixos-module` (exit 78) and
-the misleading remediation `Add at least one VM with
-d2b.vms.<vm>.supervisor = "d2bd"` - even though the
-`supervisor` option was removed in v1.1 (daemon-only is the ONLY
-mode) and the deployed bundle absolutely uses the daemon path.
-
-**Root cause.** `detect_deployment_shape` in
-`packages/d2b/src/lib.rs` (~line 1901) falls back to
-`DeploymentShape::Tier0AllLegacy` whenever
-`context.load_bundle_context()` returns `Ok(None)` or any error. The
-`.ok().flatten()` chain SILENTLY swallows the actual failure. In
-practice the CLI runs as a launcher user (`paydro`) who cannot read
-`/etc/d2b/bundle.json` (root:d2bd 0640) - so every CLI
-invocation from the launcher misclassifies the deployment as legacy
-and the operator is told to set a long-removed option.
-
-**Fix direction (pick one or both).**
-
-1. **Delete the Tier-0 branches entirely.** v1.1+ is daemon-only by
-   design; there is no Tier-0 / Tier-mixed code path the framework
-   even supports. `DeploymentShape` should collapse to `AllDaemon`
-   and `cmd_host_prepare` should not gate on shape at all. Drop:
-   - `DeploymentShape::Tier0AllLegacy` / `Tier0Mixed` variants
-   - The `tier-0-legacy-uses-nixos-module` /
-     `single-writer-conflict` envelope branches
-   - The `D2B_TEST_DEPLOYMENT_SHAPE` test override
-   - Whatever tests assert the Tier-0 refusal contract
-2. **Decide bundle.json access policy** for the CLI:
-   - Either widen the file to `root:d2b-launchers 0640` (or add
-     the launcher group via a setfacl seed) so the CLI can read it
-     directly, OR
-   - Make the CLI query bundle metadata via the daemon (already a
-     trusted reader). Today the CLI does a direct file read; if we
-     keep that pattern post-fix, the group needs to match.
-
-The remediation message in `cmd_host_prepare` also needs to be
-rewritten: pointing operators at a removed option is actively
-misleading.
-
-**Files to touch.**
-
-- `packages/d2b/src/lib.rs` (`detect_deployment_shape`,
-  `cmd_host_prepare`, `cmd_host_destroy`, related callers).
-- `nixos-modules/bundle.nix` (file mode declaration) if widening
-  the bundle perms is the path chosen.
-- `docs/reference/error-codes.md` - drop the
-  `#tier-0-legacy-uses-nixos-module` and
-  `#single-writer-conflict` anchors.
+The Tier-0 deployment-shape refusal is retired. The unreachable
+legacy routing (including `detect_deployment_shape`,
+`DeploymentShape::Tier0AllLegacy` / `Tier0Mixed`, the Tier-0 CLI
+refusal envelope branches, and the `D2B_TEST_DEPLOYMENT_SHAPE`
+override) was deleted with the legacy-routing removal (U27), and
+issue #591 closed the remaining half: the docs anchors, coverage
+rows, generator branches, and committed goldens that still pinned
+the exit-78 refusal contract are gone. The `single-writer-conflict`
+code survives only on its live surface (the volume-local provider
+error mapping).
 
 ## `pidfd-table` is not reaped when supervised processes exit
 

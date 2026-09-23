@@ -13,8 +13,7 @@ per support tier. The integrator assembles this into
 | `vhost_net`| 6.6        | NixOS module declares; loaded at activation. |
 | `fuse`     | 6.6        | NixOS module declares; loaded at activation. |
 
-`d2b host prepare --apply` is refused on Tier 0 with
-`tier-0-legacy-uses-nixos-module` (exit 78). The NixOS module owns the
+The NixOS module owns the
 module + device-node activation contract.
 
 ## Tier 1 alpha - Ubuntu 24.04 LTS

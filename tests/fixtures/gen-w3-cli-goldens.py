@@ -46,7 +46,7 @@ W3_ROWS = {
         "host-check-error", 1,
         "Whether systemd delegated +cpu +memory +io +pids to the d2b host slice.",
         "Delegation request refused; controllers missing from cgroup.subtree_control.",
-        "Add `Delegate=cpu memory io pids` to /etc/systemd/system/d2b-host.slice and `systemctl daemon-reload`.",
+        "Add `Delegate=cpu memory io pids` to /etc/systemd/system/d2b.slice and `systemctl daemon-reload`.",
     ),
     ("host-check", "cgroup-v2-unified-not-present"): (
         "host-check-error", 1,
@@ -58,7 +58,7 @@ W3_ROWS = {
         "host-check-error", 1,
         "Whether the host slice exposes the cpu/memory/io/pids controllers.",
         "Required controllers missing from /sys/fs/cgroup/d2b.slice/cgroup.controllers.",
-        "Enable the missing controllers via systemd `Delegate=` on d2b-host.slice and reload.",
+        "Enable the missing controllers via systemd `Delegate=` on d2b.slice and reload.",
     ),
     ("host-check", "cgroup-kill-on-ancestor-refused"): (
         "host-check-error", 1,
@@ -116,14 +116,14 @@ W3_ROWS = {
     ),
     ("host-check", "modprobe-denied-not-in-matrix"): (
         "host-check-error", 1,
-        "Whether every modprobe target is declared in the W3 kernel-module matrix.",
+        "Whether every modprobe target is declared in the kernel-module matrix.",
         "Broker observed a modprobe request for a module not present in modprobeAllowed.",
         "Add the module to d2b.kernelModules.allowed or remove its consumer.",
     ),
     ("host-check", "minijail-too-old"): (
         "host-check-error", 1,
-        "Whether the nix-built minijail satisfies the W3 minimum version (v17).",
-        "Detected minijail version older than 17; W3 sandbox profiles will not parse.",
+        "Whether the nix-built minijail satisfies the required minimum version (v17).",
+        "Detected minijail version older than 17; the required sandbox profiles will not parse.",
         "Update to the Nix-built minijail v17+ pinned in pkgs/minijail.nix.",
     ),
     ("host-check", "ch-net-handoff-not-supported"): (
@@ -137,18 +137,6 @@ W3_ROWS = {
         "Whether the rendered runner argv matches the golden runner-shape snapshot.",
         "Runner argv diverges from tests/golden/runner-shape/* baseline.",
         "Regenerate the runner-shape baseline via the documented xtask or revert the drifted change.",
-    ),
-    ("host-check", "single-writer-conflict"): (
-        "host-check-error", 78,
-        "Whether legacy systemd units and the W3 daemon are both writing the host.",
-        "Both `d2b-legacy.service` and `d2bd.service` are active on a Tier-0 mixed host.",
-        "Stop the legacy units before starting the daemon; consult docs/explanation/host-prepare.md#mixed-tier-0.",
-    ),
-    ("host-check", "tier-0-legacy-uses-nixos-module"): (
-        "host-check-error", 78,
-        "Whether a Tier-0 all-legacy host is configured via the W3 daemon path.",
-        "host.tier == 0 / legacy but d2bd.service was reached.",
-        "Use the NixOS module on Tier-0 all-legacy hosts; the W3 daemon path is for Tier 1+.",
     ),
     ("host-check", "host-lan-cidr-ambiguous"): (
         "host-check-error", 1,
@@ -211,18 +199,6 @@ W3_ROWS = {
         "Apply phase observed the same firewallCoexistence drift as the read-only probe.",
         "See remediation for host-check#firewall-coexistence-mismatch; re-run apply after the fix.",
     ),
-    ("host-prepare", "tier-0-legacy-uses-nixos-module"): (
-        "host-prepare-apply-error", 78,
-        "Whether a Tier-0 all-legacy host is invoking the W3 apply path.",
-        "host.tier == 0 / legacy but d2bd.service was asked to mutate the host.",
-        "Use the NixOS module on Tier-0 all-legacy hosts; the W3 daemon path is for Tier 1+.",
-    ),
-    ("host-prepare", "single-writer-conflict"): (
-        "host-prepare-apply-error", 78,
-        "Whether legacy + daemon writers are both targeting host state at apply time.",
-        "Both legacy units and d2bd.service hold an exclusive writer claim.",
-        "Stop legacy units before running `host prepare --apply` on a Tier-0 mixed host.",
-    ),
     ("host-prepare", "legacy-no-prepare-apply"): (
         "host-prepare-apply-error", 78,
         "Whether the legacy bash dispatch attempted a mutating prepare apply.",
@@ -236,12 +212,6 @@ W3_ROWS = {
         "At least one VM is still running (cloud-hypervisor process detected).",
         "Stop the listed VMs with `d2b down <vm>` then retry `host destroy --apply`.",
     ),
-    ("host-destroy", "tier-0-legacy-uses-nixos-module"): (
-        "host-destroy-apply-error", 78,
-        "Whether a Tier-0 all-legacy host is invoking the W3 destroy path.",
-        "host.tier == 0 / legacy but d2bd.service was asked to tear the host down.",
-        "Use the NixOS module path on Tier-0 all-legacy hosts.",
-    ),
     ("host-destroy", "legacy-no-destroy-apply"): (
         "host-destroy-apply-error", 78,
         "Whether the legacy bash dispatch attempted a mutating destroy apply.",
@@ -252,8 +222,8 @@ W3_ROWS = {
     ("host-install", "not-yet-implemented"): (
         "host-install-error", 70,
         "Whether `host install` is implemented in this d2b release.",
-        "host install is a W4 deliverable; W3 ships the schema + CLI surface only.",
-        "Use `d2b switch` or the NixOS module integration path until W4 ships.",
+        "host install is not yet implemented; the schema and CLI surface are available.",
+        "Use `d2b switch` or the NixOS module integration path until host install is implemented.",
     ),
     # ---- Inherited W3-relevant onboarding rows (host check) -----------
     ("host-check", "daemon-down"): (
@@ -266,7 +236,7 @@ W3_ROWS = {
         "host-check-error", 1,
         "Whether /run/d2b/public.sock has the expected mode/owner/group.",
         "Observed mode/owner/group diverges from the declared SocketSpec.",
-        "Inspect `systemctl status d2bd.socket`; the unit re-asserts perms on restart.",
+        "Restart the daemon: `systemctl restart d2bd.service`; d2bd recreates /run/d2b/public.sock and re-asserts its mode/owner/group on bind.",
     ),
     ("host-check", "missing-group"): (
         "host-check-error", 1,
@@ -276,9 +246,9 @@ W3_ROWS = {
     ),
     ("host-check", "unsupported-kernel"): (
         "host-check-error", 1,
-        "Whether the running kernel is >= 6.6 (W3 minimum).",
+        "Whether the running kernel is >= 6.6 (the required minimum).",
         "uname -r reports a kernel older than 6.6.",
-        "Upgrade to a kernel >= 6.6 (Ubuntu 24.04 ships 6.8; see tests/golden/l3-matrix/w3-ubuntu.txt).",
+        "Upgrade to a kernel >= 6.6 (Ubuntu 24.04 ships 6.8; see docs/reference/compatibility.md).",
     ),
     ("host-check", "no-kvm"): (
         "host-check-error", 1,

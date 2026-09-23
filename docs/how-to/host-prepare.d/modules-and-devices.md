@@ -53,8 +53,7 @@ policy. An ADR opt-in is required to suppress this recommendation.
 - **Arch (Tier 2).** Kernel built with `MODULES_DISABLED=y` requires a
   rebuild before VM startup is accepted.
 - **NixOS (Tier 0 legacy).** The framework's NixOS module is the
-  primary path; `d2b host prepare --apply` is refused with
-  `tier-0-legacy-uses-nixos-module`.
+  primary path.
 
 ## Device nodes
 
