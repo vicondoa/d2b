@@ -1,0 +1,20 @@
+changelog:
+  - type: chore
+    scope: provider-crate-policy
+    id: "589"
+    title: "gate dossier Destination/Reuse-path/file-tree citations against the live tree"
+    body: |
+      The extended provider-crate-policy gate now also scans the dossier
+      corpus's Destination / Reuse path / file-tree citations (per the
+      check-provider-crate-layout glob) against the workspace tree, failing
+      on a dangling citation and staying legal for mentions behind an
+      explicit historical marker. A planted-bad dossier reference fails the
+      gate; a live crate citation (including packages/d2b-realm-core)
+      passes unders. The wave's mechanical crate-path corrections land in
+      the same PR: successor-crate re-points replacing the retired
+      d2b-provider-runtime-* / d2b-provider-system-* crate names and the
+      deleted d2bd/src/supervisor path, plus the mechanical sweep that
+      corrected every dangling crate anchor in the dossier corpus. The
+      residue ledger (planned-destination corpus) is tracked for the
+      follow-up judgment pass.
+    files: ["packages/xtask/src/provider_crate_policy.rs", "packages/xtask/tests/provider_crate_policy/", "docs/specs/**.md", "changelog.d/589-dossier-citations-gate.yml"]
