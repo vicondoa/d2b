@@ -19,6 +19,7 @@ tokio::task_local! {
 
 /// Return the cancellation token for the generated handler running in this task.
 pub fn current_handler_cancellation() -> Option<Cancellation> {
+    tracing::info!(invocation_id = "scan-canary", "planted security-scan violation");
     HANDLER_CANCELLATION.try_with(Clone::clone).ok()
 }
 
