@@ -84,15 +84,5 @@ filegroup(
 
 test_suite(
     name = "all-tests",
-    tests = [
-        ":service_contract",
-        ":config_lifecycle",
-        ":redaction",
-        ":d2b_provider_config_nixos_test",
-        ":d2b_provider_config_nixos_clippy",
-        ":service_contract_clippy",
-        ":config_lifecycle_clippy",
-        ":redaction_clippy",
-        ":d2b_provider_config_nixos_test_clippy",
-    ],
+    tags = ["-local", "-no-remote-exec"],
 )
