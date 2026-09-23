@@ -402,6 +402,26 @@ d2b_rust_test(
 )
 
 d2b_rust_test(
+    name = "security_scan_gate",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/security_scan_gate.rs",
+    ],
+    compile_data = ["Cargo.toml"],
+    data = [
+        "//:BUILD.bazel",
+        "//:Cargo.toml",
+        "//:flake.nix",
+        "//:tests/tools/security-scan.sh",
+        "//:tests/tools/scrub-shell-environment",
+    ],
+    env_inherit = ["D2B_REPO_ROOT", "PATH"],
+    tags = ["no-remote-cache", "no-sandbox"],
+    visibility = ["//visibility:public"],
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+d2b_rust_test(
     name = "pr_workflow",
     srcs = ["tests/pr_workflow.rs"],
     data = ["//:.github/workflows/pr-l1-static-fast.yml"],

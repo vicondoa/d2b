@@ -17,8 +17,12 @@
 #   the buffered record, including a mention in message text (a
 #   rustfmt-conventional multi-line invocation - macro opened on one
 #   line, fields on continuation lines - is therefore a finding when any
-#   part of the record references a pinned identifier). A false positive
-#   is resolved by rewording the record, never by allowlisting.
+#   part of the record references a pinned identifier). The buffered
+#   record is scanned literal-aware: string/char-literal/block-comment
+#   state is carried across the record's lines, so a `)` inside a
+#   multi-line string or char literal is never mistaken for the
+#   invocation's closing delimiter. A false positive is resolved by
+#   rewording the record, never by allowlisting.
 #
 # Scope (pinned):
 #   - Changed-line mode (D2B_SCAN_BASE_SHA set): the added lines of the
@@ -59,10 +63,35 @@ identifier='(root_invocation_id|invocation_id|operation_id|session_id|audit_id|t
 scan_file() {
   local file="$1" added_csv="$2"
   awk -v file="$file" -v added_csv="$added_csv" -v log_macro="$log_macro" -v identifier="$identifier" '
-    function strip_strings(s,    out, i, n, c, in_str, in_block, esc) {
+    # char_literal(s, i): s[i] is a quote that starts a char literal
+    # (not a lifetime) when a closing quote follows on the same line.
+    function char_literal(s, i,    j, n, c, esc) {
+      n = length(s)
+      c = substr(s, i + 1, 1)
+      if (c == "\\") {
+        j = i + 2
+        esc = 0
+        while (j <= n) {
+          c = substr(s, j, 1)
+          if (esc) { esc = 0; j++; continue }
+          if (c == "\\") { esc = 1; j++; continue }
+          if (c == "\047") return 1
+          j++
+        }
+        return 0
+      }
+      if (c == "") return 0
+      return (substr(s, i + 2, 1) == "\047") ? 1 : 0
+    }
+    # strip_strings(s): per-line stripper with fresh literal state.
+    # Used ONLY for the opening-line decision (does this line open a
+    # log-macro invocation?). Strings, char literals, block comments,
+    # and line comments are blanked; lifetimes stay as code.
+    function strip_strings(s,    out, i, n, c, in_str, in_char, in_block, esc) {
       out = ""
       n = length(s)
       in_str = 0
+      in_char = 0
       in_block = 0
       for (i = 1; i <= n; i++) {
         c = substr(s, i, 1)
@@ -71,11 +100,21 @@ scan_file() {
           if (c == "\\") { esc = 1; out = out " "; continue }
           if (c == "\"") { in_str = 0; out = out " "; continue }
           out = out " "
+        } else if (in_char) {
+          if (esc) { esc = 0; out = out " "; continue }
+          if (c == "\\") { esc = 1; out = out " "; continue }
+          if (c == "\047") { in_char = 0; out = out " "; continue }
+          out = out " "
         } else if (in_block) {
           if (c == "*" && substr(s, i + 1, 1) == "/") { i++; in_block = 0; out = out "  " }
           else out = out " "
         } else {
           if (c == "\"") { in_str = 1; out = out " "; continue }
+          if (c == "\047") {
+            if (char_literal(s, i)) { in_char = 1; out = out " "; continue }
+            out = out c
+            continue
+          }
           if (c == "/" && substr(s, i + 1, 1) == "*") { i++; in_block = 1; out = out "  "; continue }
           if (c == "/" && substr(s, i + 1, 1) == "/") break
           out = out c
@@ -85,6 +124,59 @@ scan_file() {
     }
     function net_parens(s,    t, i, n, d, c) {
       t = strip_strings(s)
+      d = 0
+      n = length(t)
+      for (i = 1; i <= n; i++) {
+        c = substr(t, i, 1)
+        if (c == "(") d++
+        else if (c == ")") d--
+      }
+      return d
+    }
+    # Cross-line literal state for the buffered-record scanner: string,
+    # char-literal, and block-comment state is carried across the record
+    # lines, so a ")" inside a multi-line string or char literal is never
+    # mistaken for the closing delimiter of the invocation.
+    function reset_literal_state(   ) {
+      s_str = 0
+      s_char = 0
+      s_block = 0
+      s_esc = 0
+    }
+    function strip_record_line(s,    out, i, n, c) {
+      out = ""
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (s_str) {
+          if (s_esc) { s_esc = 0; out = out " "; continue }
+          if (c == "\\") { s_esc = 1; out = out " "; continue }
+          if (c == "\"") { s_str = 0; out = out " "; continue }
+          out = out " "
+        } else if (s_char) {
+          if (s_esc) { s_esc = 0; out = out " "; continue }
+          if (c == "\\") { s_esc = 1; out = out " "; continue }
+          if (c == "\047") { s_char = 0; out = out " "; continue }
+          out = out " "
+        } else if (s_block) {
+          if (c == "*" && substr(s, i + 1, 1) == "/") { i++; s_block = 0; out = out "  " }
+          else out = out " "
+        } else {
+          if (c == "\"") { s_str = 1; out = out " "; continue }
+          if (c == "\047") {
+            if (char_literal(s, i)) { s_char = 1; out = out " "; continue }
+            out = out c
+            continue
+          }
+          if (c == "/" && substr(s, i + 1, 1) == "*") { i++; s_block = 1; out = out "  "; continue }
+          if (c == "/" && substr(s, i + 1, 1) == "/") break
+          out = out c
+        }
+      }
+      return out
+    }
+    function net_parens_stateful(s,    t, i, n, d, c) {
+      t = strip_record_line(s)
       d = 0
       n = length(t)
       for (i = 1; i <= n; i++) {
@@ -113,16 +205,23 @@ scan_file() {
       record = ""
       depth = 0
       record_start = 0
+      reset_literal_state()
     }
     {
       if (in_record) {
         record = record "\n" $0
-        depth += net_parens($0)
+        # Continuation lines are stripped with the cross-line literal
+        # state carried from the earlier lines of the record, so a ")" inside
+        # a multi-line string/char/block-comment is never counted as a
+        # paren; the record ends at the real closing delimiter of the
+        # invocation (net depth back to 0).
+        depth += net_parens_stateful($0)
         if (depth <= 0) {
           check(record_start, NR, record)
           in_record = 0
           record = ""
           depth = 0
+          reset_literal_state()
         }
         next
       }
@@ -133,6 +232,11 @@ scan_file() {
           record = $0
           record_start = NR
           depth = d
+          # Seed the cross-line literal state from the opening line too:
+          # a string/char/block-comment opened on the opening line
+          # continues into the continuation lines of the record.
+          reset_literal_state()
+          strip_record_line($0)
         } else {
           check(NR, NR, $0)
         }
@@ -205,10 +309,29 @@ if [[ -n "$base" ]]; then
   fi
   scanned="changed in-tree Rust lines since the merge base $merge_base"
 else
+  # Capture the enumeration and check its status: a failed enumeration
+  # (e.g. outside a git checkout) must be a scan that could not run
+  # (exit 2), never a clean report. Feeding the loop from a process
+  # substitution would silently scan zero files when ls-files fails and
+  # report clean - a green verdict from a scan that never ran.
+  ls_file="$(mktemp)"
+  trap 'rm -f "$ls_file"' EXIT
+  set +e
+  git ls-files '*.rs' ':(exclude)pkgs/**' > "$ls_file"
+  ls_status=$?
+  set -e
+  if (( ls_status != 0 )); then
+    echo "security-scan: the in-tree Rust file enumeration could not run (git ls-files exited $ls_status); a scan that could not run is never reported clean" >&2
+    rm -f "$ls_file"
+    trap - EXIT
+    exit 2
+  fi
   while IFS= read -r file; do
     file_findings="$(scan_file "$file" "")"
     findings="${findings}${file_findings}"
-  done < <(git ls-files '*.rs' ':(exclude)pkgs/**')
+  done < "$ls_file"
+  rm -f "$ls_file"
+  trap - EXIT
   scanned="tracked in-tree Rust files"
 fi
 

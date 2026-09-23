@@ -109,6 +109,20 @@ fn pr_suites_start_concurrently_and_aggregate_preserves_required_failures() {
         "performance budgets must remain advisory"
     );
 
+    // A required aggregate job must never set job-level
+    // continue-on-error: GitHub reads the job result of such a job as
+    // success, so the aggregate's needs.*.result guard would pass even
+    // when the job failed - the gate would be silently defeated while
+    // this contract test stays green. Job-level keys sit at 4-space
+    // indent; step-level continue-on-error (deeper indent) is allowed.
+    for job in REQUIRED_AGGREGATE_JOBS {
+        let block = job_block(&workflow, job);
+        assert!(
+            !block.lines().any(|line| line.starts_with("    continue-on-error:")),
+            "{job} is a required aggregate job and must not set job-level continue-on-error: needs.*.result would read it as success and defeat the gate"
+        );
+    }
+
     let aggregate = job_block(&workflow, "check");
     assert_eq!(needs_entries(aggregate), REQUIRED_AGGREGATE_JOBS);
     assert!(aggregate.contains("if: ${{ always() }}"));
