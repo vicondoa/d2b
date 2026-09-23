@@ -152,8 +152,10 @@ settings or claim atomic base binding.
   advisory skip as validation evidence.
 - The security scan is a required check: the `security-scan` job in
   `pr-l1-static-fast.yml` runs the ADR 0010/0028 identifier-in-log
-  redaction rule on every pull request, and its context is required on
-  `main` and `v3`. See
+  redaction rule on every pull request to `v3`, and its context is a
+  required status check on `main` and `v3` (on `main` the producing job
+  lands only via a `v3`-derived promotion; until then PRs to `main`
+  show the check as Expected). See
   [`docs/contributing/workflow.md`](./docs/contributing/workflow.md#security-scan-gate)
   for the pinned rule and the local run.
 - Never pass a Bazel profile override of your own, and never set
