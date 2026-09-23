@@ -1044,7 +1044,17 @@ use d2b_contracts_broker::broker_wire::UnitRequest;
 /// hash the request's content identity matches.
 #[cfg(test)]
 pub(crate) fn fixture_resolver() -> BundleResolver {
-    fixture_resolver_with_execution("Host/vm")
+    fixture_resolver_with_execution("Host/vm", 1000)
+}
+
+/// The live-uid twin of [`fixture_resolver`]: the trusted runner's uid
+/// (profile binding, `user_ref`, and the user-bus path derivation) is
+/// the caller's own uid, so the live compatibility test can drive the
+/// production `manager_connection` user leg against the test user's own
+/// manager instead of a fixed fixture uid.
+#[cfg(test)]
+pub(crate) fn fixture_resolver_with_uid(uid: u32) -> BundleResolver {
+    fixture_resolver_with_execution("Host/vm", uid)
 }
 
 /// The trusted bundle whose runner targets a Guest execution reference:
@@ -1052,11 +1062,11 @@ pub(crate) fn fixture_resolver() -> BundleResolver {
 /// exercises.
 #[cfg(test)]
 pub(crate) fn fixture_guest_resolver() -> BundleResolver {
-    fixture_resolver_with_execution("Guest/vm")
+    fixture_resolver_with_execution("Guest/vm", 1000)
 }
 
 #[cfg(test)]
-fn fixture_resolver_with_execution(execution_ref: &str) -> BundleResolver {
+fn fixture_resolver_with_execution(execution_ref: &str, uid: u32) -> BundleResolver {
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::{
@@ -1120,9 +1130,9 @@ fn fixture_resolver_with_execution(execution_ref: &str) -> BundleResolver {
     )
     .expect("manifest fixture parses");
     // The unit tests never reach the manager leg (the gate tests refuse
-    // before it), so a fixed runner uid is fine here; the d2bd end-to-end
-    // test uses the real test uid where the handler drives the user bus.
-    let uid = 1000_u32;
+    // before it), so the fixed runner uid is fine for the execution
+    // fixture wrappers; the live-uid twin substitutes the test process's
+    // own uid so the manager leg drives the test user's own bus.
     BundleResolver::from_artifacts_with_zone_resource_bundles(
         Bundle {
             bundle_version: 1,
@@ -1148,7 +1158,7 @@ fn fixture_resolver_with_execution(execution_ref: &str) -> BundleResolver {
                     id: NodeId("role".to_owned()),
                     execution_ref: Some(execution_ref.to_owned()),
                     execution_domain: Some(ProcessExecutionDomain::User),
-                    user_ref: Some("User/user-1000".to_owned()),
+                    user_ref: Some(format!("User/user-{uid}")),
                     role: ProcessRole::Audio,
                     unit: None,
                     binary_path: Some("/run/current-system/sw/bin/sleep".to_owned()),
@@ -1426,24 +1436,33 @@ mod tests {
     /// transient service units expose ControlGroup and MainPID on the
     /// Service interface, not on Unit, so reading them through the Unit
     /// proxy fails every read with UnknownProperty and the identity can
-    /// never bind. The test starts a real transient service on the session
-    /// bus and runs the production `read_identity` against it; it fails on
-    /// any host with a reachable user bus while the reads are bound to the
-    /// wrong interface, and skips in hermetic sandboxes without one.
+    /// never bind. The test resolves the host's sleep binary, starts a
+    /// real transient service under the test user's own manager - through
+    /// the production `manager_connection` user leg, with the live uid
+    /// threaded through the trusted runner - and runs the production
+    /// `read_identity` against it; it fails on any host with a reachable
+    /// user manager while the reads are bound to the wrong interface, and
+    /// skips in hermetic sandboxes without one.
     #[tokio::test]
     async fn transient_service_identity_reads_live_against_the_user_manager() {
-        let connection = match connection::Builder::session() {
-            Ok(builder) => match builder.method_timeout(METHOD_TIMEOUT).build().await {
-                Ok(connection) => connection,
-                Err(_) => {
-                    eprintln!("skipping live identity read: session bus unreachable");
-                    return;
-                }
-            },
-            Err(_) => {
-                eprintln!("skipping live identity read: no session bus address");
+        let uid = nix::unistd::getuid().as_raw();
+        let bundle = fixture_resolver_with_uid(uid);
+        let mut request = fixture_unit_request();
+        request.user_ref = Some(
+            ResourceRef::parse(&format!("User/user-{uid}"))
+                .expect("the user reference is canonical"),
+        );
+        let intent = validate_request(&bundle, &request).expect("fixture request validates");
+        let connection = match manager_connection(&intent, UnitDomain::User).await {
+            Ok(connection) => connection,
+            Err(USER_MANAGER_UNAVAILABLE) => {
+                eprintln!(
+                    "skipping live identity read: user manager unavailable for uid {uid} \
+                     (USER_MANAGER_UNAVAILABLE)"
+                );
                 return;
             }
+            Err(error) => panic!("manager connection failed: {error}"),
         };
         let manager = match manager_proxy(&connection).await {
             Ok(manager) => manager,
@@ -1452,10 +1471,6 @@ mod tests {
                 return;
             }
         };
-
-        let bundle = fixture_resolver();
-        let request = fixture_unit_request();
-        let intent = validate_request(&bundle, &request).expect("fixture request validates");
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
@@ -1465,11 +1480,18 @@ mod tests {
             nanos,
             std::process::id() & 0xffff
         );
-        let exec_start = vec![(
-            intent.binary_path.to_string_lossy().into_owned(),
-            intent.argv.clone(),
-            false,
-        )];
+        let sleep_binary = if Path::new("/run/current-system/sw/bin/sleep").exists() {
+            "/run/current-system/sw/bin/sleep"
+        } else if Path::new("/bin/sleep").exists() {
+            "/bin/sleep"
+        } else {
+            eprintln!(
+                "skipping live identity read: neither /run/current-system/sw/bin/sleep \
+                 nor /bin/sleep exists on this host"
+            );
+            return;
+        };
+        let exec_start = vec![(sleep_binary.to_owned(), intent.argv.clone(), false)];
         let properties = vec![
             ("Type", Value::from("exec")),
             ("ExecStart", Value::from(exec_start)),
