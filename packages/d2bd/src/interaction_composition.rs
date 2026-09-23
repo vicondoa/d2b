@@ -6638,7 +6638,15 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn spawned_listener_set_admits_through_the_reactor_and_stops() {
-        let directory = tempfile::tempdir().unwrap();
+        // The spawned set binds the daemon's production socket names
+        // (`interaction-{service-slug}.sock`, up to 45 bytes). A long
+        // `$TMPDIR` chain (CI sandboxes, nix-shell dev shells) pushes the
+        // bind path past SUN_LEN (108); keep the fixture scratch on the
+        // short `/tmp` base so the production slugs still fit.
+        let directory = tempfile::Builder::new()
+            .prefix("d2b-")
+            .tempdir_in("/tmp")
+            .unwrap();
         let zone = ZoneId::parse("work").unwrap();
         let uid = nix::unistd::getuid().as_raw();
         let runtime = Arc::new(AsyncMutex::new(Some(test_interaction_runtime(&zone, uid))));
@@ -6711,10 +6719,12 @@ mod tests {
                 .is_some_and(|composition| composition.session_count() == 1),
             "the reactor accept loop admitted the connecting client"
         );
-        let _ = engine.close(
+        engine.close(
             d2b_contracts_zone_session::v3::component_session::CloseReason::Normal,
             d2b_contracts_zone_session::v3::component_session::Remediation::None,
-        );
+        )
+        .await
+        .expect("the engine closes and stops its listeners");
         listeners.stop().await;
         assert!(
             !path.exists(),

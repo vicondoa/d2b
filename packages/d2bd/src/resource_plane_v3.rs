@@ -729,6 +729,7 @@ fn spawn_anchor_subscription(
 /// is a *retryable* failure rather than a permanent one - the row's actor
 /// requeues it, on the delay the driver named or on its own ladder, and the
 /// anchor this subscription registers is there by the next pass.
+#[allow(clippy::too_many_arguments)]
 async fn run_anchor_subscription(
     hub: Arc<WatchHub>,
     selector: WatchSelector,
@@ -778,6 +779,7 @@ async fn run_anchor_subscription(
 /// re-materialization per drain. Returns the revision the next phase must
 /// relist from when the stream ends (a terminal missed-data signal or the
 /// hub reaping the subscriber) or the registration is Expired.
+#[allow(clippy::too_many_arguments)]
 async fn anchor_subscription_phase(
     hub: &WatchHub,
     selector: &WatchSelector,
@@ -795,10 +797,11 @@ async fn anchor_subscription_phase(
             // registration, and the projection must reflect it (R1).
             let mut keys: Vec<ResourceKey> = Vec::new();
             for change in replay {
-                if change.source == ChangeSource::Desired && selector.matches(&change.key) {
-                    if !keys.contains(&change.key) {
-                        keys.push(change.key);
-                    }
+                if change.source == ChangeSource::Desired
+                    && selector.matches(&change.key)
+                    && !keys.contains(&change.key)
+                {
+                    keys.push(change.key);
                 }
             }
             if !keys.is_empty() {
@@ -873,12 +876,11 @@ async fn anchor_subscription_phase(
                         match stream.try_recv() {
                             Some(WatchDelivery::Change(change)) => {
                                 if change.source == ChangeSource::Desired
-                                    && selector.matches(&change.key)
-                                {
-                                    if !keys.contains(&change.key) {
+                                        && selector.matches(&change.key)
+                                        && !keys.contains(&change.key)
+                                    {
                                         keys.push(change.key);
                                     }
-                                }
                             }
                             Some(WatchDelivery::Missed { last_delivered }) => {
                                 return last_delivered;
@@ -1192,10 +1194,10 @@ impl EndpointSocketSource for PlaneEndpointSocketSource {
         let path = self.path_for(producer_ref).await;
         let deadline = tokio::time::Instant::now() + SOCKET_BIND_BUDGET;
         loop {
-            if let Some(path) = path.as_deref() {
-                if socket_is_present(path).await {
-                    return Ok(());
-                }
+            if let Some(path) = path.as_deref()
+                && socket_is_present(path).await
+            {
+                return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err("virtiofsd socket not bound within its realize budget".to_owned());
@@ -2228,6 +2230,7 @@ Arc::new(DaemonAudioMediatorSource {
 /// identity, built from the families' own implementations over this zone's
 /// facet sets. A declared service with no entry still refuses startup by
 /// name.
+#[allow(clippy::too_many_arguments)]
 fn registered_service_factories(
     process_facets: &ProcessEffectFacets,
     network_facets: &NetworkEffectFacets,
@@ -4783,7 +4786,6 @@ HOST_EFFECTS_SERVICE.id,
     /// `inspect-process-systemd` through the real invocation capability
     /// object carrying the real envelope payload - hermetic, served from
     /// the crate's own handler table, reaching no daemon state.
-
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn the_process_systemd_effects_service_answers_inspect_process_systemd_through_the_binding() {
@@ -6697,9 +6699,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// A sustained stream that never empties still performs a re-materialization
     /// within the bounded window, and the stall line is logged.
-
-
-
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn a_sustained_stream_still_rematerializes_within_the_bounded_window() {

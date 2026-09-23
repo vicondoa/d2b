@@ -30,3 +30,17 @@ sh_test(
         "no-sandbox",
     ],
 )
+
+sh_test(
+    name = "rust_main_packages_suite_guard",
+    srcs = ["rust-main-packages-suite-guard.sh"],
+    data = [
+        "//:packages_workspace_sources",
+        "//bazel/checks:BUILD.bazel",
+    ],
+    env_inherit = ["PATH", "ROOT"],
+    tags = [
+        "local",
+        "no-sandbox",
+    ],
+)

@@ -154,8 +154,8 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-host:d2b_host_test_support",
-        "//packages/d2b-provider-network-local:d2b_provider_network_local",
-        ":d2b_provider_volume_local",
+        "//packages/d2b-provider-network-local:d2b_provider_network_local_test_support",
+        ":d2b_provider_volume_local_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

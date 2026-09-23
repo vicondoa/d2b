@@ -3110,6 +3110,7 @@ enum CloudHypervisorSetupVolumeOutcome {
     Pending,
 }
 
+#[allow(clippy::type_complexity)]
 impl ZoneResourceRuntime {
     /// Open one Zone runtime bound to its verified bundle authority.
     ///
@@ -6211,6 +6212,7 @@ impl ZoneResourceRuntime {
 /// preserved provider reads and the ProviderSupervisor session handoff
 /// registry. The closures are the inputs the old `start_u10_controller_runners`
 /// assembled; the family crate holds no daemon state type (R2).
+#[allow(clippy::type_complexity)]
 struct ProductionCredentialRuntime {
     /// One Provider/target dependency-facts probe.
     facts: Arc<

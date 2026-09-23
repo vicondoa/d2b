@@ -13,6 +13,9 @@ disallowed_methods = "deny"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 
+[features]
+test-support = []
+
 [dependencies]
 async-trait = "0.1"
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }

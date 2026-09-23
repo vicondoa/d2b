@@ -61,17 +61,17 @@ d2b_rust_library(
     crate_features = ["test-support"],
     crate_name = "d2b_provider_process",
     deps = [
-        "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor",
+        "//packages/d2b-provider-guest-cloud-hypervisor:d2b_provider_guest_cloud_hypervisor_test_support",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-core:d2b_core",
+        "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
         "//packages/d2b-provider-process-systemd:d2b_provider_process_systemd_test_support",
-        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
         "//packages/d2b-provider-volume-virtiofs:d2b_provider_volume_virtiofs",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 

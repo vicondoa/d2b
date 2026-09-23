@@ -43,9 +43,9 @@ d2b_rust_library(
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
     crate_name = "d2b_provider_activation_nixos",
     crate_features = ["test-support"],
@@ -59,9 +59,9 @@ d2b_rust_test(
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -89,7 +89,7 @@ d2b_rust_test(
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
         ":d2b_provider_activation_nixos_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

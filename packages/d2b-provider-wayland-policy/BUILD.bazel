@@ -43,12 +43,12 @@ d2b_rust_library(
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
-        "//packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire",
+        "//packages/d2b-provider-audio-pipewire:d2b_provider_audio_pipewire_test_support",
         "//packages/d2b-provider-display-wayland:d2b_provider_display_wayland_test_support",
-        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
-        "//packages/d2b-resource-api:d2b_resource_api",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
+        "//packages/d2b-resource-api:d2b_resource_api_test_support",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -60,7 +60,7 @@ d2b_rust_test(
         ":d2b_provider_wayland_policy_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -72,7 +72,7 @@ d2b_rust_test(
         ":d2b_provider_wayland_policy_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

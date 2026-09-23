@@ -46,9 +46,9 @@ d2b_rust_library(
         "//packages/d2b-provider-credential-managed-identity:d2b_provider_credential_managed_identity_test_support",
         "//packages/d2b-provider-credential-secret-service:d2b_provider_credential_secret_service_test_support",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
-        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
         "//packages/d2b-resource-runtime:d2b_resource_runtime",
-        "//packages/d2b-resource-types:d2b_resource_types",
+        "//packages/d2b-resource-types:d2b_resource_types_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 

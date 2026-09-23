@@ -55,6 +55,10 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# Retired owner (release when the owner was retired; AGENTS.md: realm-core
+# owners are absent from the shared Cargo, copied-Guest, policy, and
+# aggregate Bazel edges). Deliberately not a member of rust-main-packages;
+# the suite guard carries this package in its intentional-exclusion set.
 test_suite(
     name = "all-tests",
     tags = ["-local", "-no-remote-exec"],
