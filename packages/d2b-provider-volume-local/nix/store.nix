@@ -2,10 +2,10 @@
 #
 # Background
 # ----------
-# By default, microvm.nix shares the host's entire /nix/store into
-# every guest read-only. That leaks the union of every package and
-# every other VM's closure into each VM (and prevents host GC from
-# trimming anything a VM references).
+# By default, the upstream module shares the host's entire /nix/store
+# into every guest read-only. That leaks the union of every package
+# and every other VM's closure into each VM (and prevents host GC
+# from trimming anything a VM references).
 #
 # This module replaces that share with a per-VM hardlink farm under
 # /var/lib/d2b/vms/<vm>/store/ containing ONLY the paths in that VM's
@@ -82,10 +82,9 @@ let
     else "root@.host";
 
 
-  # Pull the fully-evaluated guest config for each VM out of microvm.nix.
-  # `microvm.vms.<name>.config.config` is the evaluated guest NixOS
-  # config (the inner `.config` is the standard "you want the config
-  # attrset, not the module function"). `system.build.toplevel` is the
+  # Pull the fully-evaluated guest config for each VM out of the
+  # per-VM evaluator. `d2b._computed.<name>.config` is the evaluated
+  # guest NixOS config. `system.build.toplevel` is the
   # nixos-system-<vm> derivation that virtiofsd would otherwise be
   # serving from the host's /nix/store. We snapshot per-VM closure
   # info via `pkgs.closureInfo`, which gives us
@@ -93,8 +92,8 @@ let
   #   <out>/registration  format consumed by `nix-store --load-db`
   vmTopOf = name: d2bLib.vmToplevel config name;
 
-  # The microvm.nix-generated "runner" derivation for this VM. It
-  # holds
+  # The legacy "runner" derivation for this VM (retired with the
+  # systemd-template world). It held
   #   bin/virtiofsd-run       (what microvm-virtiofsd@<vm>.service execs)
   #   bin/microvm-run         (what microvm@<vm>.service execs)
   #   bin/microvm-shutdown
@@ -111,8 +110,8 @@ let
   # packages with no host-private data.
   vmRunnerOf = name: d2bLib.vmDeclaredRunner config name;
 
-  # Wrapper around microvm.nix's bin/virtiofsd-run that sanitises the
-  # supervisord config before invoking it. The microvm.nix-generated
+  # Wrapper around the legacy bin/virtiofsd-run that sanitises the
+  # supervisord config before invoking it. The generated
   # supervisord conf has a top-level `user=root` directive (because
   # the unit historically ran as root). With the C1a User= drop to
   # `d2b-virtiofs-<vm>` the kernel rejects supervisord's attempt to
@@ -132,7 +131,7 @@ let
   #
   # What the wrapper actually does
   #
-  #   1. Locate microvm.nix's generated virtiofsd-run script + the
+  #   1. Locate the generated virtiofsd-run script + the
   #      supervisord conf it references.
   #   2. For each `command=<path>` entry in that conf (one per
   #      virtiofs share), copy <path> to a writable per-VM location
@@ -148,7 +147,7 @@ let
   #          paths don't use POSIX ACLs or user xattrs.)
   #
   #   3. Sanitise the conf: strip the `user=root` directive that
-  #      microvm.nix's generator emits. Harmless when running as
+  #      the upstream generator emits. Harmless when running as
   #      root, but lets a future User= drop work without an
   #      additional change.
   #   4. exec supervisord against the rewritten conf.
@@ -185,7 +184,7 @@ let
       #
       # Both layers are necessary because each catches a different
       # failure mode. A source-only check still passes if a future
-      # systemd refactor (or microvm.nix upstream change) silently
+      # systemd refactor (or an upstream generator change) silently
       # no-ops BindReadOnlyPaths -- the marker remains on the host's
       # /var/lib, but /nix/store inside the namespace is the host's
       # REAL store, and virtiofsd would happily serve the host's
@@ -229,9 +228,9 @@ let
       sed '/^user=root$/d' "$CONF" > "$LOCAL.tmp"
 
       # Per command= entry, copy + patch the referenced script.
-      # The script is a small shell wrapper microvm.nix generates
-      # that exec's the actual virtiofsd binary with the share's
-      # flags. We sed those flags in-place AND add --modcaps to
+      # The script is a small shell wrapper the upstream generator
+      # produces that exec's the actual virtiofsd binary with the
+      # share's flags. We sed those flags in-place AND add --modcaps to
       # drop virtiofsd's runtime retain-set + --readonly to refuse
       # any guest write attempt.
       #
@@ -255,7 +254,7 @@ let
         base=$(basename "$origcmd")
         patched=$HARDENED/$base-hardened
 
-        # A microvm.nix supervisord conf can also list non-virtiofsd
+        # A generated supervisord conf can also list non-virtiofsd
         # commands (e.g. a Python event handler). Only the virtiofsd
         # invocations have to carry our hardening flags, so gate the
         # fail-closed check below on a STRUCTURAL signal of "this is
@@ -265,7 +264,7 @@ let
         # requires.
         #
         # The previous gate keyed off the literal `--inode-file-handles`
-        # token. That worked because microvm.nix's generator always
+        # token. That worked because the upstream generator always
         # emits it, but if upstream ever drops the flag, picks a
         # different default, or splits its generator we silently
         # skip the fail-closed check and exec an unhardened daemon.
@@ -293,7 +292,7 @@ let
         #
         # The sed substitution that injects --modcaps and --readonly
         # is anchored on the literal string `--inode-file-handles=prefer`.
-        # If microvm.nix ever changes its generator to emit `=never`
+        # If the upstream generator ever changes to emit `=never`
         # instead of `=prefer`, or to split the flag across two
         # arguments (`--inode-file-handles never`), the substitution
         # silently no-ops -- the patched script reaches supervisord
@@ -308,8 +307,8 @@ let
         # exits 4, the unit's ExecStart fails, and supervisord is
         # never reached with an unhardened virtiofsd command.
         #
-        # This is also forward-compatible: if microvm.nix ever
-        # applies one of these flags upstream, the grep still passes
+        # This is also forward-compatible: if upstream ever
+        # applies one of these flags, the grep still passes
         # (it verifies presence, not authorship).
         if [ "$needs_hardening" = 1 ]; then
           for flag in \
@@ -742,7 +741,7 @@ in
       default = true;
       description = ''
         Materialise a per-VM hardlink-farm `/nix/store` for every
-        d2b microVM. When false, microvm.nix's default behaviour
+        d2b microVM. When false, the upstream default behaviour
         (share host's full `/nix/store`) is restored. The toggle is
         global; per-VM opt-out is not supported.
       '';
@@ -785,17 +784,18 @@ in
         vmGenPaths);
 
     # Force every VM's nix-store share to point at its per-VM hardlink
-    # farm instead of the host's full /nix/store. microvm.nix's
-    # mounts.nix REQUIRES one share with literal `source =
-    # "/nix/store"` so it can wire writableStoreOverlay correctly; we
-    # keep that literal here and override the actual served path at
-    # runtime with a BindReadOnlyPaths drop-in on
+    # farm instead of the host's full /nix/store. The upstream
+    # mounts wiring REQUIRES one share with literal `source =
+    # "/nix/store"` so it can wire the writable-store overlay
+    # correctly; we keep that literal here and override the actual
+    # served path at runtime with a BindReadOnlyPaths drop-in on
     # microvm-virtiofsd@<vm> (further down).
     #
-    # `microvm.writableStoreOverlay = "/nix/.rw-store"` is REQUIRED, not
-    # optional. Without it the guest mounts the virtiofs share read-only
-    # at /nix/store, which makes `nix-env --profile … --set` (the first
-    # action `d2b switch/boot` runs in the guest) fail with
+    # `d2b.vms.<vm>.runner.store.writableOverlay = "/nix/.rw-store"`
+    # is REQUIRED, not optional. Without it the guest mounts the
+    # virtiofs share read-only at /nix/store, which makes
+    # `nix-env --profile … --set` (the first action `d2b switch/boot`
+    # runs in the guest) fail with
     #   error: creating directory "/nix/store/.links": Read-only file system
     # because nix-env's optimised-store and validity-registration paths
     # both want to write under /nix/store. The overlay layers a tmpfs
@@ -808,14 +808,13 @@ in
     # Also add a tiny second share for store-meta (db.dump + generation
     # info), mounted in the guest at /run/d2b-store-meta.
     # Per-VM nix-store + meta + host-keys shares are injected by
-    # host.nix's composeVm pass directly (see
-    # `nixos-modules/host.nix` composedConfig). store.nix used to
-    # write `d2b.vms = lib.mapAttrs... { config.microvm.shares
-    # = ...; }` here, but reading cfg.vms while writing to
-    # d2b.vms causes module-system infinite recursion. The
-    # shares injection moved into host.nix where the per-VM
-    # composedConfig has direct access to the consumer's `vm`
-    # struct without needing to round-trip through cfg.vms.
+    # the per-VM evaluator's composeVm pass directly. store.nix used
+    # to write `config.d2b.vms.<vm>.runner.shares = ...;` here, but
+    # reading cfg.vms while writing to d2b.vms causes module-system
+    # infinite recursion. The shares injection moved into the
+    # composeVm pass where the per-VM composedConfig has direct
+    # access to the consumer's `vm` struct without needing to
+    # round-trip through cfg.vms.
 
     # microvm-virtiofsd@<vm> systemd drop-ins REMOVED.
     # The upstream `microvm-virtiofsd@.service` template doesn't
@@ -916,7 +915,7 @@ in
     # spinning at 100%, no SSH, no console. Observed on a live graphics
     # VM during the C1a/C1b iterations.
     #
-    # microvm.nix sets `X-RestartIfChanged=false` on microvm@<vm> so a
+    # The upstream module set `X-RestartIfChanged=false` on microvm@<vm> so a
     # nixos-rebuild does NOT bounce running VMs on every switch. Good
     # for normal config changes; broken for changes that bounce
     # virtiofsd, because then microvm@ keeps running but its CH is sick.

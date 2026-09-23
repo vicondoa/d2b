@@ -85,7 +85,7 @@ let
     inherit pkgs;
     name = "acceptance-guest";
     modules = [
-      ({ lib, ... }: {
+      ({ lib, name, ... }: {
         boot.kernelParams = [ "console=ttyS0" "loglevel=7" ];
         environment.etc."d2b/component-session/guest.key".source =
           "${fixtureKeys}/guest.key";
@@ -142,9 +142,11 @@ let
         services.dbus.enable = lib.mkForce false;
         services.resolved.enable = lib.mkForce false;
         systemd.services.systemd-vconsole-setup.enable = false;
-        microvm.storeOnDisk = true;
-        microvm.storeDisk = guestStoreDisk;
-        microvm.shares = lib.mkForce [ ];
+        d2b.vms.${name}.runner = {
+          store.onDisk = true;
+          store.disk = guestStoreDisk;
+          shares = lib.mkForce [ ];
+        };
         fileSystems."/nix/store" = {
           device = "/dev/vda";
           fsType = "ext4";

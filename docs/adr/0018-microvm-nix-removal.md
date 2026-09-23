@@ -2070,3 +2070,51 @@ v1.1-P8 → P11 (file names are *future* until each phase ships):
   return the same 54 attrs as v1.0 on the same example bundle.
 - Live re-validation: `nixos-rebuild switch` on the user's host
   produces no toplevel-hash drift for `personal-dev` or `work-aad`.
+
+## Follow-up: the `microvm.*` option namespace is retired (v1.x)
+
+ADR 0018 dropped the `microvm.nix` flake input in v1.1 but left the
+`microvm.*` OPTION NAMESPACE alive as a compatibility shim:
+`nixos-modules/vm-options.nix` declared `options.microvm = { ... }`
+(the hypervisor enum still admitted crosvm/qemu/firecracker/kvmtool/
+stratovirt that d2b does not ship), and framework writers plus
+consumer flakes still set `microvm.mem`, `microvm.shares`,
+`microvm.writableStoreOverlay`, etc. through it.
+
+This follow-up retires the namespace outright. There is no
+deprecation shim and no `lib.warn` window: `options.microvm` is
+deleted, every in-tree writer and reader migrated in the same change,
+and the break is recorded in the changelog and the v1.x migration
+notes. The migration map above (`microvm.*` ->
+`d2b.vms.<vm>.runner.*`) is the canonical rename table, now
+materialized inside the per-VM evaluation: `vm-options.nix` declares
+`options.d2b.vms.<name>.runner.*` (the per-VM evaluation's own name),
+guest modules write `d2b.vms.<name>.runner.*`, and the read surface
+(`guest-closures.nix`, the `d2bLib.vmRunner` accessor) reads
+`config.d2b._computed.<name>.config.d2b.vms.<name>.runner.*`.
+
+Notable renames beyond the table (leaf shapes materialized in
+`vm-options.nix`):
+
+- `microvm.hypervisor` is DROPPED (cloud-hypervisor is the only
+  hypervisor d2b ships; the enum values for crosvm/qemu/firecracker/
+  kvmtool/stratovirt are gone).
+- `microvm.vcpu` -> `d2b.vms.<vm>.runner.cpu.count`.
+- `microvm.mem` -> `d2b.vms.<vm>.runner.memory.sizeMiB`.
+- `microvm.hotplugMem` / `hotpluggedMem` ->
+  `d2b.vms.<vm>.runner.memory.hotplug.{sizeMiB,hotpluggedMiB}`.
+- `microvm.initialBalloonMem` ->
+  `d2b.vms.<vm>.runner.memory.balloon.initialSizeMiB`.
+- `microvm.storeOnDisk` / `storeDisk` / `writableStoreOverlay` ->
+  `d2b.vms.<vm>.runner.store.{onDisk,disk,writableOverlay}`.
+- `microvm.cloud-hypervisor.*` -> `d2b.vms.<vm>.runner.hypervisor.*`.
+- `microvm.graphics.*`, `microvm.virtiofsd.*`, `microvm.shares`,
+  `microvm.volumes`, `microvm.interfaces`, `microvm.kernel*`,
+  `microvm.vsock.*` keep their leaf names under
+  `d2b.vms.<vm>.runner.*`.
+
+The containment lint (`guestConfigForbiddenNamespaces` in lib.nix)
+no longer declares a `microvm` detector root: the namespace does not
+exist, so a guest file setting it fails the sandbox eval as an
+unknown option and is reported fail-closed. The `d2b` detector root
+remains.

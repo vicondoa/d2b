@@ -101,3 +101,37 @@ The broker caller-role audit label remains `"d2b-launcher"` for
 format stability. That string is an audit/authz class identifier, not a
 Unix group lookup. See
 [`docs/reference/naming-conventions.md`](../reference/naming-conventions.md#broker-caller-role-audit-labels).
+
+## The `microvm.*` option namespace is retired
+
+The v1.1 drop of the `microvm.nix` flake input (ADR 0018) left the
+`microvm.*` OPTION NAMESPACE alive as a compatibility shim. This
+follow-up retires the namespace outright: `options.microvm` is
+deleted with no deprecation shim and no `lib.warn` window, and every
+in-tree writer and reader has moved to the d2b-owned namespace
+`d2b.vms.<vm>.runner.*` (see the ADR 0018 migration map and its
+follow-up note).
+
+Consumers that still set `microvm.*` options must rename them before
+upgrading. The full rename table lives in
+[`docs/adr/0018-microvm-nix-removal.md`](../adr/0018-microvm-nix-removal.md);
+the fields consumers most commonly set map as follows:
+
+| Retired `microvm.*` option | d2b-owned replacement |
+|----------------------------|-----------------------|
+| `microvm.mem` | `d2b.vms.<vm>.runner.memory.sizeMiB` |
+| `microvm.vcpu` | `d2b.vms.<vm>.runner.cpu.count` |
+| `microvm.shares` | `d2b.vms.<vm>.runner.shares` |
+| `microvm.volumes` | `d2b.vms.<vm>.runner.volumes` |
+| `microvm.interfaces` | `d2b.vms.<vm>.runner.interfaces` |
+| `microvm.kernelParams` | `d2b.vms.<vm>.runner.kernelParams` |
+| `microvm.storeOnDisk` | `d2b.vms.<vm>.runner.store.onDisk` |
+| `microvm.storeDisk` | `d2b.vms.<vm>.runner.store.disk` |
+| `microvm.writableStoreOverlay` | `d2b.vms.<vm>.runner.store.writableOverlay` |
+| `microvm.cloud-hypervisor.extraArgs` | `d2b.vms.<vm>.runner.hypervisor.extraArgs` |
+| `microvm.cloud-hypervisor.package` | `d2b.vms.<vm>.runner.hypervisor.package` |
+| `microvm.hypervisor` | removed (cloud-hypervisor is the only hypervisor d2b ships) |
+
+A configuration that still sets any `microvm.*` option fails
+evaluation with an unknown-option error after this change - that is
+the deliberate breaking change recorded in the changelog.

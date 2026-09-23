@@ -1,13 +1,13 @@
 # nixos-modules/vm-submodule.nix
 #
 # Wraps the d2b-owned per-VM evaluator (`vm-evaluator.nix`) for
-# `host.nix`'s consumption. This file
-# stays as the single entry-point for `composeVm` and `_evalGuest` so host.nix
-# imports it once. The actual NixOS evaluation logic lives in
+# host-side consumption. This file
+# stays as the single entry-point for `composeVm` and `_evalGuest` so
+# consumers import it once. The actual NixOS evaluation logic lives in
 # `vm-evaluator.nix`; `vm-options.nix` defines the per-VM
-# `microvm.*` option set the evaluator layers in.
+# `d2b.vms.<name>.runner.*` option set the evaluator layers in.
 #
-# No upstream microvm.nix dependency anywhere in this graph.
+# No upstream dependency anywhere in this graph.
 { inputs }:
 { config, lib, pkgs, d2bHostTools ? null, d2bHostToolOverrides ? null, ... }:
 

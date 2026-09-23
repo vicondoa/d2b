@@ -343,154 +343,23 @@ broker, SO_PEERCRED at accept restricts callers to d2bd, and the
 pidfd registry constrains runner IDs. Phase 6 should move per-op
 privileges-matrix enforcement into the broker boundary.
 
-## Drop the `microvm.*` option namespace; d2b owns its hypervisors
+## Resolved: `microvm.*` option namespace retired; d2b owns its hypervisors
 
-**Status.** The `microvm.nix` FLAKE INPUT was dropped in v1.1 (per
-[ADR 0018](docs/adr/0018-microvm-nix-removal.md); `flake.nix` line
-7 carries the comment). d2b owns its per-VM evaluator
-(`nixos-modules/vm-evaluator.nix` + `nixos-modules/vm-options.nix`)
-and spawns every runner through the broker's `SpawnRunner` pipeline.
-
-**What didn't get cleaned up.** The OPTION NAMESPACE `microvm.*`
-survives across 29 framework `.nix` files and is the live writer
-inside consumer flakes. `nixos-modules/vm-options.nix` declares
-`options.microvm = { … }` (line 27) explicitly for backward-compat
-with consumer flakes that still set `microvm.mem`, `microvm.shares`,
-`microvm.writableStoreOverlay`, etc. That backward-compat shim is
-also why every comment in the framework reads "microvm.nix's
-cloud-hypervisor runner" and "microvm.nix's generator" - the names
-imply an upstream dependency that no longer exists. New contributors
-and operators reading the code are misled into thinking microvm.nix
-is still load-bearing.
-
-The user-facing rename: introduce a d2b-native namespace (e.g.
-`d2b.vms.<vm>.runner.* / .volumes / .shares / …`), keep the
-`microvm.*` aliases as a deprecation shim for one minor release,
-then delete them.
-
-### Framework files with live `microvm.*` writers (must rename)
-
-- `nixos-modules/host.nix` lines 108, 257, 260-262, 306 - declares
-  `microvm.interfaces`, `microvm.vsock.cid`, `microvm.hypervisor`,
-  `microvm.cloud-hypervisor.extraArgs`, `microvm.shares`
-  per-VM. This is the primary translation site.
-- `nixos-modules/net.nix` line 380 - declares the net-VM's
-  `microvm = { hypervisor; vcpu; mem; volumes; interfaces; }`
-  block.
-- `nixos-modules/components/graphics.nix` line 332 - writes
-  `microvm = { hypervisor; cloud-hypervisor; … }` for graphics VMs.
-- `nixos-modules/components/tpm.nix` lines 16, 25 -
-  `microvm.hypervisor`, `microvm.cloud-hypervisor.extraArgs`.
-- `nixos-modules/components/audio/guest.nix` lines 126, 130 -
-  `microvm.hypervisor`, `microvm.extraArgsScript`.
-- `nixos-modules/components/video/guest.nix` lines 15, 17 -
-  `microvm.hypervisor`, `microvm.cloud-hypervisor.extraArgs`.
-- `nixos-modules/components/observability/guest.nix` line 207 -
-  `microvm.hypervisor`.
-- `nixos-modules/vm-guest-base.nix` line 71 - `microvm.kernelParams`.
-- `nixos-modules/observability-vm.nix` line 53 - `microvm.mem`.
-- `nixos-modules/processes-json.nix` lines 183, 417, 454, 607 -
-  reads `microvm.vsock.cid`, `microvm.graphics.socket`,
-  `microvm.shares` from the evaluated per-VM config.
-
-### Framework files with `microvm.nix` only in COMMENTS (rewrite text)
-
-Roughly 20+ files including `vm-options.nix` (header block),
-`vm-evaluator.nix`, `vm-submodule.nix`, `vm-guest-base.nix`,
-`host.nix`, `processes-json.nix`, `store.nix`, `manifest.nix`,
-`network.nix`, `net.nix`, `host-otel-relay-acl.nix`,
-`host-activation.nix`, `host-keys.nix`, `options-vms.nix`
-(line 27 `microvm.nix` reference in the description string,
-line 148 / 160 / 300 in option doc-strings),
-`options-site.nix`, `assertions.nix` lines 307-323 (the graphics
-+ autostart assertion talks about `microvm@<vm>.service` and "the
-upstream microvm.nix runner" - those units don't exist anymore).
-Component modules carry stale comments about `microvm.nix's
-cloud-hypervisor runner` / `microvm.nix's generator`. Rewrite each
-to describe current behavior: "the broker's `SpawnRunner` op
-spawns cloud-hypervisor via the Rust argv generator in
-`packages/d2b-host/src/ch_argv.rs`".
-
-### Rust files referencing `microvm` (16 files)
-
-All in comments / doc-strings, e.g.
-`packages/d2b-host/src/ch_argv.rs`,
-`packages/d2b-host/src/virtiofsd_argv.rs`,
-`packages/d2b-host/src/swtpm_argv.rs`,
-`packages/d2b-host/src/gpu_argv.rs`,
-`packages/d2b-broker/src/ops/spawn_runner.rs`,
-`packages/d2bd/src/pidfs_probe.rs`,
-`packages/d2bd/src/ch_stats.rs`,
-`packages/d2b-core/src/bundle_resolver.rs` (e.g. line 2265
-"Per-VM systemd unit `microvm@<vm>` will be stopped..."),
-`packages/d2b-host/src/host_prep_dag.rs`,
-`packages/d2b-host/src/runner_argv_regenerator.rs`,
-`packages/d2b/src/lib.rs`. Update to describe the current
-broker/daemon path; drop the "microvm.nix's X" framing.
-
-### Consumer side (`/etc/nixos`)
-
-The dependency is no longer used by d2b but the consumer flake
-still pulls it in. Drop:
-
-- `/etc/nixos/flake.nix` lines 28-31 - `inputs.microvm` block.
-- `/etc/nixos/flake.nix` line 45 - `microvm` in the outputs
-  function signature.
-- `/etc/nixos/flake.nix` line 125 - stale "checks.security-suite"
-  comment that blames `inputs.microvm.nixosModules.host`.
-- `/etc/nixos/modules/d2b-config.nix` line 53 - stale comment.
-- `/etc/nixos/vms/d2b-test.nix` lines 29-42 - `microvm = { mem;
-  vcpu; volumes; }` block; rename to the new d2b-native
-  namespace.
-- `/etc/nixos/vms/personal-dev.nix` lines 98-142 - same;
-  particularly `microvm.writableStoreOverlay` (referenced in
-  `nixos-modules/options-vms.nix` line 160).
-- `/etc/nixos/vms/work-aad.nix` lines 336-354 - same.
-
-The consumer migration is mechanical (one-time `sed`-style rename)
-once the framework provides the new option names. Until then, the
-deprecation shim must accept BOTH spellings.
-
-### Wider context
-
-- `scripts/MIGRATION-PRE-V0.1.0.md` and
-  `scripts/migrate-d2b-v0.1.0.sh` mention microvm.nix as
-  historical context - leave alone.
-- `pkgs/spectrum-ch/` and `pkgs/crosvm-patched/` mention
-  microvm.nix because they're forks of upstream binaries that
-  microvm.nix also patches; the comments are documenting heritage,
-  not a live dependency.
-- `docs/adr/0018-microvm-nix-removal.md` is the binding decision;
-  ADRs 0001, 0004, 0011, 0021, 0022, 0023 cross-reference. ADRs
-  do not need rewriting (per the docs-cleanup policy from this
-  session).
-- `docs/adr/README.md` may need a footnote that the option
-  namespace cleanup is a follow-up to ADR 0018.
-
-### Sketch of the rename
-
-```
-microvm.hypervisor                  →  d2b.vms.<vm>.runner.hypervisor
-microvm.vcpu                        →  d2b.vms.<vm>.runner.vcpu
-microvm.mem                         →  d2b.vms.<vm>.runner.mem
-microvm.vsock.cid                   →  d2b.vms.<vm>.runner.vsockCid
-microvm.shares                      →  d2b.vms.<vm>.runner.shares
-microvm.volumes                     →  d2b.vms.<vm>.runner.volumes
-microvm.interfaces                  →  d2b.vms.<vm>.runner.interfaces
-microvm.cloud-hypervisor.extraArgs  →  d2b.vms.<vm>.runner.cloudHypervisor.extraArgs
-microvm.kernelParams                →  d2b.vms.<vm>.runner.kernelParams
-microvm.writableStoreOverlay        →  d2b.vms.<vm>.runner.writableStoreOverlay
-microvm.graphics.socket             →  d2b.vms.<vm>.runner.graphics.socket
-microvm.extraArgsScript             →  d2b.vms.<vm>.runner.extraArgsScript
-```
-
-(Names are illustrative - pick a final shape during implementation.)
-
-The deprecation shim in `vm-options.nix` should `lib.warn` once per
-eval when a consumer flake still uses `microvm.*`, and the new
-namespace becomes the documented API across `README.md`,
-`templates/default/configuration.nix`, and every example under
-`examples/`.
+Issue #592 retired the `microvm.*` option namespace outright (no
+deprecation shim, no `lib.warn` window). `options.microvm` is deleted
+from `nixos-modules/vm-options.nix`; the runner option family now
+lives at `d2b.vms.<vm>.runner.*` per the ADR 0018 migration map,
+materialized inside the per-VM evaluation. Every in-tree writer
+(`vm-evaluator.nix`, `vm-guest-base.nix`, `observability-vm.nix`,
+component and provider guest modules, host-integration fixtures) and
+reader (`guest-closures.nix`, the `d2bLib.vmRunner` accessor, the
+containment lint in `lib.nix`/`assertions.nix`) migrated in the same
+change; the `microvm.hypervisor` enum option is gone (cloud-hypervisor
+is the only hypervisor d2b ships). The break is recorded in the
+changelog, the ADR 0018 follow-up note, and the v1.x migration notes.
+The comment corpus ("microvm.nix's cloud-hypervisor runner",
+"microvm.nix's generator") was rewritten to name the broker
+`SpawnRunner` path.
 
 ## Resolved: Tier-0 deployment-shape logic removed
 

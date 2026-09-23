@@ -571,9 +571,10 @@ rec {
           zone.tpmDevices)
       devices;
 
-  # Stable virtio-blk serial for a microvm.volumes entry. Cloud Hypervisor
-  # emits this into the block device, while vm-guest-base.nix mounts by the
-  # corresponding /dev/disk/by-id/virtio-<serial> path.
+  # Stable virtio-blk serial for a d2b.vms.<vm>.runner.volumes entry.
+  # Cloud Hypervisor emits this into the block device, while
+  # vm-guest-base.nix mounts by the corresponding
+  # /dev/disk/by-id/virtio-<serial> path.
   volumeSerial = volume:
     if (volume.serial or null) != null then volume.serial else (
       let
@@ -729,18 +730,17 @@ rec {
     lib.toUpper "02:${pair 0}:${pair 2}:${pair 4}:${pair 6}:${hex2 index}";
 
   # vmRunner - single access point for per-VM runner config that
-  # processes-json.nix / closures-json.nix /
-  # minijail-profiles.nix / store.nix consume. Reads from
-  # `config.d2b._computed.vms.<name>.config.microvm.*` - the
-  # d2b-owned per-VM evaluator output (see
+  # guest-closures.nix / store.nix consume. Reads from
+  # `config.d2b._computed.<name>.config.d2b.vms.<name>.runner.*` -
+  # the d2b-owned per-VM evaluator output (see
   # `nixos-modules/vm-evaluator.nix`). The
-  # `d2b._computed.vms.<name>` storage location is a SIBLING
+  # `d2b._computed.<name>` storage location is a SIBLING
   # to `d2b.vms.<name>` to avoid module-system infinite
-  # recursion (host.nix's composeVm pass cannot map over cfg.vms
+  # recursion (the composeVm pass cannot map over cfg.vms
   # and write back to d2b.vms.<name>.computed without
-  # cycling). NO upstream microvm.nix dependency.
+  # cycling). No upstream dependency.
   vmRunner = config: name:
-    config.d2b._computed.${name}.config.microvm or { };
+    config.d2b._computed.${name}.config.d2b.vms.${name}.runner or { };
 
   # Sibling helper for the per-VM toplevel build.
   vmToplevel = config: name:
@@ -822,22 +822,23 @@ rec {
   # guestConfigForbiddenNamespaces - namespace-containment policy check
   # for the per-VM guest-editable `guestConfigFile`.
   #
-  # Returns the host-owned option path(s) (under `microvm.*` /
-  # `d2b.*`) that the guest file - OR ANY MODULE IT IMPORTS /
-  # GENERATES - defined. An empty list means the guest file touched only
-  # guest-OS options.
+  # Returns the host-owned option path(s) (under `d2b.*`) that the
+  # guest file - OR ANY MODULE IT IMPORTS / GENERATES - defined. An
+  # empty list means the guest file touched only guest-OS options.
   #
   # Mechanism: evaluate the guest file (and its full import closure) with
   # `lib.evalModules` over the REAL nixpkgs NixOS module set, so a guest
   # module that READS a standard option (e.g.
   # `config.networking.hostName` in a `mkIf` guard) resolves instead of
-  # crashing the host eval. `microvm` and `d2b` are redeclared as
-  # detector options that nothing else defines, and a namespace is
-  # reported iff `options.<ns>.isDefined` - i.e. the guest contributed a
-  # real definition. Detection is by definition-EXISTENCE, so a guest's
+  # crashing the host eval. `d2b` is redeclared as a detector option
+  # that nothing else defines, and a namespace is reported iff
+  # `options.d2b.isDefined` - i.e. the guest contributed a real
+  # definition. Detection is by definition-EXISTENCE, so a guest's
   # `imports`, a `builtins.toFile`-generated module, and `_file`
   # spoofing are all caught (none can hide a definition from the option
-  # system).
+  # system). The retired upstream option namespace needs no detector
+  # root: it no longer exists, so a guest file setting it fails the
+  # sandbox eval as an unknown option and is reported fail-closed.
   #
   # SCOPE / NON-GOAL: this is a best-effort namespace-containment policy
   # lint, NOT a sound eval-time security sandbox. Two known limits, both
@@ -850,10 +851,10 @@ rec {
   #   1. `lib.evalModules` cannot stop an approved guest file from
   #      reading host paths at eval time (e.g. `builtins.readFile`).
   #   2. This lint evaluates the guest file over the base NixOS module
-  #      set, NOT the full per-VM module stack (`vm.config`, components,
-  #      framework). So the `config.*` context can differ from the real
-  #      eval, which has two consequences:
-  #      (a) a forbidden `microvm.*`/`d2b.*` definition gated on
+  #      set, NOT the full per-VM module stack (components, framework).
+  #      So the `config.*` context can differ from the real eval, which
+  #      has two consequences:
+  #      (a) a forbidden `d2b.*` definition gated on
   #          `lib.mkIf <cond>` where `<cond>` depends on a value the real
   #          eval sets but this context does not can evaluate false here
   #          and true in the real eval, escaping the lint (false NEGATIVE);
@@ -870,9 +871,8 @@ rec {
   # sets, and conditional ones whose guard resolves the same here as in
   # the real eval - from any source (`imports`, `builtins.toFile`,
   # `_file` spoofing), since detection is by definition-existence. Guest
-  # files that read framework-declared `d2b.*`/`microvm.*` options
-  # are not supported (they read host-owned state the guest layer should
-  # not depend on).
+  # files that read framework-declared `d2b.*` options are not supported
+  # (they read host-owned state the guest layer should not depend on).
   #
   # `pkgs` + `specialArgs` mirror what the real per-VM evaluator passes
   # so a guest config valid in the real eval applies here too. Any eval
@@ -895,7 +895,6 @@ rec {
             nixpkgs.hostPlatform = pkgs.stdenv.hostPlatform.system;
           }
           {
-            options.microvm = lib.mkOption { type = lib.types.anything; };
             options.d2b = lib.mkOption { type = lib.types.anything; };
           }
           guestFile
@@ -906,7 +905,7 @@ rec {
           (lib.concatMap
             (def: map (k: "${ns}.${k}") (lib.attrNames def))
             ev.options.${ns}.definitions);
-      probe = builtins.tryEval (namesIn "microvm" ++ namesIn "d2b");
+      probe = builtins.tryEval (namesIn "d2b");
     in
     if probe.success then probe.value
     else [ "<guestConfigFile failed to evaluate in the containment check>" ];

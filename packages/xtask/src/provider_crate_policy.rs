@@ -5707,12 +5707,6 @@ const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption]
         retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
     },
     SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/components/observability/guest.nix",
-        class: "role-literal",
-        symbol: "cloud-hypervisor",
-        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
         module: "nixos-modules/lib.nix",
         class: "role-literal",
 
@@ -5771,12 +5765,6 @@ const SHARED_STRUCTURAL_KNOWLEDGE_RATCHET: &[SharedStructuralKnowledgeExemption]
         module: "nixos-modules/provider-catalog.nix",
         class: "role-literal",
         symbol: "audio",
-        retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
-    },
-    SharedStructuralKnowledgeExemption {
-        module: "nixos-modules/vm-options.nix",
-        class: "role-literal",
-        symbol: "cloud-hypervisor",
         retires_with: "U8/U13 (the hand per-role Nix tables are generated from declarations)",
     },
     SharedStructuralKnowledgeExemption {
