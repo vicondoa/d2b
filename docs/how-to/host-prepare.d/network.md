@@ -50,12 +50,6 @@ sudo d2b host prepare --apply
 sudo d2b host destroy --apply
 ```
 
-`host prepare --apply` is refused on a Tier 0 NixOS-legacy host -
-one where d2b resolves no daemon-owned bundle to reconcile. The
-per-VM `d2b.vms.<vm>.supervisor` option was removed in v1.1 (per
-ADR 0015); every enabled VM is now daemon-supervised, so a normal v1.1
-host resolves to the daemon path.
-
 ## Ownership markers (foreign-rule preservation guarantees)
 
 The broker writes inside marker blocks that downstream consumers can
@@ -130,8 +124,7 @@ between the step-3 write and the step-5 readback is the
 
 ### NixOS (Tier 0)
 
-- `host prepare --apply` is refused on the legacy path. Tier-0
-  consumers use the NixOS module: every d2b-owned bridge, TAP,
+- Tier-0 consumers use the NixOS module: every d2b-owned bridge, TAP,
   sysctl, NM unmanaged entry, and `/etc/hosts` block is materialised
   declaratively via `nixos-modules/`. The `host doctor --read-only`
   command still runs and reports drift between the module-emitted

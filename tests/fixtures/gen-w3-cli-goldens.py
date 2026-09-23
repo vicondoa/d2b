@@ -46,7 +46,7 @@ W3_ROWS = {
         "host-check-error", 1,
         "Whether systemd delegated +cpu +memory +io +pids to the d2b host slice.",
         "Delegation request refused; controllers missing from cgroup.subtree_control.",
-        "Add `Delegate=cpu memory io pids` to /etc/systemd/system/d2b-host.slice and `systemctl daemon-reload`.",
+        "Add `Delegate=cpu memory io pids` to /etc/systemd/system/d2b.slice and `systemctl daemon-reload`.",
     ),
     ("host-check", "cgroup-v2-unified-not-present"): (
         "host-check-error", 1,
@@ -58,7 +58,7 @@ W3_ROWS = {
         "host-check-error", 1,
         "Whether the host slice exposes the cpu/memory/io/pids controllers.",
         "Required controllers missing from /sys/fs/cgroup/d2b.slice/cgroup.controllers.",
-        "Enable the missing controllers via systemd `Delegate=` on d2b-host.slice and reload.",
+        "Enable the missing controllers via systemd `Delegate=` on d2b.slice and reload.",
     ),
     ("host-check", "cgroup-kill-on-ancestor-refused"): (
         "host-check-error", 1,
@@ -236,7 +236,7 @@ W3_ROWS = {
         "host-check-error", 1,
         "Whether /run/d2b/public.sock has the expected mode/owner/group.",
         "Observed mode/owner/group diverges from the declared SocketSpec.",
-        "Inspect `systemctl status d2bd.socket`; the unit re-asserts perms on restart.",
+        "Restart the daemon: `systemctl restart d2bd.service`; d2bd recreates /run/d2b/public.sock and re-asserts its mode/owner/group on bind.",
     ),
     ("host-check", "missing-group"): (
         "host-check-error", 1,
