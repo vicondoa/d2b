@@ -503,6 +503,9 @@ d2b_rust_test(
 
         "src/shared_provider_effects.rs",
         "src/provider_registry.rs",
+        # The volume driver source the package-source policy reads: the
+        # crate source is data, not a stray sandbox impure read.
+        "//packages/d2b-provider-volume:cargo_workspace_sources",
     ],
     env = {"CARGO_BIN_EXE_d2bd": "$(rootpath :d2bd)"},
     env_inherit = ["D2B_REPO_ROOT", "PATH"],

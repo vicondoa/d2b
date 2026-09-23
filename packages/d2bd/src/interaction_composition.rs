@@ -6711,10 +6711,12 @@ mod tests {
                 .is_some_and(|composition| composition.session_count() == 1),
             "the reactor accept loop admitted the connecting client"
         );
-        let _ = engine.close(
+        engine.close(
             d2b_contracts_zone_session::v3::component_session::CloseReason::Normal,
             d2b_contracts_zone_session::v3::component_session::Remediation::None,
-        );
+        )
+        .await
+        .expect("the engine closes and stops its listeners");
         listeners.stop().await;
         assert!(
             !path.exists(),

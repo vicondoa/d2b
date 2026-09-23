@@ -33,10 +33,21 @@ use d2b_contracts_broker::broker_wire::{
 use d2b_contracts_resource::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
 use d2bd_runtime::broker_transport::ModeBoundBrokerAdapter;
 use d2bd_runtime::target_runtime::DaemonMode;
+use d2b_provider_activation_nixos::ACTIVATION_EFFECTS_SERVICE;
+use d2b_provider_credential::CREDENTIAL_EFFECTS_SERVICE;
+use d2b_provider_device::DEVICE_EFFECTS_SERVICE;
+use d2b_provider_device_security_key::SECURITY_KEY_EFFECTS_SERVICE;
+use d2b_provider_device_usbip::USBIP_EFFECTS_SERVICE;
+use d2b_provider_endpoint::ENDPOINT_EFFECTS_SERVICE;
+use d2b_provider_guest::GUEST_EFFECTS_SERVICE;
 use d2b_provider_host::HOST_EFFECTS_SERVICE;
 use d2b_provider_network_local::NETWORK_EFFECTS_SERVICE;
 use d2b_provider_process::PROCESS_EFFECTS_SERVICE;
 use d2b_provider_process_systemd::effects_service::PROCESS_SYSTEMD_EFFECTS_SERVICE;
+use d2b_provider_user::USER_EFFECTS_SERVICE;
+use d2b_provider_volume::VOLUME_EFFECTS_SERVICE;
+use d2b_provider_volume_binding::BINDING_EFFECTS_SERVICE;
+use d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE;
 use d2b_provider_toolkit::{
     AttachError, Cardinality, DEFAULT_DRAIN_BUDGET_MS, DrainDeadline, DrainError,
     DriverDescriptor, IsolationPosture, Lifecycle, OperationEnvelope, OperationFailure,
@@ -58,6 +69,12 @@ use crate::plane_port::{PlaneRefusal, ProductionPlanePort};
 /// hosts it (U15). The registration table carries only ids; the hosting
 /// pass resolves the crate-owned declaration so the row can be published
 /// with its methods and facets.
+///
+/// The table of registrations is the authority: every registered service id
+/// must resolve here, so a set that declares only a subset of families (a
+/// test fixture or a partial composition) can still host every registered
+/// service through the U15 pass. The families with no registration row
+/// declare their services only through their drivers and never appear here.
 fn registered_service_decl(service: &str) -> Option<&'static ServiceDecl> {
     if service == PROCESS_EFFECTS_SERVICE.id {
         Some(&PROCESS_EFFECTS_SERVICE)
@@ -67,6 +84,28 @@ fn registered_service_decl(service: &str) -> Option<&'static ServiceDecl> {
         Some(&HOST_EFFECTS_SERVICE)
     } else if service == PROCESS_SYSTEMD_EFFECTS_SERVICE.id {
         Some(&PROCESS_SYSTEMD_EFFECTS_SERVICE)
+    } else if service == ACTIVATION_EFFECTS_SERVICE.id {
+        Some(&ACTIVATION_EFFECTS_SERVICE)
+    } else if service == CREDENTIAL_EFFECTS_SERVICE.id {
+        Some(&CREDENTIAL_EFFECTS_SERVICE)
+    } else if service == DEVICE_EFFECTS_SERVICE.id {
+        Some(&DEVICE_EFFECTS_SERVICE)
+    } else if service == SECURITY_KEY_EFFECTS_SERVICE.id {
+        Some(&SECURITY_KEY_EFFECTS_SERVICE)
+    } else if service == USBIP_EFFECTS_SERVICE.id {
+        Some(&USBIP_EFFECTS_SERVICE)
+    } else if service == ENDPOINT_EFFECTS_SERVICE.id {
+        Some(&ENDPOINT_EFFECTS_SERVICE)
+    } else if service == GUEST_EFFECTS_SERVICE.id {
+        Some(&GUEST_EFFECTS_SERVICE)
+    } else if service == USER_EFFECTS_SERVICE.id {
+        Some(&USER_EFFECTS_SERVICE)
+    } else if service == VOLUME_EFFECTS_SERVICE.id {
+        Some(&VOLUME_EFFECTS_SERVICE)
+    } else if service == BINDING_EFFECTS_SERVICE.id {
+        Some(&BINDING_EFFECTS_SERVICE)
+    } else if service == INTERACTION_EFFECTS_SERVICE.id {
+        Some(&INTERACTION_EFFECTS_SERVICE)
     } else {
         None
     }
@@ -601,6 +640,25 @@ impl ProviderSet {
         self
     }
 
+    /// Supply one factory for every registered service (test-support only):
+    /// the U15 hosting pass publishes each registered family's service that
+    /// no driver in this set declared, so a fixture set that declares only a
+    /// subset of families must still host the rest - the echo fixture
+    /// factory hosts them without ever being called.
+    #[cfg(test)]
+    pub(crate) fn inject_registered_service_factories<F>(self) -> Self
+    where
+        F: EffectServiceFactory + Default + 'static,
+    {
+        let mut set = self;
+        for registration in crate::resource_plane_v3::PROVIDER_REGISTRATIONS {
+            for &service in registration.services {
+                set = set.with_effect_service_factory(service, Arc::new(F::default()));
+            }
+        }
+        set
+    }
+
     /// Start every provider through the base.
     pub(crate) async fn start(self) -> Result<ProviderRuntime, ProviderStartupError> {
         let ProviderSet {
@@ -1083,6 +1141,7 @@ mod tests {
             .with(declared("process"), Vec::new())
             .with(declared("volume"), Vec::new())
             .with(declared("endpoint"), Vec::new())
+            .inject_registered_service_factories::<EchoFactory>()
             .start()
             .await
             .expect("the providers start through the base");
@@ -1122,6 +1181,7 @@ mod tests {
                 },
                 Vec::new(),
             )
+            .inject_registered_service_factories::<EchoFactory>()
             .start()
             .await
             .expect_err("the subtree belongs to another provider");
@@ -1276,6 +1336,14 @@ mod tests {
         builds: Arc<AtomicU64>,
     }
 
+    impl Default for EchoFactory {
+        fn default() -> Self {
+            Self {
+                builds: Arc::new(AtomicU64::new(0)),
+            }
+        }
+    }
+
     impl EffectServiceFactory for EchoFactory {
         fn build(&self) -> Arc<dyn EffectService> {
             self.builds.fetch_add(1, Ordering::SeqCst);
@@ -1316,6 +1384,7 @@ mod tests {
                 ECHO_SERVICE.id,
                 Arc::new(EchoFactory { builds: Arc::clone(&builds) }),
             )
+            .inject_registered_service_factories::<EchoFactory>()
             .start()
             .await
             .expect("the provider starts through the base");
@@ -1357,6 +1426,7 @@ mod tests {
                 ECHO_SERVICE.id,
                 Arc::new(EchoFactory { builds: Arc::clone(&builds) }),
             )
+            .inject_registered_service_factories::<EchoFactory>()
             .start()
             .await
             .expect("the provider starts through the base");
@@ -1432,6 +1502,7 @@ mod tests {
                 ECHO_SERVICE.id,
                 Arc::new(EchoFactory { builds: Arc::clone(&builds) }),
             )
+            .inject_registered_service_factories::<EchoFactory>()
             .start()
             .await
             .expect("the provider starts through the base");
@@ -1708,6 +1779,7 @@ mod tests {
                 ECHO_SERVICE.id,
                 Arc::new(OnceFactory(Arc::new(StateReadingService))),
             )
+            .inject_registered_service_factories::<EchoFactory>()
             .start()
             .await
             .expect("the provider starts through the base");
@@ -1748,6 +1820,7 @@ mod tests {
                 ECHO_SERVICE.id,
                 Arc::new(EchoFactory { builds: Arc::clone(&builds) }),
             )
+            .inject_registered_service_factories::<EchoFactory>()
             .start()
             .await
             .expect("the first generation starts");
@@ -1770,6 +1843,7 @@ mod tests {
                 ECHO_SERVICE.id,
                 Arc::new(EchoFactory { builds: Arc::clone(&builds) }),
             )
+            .inject_registered_service_factories::<EchoFactory>()
             .start()
             .await
             .expect("the restarted generation starts");

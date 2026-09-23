@@ -718,7 +718,6 @@ fn spawn_anchor_subscription(
     ))
 }
 
-    #[allow(clippy::too_many_arguments)]
 /// Run the anchor projection subscription: drain each registration's
 /// retained replay, then its live stream, coalescing Desired notices into
 /// one bounded re-materialization per drain, and relist on the hub's
@@ -775,7 +774,6 @@ async fn run_anchor_subscription(
     }
 }
 
-    #[allow(clippy::too_many_arguments)]
 /// One registration and its live phase: drains the retained replay, then
 /// the live stream, coalescing Desired notices into one bounded
 /// re-materialization per drain. Returns the revision the next phase must
@@ -2227,7 +2225,6 @@ Arc::new(DaemonAudioMediatorSource {
     }
 }
 
-    #[allow(clippy::too_many_arguments)]
 /// The hosting factories the composition root registers for the services
 /// the registration table declares (U3, R5): one entry per declared service
 /// identity, built from the families' own implementations over this zone's
@@ -4789,7 +4786,6 @@ HOST_EFFECTS_SERVICE.id,
     /// `inspect-process-systemd` through the real invocation capability
     /// object carrying the real envelope payload - hermetic, served from
     /// the crate's own handler table, reaching no daemon state.
-
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "multi_thread")]
     async fn the_process_systemd_effects_service_answers_inspect_process_systemd_through_the_binding() {
@@ -6703,9 +6699,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// A sustained stream that never empties still performs a re-materialization
     /// within the bounded window, and the stall line is logged.
-
-
-
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
     async fn a_sustained_stream_still_rematerializes_within_the_bounded_window() {

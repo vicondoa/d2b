@@ -2536,6 +2536,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     }
 
     /// Builds one echo service per respawn.
+    #[derive(Default)]
     struct EchoFactory;
 
     impl EffectServiceFactory for EchoFactory {
@@ -3756,27 +3757,37 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
             guest_execution: None,
             mode: ExecutionMode::Host,
         });
+        let mut set = ProviderSet::new(zone.clone(), scratch.path().join("state"))
+            .with_trusted_context_publication(Some(
+                TrustedContextPublication::production(
+                    DaemonMode::Host,
+                    broker_socket,
+                    nix::unistd::getuid().as_raw(),
+                    4,
+                ),
+            ))
+            .with(
+                family_declaration("process"),
+                vec![
+                    process,
+                    DriverDescriptor {
+                        operations: &STALL_OPERATIONS[..],
+                        ..ephemeral
+                    },
+                ],
+            );
+        // The U15 hosting pass publishes every registered family's service
+        // that no driver in this set declared; the fixture set declares
+        // only the process family's driver, so the remaining registered
+        // services receive the echo fixture factory too - they are hosted
+        // but never called by these tests.
+        for registration in crate::resource_plane_v3::PROVIDER_REGISTRATIONS {
+            for &service in registration.services {
+                set = set.with_effect_service_factory(service, Arc::new(EchoFactory));
+            }
+        }
         let providers = Arc::new(
-            ProviderSet::new(zone.clone(), scratch.path().join("state"))
-                .with_trusted_context_publication(Some(
-                    TrustedContextPublication::production(
-                        DaemonMode::Host,
-                        broker_socket,
-                        nix::unistd::getuid().as_raw(),
-                        4,
-                    ),
-                ))
-                .with(
-                    family_declaration("process"),
-                    vec![
-                        process,
-                        DriverDescriptor {
-                            operations: &STALL_OPERATIONS[..],
-                            ..ephemeral
-                        },
-                    ],
-                )
-                .start()
+            set.start()
                 .await
                 .expect("the process family starts through the base"),
         );
@@ -3908,6 +3919,12 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
                         },
                     ],
                 )
+                // The U15 hosting pass publishes every registered family's
+                // service that no driver in this set declared; the fixture
+                // set declares only the process family's driver, so the
+                // remaining registered services receive the echo fixture
+                // factory too - they are hosted but never called.
+                .inject_registered_service_factories::<EchoFactory>()
                 .start()
                 .await
                 .expect("the process family starts through the base"),
@@ -3961,27 +3978,37 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
             guest_execution: None,
             mode: ExecutionMode::Host,
         });
+        let mut set = ProviderSet::new(zone.clone(), scratch.path().join("state"))
+            .with_trusted_context_publication(Some(
+                TrustedContextPublication::production(
+                    DaemonMode::Host,
+                    missing_broker,
+                    nix::unistd::getuid().as_raw(),
+                    1,
+                ),
+            ))
+            .with(
+                family_declaration("process"),
+                vec![
+                    process,
+                    DriverDescriptor {
+                        operations: &STALL_OPERATIONS[..],
+                        ..ephemeral
+                    },
+                ],
+            );
+        // The U15 hosting pass publishes every registered family's service
+        // that no driver in this set declared; the fixture set declares
+        // only the process family's driver, so the remaining registered
+        // services receive the echo fixture factory too - they are hosted
+        // but never called by these tests.
+        for registration in crate::resource_plane_v3::PROVIDER_REGISTRATIONS {
+            for &service in registration.services {
+                set = set.with_effect_service_factory(service, Arc::new(EchoFactory));
+            }
+        }
         let providers = Arc::new(
-            ProviderSet::new(zone.clone(), scratch.path().join("state"))
-                .with_trusted_context_publication(Some(
-                    TrustedContextPublication::production(
-                        DaemonMode::Host,
-                        missing_broker,
-                        nix::unistd::getuid().as_raw(),
-                        1,
-                    ),
-                ))
-                .with(
-                    family_declaration("process"),
-                    vec![
-                        process,
-                        DriverDescriptor {
-                            operations: &STALL_OPERATIONS[..],
-                            ..ephemeral
-                        },
-                    ],
-                )
-                .start()
+            set.start()
                 .await
                 .expect("the process family starts through the base"),
         );
@@ -4807,8 +4834,8 @@ assert_eq!(
                 }),
                 refusal: (!granted).then(|| UNGRANTED_CALLER.to_owned()),
                 detail: None,
-                fd_indexes: granted.then(|| vec![0]).unwrap_or_default(),
-                fd_kinds: granted.then(|| vec![FdKind::Any]).unwrap_or_default(),
+                fd_indexes: if granted { vec![0] } else { Vec::new() },
+                fd_kinds: if granted { vec![FdKind::Any] } else { Vec::new() },
             });
             let frame = encode_broker_frame(&response).expect("the kernel reply encodes");
             match pidfd {
@@ -4856,7 +4883,7 @@ assert_eq!(
             )
             .await;
 
-        let payload = serde_json::to_value(&systemd_unit_request())
+        let payload = serde_json::to_value(systemd_unit_request())
             .expect("the unit request serializes");
         let (response, received) = forward_and_read_fds(
             &serving.socket_path,

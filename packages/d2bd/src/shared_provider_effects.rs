@@ -40,7 +40,7 @@ use d2b_provider_network_local::{
         NetworkEffectError, NetworkReconciler, NetworkResourcePort, ReconcileInput,
         ReconcileProgress,
     },
-    observe::observe_host_network,
+    observe::{HostNetworkOccupancy, observe_host_network},
 };
 use d2b_resource_runtime::context::ChildEnsure;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
@@ -215,6 +215,12 @@ pub(crate) struct ProductionSharedProviderEffects {
     usbip_ledger: Arc<tokio::sync::Mutex<d2b_provider_device_usbip::broker::AuthorityLedger>>,
     /// Zone-wide activated USBIP services (old `usbip_services`).
     usbip_services: Arc<tokio::sync::Mutex<BTreeSet<ResourceUid>>>,
+    /// Scripted host-network occupancy (test-support only): a test installs a
+    /// fixed snapshot so the admission path is hermetic (the observed host
+    /// state would otherwise leak the machine running the suite). Production
+    /// leaves this empty and always observes the live host.
+    #[cfg(any(test, feature = "test-support"))]
+    scripted_host_occupancy: Option<HostNetworkOccupancy>,
 }
 
 impl ProductionSharedProviderEffects {
@@ -260,7 +266,35 @@ impl ProductionSharedProviderEffects {
             gpu_facets: std::sync::OnceLock::new(),
             usbip_ledger: d2b_provider_device_usbip::broker::new_authority_ledger(),
             usbip_services: Arc::new(tokio::sync::Mutex::new(BTreeSet::new())),
+            #[cfg(any(test, feature = "test-support"))]
+            scripted_host_occupancy: None,
         }
+    }
+
+    /// Install a scripted host-network occupancy (test-support only): the
+    /// admission path then observes this snapshot instead of the live host,
+    /// so tests that drive the real `network_admission` are hermetic
+    /// regardless of the machine they run on. Production never calls this.
+    #[cfg(test)]
+    pub(crate) fn with_scripted_host_occupancy(
+        mut self,
+        occupancy: HostNetworkOccupancy,
+    ) -> Self {
+        self.scripted_host_occupancy = Some(occupancy);
+        self
+    }
+
+    /// The host-network occupancy admission observes: the scripted snapshot
+    /// a test installed, or the live host observation.
+    async fn observed_host_occupancy(
+        &self,
+    ) -> Result<HostNetworkOccupancy, d2b_provider_network_local::observe::HostNetworkObservationError>
+    {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(occupancy) = &self.scripted_host_occupancy {
+            return Ok(occupancy.clone());
+        }
+        observe_host_network().await
     }
 
     /// Attach the device-family facet sets the composition root built from
@@ -1090,7 +1124,8 @@ impl ProductionSharedProviderEffects {
             .as_ref()
             .map(Arc::clone)
             .ok_or(SharedProviderEffectError::Unavailable)?;
-        let occupancy = observe_host_network()
+        let occupancy = self
+            .observed_host_occupancy()
             .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         plane
@@ -3034,7 +3069,6 @@ mod tests {
     /// Capture everything one action emits with the daemon's default filter
     /// applied (`main.rs` initializes `info`): an event below that level never
     /// reaches the host journal.
-
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn capture_journal_output(action: impl FnOnce()) -> String {
         #[derive(Clone)]
@@ -3779,7 +3813,12 @@ mod tests {
                 zone,
                 ControllerGeneration::new(3).unwrap(),
                 resolver.clone(),
-            ),
+            )
+            .with_scripted_host_occupancy(HostNetworkOccupancy::from_parts(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )),
             network_uid,
             network_generation,
             resolver,
@@ -3842,7 +3881,7 @@ mod tests {
             Err(error) => error.to_string(),
         };
         assert!(
-            matches!(result, Ok(_)),
+            result.is_ok(),
             "a same-zone attached Guest must be admitted: {verdict}",
         );
     }
