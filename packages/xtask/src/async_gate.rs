@@ -272,6 +272,14 @@ pub fn scan_source(
     let mut state = ScanState::new();
     let mut outcome = ScanOutcome::default();
     for (index, line) in text.lines().enumerate() {
+        // A line join is a token boundary: the sanitizer blanks each line
+        // independently, and the scanner accumulates its segment across
+        // lines, so without a separator `pub async` + newline + `fn` would
+        // glue into one `asyncfn` identifier. Push a space at the join so
+        // whitespace tokenisation splits `async` and `fn` apart.
+        if index > 0 {
+            state.segment.push(' ');
+        }
         scan_line(
             &mut state,
             file,
@@ -502,10 +510,83 @@ fn starts_with_await(text: &str) -> bool {
 /// trailing comment on the call's own line; `None` when the marker is absent
 /// or carries no reason.
 fn marker_reason(raw: &str, from: usize, marker: &str) -> Option<String> {
-    let pos = raw[from..].find(marker)?;
-    let after = from + pos + marker.len();
+    let trailing = trailing_line_comment_start(raw, from)?;
+    let text = &raw[trailing..];
+    let pos = text.find(marker)?;
+    let after = trailing + pos + marker.len();
     let reason = raw[after..].trim();
     (!reason.is_empty()).then(|| reason.to_owned())
+}
+
+/// The byte offset of the trailing `//` line comment on the call's own line,
+/// when one exists at or after `from` outside a string literal, char literal,
+/// raw string, block comment, or line comment - the only comment text that
+/// can carry the hatch marker (the sanitizer's comment handling: a `//` in
+/// Normal mode runs to the end of the line, so the trailing comment is the
+/// text after the *last* `//` outside any literal or block comment). String
+/// literals and block comments never arm the hatch.
+fn trailing_line_comment_start(raw: &str, from: usize) -> Option<usize> {
+    let bytes = raw.as_bytes();
+    let mut mode = Mode::Normal;
+    let mut i = from;
+    let mut last: Option<usize> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match mode {
+            Mode::BlockComment => {
+                if b == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    i += 2;
+                    mode = Mode::Normal;
+                } else {
+                    i += 1;
+                }
+            }
+            Mode::String => {
+                if b == b'\\' {
+                    i += 2;
+                } else if b == b'"' {
+                    i += 1;
+                    mode = Mode::Normal;
+                } else {
+                    i += 1;
+                }
+            }
+            Mode::Char => {
+                if b == b'\\' {
+                    i += 2;
+                } else if b == b'\'' {
+                    i += 1;
+                    mode = Mode::Normal;
+                } else {
+                    i += 1;
+                }
+            }
+            Mode::Normal => {
+                if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
+                    last = Some(i);
+                    // A `//` runs to the end of the line; everything after is
+                    // comment text, so this is the trailing comment.
+                    break;
+                } else if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                    i += 2;
+                    mode = Mode::BlockComment;
+                } else if b == b'"' {
+                    i += 1;
+                    mode = Mode::String;
+                } else if b == b'\'' {
+                    if char_literal_starts(&bytes[i..]) {
+                        i += 1;
+                        mode = Mode::Char;
+                    } else {
+                        i += 1;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+    }
+    last
 }
 
 /// Whether a denied API matches at byte position `i` of the sanitized code.
@@ -564,12 +645,15 @@ fn brace_kind(state: &ScanState) -> BraceKind {
 /// brace; `async fn_pointer()` must not match (the `fn` needs a word
 /// boundary after it).
 fn segment_has_async_fn(segment: &str) -> bool {
-    segment.match_indices("async fn").any(|(pos, _)| {
-        let before_ok = pos == 0 || !is_ident_char(segment.as_bytes()[pos - 1]);
-        let after = pos + "async fn".len();
-        let after_ok = after == segment.len() || !is_ident_char(segment.as_bytes()[after]);
-        before_ok && after_ok
-    })
+    // The sanitizer already turns block comments into spaces, so splitting
+    // the segment on whitespace recovers the token stream; arming on an
+    // `async` token immediately followed by an `fn` token covers every
+    // spelling rustc accepts (`pub async   fn`, `pub async` + newline +
+    // `fn`, `pub async /* c */ fn`, including a hatch block between the
+    // two) while `async fn_pointer()` and a lone `async` token stay
+    // disarmed.
+    let tokens: Vec<&str> = segment.split_whitespace().collect();
+    tokens.windows(2).any(|pair| pair == ["async", "fn"])
 }
 
 /// The identifier token ending at `offset` (exclusive), skipping whitespace.
@@ -981,6 +1065,16 @@ fn write_inventory(
 /// above a marked call.
 pub fn run(repo_root: &Path, args: &[String]) -> Result<(), String> {
     let write_mode = args.iter().any(|arg| arg == "--write-inventory");
+    // Reject any flag-shaped argument that is not the documented
+    // `--write-inventory`: a mistyped flag (`--write-inventoryy`) used to
+    // fall through to the path list and silently scan nothing.
+    for arg in args {
+        if arg.starts_with("--") && arg != "--write-inventory" {
+            return Err(format!(
+                "async-gate: unknown flag {arg:?} (the only flag is --write-inventory)"
+            ));
+        }
+    }
     let paths_args: Vec<&String> = args
         .iter()
         .filter(|arg| *arg != "--write-inventory")
@@ -998,7 +1092,22 @@ pub fn run(repo_root: &Path, args: &[String]) -> Result<(), String> {
     } else {
         paths_args.iter().map(PathBuf::from).collect()
     };
+    // A resolved scan set that matches no `.rs` file (a mistyped or stale
+    // path, an empty subtree) is a fatal scan error rather than a vacuous
+    // pass: the gate must fail closed on "nothing scanned".
+    if paths.is_empty() {
+        return Err("async-gate: the resolved scan set is empty (no `.rs` file matched the given paths)".to_owned());
+    }
     let run = scan_paths(repo_root, &paths, &entries, Some(&inventory.marker))?;
+    // A resolved scan set with no `.rs` files is a mistake (a mistyped path,
+    // a stray flag, an empty directory): failing the gate here stops a
+    // vacuous "0 file(s) scanned, no blocking calls" success.
+    if run.file_count == 0 {
+        return Err(
+            "async-gate: the resolved scan set is empty (no .rs files matched the scan paths): a zero-file scan must not report success"
+                .to_owned(),
+        );
+    }
     if write_mode {
         write_inventory(repo_root, &inventory.marker, &run.marker_sites)?;
         println!(
@@ -1474,6 +1583,9 @@ mod tests {
 
     /// A throwaway repo root containing one `.rs` file at `rel_path`, so
     /// inventory validation's tree-existence check sees it. Removed on drop.
+    static NEXT_TEMP_REPO: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
     struct TempRepo {
         root: PathBuf,
     }
@@ -1482,8 +1594,9 @@ mod tests {
     impl TempRepo {
         fn with_file(rel_path: &str) -> Self {
             let root = std::env::temp_dir().join(format!(
-                "async-gate-inventory-test-{}-{}",
+                "async-gate-inventory-test-{}-{}-{}",
                 std::process::id(),
+                NEXT_TEMP_REPO.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 rel_path.replace(['/', '.'], "-")
             ));
             let _ = fs::remove_dir_all(&root);

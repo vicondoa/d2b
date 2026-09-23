@@ -146,8 +146,8 @@ all = { level = "warn", priority = -1 }
 # holds it, and `await_holding_lock` cannot see that because no guard crosses
 # the suspension point. The source-level half is the async-gate scanner
 # (`cargo xtask check-async-gate`, Layer-1 policy): it flags the conservative
-# method-call lock shape - a `lock()`/`read()`/`write()` method call inside an
-# `async fn` not followed by `.await` - and its escape hatch is the source
+# method-call lock shape - a `lock()`/`read()`/`write()` method call inside an async context (`async fn` or
+# async block) not followed by `.await` - and its escape hatch is the source
 # marker `// async-gate-allow: <reason>` recorded in
 # packages/xtask/data/async-gate-inventory.json.
 await_holding_refcell_ref = "deny"
