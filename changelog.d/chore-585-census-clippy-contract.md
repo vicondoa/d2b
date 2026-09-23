@@ -1,0 +1,4 @@
+### Fixed
+
+- Fixed the blocking-census clippy invocation to pass the manifest's documented de-escalation set (`-W warnings -W clippy::disallowed_methods -W clippy::await_holding_lock -W clippy::await_holding_refcell_ref`), so a stray `await_holding_lock` or `await_holding_refcell_ref` diagnostic counts instead of failing the census gate off the clippy-run error path.
+- Fixed the blocking-census clippy failure report to surface the first real diagnostic (file:line and message) instead of the reversed last-15 stderr lines, which reduced a compile error in a large crate to a bare "could not compile" summary.

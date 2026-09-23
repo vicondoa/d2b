@@ -10,10 +10,12 @@
 //! Two counting paths keep the meter on the lint's predicate (plan R10:
 //! clippy deny is the flip authority). The authoritative count for EVERY
 //! deny-entry class comes from `cargo clippy --message-format=json`
-//! `disallowed_methods` diagnostics (run with `-W clippy::disallowed_methods`
-//! so the manifest's `allow` level does not hide the diagnostics while
-//! `#[allow]` attributes keep suppressing - the same predicate the lint
-//! enforces under deny). The lexical meter is the report's cross-check:
+//! `disallowed_methods` diagnostics (run with the manifest's documented
+//! de-escalation set - `-W warnings -W clippy::disallowed_methods
+//! -W clippy::await_holding_lock -W clippy::await_holding_refcell_ref` - so
+//! the manifest's `deny` level cannot fail the run while `#[allow]`
+//! attributes keep suppressing - the same predicate the lint enforces under
+//! deny). The lexical meter is the report's cross-check:
 //!
 //! * Free-function and module-qualified entries (`std::fs::read_to_string`)
 //!   are counted by their FULL configured path text, so a tokio-replacement
@@ -751,14 +753,18 @@ fn package_name(crate_dir: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("blocking-census: no package name in {}", crate_dir.display()))
 }
 
-/// Run `cargo clippy --message-format=json` over the given packages (or the
-/// whole workspace) with `disallowed_methods` forced to warn, and return the
-/// JSON stream. `RUSTFLAGS` is cleared so the `.cargo/config.toml`
-/// `-D warnings` rustflags cannot turn unrelated warnings into failures, and
-/// `-W` (not `--force-warn`) is used so `#[allow]` attributes keep
-/// suppressing - the same predicate the lint enforces under deny.
+/// Build the census clippy command: `cargo clippy --locked
+/// --message-format=json --all-targets` over the given packages (or the
+/// whole workspace) with the manifest's documented de-escalation set after
+/// `--` (Cargo.toml, "Keep the census visible:"). `RUSTFLAGS` is cleared so
+/// the `.cargo/config.toml` `-D warnings` rustflags cannot turn unrelated
+/// warnings into failures, and `-W` (not `--force-warn`) is used so
+/// `#[allow]` attributes keep suppressing - the same predicate the lints
+/// enforce under deny. The de-escalation set is the contract: a stray
+/// `await_holding_lock`/`await_holding_refcell_ref`/`disallowed_methods`
+/// diagnostic must count, not fail the run.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn run_clippy(repo_root: &Path, packages: &[String]) -> Result<String, String> {
+fn clippy_command(repo_root: &Path, packages: &[String]) -> Command {
     let mut command = Command::new("cargo");
     command
         .arg("clippy")
@@ -775,18 +781,159 @@ fn run_clippy(repo_root: &Path, packages: &[String]) -> Result<String, String> {
             command.arg("-p").arg(package);
         }
     }
-    command.arg("--").arg("-W").arg("clippy::disallowed_methods");
-    let output = command
+    command
+        .arg("--")
+        .arg("-W")
+        .arg("warnings")
+        .arg("-W")
+        .arg("clippy::disallowed_methods")
+        .arg("-W")
+        .arg("clippy::await_holding_lock")
+        .arg("-W")
+        .arg("clippy::await_holding_refcell_ref");
+    command
+}
+
+/// Find the first real rustc/clippy diagnostic in `stderr`: the first
+/// `error`/`warning` header that carries a `--> file:line` span (the header
+/// is followed by the span, possibly through message continuation lines).
+/// Errors are preferred over warnings - the run only fails on errors, so a
+/// leading warning would not be the cause. Returns `file:line: message`;
+/// falls back to the first header's message when no diagnostic carries a
+/// span (e.g. a cargo-level error), and `None` when stderr has no
+/// diagnostic at all.
+fn first_diagnostic(stderr: &str) -> Option<String> {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let mut first_warning: Option<String> = None;
+    let mut first_spanless: Option<String> = None;
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim_start();
+        let is_error = trimmed.starts_with("error");
+        let is_warning = trimmed.starts_with("warning");
+        if !is_error && !is_warning {
+            i += 1;
+            continue;
+        }
+        let Some(colon) = trimmed.find(": ") else {
+            i += 1;
+            continue;
+        };
+        let message = trimmed[colon + 2..].trim();
+        if first_spanless.is_none() {
+            first_spanless = Some(message.to_string());
+        }
+        // The span line follows the header, possibly after message
+        // continuation lines; a following header, note, or help ends the
+        // header's block.
+        let mut span = None;
+        for next in lines.iter().skip(i + 1).take(6) {
+            let next_trimmed = next.trim_start();
+            if let Some(rest) = next_trimmed.strip_prefix("--> ") {
+                span = Some(rest);
+                break;
+            }
+            if next_trimmed.starts_with("error")
+                || next_trimmed.starts_with("warning")
+                || next_trimmed.starts_with("note")
+                || next_trimmed.starts_with("help")
+                || next_trimmed.starts_with("= ")
+            {
+                break;
+            }
+        }
+        if let Some(rest) = span {
+            let loc = rest.split(':').take(2).collect::<Vec<_>>().join(":");
+            let diagnostic = format!("{loc}: {message}");
+            if is_error {
+                return Some(diagnostic);
+            }
+            if first_warning.is_none() {
+                first_warning = Some(diagnostic);
+            }
+        }
+        i += 1;
+    }
+    first_warning.or(first_spanless)
+}
+
+/// Find the first real diagnostic in the `--message-format=json` stream:
+/// the first `compiler-message` at error level (falling back to warning)
+/// that carries a primary span, returned as `file:line: message`. Errors
+/// are preferred over warnings - the run only fails on errors, so a leading
+/// warning would not be the cause. Returns `None` when the stream has no
+/// such message (e.g. a cargo-level failure that never reached rustc).
+fn first_json_diagnostic(json: &str) -> Option<String> {
+    let mut first_warning = None;
+    for line in json.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("reason").and_then(|r| r.as_str()) != Some("compiler-message") {
+            continue;
+        }
+        let Some(message) = value.get("message") else {
+            continue;
+        };
+        let Some(level) = message.get("level").and_then(|l| l.as_str()) else {
+            continue;
+        };
+        let Some(text) = message.get("message").and_then(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(span) = message
+            .get("spans")
+            .and_then(|s| s.as_array())
+            .and_then(|spans| {
+                spans
+                    .iter()
+                    .find(|span| span.get("is_primary").and_then(|p| p.as_bool()) == Some(true))
+            })
+        else {
+            continue;
+        };
+        let Some(file) = span.get("file_name").and_then(|f| f.as_str()) else {
+            continue;
+        };
+        let Some(line_start) = span.get("line_start").and_then(|l| l.as_u64()) else {
+            continue;
+        };
+        let diagnostic = format!("{file}:{line_start}: {text}");
+        if level == "error" {
+            return Some(diagnostic);
+        }
+        if first_warning.is_none() {
+            first_warning = Some(diagnostic);
+        }
+    }
+    first_warning
+}
+
+/// Run the census clippy command over the given packages (or the whole
+/// workspace) and return the JSON stream. On failure the error surfaces the
+/// first real diagnostic (file:line and message) rather than a reversed
+/// tail, so a compile error in a large crate stays actionable. Under
+/// `--message-format=json` the diagnostics live in the JSON stream (stderr
+/// only carries cargo's own messages), so the JSON stream is parsed first;
+/// the stderr text is the fallback for cargo-level failures, and the
+/// reversed tail only survives as the last resort.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn run_clippy(repo_root: &Path, packages: &[String]) -> Result<String, String> {
+    let output = clippy_command(repo_root, packages)
         .output()
         .map_err(|error| format!("blocking-census: cargo clippy launch failed: {error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let tail: Vec<&str> = stderr.lines().rev().take(15).collect();
+        let diagnostic = first_json_diagnostic(&stdout)
+            .or_else(|| first_diagnostic(&stderr))
+            .unwrap_or_else(|| {
+                let tail: Vec<&str> = stderr.lines().rev().take(15).collect();
+                tail.join("\n")
+            });
         return Err(format!(
-            "blocking-census: cargo clippy failed (exit {}):\n{}",
-            output.status,
-            tail.join("\n")
+            "blocking-census: cargo clippy failed (exit {}):\n{diagnostic}",
+            output.status
         ));
     }
     Ok(stdout)
@@ -1303,5 +1450,175 @@ pub fn f<'a>(x: &'a str) -> &'a str {
 ";
         let sites = scan_suppressions("fixture.rs", raw);
         assert!(sites.is_empty(), "no real attributes: {sites:?}");
+    }
+
+    #[test]
+    fn clippy_command_matches_the_documented_contract() {
+        // The de-escalation set after `--` is the contract documented in the
+        // root Cargo.toml ("Keep the census visible:"); a drift here would
+        // let a deny-level `await_holding_lock`/`await_holding_refcell_ref`
+        // diagnostic fail the gate off the clippy-run error path.
+        let command = clippy_command(Path::new("/repo"), &[]);
+        let args: Vec<&str> = command.get_args().map(|arg| arg.to_str().unwrap()).collect();
+        assert_eq!(
+            args,
+            [
+                "clippy",
+                "--locked",
+                "--message-format=json",
+                "--all-targets",
+                "--workspace",
+                "--",
+                "-W",
+                "warnings",
+                "-W",
+                "clippy::disallowed_methods",
+                "-W",
+                "clippy::await_holding_lock",
+                "-W",
+                "clippy::await_holding_refcell_ref",
+            ]
+        );
+        let per_crate = clippy_command(Path::new("/repo"), &["d2b-broker".to_string()]);
+        let args: Vec<&str> = per_crate.get_args().map(|arg| arg.to_str().unwrap()).collect();
+        assert_eq!(
+            args,
+            [
+                "clippy",
+                "--locked",
+                "--message-format=json",
+                "--all-targets",
+                "-p",
+                "d2b-broker",
+                "--",
+                "-W",
+                "warnings",
+                "-W",
+                "clippy::disallowed_methods",
+                "-W",
+                "clippy::await_holding_lock",
+                "-W",
+                "clippy::await_holding_refcell_ref",
+            ]
+        );
+    }
+
+    #[test]
+    fn first_diagnostic_surfaces_the_first_real_error_not_the_summary_tail() {
+        let stderr = "\
+error[E0308]: mismatched types
+   --> packages/d2b-broker/tests/planted.rs:2:17
+    |
+2   |     let x: u32 = \"boom\";
+    |              ^^ expected `u32`, found `&str`
+    |
+error: could not compile `d2b-broker` (test \"planted\") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+";
+        assert_eq!(
+            first_diagnostic(stderr),
+            Some(
+                "packages/d2b-broker/tests/planted.rs:2: mismatched types".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn first_diagnostic_prefers_errors_over_leading_warnings() {
+        let stderr = "\
+warning: unused variable: `x`
+ --> packages/d2b-broker/src/lib.rs:10:9
+  |
+error[E0425]: cannot find value `nope` in this scope
+ --> packages/d2b-broker/src/runtime.rs:41:13
+  |
+error: aborting due to previous error
+";
+        assert_eq!(
+            first_diagnostic(stderr),
+            Some(
+                "packages/d2b-broker/src/runtime.rs:41: cannot find value `nope` in this scope"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn first_diagnostic_reads_through_message_continuation_lines() {
+        let stderr = "\
+error[E0277]: the trait bound `Foo: Bar` is not satisfied
+             the following other types implement trait `Bar`:
+               `Baz`
+   --> packages/d2b-broker/src/lib.rs:3:5
+  |
+error: could not compile `d2b-broker` due to previous error
+";
+        assert_eq!(
+            first_diagnostic(stderr),
+            Some(
+                "packages/d2b-broker/src/lib.rs:3: the trait bound `Foo: Bar` is not satisfied"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn first_diagnostic_falls_back_to_spanless_headers_and_none() {
+        let cargo_level = "error: failed to parse manifest at `/repo/Cargo.toml`\n\nCaused by:\n  no `package` section found.\n";
+        assert_eq!(
+            first_diagnostic(cargo_level),
+            Some("failed to parse manifest at `/repo/Cargo.toml`".to_string())
+        );
+        assert_eq!(first_diagnostic(""), None);
+        assert_eq!(first_diagnostic("  Compiling d2b-broker v0.0.0-bootstrap\n"), None);
+    }
+
+    #[test]
+    fn first_json_diagnostic_surfaces_the_first_error_with_its_primary_span() {
+        // The shape cargo clippy --message-format=json actually emits: the
+        // diagnostic lives only in the JSON stream, stderr carries just the
+        // cargo summaries.
+        let json = r#"
+{"reason":"compiler-message","message":{"level":"error","message":"mismatched types","spans":[{"file_name":"packages/d2b-broker/tests/planted_compile_error_585.rs","line_start":4,"is_primary":true},{"file_name":"packages/d2b-broker/tests/planted_compile_error_585.rs","line_start":4,"is_primary":false}]}}
+{"reason":"compiler-message","message":{"level":"warning","message":"unused variable: `x`","spans":[{"file_name":"packages/d2b-broker/src/lib.rs","line_start":10,"is_primary":true}]}}
+{"reason":"build-finished","success":false}
+"#;
+        assert_eq!(
+            first_json_diagnostic(json),
+            Some(
+                "packages/d2b-broker/tests/planted_compile_error_585.rs:4: mismatched types"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn first_json_diagnostic_prefers_errors_and_ignores_spanless_messages() {
+        let json = r#"
+{"reason":"compiler-message","message":{"level":"warning","message":"unused variable: `x`","spans":[{"file_name":"packages/d2b-broker/src/lib.rs","line_start":10,"is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"error","message":"cannot find value `nope` in this scope","spans":[{"file_name":"packages/d2b-broker/src/runtime.rs","line_start":41,"is_primary":true}]}}
+{"reason":"compiler-message","message":{"level":"error","message":"aborting due to previous error","spans":[]}}
+{"reason":"build-finished","success":false}
+"#;
+        assert_eq!(
+            first_json_diagnostic(json),
+            Some(
+                "packages/d2b-broker/src/runtime.rs:41: cannot find value `nope` in this scope"
+                    .to_string()
+            )
+        );
+        let warnings_only = r#"
+{"reason":"compiler-message","message":{"level":"warning","message":"unused variable: `x`","spans":[{"file_name":"packages/d2b-broker/src/lib.rs","line_start":10,"is_primary":true}]}}
+"#;
+        assert_eq!(
+            first_json_diagnostic(warnings_only),
+            Some("packages/d2b-broker/src/lib.rs:10: unused variable: `x`".to_string())
+        );
+        assert_eq!(first_json_diagnostic(""), None);
+        assert_eq!(
+            first_json_diagnostic("{\"reason\":\"build-finished\",\"success\":false}\n"),
+            None,
+            "a cargo-level failure without compiler messages has no diagnostic"
+        );
     }
 }
