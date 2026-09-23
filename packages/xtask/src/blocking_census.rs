@@ -669,7 +669,6 @@ struct CensusFile {
 
 /// The workspace member paths the root manifest declares, e.g.
 /// `packages/d2b-broker`.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn workspace_member_paths(repo_root: &Path) -> Result<BTreeSet<String>, String> {
     let manifest = fs::read_to_string(repo_root.join("Cargo.toml"))
         .map_err(|error| format!("blocking-census: read root Cargo.toml: {error}"))?;
@@ -703,7 +702,6 @@ fn workspace_member_paths(repo_root: &Path) -> Result<BTreeSet<String>, String> 
 /// Non-member directories under `packages/` (e.g. `d2b-realm-core`) are not
 /// censused: they are not workspace crates, so the workspace-wide clippy run
 /// cannot measure their instance-method classes.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn resolve_crate_dirs(repo_root: &Path, crate_args: &[String]) -> Result<Vec<PathBuf>, String> {
     if crate_args.is_empty() {
         let members = workspace_member_paths(repo_root)?;
@@ -741,7 +739,6 @@ fn resolve_crate_dirs(repo_root: &Path, crate_args: &[String]) -> Result<Vec<Pat
 }
 
 /// The package name a crate directory's manifest declares.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn package_name(crate_dir: &Path) -> Result<String, String> {
     let manifest = fs::read_to_string(crate_dir.join("Cargo.toml"))
         .map_err(|error| format!("blocking-census: read {}: {error}", crate_dir.display()))?;
@@ -763,7 +760,6 @@ fn package_name(crate_dir: &Path) -> Result<String, String> {
 /// enforce under deny. The de-escalation set is the contract: a stray
 /// `await_holding_lock`/`await_holding_refcell_ref`/`disallowed_methods`
 /// diagnostic must count, not fail the run.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn clippy_command(repo_root: &Path, packages: &[String]) -> Command {
     let mut command = Command::new("cargo");
     command
@@ -805,6 +801,7 @@ fn clippy_command(repo_root: &Path, packages: &[String]) -> Command {
 fn first_diagnostic(stderr: &str) -> Option<String> {
     let lines: Vec<&str> = stderr.lines().collect();
     let mut first_warning: Option<String> = None;
+    let mut first_spanless_error: Option<String> = None;
     let mut first_spanless: Option<String> = None;
     let mut i = 0;
     while i < lines.len() {
@@ -819,18 +816,21 @@ fn first_diagnostic(stderr: &str) -> Option<String> {
             i += 1;
             continue;
         };
-        let message = trimmed[colon + 2..].trim();
+        let text = trimmed[colon + 2..].trim();
+        if first_spanless_error.is_none() && is_error {
+            first_spanless_error = Some(text.to_string());
+        }
         if first_spanless.is_none() {
-            first_spanless = Some(message.to_string());
+            first_spanless = Some(text.to_string());
         }
         // The span line follows the header, possibly after message
         // continuation lines; a following header, note, or help ends the
         // header's block.
-        let mut span = None;
+        let mut span: Option<String> = None;
         for next in lines.iter().skip(i + 1).take(6) {
             let next_trimmed = next.trim_start();
             if let Some(rest) = next_trimmed.strip_prefix("--> ") {
-                span = Some(rest);
+                span = Some(rest.to_string());
                 break;
             }
             if next_trimmed.starts_with("error")
@@ -844,7 +844,7 @@ fn first_diagnostic(stderr: &str) -> Option<String> {
         }
         if let Some(rest) = span {
             let loc = rest.split(':').take(2).collect::<Vec<_>>().join(":");
-            let diagnostic = format!("{loc}: {message}");
+            let diagnostic = format!("{loc}: {text}");
             if is_error {
                 return Some(diagnostic);
             }
@@ -854,7 +854,7 @@ fn first_diagnostic(stderr: &str) -> Option<String> {
         }
         i += 1;
     }
-    first_warning.or(first_spanless)
+    first_spanless_error.or(first_warning).or(first_spanless)
 }
 
 /// Find the first real diagnostic in the `--message-format=json` stream:
@@ -864,7 +864,8 @@ fn first_diagnostic(stderr: &str) -> Option<String> {
 /// warning would not be the cause. Returns `None` when the stream has no
 /// such message (e.g. a cargo-level failure that never reached rustc).
 fn first_json_diagnostic(json: &str) -> Option<String> {
-    let mut first_warning = None;
+    let mut first_warning: Option<String> = None;
+    let mut first_spanless_error: Option<String> = None;
     for line in json.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
@@ -881,32 +882,35 @@ fn first_json_diagnostic(json: &str) -> Option<String> {
         let Some(text) = message.get("message").and_then(|m| m.as_str()) else {
             continue;
         };
-        let Some(span) = message
-            .get("spans")
-            .and_then(|s| s.as_array())
-            .and_then(|spans| {
-                spans
-                    .iter()
-                    .find(|span| span.get("is_primary").and_then(|p| p.as_bool()) == Some(true))
-            })
-        else {
-            continue;
-        };
-        let Some(file) = span.get("file_name").and_then(|f| f.as_str()) else {
-            continue;
-        };
-        let Some(line_start) = span.get("line_start").and_then(|l| l.as_u64()) else {
-            continue;
-        };
-        let diagnostic = format!("{file}:{line_start}: {text}");
+        let spanned = (|| {
+            let primary = message
+                .get("spans")
+                .and_then(|s| s.as_array())
+                .and_then(|spans| {
+                    spans
+                        .iter()
+                        .find(|span| span.get("is_primary").and_then(|p| p.as_bool()) == Some(true))
+                })?;
+            let file = primary.get("file_name").and_then(|f| f.as_str())?;
+            let line_start = primary.get("line_start").and_then(|l| l.as_u64())?;
+            Some(format!("{file}:{line_start}: {text}"))
+        })();
         if level == "error" {
-            return Some(diagnostic);
+            if let Some(diagnostic) = spanned {
+                return Some(diagnostic);
+            }
+            if first_spanless_error.is_none() {
+                first_spanless_error = Some(text.to_string());
+            }
+            continue;
         }
         if first_warning.is_none() {
-            first_warning = Some(diagnostic);
+            if let Some(diagnostic) = spanned {
+                first_warning = Some(diagnostic);
+            }
         }
     }
-    first_warning
+    first_spanless_error.or(first_warning)
 }
 
 /// Run the census clippy command over the given packages (or the whole
@@ -917,6 +921,105 @@ fn first_json_diagnostic(json: &str) -> Option<String> {
 /// only carries cargo's own messages), so the JSON stream is parsed first;
 /// the stderr text is the fallback for cargo-level failures, and the
 /// reversed tail only survives as the last resort.
+
+// ---- Error-level-only picks -------------------------------------
+/// The first error-level header in the stderr text, span or spanless,
+/// returned as `file:line: message` when it carries a span and the bare
+/// message otherwise. The text parser already ranks errors ahead of
+/// warnings, so this just discards the warning-level fallback - the caller
+/// (run_clippy) consults it before accepting a warning-only JSON pick.
+fn first_stderr_error(stderr: &str) -> Option<String> {
+    // First error-level header, span or spanless: cargo-level failures
+    // (e.g. `error: failed to run custom build command`) never carry a
+    // `--> file:line` span, but they are the real cause when the JSON
+    // stream holds only warnings.
+    let lines: Vec<&str> = stderr.lines().collect();
+    let mut first_error_spanless: Option<String> = None;
+    let mut i = 0;
+    while i < lines.len() {
+        let trimmed = lines[i].trim_start();
+        if !trimmed.starts_with("error") {
+            i += 1;
+            continue;
+        }
+        let Some(colon) = trimmed.find(": ") else {
+            i += 1;
+            continue;
+        };
+        let text = trimmed[colon + 2..].trim();
+        if first_error_spanless.is_none() {
+            first_error_spanless = Some(text.to_string());
+        }
+        // The span line follows the header, possibly after message
+        // continuation lines; a following header, note, or help ends the
+        // header's block.
+        for next in lines.iter().skip(i + 1).take(6) {
+            let next_trimmed = next.trim_start();
+            if let Some(rest) = next_trimmed.strip_prefix("--> ") {
+                let loc = rest.split(':').take(2).collect::<Vec<_>>().join(":");
+                return Some(format!("{loc}: {text}"));
+            }
+            if next_trimmed.starts_with("error")
+                || next_trimmed.starts_with("warning")
+                || next_trimmed.starts_with("note")
+                || next_trimmed.starts_with("help")
+                || next_trimmed.starts_with("= ")
+            {
+                break;
+            }
+        }
+        i += 1;
+    }
+    first_error_spanless
+}
+/// The first error-level record in the `--message-format=json` stream,
+/// span or spanless. This is the pick the census run's failure message is
+/// built from: errors are ranked ahead of any warning because the run only
+/// fails on errors, and a spanless cargo-level error outranks a warning
+/// that carried a primary span.
+fn first_json_error(json: &str) -> Option<String> {
+    let mut first_spanless_error: Option<String> = None;
+    for line in json.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if value.get("reason").and_then(|r| r.as_str()) != Some("compiler-message") {
+            continue;
+        }
+        let Some(message) = value.get("message") else {
+            continue;
+        };
+        let Some(level) = message.get("level").and_then(|l| l.as_str()) else {
+            continue;
+        };
+        if level != "error" {
+            continue;
+        }
+        let Some(text) = message.get("message").and_then(|m| m.as_str()) else {
+            continue;
+        };
+        let spanned = (|| {
+            let primary = message
+                .get("spans")
+                .and_then(|s| s.as_array())
+                .and_then(|spans| {
+                    spans
+                        .iter()
+                        .find(|span| span.get("is_primary").and_then(|p| p.as_bool()) == Some(true))
+                })?;
+            let file = primary.get("file_name").and_then(|f| f.as_str())?;
+            let line_start = primary.get("line_start").and_then(|l| l.as_u64())?;
+            Some(format!("{file}:{line_start}: {text}"))
+        })();
+        if let Some(diagnostic) = spanned {
+            return Some(diagnostic);
+        }
+        if first_spanless_error.is_none() {
+            first_spanless_error = Some(text.to_string());
+        }
+    }
+    first_spanless_error
+}
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run_clippy(repo_root: &Path, packages: &[String]) -> Result<String, String> {
     let output = clippy_command(repo_root, packages)
@@ -925,11 +1028,14 @@ fn run_clippy(repo_root: &Path, packages: &[String]) -> Result<String, String> {
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let diagnostic = first_json_diagnostic(&stdout)
+        let diagnostic = first_json_error(&stdout)
+            .or_else(|| first_stderr_error(&stderr))
+            .or_else(|| first_json_diagnostic(&stdout))
             .or_else(|| first_diagnostic(&stderr))
             .unwrap_or_else(|| {
                 let tail: Vec<&str> = stderr.lines().rev().take(15).collect();
-                tail.join("\n")
+                tail.join("
+")
             });
         return Err(format!(
             "blocking-census: cargo clippy failed (exit {}):\n{diagnostic}",
@@ -1621,4 +1727,48 @@ error: could not compile `d2b-broker` due to previous error
             "a cargo-level failure without compiler messages has no diagnostic"
         );
     }
+    #[test]
+    fn run_clippy_consults_the_stderr_cargo_error_before_a_warning_only_json_pick() {
+        // The JSON stream holds only a warning-with-span; the true cause is
+        // a cargo-level failure (`error: failed to run custom build
+        // command`) that never reached rustc and lives in the stderr text.
+        let json = r#"
+{"reason":"compiler-message","message":{"level":"warning","message":"unused variable: `x`","spans":[{"file_name":"packages/d2b-broker/src/lib.rs","line_start":10,"is_primary":true}]}}
+"#;
+        let stderr = "error: failed to run custom build command for `d2b-broker`
+";
+        assert_eq!(
+            first_json_error(json),
+            None,
+            "a warning-only JSON stream has no error-level pick"
+        );
+        assert_eq!(
+            first_stderr_error(stderr),
+            Some("failed to run custom build command for `d2b-broker`".to_string())
+        );
+        assert_eq!(
+            first_stderr_error(stderr),
+            Some("failed to run custom build command for `d2b-broker`".to_string())
+        );
+    }
+
+    #[test]
+    fn first_json_error_prefers_the_spanless_error_over_a_warning_with_span() {
+        // An error-level record without a primary span outranks any
+        // warning-level record that carries one - the run only fails on
+        // errors, so a cargo-level failure reported spanless is the cause.
+        let json = r#"
+{"reason":"compiler-message","message":{"level":"error","message":"failed to run custom build command for `d2b-broker`","spans":[]}}
+{"reason":"compiler-message","message":{"level":"warning","message":"unused variable: `x`","spans":[{"file_name":"packages/d2b-broker/src/lib.rs","line_start":10,"is_primary":true}]}}
+"#;
+        assert_eq!(
+            first_json_error(json),
+            Some("failed to run custom build command for `d2b-broker`".to_string())
+        );
+        assert_eq!(
+            first_json_diagnostic(json),
+            Some("failed to run custom build command for `d2b-broker`".to_string())
+        );
+    }
+
 }
