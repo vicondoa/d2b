@@ -87,15 +87,23 @@ scan_file() {
     # Used ONLY for the opening-line decision (does this line open a
     # log-macro invocation?). Strings, char literals, block comments,
     # and line comments are blanked; lifetimes stay as code.
-    function strip_strings(s,    out, i, n, c, in_str, in_char, in_block, esc) {
+    function strip_strings(s,    out, i, n, c, in_str, in_char, in_block, esc, in_raw, h, j) {
       out = ""
       n = length(s)
       in_str = 0
       in_char = 0
       in_block = 0
+      in_raw = 0
       for (i = 1; i <= n; i++) {
         c = substr(s, i, 1)
-        if (in_str) {
+        if (in_raw) {
+          if (c == "\"") {
+            j = 1
+            while (j <= h && substr(s, i + j, 1) == "#") j++
+            if (j > h) { i += h; in_raw = 0; out = out " "; continue }
+          }
+          out = out " "
+        } else if (in_str) {
           if (esc) { esc = 0; out = out " "; continue }
           if (c == "\\") { esc = 1; out = out " "; continue }
           if (c == "\"") { in_str = 0; out = out " "; continue }
@@ -109,7 +117,12 @@ scan_file() {
           if (c == "*" && substr(s, i + 1, 1) == "/") { i++; in_block = 0; out = out "  " }
           else out = out " "
         } else {
-          if (c == "\"") { in_str = 1; out = out " "; continue }
+          if (c == "\"") {
+            h = 0; j = i - 1
+            while (j >= 1 && substr(s, j, 1) == "#") { h++; j-- }
+            if (j >= 1 && substr(s, j, 1) == "r") { in_raw = 1; out = out " "; continue }
+            in_str = 1; out = out " "; continue
+          }
           if (c == "\047") {
             if (char_literal(s, i)) { in_char = 1; out = out " "; continue }
             out = out c
@@ -142,13 +155,22 @@ scan_file() {
       s_char = 0
       s_block = 0
       s_esc = 0
+      s_raw = 0
+      s_hash = 0
     }
-    function strip_record_line(s,    out, i, n, c) {
+    function strip_record_line(s,    out, i, n, c, h, j, k) {
       out = ""
       n = length(s)
       for (i = 1; i <= n; i++) {
         c = substr(s, i, 1)
-        if (s_str) {
+        if (s_raw) {
+          if (c == "\"") {
+            k = 1
+            while (k <= s_hash && substr(s, i + k, 1) == "#") k++
+            if (k > s_hash) { i += s_hash; s_raw = 0; out = out " "; continue }
+          }
+          out = out " "
+        } else if (s_str) {
           if (s_esc) { s_esc = 0; out = out " "; continue }
           if (c == "\\") { s_esc = 1; out = out " "; continue }
           if (c == "\"") { s_str = 0; out = out " "; continue }
@@ -162,7 +184,12 @@ scan_file() {
           if (c == "*" && substr(s, i + 1, 1) == "/") { i++; s_block = 0; out = out "  " }
           else out = out " "
         } else {
-          if (c == "\"") { s_str = 1; out = out " "; continue }
+          if (c == "\"") {
+            h = 0; j = i - 1
+            while (j >= 1 && substr(s, j, 1) == "#") { h++; j-- }
+            if (j >= 1 && substr(s, j, 1) == "r") { s_raw = 1; s_hash = h; out = out " "; continue }
+            s_str = 1; out = out " "; continue
+          }
           if (c == "\047") {
             if (char_literal(s, i)) { s_char = 1; out = out " "; continue }
             out = out c
@@ -173,6 +200,9 @@ scan_file() {
           out = out c
         }
       }
+      # A trailing backslash is a line continuation, not an escape that
+      # consumes the first character of the next line.
+      s_esc = 0
       return out
     }
     function net_parens_stateful(s,    t, i, n, d, c) {

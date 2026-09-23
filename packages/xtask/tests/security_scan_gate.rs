@@ -221,6 +221,59 @@ fn a_multi_line_record_without_an_identifier_stays_clean() {
     assert_exit(code, 0, "multi-line record without identifier", &out);
 }
 
+// A multi-line raw string with an embedded quote that contains `)`
+// later in the record: the record must stay open until the real
+// closing delimiter (the quote inside the raw string is content, not
+// a delimiter) and the pinned identifier must be found.
+#[test]
+fn a_multi_line_raw_string_with_an_embedded_quote_finding_exits_one() {
+    // Shape: the raw string opens on the opening line (`m = r#"abc`),
+    // a continuation line carries an embedded quote followed by `)`, and
+    // the identifier sits later in the record.
+    let repo = FixtureRepo::new("raw-embed-quote");
+    repo.write(
+        "src/lib.rs",
+        "pub fn seed() {\n    tracing::warn!(m = r#\"abc\n        xyz\" ) more\"#, id = operation_id,\n    );\n}\n",
+    );
+    repo.commit("plant embedded-quote raw string finding");
+    let (code, out) = repo.run_scan(None);
+    assert_exit(code, 1, "embedded-quote raw string", &out);
+    assert!(out.contains("operation_id"), "expected the finding:\n{out}");
+}
+
+// A raw string ending in a trailing backslash: in a raw string a
+// backslash is literal content, never an escape, so the closing
+// delimiter must still be found and the record closed - the identifier
+// outside the record must not be invented as a finding.
+#[test]
+fn a_raw_string_ending_in_a_trailing_backslash_stays_clean() {
+    let repo = FixtureRepo::new("raw-trailing-backslash");
+    repo.write(
+        "src/lib.rs",
+        "pub fn seed() {\n    tracing::warn!(m = r\"C:\\\",\n    );\n    let id = lookup(operation_id);\n}\n",
+    );
+    repo.commit("raw string ending in backslash");
+    let (code, out) = repo.run_scan(None);
+    assert_exit(code, 0, "raw string ending in backslash", &out);
+}
+
+// A backslash at the end of a line continues the string literal, it
+// does not escape the first character of the next line: the record
+// must stay open through the `)` inside the continued string and the
+// pinned identifier later in the record must be found.
+#[test]
+fn a_backslash_continued_string_record_finding_exits_one() {
+    let repo = FixtureRepo::new("backslash-continued");
+    repo.write(
+        "src/lib.rs",
+        "pub fn seed() {\n    tracing::warn!(m = \"ab\\\n        ) more\", id = operation_id,\n    );\n}\n",
+    );
+    repo.commit("plant backslash-continued finding");
+    let (code, out) = repo.run_scan(None);
+    assert_exit(code, 1, "backslash-continued record", &out);
+    assert!(out.contains("operation_id"), "expected the finding:\n{out}");
+}
+
 // ---------------------------------------------------------------------------
 // Could-not-run status (finding: a failed enumeration reported clean)
 // ---------------------------------------------------------------------------
