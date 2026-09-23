@@ -254,7 +254,6 @@ filegroup(
 )
 
 # keep
-# keep
 filegroup(
     name = "tests_root_sources",
     srcs = glob(
