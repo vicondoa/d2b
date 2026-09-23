@@ -68,9 +68,20 @@ The marker is not an allowlist: every marked site must be recorded in
 `packages/xtask/data/async-gate-inventory.json` (the same file records the
 marker format), and every inventory entry must correspond to a marked
 method-call site in the scanned roots. A marker without an inventory entry
-fails the gate, and an inventory entry without a marked site fails it too.
-The qualified-path form (`std::sync::Mutex::lock(...)`) has no hatch and
+fails the gate, and an inventory entry without a marked site fails it too -
+as does an entry whose file no longer exists in the tree (a deleted marked
+file is stale in every scan mode; a file that exists but is outside the
+current scan set is tolerated, so subset scans stay valid). The
+qualified-path form (`std::sync::Mutex::lock(...)`) has no hatch and
 always fails.
+
+The inventory keys sites by `(file, line)`, so a line-shifting edit above a
+marked call turns the gate red until the entry is re-recorded. Regenerate the
+inventory from the run's marker sites instead of hand-editing line numbers:
+`cargo xtask check-async-gate --write-inventory` from the repo root (the
+default scan roots only - a subset scan would drop entries for unscanned
+files). The regeneration output is byte-stable, so a no-op regeneration
+produces no diff.
 
 ## Build and validate, in detail
 

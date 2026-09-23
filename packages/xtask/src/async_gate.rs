@@ -45,8 +45,11 @@
 //! and every marked site are recorded in the named hatch inventory
 //! (`packages/xtask/data/async-gate-inventory.json`), and the gate validates
 //! both directions: a marked site that is not recorded fails, and a recorded
-//! site whose file no longer carries the marker (or left the scanned roots)
-//! fails too, so the hatch cannot drift into an allowlist. The marker exempts
+//! site whose file no longer carries the marker fails too - as does a
+//! recorded site whose file no longer exists in the tree (a deleted marked
+//! file is stale in every scan mode; a file that exists but is outside the
+//! current scan set is tolerated, so subset scans stay valid) - so the hatch
+//! cannot drift into an allowlist. The marker exempts
 //! only the method-call shape - the qualified form (`std::sync::Mutex::lock`)
 //! and the `X::lock(...)` form have no hatch and always fail.
 //!
@@ -67,8 +70,12 @@
 //!   line is still exempt (the await decision spans lines).
 //!
 //! The gate is a runnable subcommand (`cargo xtask check-async-gate
-//! [<paths>...]`) with fixture unit tests; it is wired into the enforcement
-//! chain as the Layer-1 policy check `make check-async-gate`.
+//! [--write-inventory] [<paths>...]`) with fixture unit tests; it is wired
+//! into the enforcement chain as the Layer-1 policy check `make
+//! check-async-gate`. The inventory keys sites by `(file, line)`, so a
+//! line-shifting edit above a marked call turns the gate red; the
+//! `--write-inventory` mode regenerates the inventory from the run's marker
+//! sites (over the default roots only) to repair exactly that drift.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -84,7 +91,8 @@ pub const VIOLATION_NAME: &str = "blocking-call-in-async-context";
 /// The named hatch inventory (KTD4): records the source-level marker format
 /// and every site the marker exempts, so the hatch cannot drift into an
 /// allowlist. The gate validates both directions - a marked site that is not
-/// recorded fails, and a recorded site without its marker fails.
+/// recorded fails, and a recorded site without its marker fails (as does a
+/// recorded site whose file no longer exists in the tree).
 pub const HATCH_INVENTORY_PATH: &str = "packages/xtask/data/async-gate-inventory.json";
 
 /// The hatch inventory file's shape: the marker format the scanner honors
@@ -160,15 +168,15 @@ impl Violation {
 pub struct ScanOutcome {
     /// Blocking calls found on runtime workers.
     pub violations: Vec<Violation>,
-    /// `(file, line)` of every method-call lock site the hatch marker
-    /// exempted - the sites the inventory must record.
-    pub marker_sites: Vec<(String, usize)>,
+    /// Every method-call lock site the hatch marker exempted - exactly the
+    /// sites the inventory must record, with the marker's `<reason>`.
+    pub marker_sites: Vec<HatchSite>,
 }
 
 /// One whole-run scan result: the per-file outcomes plus the scanned set.
 struct ScanRun {
     violations: Vec<Violation>,
-    marker_sites: Vec<(String, usize)>,
+    marker_sites: Vec<HatchSite>,
     scanned_files: Vec<String>,
     file_count: usize,
 }
@@ -380,8 +388,12 @@ fn scan_line(
                 if let Some(context) = context
                     && let Some(method) = method_call_lock_at(&code, i, lock_methods)
                 {
-                    if marker.is_some_and(|marker| line_has_marker(raw, i, marker)) {
-                        outcome.marker_sites.push((file.to_owned(), line_no));
+                    if let Some(reason) = marker.and_then(|marker| marker_reason(raw, i, marker)) {
+                        outcome.marker_sites.push(HatchSite {
+                            file: file.to_owned(),
+                            line: line_no,
+                            reason,
+                        });
                     } else {
                         state.open_calls.push(PendingCall {
                             line: line_no,
@@ -482,21 +494,18 @@ fn starts_with_await(text: &str) -> bool {
     rest.chars().next().is_none_or(|c| !is_ident_char(c as u8))
 }
 
-/// Whether the hatch marker appears on the raw line at or after byte
-/// position `from` (the call's `.`), with a non-space reason after it (the
-/// documented form is `// async-gate-allow: <reason>`). Sanitized positions
-/// align with raw positions one-to-one, so `from` is valid in both. The
-/// marker is a trailing comment on the call's own line.
-fn line_has_marker(raw: &str, from: usize, marker: &str) -> bool {
-    let Some(pos) = raw[from..].find(marker) else {
-        return false;
-    };
+/// The hatch marker's `<reason>` when the marker appears on the raw line at
+/// or after byte position `from` (the call's `.`): the text after the marker
+/// prefix, trimmed (the documented form is
+/// `// async-gate-allow: <reason>`). Sanitized positions align with raw
+/// positions one-to-one, so `from` is valid in both. The marker is a
+/// trailing comment on the call's own line; `None` when the marker is absent
+/// or carries no reason.
+fn marker_reason(raw: &str, from: usize, marker: &str) -> Option<String> {
+    let pos = raw[from..].find(marker)?;
     let after = from + pos + marker.len();
-    raw[after..]
-        .trim_start()
-        .chars()
-        .next()
-        .is_some_and(|c| !c.is_whitespace())
+    let reason = raw[after..].trim();
+    (!reason.is_empty()).then(|| reason.to_owned())
 }
 
 /// Whether a denied API matches at byte position `i` of the sanitized code.
@@ -861,17 +870,19 @@ fn load_inventory(repo_root: &Path) -> Result<HatchInventory, String> {
 
 /// Validate the hatch inventory against the scan, both directions:
 ///
-/// * every marker-honored site must be recorded in the inventory, and
+/// * every marker-honored site must be recorded in the inventory,
 /// * every recorded site must be a marker-honored site in a scanned file
-///   (a stale entry - a marker removed, or a file that left the covered
-///   roots - fails the gate).
+///   (a stale entry - a marker removed - fails the gate), and
+/// * every recorded site's file must still exist in the tree (a deleted or
+///   moved marked file leaves a stale exemption in every scan mode).
 ///
-/// Entries for files outside the scanned set are ignored, so a subset scan
-/// (`check-async-gate <paths>`) stays valid; the full default-roots run
-/// validates every entry.
+/// Entries whose file exists but is outside the scanned set are ignored, so
+/// a subset scan (`check-async-gate <paths>`) stays valid; the full
+/// default-roots run validates every entry.
 fn validate_inventory(
+    repo_root: &Path,
     inventory: &HatchInventory,
-    marker_sites: &[(String, usize)],
+    marker_sites: &[HatchSite],
     scanned_files: &[String],
 ) -> Result<(), String> {
     let recorded: BTreeSet<(&str, usize)> = inventory
@@ -881,16 +892,24 @@ fn validate_inventory(
         .collect();
     let scanned: BTreeSet<&str> = scanned_files.iter().map(String::as_str).collect();
     let mut errors = Vec::new();
-    for (file, line) in marker_sites {
-        if !recorded.contains(&(file.as_str(), *line)) {
+    for site in marker_sites {
+        if !recorded.contains(&(site.file.as_str(), site.line)) {
             errors.push(format!(
-                "{file}:{line}: marker-honored site is not recorded in {HATCH_INVENTORY_PATH}"
+                "{}:{}: marker-honored site is not recorded in {HATCH_INVENTORY_PATH}",
+                site.file, site.line
             ));
         }
     }
     for site in &inventory.sites {
-        if scanned.contains(site.file.as_str())
-            && !marker_sites.contains(&(site.file.clone(), site.line))
+        if !repo_root.join(&site.file).is_file() {
+            errors.push(format!(
+                "{}:{}: inventory entry file does not exist in the tree",
+                site.file, site.line
+            ));
+        } else if scanned.contains(site.file.as_str())
+            && !marker_sites
+                .iter()
+                .any(|marked| marked.file == site.file && marked.line == site.line)
         {
             errors.push(format!(
                 "{}:{}: inventory entry has no marker-honored method-call site",
@@ -928,18 +947,67 @@ fn walk_rs(dir: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+/// Rewrite the hatch inventory from a run's marker sites: the regeneration
+/// path for a line-shifting edit above a marked call (the ledger keys sites
+/// by `(file, line)`, so any such edit turns the gate red until the entry is
+/// re-recorded). Sites are sorted by `(file, line)` so the file is
+/// byte-stable regardless of scan order, and two marked calls on one line
+/// collapse to a single entry.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
+fn write_inventory(
+    repo_root: &Path,
+    marker: &str,
+    marker_sites: &[HatchSite],
+) -> Result<(), String> {
+    let mut sites = marker_sites.to_vec();
+    sites.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+    sites.dedup_by(|a, b| a.file == b.file && a.line == b.line);
+    let inventory = HatchInventory {
+        marker: marker.to_owned(),
+        sites,
+    };
+    let path = repo_root.join(HATCH_INVENTORY_PATH);
+    let json = serde_json::to_string_pretty(&inventory)
+        .map_err(|error| format!("async-gate: serialize inventory: {error}"))?;
+    fs::write(&path, json)
+        .map_err(|error| format!("async-gate: write {}: {error}", path.display()))?;
+    Ok(())
+}
+
 /// Run the gate: scan the default roots (or the given paths) and fail on any
-/// blocking call inside an async context or any hatch inventory drift.
+/// blocking call inside an async context or any hatch inventory drift. With
+/// `--write-inventory`, rewrite the inventory from the run's marker sites
+/// instead of validating it - the regeneration path for a line-shifting edit
+/// above a marked call.
 pub fn run(repo_root: &Path, args: &[String]) -> Result<(), String> {
+    let write_mode = args.iter().any(|arg| arg == "--write-inventory");
+    let paths_args: Vec<&String> = args
+        .iter()
+        .filter(|arg| *arg != "--write-inventory")
+        .collect();
+    if write_mode && !paths_args.is_empty() {
+        return Err(
+            "async-gate: --write-inventory requires the default scan roots (no <paths>): a subset scan would drop entries for unscanned files"
+                .to_owned(),
+        );
+    }
     let entries = load_entries(repo_root)?;
     let inventory = load_inventory(repo_root)?;
-    let paths = if args.is_empty() {
+    let paths = if paths_args.is_empty() {
         default_scan_paths(repo_root)?
     } else {
-        args.iter().map(PathBuf::from).collect()
+        paths_args.iter().map(PathBuf::from).collect()
     };
     let run = scan_paths(repo_root, &paths, &entries, Some(&inventory.marker))?;
-    validate_inventory(&inventory, &run.marker_sites, &run.scanned_files)?;
+    if write_mode {
+        write_inventory(repo_root, &inventory.marker, &run.marker_sites)?;
+        println!(
+            "async gate: regenerated {HATCH_INVENTORY_PATH} with {} site(s)",
+            run.marker_sites.len()
+        );
+    } else {
+        validate_inventory(repo_root, &inventory, &run.marker_sites, &run.scanned_files)?;
+    }
     if run.violations.is_empty() {
         println!(
             "async gate: {} file(s) scanned, no blocking calls in async contexts",
@@ -1352,7 +1420,14 @@ mod tests {
             "a marked method-call lock must pass: {:?}",
             outcome.violations.iter().map(Violation::render).collect::<Vec<_>>()
         );
-        assert_eq!(outcome.marker_sites, vec![("x.rs".to_owned(), 2)]);
+        assert_eq!(
+            outcome.marker_sites,
+            vec![HatchSite {
+                file: "x.rs".to_owned(),
+                line: 2,
+                reason: "short critical section, no await inside".to_owned(),
+            }]
+        );
     }
 
     #[test]
@@ -1397,47 +1472,80 @@ mod tests {
         assert!(violations.is_empty(), "{violations:?}");
     }
 
+    /// A throwaway repo root containing one `.rs` file at `rel_path`, so
+    /// inventory validation's tree-existence check sees it. Removed on drop.
+    struct TempRepo {
+        root: PathBuf,
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl TempRepo {
+        fn with_file(rel_path: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "async-gate-inventory-test-{}-{}",
+                std::process::id(),
+                rel_path.replace(['/', '.'], "-")
+            ));
+            let _ = fs::remove_dir_all(&root);
+            let file = root.join(rel_path);
+            fs::create_dir_all(file.parent().expect("rel path has a parent"))
+                .expect("create temp tree");
+            fs::write(&file, "// placeholder body\n").expect("write temp file");
+            Self { root }
+        }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn site(file: &str, line: usize, reason: &str) -> HatchSite {
+        HatchSite {
+            file: file.to_owned(),
+            line,
+            reason: reason.to_owned(),
+        }
+    }
+
     #[test]
     fn inventory_validation_accepts_a_consistent_inventory() {
+        let repo = TempRepo::with_file("packages/d2b-broker/src/runtime.rs");
         let inventory = HatchInventory {
             marker: MARKER.to_owned(),
-            sites: vec![HatchSite {
-                file: "packages/d2b-broker/src/runtime.rs".to_owned(),
-                line: 10,
-                reason: "short critical section".to_owned(),
-            }],
+            sites: vec![site("packages/d2b-broker/src/runtime.rs", 10, "short critical section")],
         };
-        let marker_sites = vec![("packages/d2b-broker/src/runtime.rs".to_owned(), 10)];
+        let marker_sites = vec![site("packages/d2b-broker/src/runtime.rs", 10, "short critical section")];
         let scanned = vec!["packages/d2b-broker/src/runtime.rs".to_owned()];
-        assert!(validate_inventory(&inventory, &marker_sites, &scanned).is_ok());
+        assert!(validate_inventory(&repo.root, &inventory, &marker_sites, &scanned).is_ok());
     }
 
     #[test]
     fn inventory_validation_rejects_an_unrecorded_marker() {
+        let repo = TempRepo::with_file("packages/d2b-broker/src/runtime.rs");
         let inventory = HatchInventory {
             marker: MARKER.to_owned(),
             sites: Vec::new(),
         };
-        let marker_sites = vec![("packages/d2b-broker/src/runtime.rs".to_owned(), 10)];
+        let marker_sites = vec![site("packages/d2b-broker/src/runtime.rs", 10, "short critical section")];
         let scanned = vec!["packages/d2b-broker/src/runtime.rs".to_owned()];
-        let error = validate_inventory(&inventory, &marker_sites, &scanned)
+        let error = validate_inventory(&repo.root, &inventory, &marker_sites, &scanned)
             .expect_err("an unrecorded marker must fail");
         assert!(error.contains("not recorded"), "{error}");
     }
 
     #[test]
     fn inventory_validation_rejects_a_stale_entry() {
+        let repo = TempRepo::with_file("packages/d2b-broker/src/worker.rs");
         let inventory = HatchInventory {
             marker: MARKER.to_owned(),
-            sites: vec![HatchSite {
-                file: "packages/d2b-broker/src/runtime.rs".to_owned(),
-                line: 10,
-                reason: "short critical section".to_owned(),
-            }],
+            sites: vec![site("packages/d2b-broker/src/worker.rs", 10, "short critical section")],
         };
         let marker_sites = Vec::new();
-        let scanned = vec!["packages/d2b-broker/src/runtime.rs".to_owned()];
-        let error = validate_inventory(&inventory, &marker_sites, &scanned)
+        let scanned = vec!["packages/d2b-broker/src/worker.rs".to_owned()];
+        let error = validate_inventory(&repo.root, &inventory, &marker_sites, &scanned)
             .expect_err("a stale inventory entry must fail");
         assert!(error.contains("no marker-honored"), "{error}");
     }
@@ -1445,18 +1553,68 @@ mod tests {
     #[test]
     fn inventory_validation_ignores_entries_outside_the_scan() {
         // A subset scan (`check-async-gate <paths>`) must not fail on
-        // inventory entries for files it did not scan.
+        // inventory entries for files it did not scan - as long as the file
+        // still exists in the tree.
+        let repo = TempRepo::with_file("packages/d2b-broker/src/ops.rs");
         let inventory = HatchInventory {
             marker: MARKER.to_owned(),
-            sites: vec![HatchSite {
-                file: "packages/d2b-broker/src/runtime.rs".to_owned(),
-                line: 10,
-                reason: "short critical section".to_owned(),
-            }],
+            sites: vec![site("packages/d2b-broker/src/ops.rs", 10, "short critical section")],
         };
         let marker_sites = Vec::new();
         let scanned = vec!["packages/d2bd/src/composition.rs".to_owned()];
-        assert!(validate_inventory(&inventory, &marker_sites, &scanned).is_ok());
+        assert!(validate_inventory(&repo.root, &inventory, &marker_sites, &scanned).is_ok());
+    }
+
+    #[test]
+    fn inventory_validation_rejects_an_entry_whose_file_is_gone() {
+        // A deleted or moved marked file leaves a stale exemption entry in
+        // every scan mode: the file does not exist in the tree, so the entry
+        // must fail even when the file is outside the scanned set.
+        let repo = TempRepo::with_file("packages/d2b-broker/src/ops.rs");
+        let inventory = HatchInventory {
+            marker: MARKER.to_owned(),
+            sites: vec![site(
+                "packages/d2b-broker/src/deleted.rs",
+                10,
+                "short critical section",
+            )],
+        };
+        let marker_sites = Vec::new();
+        let scanned = vec!["packages/d2bd/src/composition.rs".to_owned()];
+        let error = validate_inventory(&repo.root, &inventory, &marker_sites, &scanned)
+            .expect_err("an entry for a missing file must fail");
+        assert!(error.contains("does not exist in the tree"), "{error}");
+    }
+
+    #[test]
+    fn regeneration_re_records_a_shifted_marked_line() {
+        // The inventory keys sites by `(file, line)`, so a line-shifting
+        // edit above a marked call turns the gate red; the regeneration mode
+        // re-records the site from the run's marker sites and passes again.
+        let repo = TempRepo::with_file("packages/d2bd/src/composition.rs");
+        let file = "packages/d2bd/src/composition.rs";
+        let source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m.lock().unwrap(); // async-gate-allow: short critical section\n}\n";
+        let first = scan_hatched(file, source, Some(MARKER));
+        assert_eq!(first.marker_sites[0].line, 2);
+        let committed = HatchInventory {
+            marker: MARKER.to_owned(),
+            sites: first.marker_sites.clone(),
+        };
+        let scanned = vec![file.to_owned()];
+        assert!(validate_inventory(&repo.root, &committed, &first.marker_sites, &scanned).is_ok());
+        // A comment line pushed in above the marked call shifts it to line 3.
+        let shifted_source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    // a line pushed in above\n    let _guard = m.lock().unwrap(); // async-gate-allow: short critical section\n}\n";
+        let shifted = scan_hatched(file, shifted_source, Some(MARKER));
+        assert_eq!(shifted.marker_sites[0].line, 3);
+        let error = validate_inventory(&repo.root, &committed, &shifted.marker_sites, &scanned)
+            .expect_err("the committed inventory must be stale after the shift");
+        assert!(error.contains("no marker-honored"), "{error}");
+        // Regeneration re-records the shifted site and passes.
+        let regenerated = HatchInventory {
+            marker: MARKER.to_owned(),
+            sites: shifted.marker_sites.clone(),
+        };
+        assert!(validate_inventory(&repo.root, &regenerated, &shifted.marker_sites, &scanned).is_ok());
     }
 
     #[test]

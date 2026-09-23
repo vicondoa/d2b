@@ -13,8 +13,12 @@
 # hatch is the source-level marker `// async-gate-allow: <reason>` on the
 # call's own line, recorded in packages/xtask/data/async-gate-inventory.json:
 # a marker without an inventory entry fails the gate, and an inventory entry
-# without a marked site fails it too, so the hatch cannot drift into an
-# allowlist.
+# without a marked site fails it too (as does an entry whose file no longer
+# exists in the tree), so the hatch cannot drift into an allowlist. The
+# inventory keys sites by (file, line): a line-shifting edit above a marked
+# call turns the gate red, and the repair is to regenerate the ledger from
+# the run's marker sites - `cargo xtask check-async-gate --write-inventory`
+# from the repo root - rather than hand-editing line numbers.
 set -euo pipefail
 
 runfiles="${TEST_SRCDIR:-}/${TEST_WORKSPACE:-}"
