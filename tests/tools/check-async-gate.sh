@@ -5,7 +5,8 @@
 # blocking calls inside async contexts (plan unit U13): a non-yielding handler
 # starves the whole envelope. Since U6 (issue #590) it also flags the
 # conservative method-call lock shape - a `lock()`/`read()`/`write()` method
-# call inside an `async fn` not followed by `.await` - because the production
+# call inside an async context (`async fn` or async block) not followed by
+# `.await` - because the production
 # lock shape is the method-call form, invisible to the deny list's qualified
 # paths. Its own unit tests pin the fixture side; this script runs it over the
 # whole repository, so a regression anywhere in the tree fails the L1 policy

@@ -53,13 +53,15 @@
 # `clippy::await_holding_refcell_ref`.
 #
 # Those two lints do not cover the scoped case: a synchronous lock *acquired*
-# inside an `async fn` whose guard drops before every suspension point still
+# inside an async context (`async fn` or async block) whose guard drops
+# before every suspension point still
 # parks the executor worker while another thread holds the lock, and no clippy
 # lint sees it. `std::sync` locking on an async path is the rule; the source
 # half is the async-gate scanner (`cargo xtask check-async-gate`, Layer-1
 # policy), which flags the conservative method-call lock shape - a
-# `lock()`/`read()`/`write()` method call inside an `async fn` not followed by
-# `.await` - and fails closed, with the source marker
+# `lock()`/`read()`/`write()` method call inside an async context (`async fn`
+# or async block) not followed by `.await` - and fails closed, with the source
+# marker
 # `// async-gate-allow: <reason>` as its recorded escape hatch (see
 # packages/xtask/data/async-gate-inventory.json and the note beside the
 # workspace lint table in `Cargo.toml`).

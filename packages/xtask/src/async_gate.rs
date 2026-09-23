@@ -524,10 +524,14 @@ fn marker_reason(raw: &str, from: usize, marker: &str) -> Option<String> {
 /// can carry the hatch marker (the sanitizer's comment handling: a `//` in
 /// Normal mode runs to the end of the line, so the trailing comment is the
 /// text after the *last* `//` outside any literal or block comment). String
-/// literals and block comments never arm the hatch.
+/// literals, raw strings, and block comments never arm the hatch; raw strings
+/// are tracked with the sanitizer's `raw_string_hashes`/`raw_string_closes`
+/// rules, so an interior quote or a `//` inside raw-string content cannot
+/// close the string early or arm the marker.
 fn trailing_line_comment_start(raw: &str, from: usize) -> Option<usize> {
     let bytes = raw.as_bytes();
     let mut mode = Mode::Normal;
+    let mut raw_hashes: Option<usize> = None;
     let mut i = from;
     let mut last: Option<usize> = None;
     while i < bytes.len() {
@@ -562,7 +566,16 @@ fn trailing_line_comment_start(raw: &str, from: usize) -> Option<usize> {
                 }
             }
             Mode::Normal => {
-                if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
+                if let Some(hashes) = raw_hashes {
+                    // Inside a raw string only the exact `"` + `hashes` `#`s
+                    // close delimiter ends it; quotes and `//` are content.
+                    if b == b'"' && raw_string_closes(&bytes[i..], hashes) {
+                        i += 1 + hashes;
+                        raw_hashes = None;
+                    } else {
+                        i += 1;
+                    }
+                } else if b == b'/' && bytes.get(i + 1) == Some(&b'/') {
                     last = Some(i);
                     // A `//` runs to the end of the line; everything after is
                     // comment text, so this is the trailing comment.
@@ -571,8 +584,13 @@ fn trailing_line_comment_start(raw: &str, from: usize) -> Option<usize> {
                     i += 2;
                     mode = Mode::BlockComment;
                 } else if b == b'"' {
-                    i += 1;
-                    mode = Mode::String;
+                    if let Some(hashes) = raw_string_hashes(&bytes[..i]) {
+                        raw_hashes = Some(hashes);
+                        i += 1;
+                    } else {
+                        i += 1;
+                        mode = Mode::String;
+                    }
                 } else if b == b'\'' {
                     if char_literal_starts(&bytes[i..]) {
                         i += 1;
@@ -1581,8 +1599,119 @@ mod tests {
         assert!(violations.is_empty(), "{violations:?}");
     }
 
-    /// A throwaway repo root containing one `.rs` file at `rel_path`, so
-    /// inventory validation's tree-existence check sees it. Removed on drop.
+    #[test]
+    fn raw_string_comment_text_does_not_arm_the_hatch() {
+        // A `//` inside raw-string content is not a comment: forged marker
+        // text in a raw string must neither exempt the call nor be recorded.
+        let source = r###"pub async fn touch(m: &std::sync::Mutex<u32>) {
+    let _g = m.lock().unwrap(); let _s = r#"// async-gate-allow: forged"#;
+}
+"###;
+        let outcome = scan_hatched("x.rs", source, Some(MARKER));
+        assert!(
+            outcome.violations.iter().any(|v| v.api == ".lock()"),
+            "raw-string `//` text must not arm the hatch: {:?}",
+            outcome
+                .violations
+                .iter()
+                .map(Violation::render)
+                .collect::<Vec<_>>()
+        );
+        assert!(outcome.marker_sites.is_empty(), "{outcome:?}");
+    }
+
+    #[test]
+    fn raw_string_interior_quote_does_not_arm_the_hatch() {
+        // The fail-open this pins: a bare quote inside a raw string used to
+        // close the string early, so a `//` that is raw-string content was
+        // accepted as the call's trailing comment and forged marker text
+        // armed the hatch over a live un-awaited lock.
+        let source = r###"pub async fn touch(m: &std::sync::Mutex<u32>) {
+    let _g = m.lock().unwrap(); let _s = r#"say "// async-gate-allow: inside a raw string"#;
+}
+"###;
+        let outcome = scan_hatched("x.rs", source, Some(MARKER));
+        assert!(
+            outcome.violations.iter().any(|v| v.api == ".lock()"),
+            "an interior quote must not close a raw string early: {:?}",
+            outcome
+                .violations
+                .iter()
+                .map(Violation::render)
+                .collect::<Vec<_>>()
+        );
+        assert!(outcome.marker_sites.is_empty(), "{outcome:?}");
+    }
+
+    #[test]
+    fn multi_hash_raw_string_does_not_arm_the_hatch() {
+        // The close delimiter is the quote plus exactly the opener's `#`s: a
+        // `r##"..."##` string must not be closed by a bare `"`, and its
+        // content must not arm the marker.
+        let source = r###"pub async fn touch(m: &std::sync::Mutex<u32>) {
+    let _g = m.lock().unwrap(); let _s = r##"say "// async-gate-allow: forged"##;
+}
+"###;
+        let outcome = scan_hatched("x.rs", source, Some(MARKER));
+        assert!(
+            outcome.violations.iter().any(|v| v.api == ".lock()"),
+            "a multi-hash raw string must not arm the hatch: {:?}",
+            outcome
+                .violations
+                .iter()
+                .map(Violation::render)
+                .collect::<Vec<_>>()
+        );
+        assert!(outcome.marker_sites.is_empty(), "{outcome:?}");
+    }
+
+    #[test]
+    fn byte_string_raw_does_not_arm_the_hatch() {
+        // The `br#`/`cr#` prefixes are raw-string openers too; their content
+        // is not comment text.
+        let source = r###"pub async fn touch(m: &std::sync::Mutex<u32>) {
+    let _g = m.lock().unwrap(); let _s = br#"say "// async-gate-allow: forged"#;
+}
+"###;
+        let outcome = scan_hatched("x.rs", source, Some(MARKER));
+        assert!(
+            outcome.violations.iter().any(|v| v.api == ".lock()"),
+            "a byte-string raw literal must not arm the hatch: {:?}",
+            outcome
+                .violations
+                .iter()
+                .map(Violation::render)
+                .collect::<Vec<_>>()
+        );
+        assert!(outcome.marker_sites.is_empty(), "{outcome:?}");
+    }
+
+    #[test]
+    fn marker_after_a_closed_raw_string_still_arms() {
+        // The raw-string handling must not swallow a genuine trailing
+        // comment that follows a closed raw string on the call's line.
+        let source = r###"pub async fn touch(m: &std::sync::Mutex<u32>) {
+    let _g = m.lock().unwrap(); let _s = r#"text"#; // async-gate-allow: short critical section
+}
+"###;
+        let outcome = scan_hatched("x.rs", source, Some(MARKER));
+        assert!(
+            outcome.violations.is_empty(),
+            "a real trailing marker after a closed raw string must arm: {:?}",
+            outcome
+                .violations
+                .iter()
+                .map(Violation::render)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            outcome.marker_sites,
+            vec![site("x.rs", 2, "short critical section")]
+        );
+    }
+
+    /// A throwaway repo root, removed on drop: a place to lay out the deny
+    /// list, the hatch ledger, and scanned sources for `run()`-driven tests.
     static NEXT_TEMP_REPO: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
 
@@ -1592,19 +1721,30 @@ mod tests {
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl TempRepo {
-        fn with_file(rel_path: &str) -> Self {
+        fn new() -> Self {
             let root = std::env::temp_dir().join(format!(
-                "async-gate-inventory-test-{}-{}-{}",
+                "async-gate-inventory-test-{}-{}",
                 std::process::id(),
                 NEXT_TEMP_REPO.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                rel_path.replace(['/', '.'], "-")
             ));
             let _ = fs::remove_dir_all(&root);
-            let file = root.join(rel_path);
+            fs::create_dir_all(&root).expect("create temp root");
+            Self { root }
+        }
+
+        /// A throwaway repo root containing one `.rs` file at `rel_path`, so
+        /// inventory validation's tree-existence check sees it.
+        fn with_file(rel_path: &str) -> Self {
+            let repo = Self::new();
+            repo.write(rel_path, "// placeholder body\n");
+            repo
+        }
+
+        fn write(&self, rel_path: &str, content: &str) {
+            let file = self.root.join(rel_path);
             fs::create_dir_all(file.parent().expect("rel path has a parent"))
                 .expect("create temp tree");
-            fs::write(&file, "// placeholder body\n").expect("write temp file");
-            Self { root }
+            fs::write(&file, content).expect("write temp file");
         }
     }
 
@@ -1699,35 +1839,174 @@ mod tests {
         assert!(error.contains("does not exist in the tree"), "{error}");
     }
 
+    /// The minimal deny list a `run()`-driven test repo needs: one
+    /// `Mutex::lock` entry so the conservative method-call shape arms.
+    const MINIMAL_CLIPPY_TOML: &str = "disallowed-methods = [\n    { path = \"std::sync::Mutex::lock\", reason = \"test deny list\", replacement = \"tokio::sync::Mutex::lock\" },\n]\n";
+
+    /// A TempRepo laid out like the real repository for `run()`: the deny
+    /// list, the hatch ledger at its committed path, and one marked source
+    /// file under a default scan root. The committed ledger records the
+    /// marked call at `committed_line`.
+    fn gate_repo(source: &str, committed_line: usize) -> TempRepo {
+        let repo = TempRepo::new();
+        repo.write("clippy.toml", MINIMAL_CLIPPY_TOML);
+        repo.write(
+            HATCH_INVENTORY_PATH,
+            &serde_json::to_string_pretty(&HatchInventory {
+                marker: MARKER.to_owned(),
+                sites: vec![site(
+                    "packages/d2bd/src/composition.rs",
+                    committed_line,
+                    "short critical section",
+                )],
+            })
+            .expect("serialize committed inventory"),
+        );
+        repo.write("packages/d2bd/src/composition.rs", source);
+        repo
+    }
+
+    /// A TempRepo with the deny list and an empty ledger but no scan roots.
+    fn empty_gate_repo() -> TempRepo {
+        let repo = TempRepo::new();
+        repo.write("clippy.toml", MINIMAL_CLIPPY_TOML);
+        repo.write(
+            HATCH_INVENTORY_PATH,
+            &serde_json::to_string_pretty(&HatchInventory {
+                marker: MARKER.to_owned(),
+                sites: Vec::new(),
+            })
+            .expect("serialize committed inventory"),
+        );
+        repo
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn read_inventory(repo_root: &Path) -> HatchInventory {
+        let text = fs::read_to_string(repo_root.join(HATCH_INVENTORY_PATH))
+            .expect("read the ledger back");
+        serde_json::from_str(&text).expect("parse the ledger back")
+    }
+
     #[test]
-    fn regeneration_re_records_a_shifted_marked_line() {
-        // The inventory keys sites by `(file, line)`, so a line-shifting
-        // edit above a marked call turns the gate red; the regeneration mode
-        // re-records the site from the run's marker sites and passes again.
-        let repo = TempRepo::with_file("packages/d2bd/src/composition.rs");
-        let file = "packages/d2bd/src/composition.rs";
-        let source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m.lock().unwrap(); // async-gate-allow: short critical section\n}\n";
-        let first = scan_hatched(file, source, Some(MARKER));
-        assert_eq!(first.marker_sites[0].line, 2);
-        let committed = HatchInventory {
-            marker: MARKER.to_owned(),
-            sites: first.marker_sites.clone(),
-        };
-        let scanned = vec![file.to_owned()];
-        assert!(validate_inventory(&repo.root, &committed, &first.marker_sites, &scanned).is_ok());
-        // A comment line pushed in above the marked call shifts it to line 3.
-        let shifted_source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    // a line pushed in above\n    let _guard = m.lock().unwrap(); // async-gate-allow: short critical section\n}\n";
-        let shifted = scan_hatched(file, shifted_source, Some(MARKER));
-        assert_eq!(shifted.marker_sites[0].line, 3);
-        let error = validate_inventory(&repo.root, &committed, &shifted.marker_sites, &scanned)
-            .expect_err("the committed inventory must be stale after the shift");
-        assert!(error.contains("no marker-honored"), "{error}");
-        // Regeneration re-records the shifted site and passes.
-        let regenerated = HatchInventory {
-            marker: MARKER.to_owned(),
-            sites: shifted.marker_sites.clone(),
-        };
-        assert!(validate_inventory(&repo.root, &regenerated, &shifted.marker_sites, &scanned).is_ok());
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn write_inventory_regenerates_a_shifted_marked_line() {
+        // Drive the real regeneration path: `run()` with `--write-inventory`
+        // rewrites the ledger from the run's marker sites, so a line-shifting
+        // edit above a marked call is re-recorded and the gate passes again
+        // without hand-editing the ledger.
+        let source = "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    // a line pushed in above\n    let _guard = m.lock().unwrap(); // async-gate-allow: short critical section\n}\n";
+        // The committed ledger still records the pre-shift line 2.
+        let repo = gate_repo(source, 2);
+        let error = run(&repo.root, &[]).expect_err("the committed ledger must be stale");
+        assert!(error.contains("hatch inventory drift"), "{error}");
+        run(&repo.root, &["--write-inventory".to_owned()])
+            .expect("regeneration must succeed");
+        let inventory = read_inventory(&repo.root);
+        assert_eq!(
+            inventory.sites,
+            vec![site(
+                "packages/d2bd/src/composition.rs",
+                3,
+                "short critical section"
+            )],
+            "the ledger must re-record the shifted site"
+        );
+        // The regenerated ledger is committed: a plain validation run passes.
+        run(&repo.root, &[]).expect("the regenerated ledger must validate");
+        // Regeneration is byte-stable: a second run rewrites identical bytes.
+        let before = fs::read(repo.root.join(HATCH_INVENTORY_PATH)).expect("read the ledger");
+        run(&repo.root, &["--write-inventory".to_owned()])
+            .expect("a second regeneration must succeed");
+        let after = fs::read(repo.root.join(HATCH_INVENTORY_PATH)).expect("read the ledger");
+        assert_eq!(before, after, "regeneration must be byte-stable");
+    }
+
+    #[test]
+    fn write_inventory_sorts_and_dedups_sites() {
+        // The ledger writer must emit sites sorted by (file, line) with
+        // same-line duplicates collapsed, so the file is byte-stable
+        // regardless of scan order.
+        let repo = TempRepo::new();
+        // The ledger's parent directory exists in the real tree; a bare temp
+        // repo needs it created before `write_inventory` can write.
+        repo.write("packages/xtask/data/async-gate-inventory.json", "{}");
+        let sites = vec![
+            site("packages/d2bd/src/ops.rs", 10, "second"),
+            site("packages/d2bd/src/composition.rs", 3, "first"),
+            site("packages/d2bd/src/composition.rs", 10, "third"),
+            site("packages/d2bd/src/composition.rs", 10, "duplicate"),
+        ];
+        write_inventory(&repo.root, MARKER, &sites).expect("write the ledger");
+        let inventory = read_inventory(&repo.root);
+        assert_eq!(inventory.marker, MARKER);
+        assert_eq!(
+            inventory.sites,
+            vec![
+                site("packages/d2bd/src/composition.rs", 3, "first"),
+                site("packages/d2bd/src/composition.rs", 10, "third"),
+                site("packages/d2bd/src/ops.rs", 10, "second"),
+            ]
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn write_inventory_refuses_a_subset_scan_and_leaves_the_ledger_untouched() {
+        // `--write-inventory` over explicit paths would drop entries for
+        // unscanned files, so the mode refuses subset scans and must not
+        // touch the committed ledger.
+        let repo = gate_repo(
+            "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m.lock().unwrap(); // async-gate-allow: short critical section\n}\n",
+            2,
+        );
+        let before = fs::read(repo.root.join(HATCH_INVENTORY_PATH)).expect("read the ledger");
+        let error = run(
+            &repo.root,
+            &[
+                "--write-inventory".to_owned(),
+                "packages/d2bd/src/composition.rs".to_owned(),
+            ],
+        )
+        .expect_err("a subset regeneration must fail");
+        assert!(error.contains("requires the default scan roots"), "{error}");
+        let after = fs::read(repo.root.join(HATCH_INVENTORY_PATH)).expect("read the ledger");
+        assert_eq!(
+            before, after,
+            "a refused regeneration must leave the ledger untouched"
+        );
+    }
+
+    #[test]
+    fn run_rejects_an_unknown_flag() {
+        // A mistyped flag used to fall through to the path list and silently
+        // scan nothing; the gate must fail closed.
+        let repo = gate_repo(
+            "pub async fn touch(m: &std::sync::Mutex<u32>) {\n    let _guard = m.lock().unwrap(); // async-gate-allow: short critical section\n}\n",
+            2,
+        );
+        let error = run(&repo.root, &["--write-inventoryy".to_owned()])
+            .expect_err("an unknown flag must fail");
+        assert!(error.contains("unknown flag"), "{error}");
+    }
+
+    #[test]
+    fn run_fails_closed_on_an_empty_resolved_scan_set() {
+        // A repo whose default roots resolve to nothing (only the ledger's
+        // `packages` tree exists) must fail rather than pass vacuously.
+        let repo = empty_gate_repo();
+        let error = run(&repo.root, &[]).expect_err("an empty scan set must fail");
+        assert!(error.contains("resolved scan set is empty"), "{error}");
+    }
+
+    #[test]
+    fn run_fails_closed_on_a_zero_file_scan() {
+        // A scan set that resolves to directories but no `.rs` file must not
+        // report a vacuous success.
+        let repo = empty_gate_repo();
+        repo.write("packages/d2bd/src/README.txt", "not rust\n");
+        let error = run(&repo.root, &[]).expect_err("a zero-file scan must fail");
+        assert!(error.contains("zero-file scan"), "{error}");
     }
 
     #[test]
