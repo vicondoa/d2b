@@ -1,15 +1,14 @@
 # Graphics support for d2b VMs (virtio-gpu + Wayland cross-domain
-# forward to the host compositor). Imported by host.nix whenever a VM
-# sets `d2b.vms.<name>.graphics.enable = true`.
+# forward to the host compositor). Imported into a guest evaluation
+# whenever a VM sets `d2b.vms.<name>.graphics.enable = true`.
 #
 # Hypervisor: cloud-hypervisor (chosen over crosvm because crosvm has
 # no swtpm backend - its only `--vtpm-proxy` flag wires to ChromeOS's
 # D-Bus vtpmd, useless outside ChromeOS). Cloud-hypervisor has native
-# `--tpm socket=` and under microvm.nix uses the same
-# `crosvm device gpu` sidecar over vhost-user-gpu that crosvm itself
-# does, so Wayland cross-domain forwarding to the host compositor is
-# unaffected by the swap.
-{ lib, pkgs, config, ... }:
+# `--tpm socket=` and uses the same `crosvm device gpu` sidecar over
+# vhost-user-gpu that crosvm itself does, so Wayland cross-domain
+# forwarding to the host compositor is unaffected by the swap.
+{ lib, pkgs, config, name, ... }:
 
 let
   # Patched virglrenderer: relax the "Mesa Gallium" vendor check in
@@ -37,8 +36,8 @@ let
   # when the cross-domain crosvm context is absent.
   wlCrossDomainProxy = import ../../../pkgs/wl-cross-domain-proxy { inherit pkgs; };
 
-  # The GPU sidecar is `crosvm device gpu`, spawned by microvm.nix's
-  # cloud-hypervisor runner over vhost-user-gpu. Use the crosvm
+  # The GPU sidecar is `crosvm device gpu`, spawned by the broker's
+  # SpawnRunner pipeline over vhost-user-gpu. Use the crosvm
   # nixpkgs ships (Feb 2026, rev 4c80bf3) directly - that rev speaks
   # the standardised vhost-user shmem message numbers
   # (`GET_SHMEM_CONFIG = 44`, `SHMEM_MAP = 9`, `SHMEM_UNMAP = 10`)
@@ -81,7 +80,7 @@ let
   # The symlinkJoin above adds the compiled .bpf files to the package
   # closure and places them at the path crosvm's jail loader expects
   # (${out}/share/policy/crosvm/). However, `crosvm device gpu` (the
-  # subcommand microvm.nix invokes as the vhost-user-gpu sidecar) has
+  # subcommand the broker invokes as the vhost-user-gpu sidecar) has
   # NO --seccomp-policy-dir flag in this crosvm rev (Feb 2026,
   # 4c80bf3). Verified: `crosvm device gpu --help` exposes only
   # --socket-path, --fd, --wayland-sock, --resource-bridge,
@@ -325,12 +324,7 @@ in
       }
     ];
 
-    microvm = {
-      # mkDefault so tpm.nix (which also sets cloud-hypervisor) doesn't
-      # produce a duplicate-definition error when both modules are
-      # imported.
-      hypervisor = lib.mkDefault "cloud-hypervisor";
-
+    d2b.vms.${name}.runner = {
       # Suppress fbcon binding to virtio-gpu in the guest. The GPU sidecar
       # is forced to use the Wayland display backend (the unnamed wayland
       # socket is structurally tied to the cross-domain channel, so we
@@ -345,7 +339,7 @@ in
 
       graphics.enable = true;
 
-      # microvm.nix's cloud-hypervisor runner uses `crosvm device gpu` as
+      # The broker's SpawnRunner pipeline uses `crosvm device gpu` as
       # the GPU sidecar over vhost-user-gpu. Feed nixpkgs's crosvm
       # directly (see crosvmPatched let-binding for why no overrides).
       #
@@ -356,7 +350,7 @@ in
       # launchpad VM running FreeRDP), wrap crosvm in a shell shim
       # that strips `cross-domain` from the `--params` JSON before
       # invoking the real binary. Stripping is tolerant of the three
-      # syntactic shapes microvm.nix's generator can emit
+      # syntactic shapes the argv generator can emit
       # (`context-types=cross-domain:virgl2`, `…:cross-domain`,
       # standalone `cross-domain`). The wrapped binary keeps all other
       # GPU capabilities (virgl2, etc.) so the VM still gets a
@@ -420,17 +414,17 @@ in
             exec ${realCrosvm}/bin/crosvm "''${newargs[@]}"
           '';
 
-      # microvm.nix's option default for `cloud-hypervisor.package` is
-      # `cfg.vmHostPackages.cloud-hypervisor-graphics`, a spectrum-os-
-      # patched build that lives only in microvm.nix's own overlay.
-      # That overlay depends on fetching spectrum-os.org's git tree,
-      # whose snapshot tarball and git-over-http servers are both
-      # broken (consistent truncation under 100KB, fetch-pack RST).
+      # The upstream option default for the hypervisor package was a
+      # spectrum-os-patched build that lived only in the retired
+      # upstream overlay. That overlay depends on fetching
+      # spectrum-os.org's git tree, whose snapshot tarball and
+      # git-over-http servers are both broken (consistent truncation
+      # under 100KB, fetch-pack RST).
       #
       # Solution: we vendor the (tiny) patch set in
       # pkgs/spectrum-ch/ (see MAINTAINING.md) and build the patched
       # cloud-hypervisor ourselves.
-      cloud-hypervisor.package = spectrumCH;
+      hypervisor.package = spectrumCH;
     };
 
     hardware.graphics.enable = true;

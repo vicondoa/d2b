@@ -10,11 +10,7 @@ let
     modules = [
       ({ lib, ... }: {
         options = {
-          microvm.hypervisor = lib.mkOption {
-            type = lib.types.str;
-            default = "";
-          };
-          microvm.cloud-hypervisor.extraArgs = lib.mkOption {
+          d2b.vms.provider-test.runner.hypervisor.extraArgs = lib.mkOption {
             type = lib.types.listOf lib.types.str;
             default = [ ];
           };
@@ -88,23 +84,22 @@ in
 {
   cases = {
     "provider-device-gpu/modules-evaluate" = {
-      expr = builtins.deepSeq config.microvm.cloud-hypervisor.extraArgs true;
+      expr = builtins.deepSeq
+        config.d2b.vms.provider-test.runner.hypervisor.extraArgs true;
       expected = true;
       propagateError = true;
     };
 
     "provider-device-gpu/video-worker-contract" = {
       expr = {
-        hypervisor = config.microvm.hypervisor;
         mediaFlag = builtins.elem "--vhost-user-media"
-          config.microvm.cloud-hypervisor.extraArgs;
+          config.d2b.vms.provider-test.runner.hypervisor.extraArgs;
         socket = builtins.elem
           "socket=/run/d2b-video/provider-test/video.sock"
-          config.microvm.cloud-hypervisor.extraArgs;
+          config.d2b.vms.provider-test.runner.hypervisor.extraArgs;
         kernel = builtins.elem "virtio_media" config.boot.kernelModules;
       };
       expected = {
-        hypervisor = "cloud-hypervisor";
         mediaFlag = true;
         socket = true;
         kernel = true;

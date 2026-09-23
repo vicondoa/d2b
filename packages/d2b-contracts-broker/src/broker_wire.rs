@@ -2387,8 +2387,8 @@ pub enum RunnerRole {
     /// Target-local one-shot NixOS activation runner. Guest mode may spawn
     /// this role only from the bundle-authoritative process intent.
     ActivationNixos,
-    /// virtiofsd sidecar; one per `microvm.shares` row. The daemon/bundle
-    /// provides argv from `nixos-modules/processes-json.nix`.
+    /// virtiofsd sidecar; one per `d2b.vms.<vm>.runner.shares` row. The
+    /// daemon/bundle provides argv from the runner-shape generators.
     Virtiofsd,
     /// swtpm sidecar (long-lived `swtpm socket ...` process).
     Swtpm,

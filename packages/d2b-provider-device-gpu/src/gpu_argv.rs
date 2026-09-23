@@ -1,10 +1,11 @@
 //! `crosvm device gpu` sidecar argv generator.
 //!
-//! Pure Rust function that emits the argv microvm.nix's graphics
-//! runner forks inline before `exec`-ing Cloud Hypervisor (per the
-//! runner-shape audit at `docs/reference/runner-shape-audit.md`).
-//! The daemon spawns this sidecar through the broker `SpawnRunner` op
-//! with `RunnerRole::Gpu` when the broker-side spawn implementation ships.
+//! Pure Rust function that emits the argv for the graphics sidecar
+//! the broker's `SpawnRunner` op forks before `exec`-ing Cloud
+//! Hypervisor (per the runner-shape audit at
+//! `docs/reference/runner-shape-audit.md`). The daemon spawns this
+//! sidecar through the broker `SpawnRunner` op with
+//! `RunnerRole::Gpu` when the broker-side spawn implementation ships.
 //!
 //! Audit shape for `corp-desktop`:
 //!
@@ -125,7 +126,7 @@ pub enum GpuArgvError {
 /// The full byte-level parity gate runs in the pinned
 /// `gpu_argv` unit tests; it is intentionally NOT a byte-compare
 /// against the W0b audit
-/// fixture (the audit fixture is a snapshot of microvm.nix's
+/// fixture (the audit fixture is a snapshot of the retired
 /// runner shape and includes a `${runtime_args:-}` template
 /// expansion the daemon never emits).
 fn render_params(params: &GpuParams) -> Result<String, GpuArgvError> {

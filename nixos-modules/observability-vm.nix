@@ -55,9 +55,10 @@ in
         # Grafana/Prometheus/Loki/Tempo stack. Keep these defaults
         # overrideable, but make the auto-declared VM viable out of the
         # box for a single-node telemetry store.
-        microvm.vcpu = lib.mkDefault 4;
-        microvm.mem = lib.mkDefault 8192;
-        microvm.volumes = lib.mkDefault [
+        d2b.vms.${cfg.vmName}.runner = {
+          cpu.count = lib.mkDefault 4;
+          memory.sizeMiB = lib.mkDefault 8192;
+          volumes = lib.mkDefault [
           {
             image = "clickhouse.img";
             mountPoint = "/var/lib/clickhouse";
@@ -91,6 +92,7 @@ in
             direct = true;
           }
         ];
+        };
       };
     };
   };

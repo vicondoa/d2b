@@ -1,10 +1,10 @@
 //! swtpm argv generator (UNIX-socket TPM 2.0 backend).
 //!
 //! `swtpm` is the per-VM software TPM sidecar d2b spawns for VMs
-//! that declare `d2b.vms.<vm>.tpm.enable = true`. The earlier
-//! runner-shape audit notes that microvm.nix's TPM component passes
-//! the CH TPM socket via `microvm.cloud-hypervisor.extraArgs`, but the
-//! sidecar process is shaped as a standalone systemd unit:
+//! that declare `d2b.vms.<vm>.tpm.enable = true`. The guest-side
+//! TPM module passes the CH TPM socket via
+//! `d2b.vms.<vm>.runner.hypervisor.extraArgs`, and the sidecar
+//! process is shaped as a standalone broker-spawned worker:
 //!
 //! ```text
 //! swtpm socket \

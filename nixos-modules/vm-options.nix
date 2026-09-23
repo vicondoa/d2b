@@ -1,96 +1,91 @@
 # nixos-modules/vm-options.nix
 #
-# D2b-owned per-VM runner options module. Replaces the upstream
-# microvm.nix `microvm.*` per-VM option set.
+# D2b-owned per-VM runner options module. Declares the
+# `d2b.vms.<name>.runner.*` option family (per ADR 0018's migration
+# map) that replaced the retired upstream per-VM option set.
 #
 # This module is added to each per-VM NixOS evaluation by
-# `vm-evaluator.nix` so consumers' guest configs can set
-# `microvm.mem`, `microvm.vcpu`, `microvm.shares`, etc. with the
-# same shape they used under microvm.nix (backward-compatible
-# option paths inside the per-VM evaluation, but no upstream
-# microvm.nix dependency at the flake-input level).
+# `vm-evaluator.nix` so guest configs can set
+# `d2b.vms.<name>.runner.memory.sizeMiB`, `d2b.vms.<name>.runner.shares`,
+# etc. under the d2b-owned namespace. The `<name>` is the per-VM
+# evaluation's own name (`_module.args.name`), threaded in by the
+# evaluator.
 #
 # The fields enumerated here are the subset consumed by
-# `nixos-modules/processes-json.nix` (via the
+# `nixos-modules/guest-closures.nix` (via the
 # `d2bLib.vmRunner config name` helper in lib.nix). Anything not
 # listed is intentionally left out - the broker SpawnRunner
-# pipeline generates runner argv in Rust
-# The owning runtime/device Provider crates plan argv, so the Nix side only
-# needs to surface the option values, not build runner derivations.
-{ config, lib, pkgs, ... }:
+# pipeline generates runner argv in Rust. The owning runtime/device
+# Provider crates plan argv, so the Nix side only needs to surface
+# the option values, not build runner derivations.
+{ name, config, lib, pkgs, ... }:
 
 let
   inherit (lib) mkOption types;
 in
 {
-  options.microvm = {
-    hypervisor = mkOption {
-      type = types.enum [ "cloud-hypervisor" "crosvm" "qemu" "firecracker" "kvmtool" "stratovirt" ];
-      default = "cloud-hypervisor";
-      description = "Hypervisor binary that runs this VM.";
-    };
-
-    vcpu = mkOption {
+  options.d2b.vms.${name}.runner = {
+    cpu.count = mkOption {
       type = types.ints.positive;
       default = 1;
       description = "Number of vCPUs allocated to this VM.";
     };
 
-    mem = mkOption {
+    memory.sizeMiB = mkOption {
       type = types.ints.positive;
       default = 512;
       description = "Memory in MiB allocated to this VM.";
     };
 
-    hotplugMem = mkOption {
+    memory.hotplug.sizeMiB = mkOption {
       type = types.ints.unsigned;
       default = 0;
       description = "Hotpluggable memory in MiB (0 = disabled).";
     };
 
-    hotpluggedMem = mkOption {
+    memory.hotplug.hotpluggedMiB = mkOption {
       type = types.ints.unsigned;
       default = 0;
-      description = "Currently-hotplugged memory in MiB (subset of hotplugMem).";
+      description = "Currently-hotplugged memory in MiB (subset of the hotplug size).";
     };
 
-    hugepageMem = mkOption {
+    memory.hugepages = mkOption {
       type = types.bool;
       default = false;
       description = "Whether to back guest memory with hugepages.";
     };
 
-    balloon = mkOption {
+    memory.balloon.enable = mkOption {
       type = types.bool;
       default = false;
       description = "Whether the VM has a virtio-balloon device.";
     };
 
-    initialBalloonMem = mkOption {
+    memory.balloon.initialSizeMiB = mkOption {
       type = types.ints.unsigned;
       default = 0;
       description = "Initial balloon size in MiB.";
     };
 
-    deflateOnOOM = mkOption {
+    memory.balloon.deflateOnOOM = mkOption {
       type = types.bool;
       default = false;
       description = "Whether the balloon deflates on guest OOM.";
     };
 
-    storeOnDisk = mkOption {
+    store.onDisk = mkOption {
       type = types.bool;
       default = false;
       description = "Whether the guest's /nix/store is on a virtual disk image.";
     };
 
-    storeDisk = mkOption {
+    store.disk = mkOption {
       type = types.nullOr types.path;
       default = null;
-      description = "Path to the store disk image (when storeOnDisk = true).";
+      description = "Path to the store disk image (when store.onDisk = true).";
     };
 
-    writableStoreOverlay = mkOption {
+    store.writableOverlay = mkOption {
       type = types.nullOr types.str;
       default = null;
       description = "Optional writable overlay path on top of the read-only store.";
@@ -185,7 +180,7 @@ in
       description = "Per-VM extra volume images.";
     };
 
-    cloud-hypervisor = {
+    hypervisor = {
       package = mkOption {
         type = types.package;
         default = pkgs.cloud-hypervisor;
@@ -247,7 +242,7 @@ in
       };
       socket = mkOption {
         type = types.str;
-        default = "/run/d2b/vms/${config._module.args.name or "unknown"}/gpu.sock";
+        default = "/run/d2b/vms/${name}/gpu.sock";
         description = "GPU device socket path.";
       };
     };
@@ -283,7 +278,7 @@ in
       internal = true;
       description = ''
         Always null in v1.1+ (d2b owns the substrate; the broker
-        Rust argv generators replace microvm.nix's runner derivation).
+        Rust argv generators replace the retired runner derivation).
         Preserved as a typed `null` for backward-compat with consumers
         that touch the path.
       '';

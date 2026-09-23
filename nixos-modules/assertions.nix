@@ -1274,13 +1274,10 @@ let
         '';
       }
       {
-        # Graphics VMs CANNOT be autostart. The
-        # `d2b@<vm>` wrapper template starts `microvm@<vm>`,
-        # which is the upstream microvm.nix runner - but graphics
-        # VMs run cloud-hypervisor via the `d2b-<vm>-gpu`
-        # sidecar (which replaces the upstream runner). The sidecar
-        # binds to /run/user/<wayland-uid>/wayland-0, which only
-        # exists in a live user session, so it MUST be launched
+        # Graphics VMs CANNOT be autostart. The broker's SpawnRunner
+        # pipeline launches cloud-hypervisor and the `d2b-<vm>-gpu`
+        # sidecar; the sidecar binds to /run/user/<wayland-uid>/wayland-0,
+        # which only exists in a live user session, so it MUST be launched
         # interactively from a Plasma terminal via `d2b up <vm>`.
         # An autostart=true graphics VM would silently boot through
         # the wrong path and never attach to the host compositor.
@@ -1290,10 +1287,9 @@ let
           with autostart = true. Graphics VMs are launched by the
           d2b CLI through d2b-${name}-gpu.service, which
           binds to /run/user/<uid>/wayland-0 - that socket only
-          exists in a live user session. The systemd boot path
-          would start microvm@${name}.service (the upstream runner)
-          bypassing the GPU sidecar entirely, and the VM would have
-          no display.
+          exists in a live user session. An autostarted launch
+          would bypass the GPU sidecar entirely, and the VM would
+          have no display.
 
           Set `d2b.vms.${name}.autostart = false` and launch
           the VM interactively via `d2b up ${name}` from a
@@ -1914,51 +1910,56 @@ let
   volumeSerialAssertions = lib.flatten (lib.mapAttrsToList
     (name: vm:
       let
-        microvm = d2bLib.vmRunner config name;
-        serialIssues = volumeSerialIssues microvm.volumes;
+        runner = d2bLib.vmRunner config name;
+        serialIssues = volumeSerialIssues runner.volumes;
       in
-      lib.optionals (vm.enable && microvm.volumes != [ ]) [
+      lib.optionals (vm.enable && runner.volumes != [ ]) [
         {
           assertion = serialIssues.duplicates == [ ];
           message = ''
-            d2b.vms.${name}.config.microvm.volumes derives duplicate virtio
-            disk serial(s): ${lib.concatStringsSep ", " serialIssues.duplicates}. Set explicit
-            unique `serial` values on the volume entries.
+            d2b.vms.${name}.config.d2b.vms.${name}.runner.volumes derives
+            duplicate virtio disk serial(s): ${
+              lib.concatStringsSep ", " serialIssues.duplicates
+            }. Set explicit unique `serial` values on the volume entries.
           '';
         }
         {
           assertion = serialIssues.reserved == [ ];
           message = ''
-            d2b.vms.${name}.config.microvm.volumes uses reserved virtio disk
-            serial `rootfs`, which is owned by writableStoreOverlay. Set an
-            explicit non-reserved `serial`.
+            d2b.vms.${name}.config.d2b.vms.${name}.runner.volumes uses
+            reserved virtio disk serial `rootfs`, which is owned by
+            store.writableOverlay. Set an explicit non-reserved `serial`.
           '';
         }
         {
           assertion = serialIssues.tooLong == [ ];
           message = ''
-            d2b.vms.${name}.config.microvm.volumes has virtio disk serial(s)
-            longer than 20 bytes: ${lib.concatStringsSep ", " serialIssues.tooLong}. Linux
-            truncates virtio-blk serials, so guest mounts would not match.
+            d2b.vms.${name}.config.d2b.vms.${name}.runner.volumes has virtio
+            disk serial(s) longer than 20 bytes: ${
+              lib.concatStringsSep ", " serialIssues.tooLong
+            }. Linux truncates virtio-blk serials, so guest mounts would not
+            match.
           '';
         }
         {
           assertion = serialIssues.unsafe == [ ];
           message = ''
-            d2b.vms.${name}.config.microvm.volumes has unsafe virtio disk
-            serial(s): ${lib.concatStringsSep ", " serialIssues.unsafe}. Use
-            only [A-Za-z0-9-], start with an alphanumeric character, and avoid
-            delimiters such as comma, equals, slash, and control characters.
+            d2b.vms.${name}.config.d2b.vms.${name}.runner.volumes has unsafe
+            virtio disk serial(s): ${
+              lib.concatStringsSep ", " serialIssues.unsafe
+            }. Use only [A-Za-z0-9-], start with an alphanumeric character,
+            and avoid delimiters such as comma, equals, slash, and control
+            characters.
           '';
         }
       ])
     (d2bLib.normalNixosVms gatewayVms));
 
   # Containment for the per-VM guest-editable `guestConfigFile`: it may
-  # only set guest OS options, never host-owned microvm.* / d2b.*.
+  # only set guest OS options, never host-owned d2b.* options.
   # The namespace-containment check (evalModules over the real nixpkgs
   # NixOS module set, definition-existence; catches imports / generated
-  # modules / `_file` spoofing) runs in host.nix's composeVm pass and is
+  # modules / `_file` spoofing) runs in the composeVm pass and is
   # read here as `_computed.<name>.guestForbidden`. It is a policy lint,
   # not an eval-time security sandbox (see lib.nix + docs/adr/0024).
   # Only VMs that set a guestConfigFile force that per-VM evaluation, so
@@ -1976,9 +1977,8 @@ let
           guest OS options, but it (or a module it imports) sets host-owned
           option(s): ${
             lib.concatStringsSep ", " forbidden
-          }. Host-owned microvm.* / d2b.* settings must live in the
-          host-owned d2b.vms.${name}.config, which the guest cannot
-          edit.
+          }. Host-owned d2b.* settings must live in the host-owned
+          d2b.vms.${name}.config, which the guest cannot edit.
         '';
       })
     (lib.filterAttrs (_: vm: vm.enable && vm.guestConfigFile != null) gatewayVms);

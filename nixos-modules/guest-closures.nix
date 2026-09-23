@@ -70,10 +70,10 @@ let
 
   cloudHypervisorArgv = row: guestConfig: toplevel: stateDir:
     let
-      microvm = guestConfig.microvm or { };
-      vcpu = microvm.vcpu or 1;
-      mem = microvm.mem or 512;
-      vsock = microvm.vsock or { };
+      runner = guestConfig.d2b.vms.${row.guestName}.runner or { };
+      vcpu = runner.cpu.count or 1;
+      mem = runner.memory.sizeMiB or 512;
+      vsock = runner.vsock or { };
       vsockCid =
         if (vsock.cid or null) != null
         then vsock.cid
@@ -83,15 +83,15 @@ let
           envIndex = null;
         };
       vsockSocket = vsock.socket or "${stateDir}/vsock.sock";
-      kernel = microvm.kernel or pkgs.linuxPackages.kernel;
+      kernel = runner.kernel or pkgs.linuxPackages.kernel;
       kernelPath =
         if pkgs.stdenv.hostPlatform.system == "x86_64-linux"
         then "${kernel.dev}/vmlinux"
         else "${kernel.out}/${pkgs.stdenv.hostPlatform.linux-kernel.target}";
-      initrdPath = microvm.initrdPath or "${toplevel}/initrd";
+      initrdPath = runner.initrdPath or "${toplevel}/initrd";
       kernelParams =
-        (microvm.kernelParams or [ ]) ++ [ "init=${toplevel}/init" ];
-      shares = microvm.shares or [
+        (runner.kernelParams or [ ]) ++ [ "init=${toplevel}/init" ];
+      shares = runner.shares or [
         {
           source = "/nix/store";
           mountPoint = "/nix/.ro-store";
@@ -114,22 +114,22 @@ let
           ])
         shares;
       diskArgs =
-        lib.optional (microvm.storeOnDisk or false) [
+        lib.optional (runner.store.onDisk or false) [
           "--disk"
-          "path=${toString microvm.storeDisk},readonly=on"
+          "path=${toString runner.store.disk},readonly=on"
         ]
         ++ lib.concatMap
           (volume: [
             "--disk"
             "path=${d2bLib.volumeHostPath stateDir row.guestName volume},serial=${d2bLib.volumeSerial volume}"
           ])
-          (microvm.volumes or [ ]);
+          (runner.volumes or [ ]);
       netArgs = lib.concatMap
         (iface:
           if (iface.type or "tap") == "macvtap"
           then [ "--net" "fd=10,mac=${iface.mac}" ]
           else [ "--net" "tap=${iface.id},mac=${iface.mac}" ])
-        (microvm.interfaces or [ ]);
+        (runner.interfaces or [ ]);
     in [
       "microvm@${row.guestName}"
       "--cpus"
@@ -154,7 +154,7 @@ let
       "--api-socket"
       "${stateDir}/${row.guestName}.sock"
     ] ++ lib.flatten diskArgs ++ lib.flatten shareArgs ++ netArgs
-      ++ (microvm.cloud-hypervisor.extraArgs or [ ]);
+      ++ (runner.hypervisor.extraArgs or [ ]);
 
   vmmFor = row: guestConfig: toplevel: stateDir:
     let
@@ -164,7 +164,7 @@ let
       profileHash = builtins.hashString "sha256"
         "${row.zoneName}/${row.guestName}/cloud-hypervisor";
       binaryPackage =
-        (guestConfig.microvm.cloud-hypervisor.package or pkgs.cloud-hypervisor);
+        (guestConfig.d2b.vms.${row.guestName}.runner.hypervisor.package or pkgs.cloud-hypervisor);
     in {
       zoneUid = zoneUid;
       descriptorDigest =

@@ -3,7 +3,10 @@
 let
   module = builtins.head modules;
   evaluated = lib.evalModules {
-    specialArgs = { inherit pkgs; };
+    specialArgs = {
+      inherit pkgs;
+      name = "provider-test";
+    };
     modules = [
       ({ lib, ... }: {
         options = {
@@ -11,11 +14,7 @@ let
             type = lib.types.str;
             default = "provider-test";
           };
-          microvm.hypervisor = lib.mkOption {
-            type = lib.types.str;
-            default = "";
-          };
-          microvm.cloud-hypervisor.extraArgs = lib.mkOption {
+          d2b.vms.provider-test.runner.hypervisor.extraArgs = lib.mkOption {
             type = lib.types.listOf lib.types.str;
             default = [ ];
           };
@@ -148,13 +147,11 @@ in
       expr = {
         tpm = builtins.elem "tpm" config.boot.kernelModules;
         crb = builtins.elem "tpm_crb" config.boot.kernelModules;
-        hypervisor = config.microvm.hypervisor;
         tpm2 = config.security.tpm2.enable;
       };
       expected = {
         tpm = true;
         crb = true;
-        hypervisor = "cloud-hypervisor";
         tpm2 = true;
       };
     };

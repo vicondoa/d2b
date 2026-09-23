@@ -1,7 +1,7 @@
 # Guest-side baseline applied to every d2b VM.
 #
-# Layered in by `host.nix`'s `microvm.vms` translation. Each entry
-# here uses `lib.mkDefault` so a per-VM module can override.
+# Layered into every per-VM evaluation by the per-VM evaluator. Each
+# entry here uses `lib.mkDefault` so a per-VM module can override.
 #
 # Component-specific concerns (graphics, TPM, USBIP, Entra-ID) live
 # in their own files under `nixos-modules/components/` and are NOT

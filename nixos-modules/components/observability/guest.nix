@@ -190,8 +190,6 @@ in
   config = {
     warnings = [ ];
 
-    microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
-
     users.users.otel = {
       isSystemUser = true;
       group = "otel";

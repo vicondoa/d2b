@@ -1,26 +1,18 @@
 # nixos-modules/vm-evaluator.nix
 #
-# D2b-owned per-VM NixOS evaluator. Replaces the upstream
-# `inputs.microvm.nixosModules.host` per-VM evaluation
-# pipeline (which used `microvm.vms = lib.mapAttrs ...` + the
-# microvm.nix host module's `lib.evalModules` invocation).
+# D2b-owned per-VM NixOS evaluator. Each VM is evaluated as a NixOS
+# toplevel with the d2b-owned runner option family
+# (`d2b.vms.<name>.runner.*` from vm-options.nix) layered in - the
+# successor to the retired upstream per-VM evaluation pipeline.
 #
-# Usage from `host.nix`:
-#
-#   composeVm = (import ./vm-evaluator.nix { inherit inputs; })
-#     { inherit config lib pkgs; };
-#   d2b.vms = lib.mapAttrs (name: vm: vm // {
-#     computed = composeVm name vm;
-#   }) cfg.vms;
-#
-# The resulting `d2b.vms.<name>.computed.config` is a fully-
-# evaluated NixOS config attrset containing:
+# The resulting per-VM evaluation's `config` is a fully-evaluated
+# NixOS config attrset containing:
 #   - `config.system.build.toplevel` (the per-VM closure)
-#   - `config.microvm.*` (the runner options from vm-options.nix
-#     above; consumer-set or default)
+#   - `config.d2b.vms.<name>.runner.*` (the runner options from
+#     vm-options.nix above; consumer-set or default)
 #   - everything else a NixOS module evaluation produces (boot,
-#     networking, services, etc. - driven by the consumer's
-#     `vm.config` module list).
+#     networking, services, etc. - driven by the consumer's module
+#     list).
 #
 # The public `_evalGuest` entry point evaluates a named Guest from its own
 # module list and Zone, without reading the host's VM or environment tables.
@@ -36,22 +28,15 @@ let
   # `nixos/lib/eval-config.nix` is the standard NixOS eval entrypoint -
   # it sets up `pkgs`, the module system, and the standard NixOS
   # module set. We layer our d2b-owned vm-options.nix on top so
-  # the per-VM config can set `microvm.mem`, etc.
+  # the per-VM config can set `d2b.vms.<name>.runner.*`, etc.
   #
-  # The caller (host.nix's composeVm wrapper) already merges
-  # `./base.nix`, `./guest-sshd-host-keys.nix`, the per-component
-  # guest modules, and `vm.config` (the consumer's module list)
-  # into the `composedConfig` it passes here, so we do NOT layer
-  # those again - double-imports of `./base.nix` would multiply
-  # evaluate the framework baseline.
-  # Build a per-VM NixOS evaluation using the host's nixpkgs path.
   # The caller passes a LIST of modules (`composedModules`) that
   # together describe the per-VM config. We layer vm-options.nix
   # and the per-VM `_module.args.name` on top.
   evalVm = name: composedModules:
     import (pkgs.path + "/nixos/lib/eval-config.nix") {
       modules = [
-        ./vm-options.nix
+        (import ./vm-options.nix { inherit name config lib pkgs; })
         ./vm-guest-base.nix
         ./component-session.nix
         ./guest-broker.nix
@@ -110,23 +95,25 @@ let
           enable = componentSessionEnable;
           inherit guestConfigPath zone;
         };
-        microvm.vsock.cid = lib.mkDefault cid;
-        microvm.vsock.socket = lib.mkDefault vsockSocket;
-        microvm.shares = lib.mkDefault [
-          {
-            source = "/nix/store";
-            mountPoint = "/nix/.ro-store";
-            tag = "ro-store";
-            proto = "virtiofs";
-          }
-          {
-            source = "${stateDir}/store-view/meta";
-            mountPoint = "/run/d2b-store-meta";
-            tag = "d2b-meta";
-            proto = "virtiofs";
-            readOnly = true;
-          }
-        ];
+        d2b.vms.${name}.runner = {
+          vsock.cid = lib.mkDefault cid;
+          vsock.socket = lib.mkDefault vsockSocket;
+          shares = lib.mkDefault [
+            {
+              source = "/nix/store";
+              mountPoint = "/nix/.ro-store";
+              tag = "ro-store";
+              proto = "virtiofs";
+            }
+            {
+              source = "${stateDir}/store-view/meta";
+              mountPoint = "/run/d2b-store-meta";
+              tag = "d2b-meta";
+              proto = "virtiofs";
+              readOnly = true;
+            }
+          ];
+        };
       }
     ] ++ modules);
 in

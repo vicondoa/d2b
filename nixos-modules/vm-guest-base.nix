@@ -1,16 +1,9 @@
 # nixos-modules/vm-guest-base.nix
 #
-# d2b-owned per-VM guest-side baseline. Replaces the
-# guest-side portion of `microvm.nix`'s
-# `microvm.nixosModules.microvm` (the per-VM eval module that
-# upstream `microvm.nixosModules.host` injected into every VM's
-# evaluation).
+# d2b-owned per-VM guest-side baseline. Provides the substrate that
+# lets `config.system.build.toplevel` succeed for a d2b guest:
 #
-# This module is added by `vm-evaluator.nix` to every per-VM eval
-# and provides the substrate that lets `config.system.build.toplevel`
-# succeed without microvm.nix:
-#
-#   1. Disable bootloader (no grub on a microvm).
+#   1. Disable bootloader (no grub on a d2b guest).
 #   2. Provide a tmpfs root + bind-mount /nix/store from the host
 #      share + mount every other virtiofs/9p share at its
 #      `mountPoint`.
@@ -19,20 +12,15 @@
 #      system closure.
 #   4. Load the virtio kernel modules at initrd time.
 #
-# Modeled after upstream microvm.nix's `microvm/system.nix` +
-# `microvm/mounts.nix` (see
-# `/nix/store/.../microvm.nix-source/nixos-modules/microvm/`)
-# but stripped to only the bits d2b's broker SpawnRunner
-# substrate actually needs. The upstream module pulled in
-# `microvm.runner`, `boot-disk`, `store-disk`, `interfaces`,
-# `pci-devices`, `virtiofsd`, `graphics`, `rosetta`, `ssh-deploy`,
-# `vsock-ssh` - none of those are needed for the daemon-native
-# substrate because the owning runtime Providers plan hypervisor argv and
-# the broker owns runtime supervision.
-{ config, lib, pkgs, ... }:
+# The runner settings come from the `d2b.vms.<name>.runner.*` option
+# family (vm-options.nix): shares, volumes, store overlay, graphics.
+# The broker's SpawnRunner pipeline owns runtime supervision; the
+# owning runtime Providers plan hypervisor argv, so this module only
+# turns the runner options into guest-side mounts and boot wiring.
+{ config, lib, pkgs, name, ... }:
 
 let
-  cfg = config.microvm;
+  cfg = config.d2b.vms.${name}.runner;
   d2bLib = import ./lib.nix { inherit lib; };
 
   # Find the host-store share (source == "/nix/store") - required
@@ -56,7 +44,7 @@ in
 
 {
   config = {
-    # No grub on a microvm.
+    # No grub on a d2b guest.
     boot.loader.grub.enable = lib.mkDefault false;
     boot.loader.systemd-boot.enable = lib.mkDefault false;
 
@@ -74,7 +62,7 @@ in
     ] ++ lib.optional hasOverlay "overlay";
 
     # Kernel cmdline: boot straight into the system closure.
-    microvm.kernelParams =
+    d2b.vms.${name}.runner.kernelParams =
       let
         toplevel =
           if cfg.storeOnDisk
@@ -83,13 +71,12 @@ in
       in
         config.boot.kernelParams ++ [ "init=${toplevel}/init" ];
 
-    # rfkill / intel_pstate are useless in a microvm and slow boot.
+    # rfkill / intel_pstate are useless in a d2b guest and slow boot.
     # drm only matters if graphics is enabled.
     boot.blacklistedKernelModules = [ "rfkill" "intel_pstate" ]
       ++ lib.optional (!cfg.graphics.enable) "drm";
 
-    # Disable services that the upstream microvm module disables
-    # because they hang / break in the microvm context.
+    # Disable services that hang / break in a microVM guest context.
     systemd.services.mount-pstore.enable = false;
     systemd.generators.systemd-gpt-auto-generator = "/dev/null";
 
@@ -169,10 +156,11 @@ in
         };
       })
 
-      # Per-VM block volumes declared through the preserved
-      # `microvm.volumes` option. processes-json.nix emits the same
-      # default virtio serial for each disk, so the guest can mount by
-      # stable /dev/disk/by-id path instead of ephemeral vda/vdb order.
+      # Per-VM block volumes declared through the
+      # `d2b.vms.<name>.runner.volumes` option. The runner argv emits
+      # the same default virtio serial for each disk, so the guest can
+      # mount by stable /dev/disk/by-id path instead of ephemeral
+      # vda/vdb order.
       volumeFileSystems
 
       # All other virtiofs/9p shares are mounted at their

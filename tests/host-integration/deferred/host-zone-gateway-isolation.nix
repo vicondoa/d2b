@@ -69,7 +69,7 @@ let
     zone = "work";
     stateDir = gatewayStateDir;
     modules = [
-      ({ lib, pkgs, ... }: {
+      ({ lib, pkgs, name, ... }: {
         environment.etc."d2b/gateway.json".text = builtins.toJSON {
           credentialPath = "${gatewayCredentialDir}/relay.sealed.json";
           sealKeyPath = "${gatewayCredentialDir}/seal.key";
@@ -79,7 +79,7 @@ let
             entity = "hc-d2b-work";
           };
         };
-        microvm.shares = lib.mkAfter [
+        d2b.vms.${name}.runner.shares = lib.mkAfter [
           {
             source = gatewayObservationDir;
             mountPoint = "/run/d2b-gateway-observation";

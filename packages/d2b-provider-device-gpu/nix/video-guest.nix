@@ -12,9 +12,7 @@ let
     ../../../pkgs/virtio-media-driver { };
 in
 {
-  microvm.hypervisor = lib.mkDefault "cloud-hypervisor";
-
-  microvm.cloud-hypervisor.extraArgs = lib.mkAfter [
+  d2b.vms.${name}.runner.hypervisor.extraArgs = lib.mkAfter [
     "--vhost-user-media"
     "socket=/run/d2b-video/${vmName}/video.sock"
   ];
