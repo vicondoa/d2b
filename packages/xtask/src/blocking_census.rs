@@ -798,9 +798,9 @@ fn clippy_command(repo_root: &Path, packages: &[String]) -> Command {
 /// is followed by the span, possibly through message continuation lines).
 /// Errors are preferred over warnings - the run only fails on errors, so a
 /// leading warning would not be the cause. Returns `file:line: message`;
-/// falls back to the first header's message when no diagnostic carries a
-/// span (e.g. a cargo-level error), and `None` when stderr has no
-/// diagnostic at all.
+/// when no diagnostic carries a span the fallback is error-first: the first
+/// error header's message, then a spanning warning, then the first header's
+/// message, and `None` when stderr has no diagnostic at all.
 fn first_diagnostic(stderr: &str) -> Option<String> {
     let lines: Vec<&str> = stderr.lines().collect();
     let mut first_warning: Option<String> = None;
@@ -864,8 +864,11 @@ fn first_diagnostic(stderr: &str) -> Option<String> {
 /// the first `compiler-message` at error level (falling back to warning)
 /// that carries a primary span, returned as `file:line: message`. Errors
 /// are preferred over warnings - the run only fails on errors, so a leading
-/// warning would not be the cause. Returns `None` when the stream has no
-/// such message (e.g. a cargo-level failure that never reached rustc).
+/// warning would not be the cause. When no error-level record carries a
+/// primary span, the first error-level record's bare message is returned
+/// before any warning is considered; `None` only when the stream has no
+/// error or warning message (e.g. a cargo-level failure that never reached
+/// rustc).
 fn first_json_diagnostic(json: &str) -> Option<String> {
     let mut first_warning: Option<String> = None;
     let mut first_spanless_error: Option<String> = None;
@@ -915,15 +918,6 @@ fn first_json_diagnostic(json: &str) -> Option<String> {
     }
     first_spanless_error.or(first_warning)
 }
-
-/// Run the census clippy command over the given packages (or the whole
-/// workspace) and return the JSON stream. On failure the error surfaces the
-/// first real diagnostic (file:line and message) rather than a reversed
-/// tail, so a compile error in a large crate stays actionable. Under
-/// `--message-format=json` the diagnostics live in the JSON stream (stderr
-/// only carries cargo's own messages), so the JSON stream is parsed first;
-/// the stderr text is the fallback for cargo-level failures, and the
-/// reversed tail only survives as the last resort.
 
 // ---- Error-level-only picks -------------------------------------
 /// The first error-level header in the stderr text, span or spanless,
@@ -1023,6 +1017,15 @@ fn first_json_error(json: &str) -> Option<String> {
     }
     first_spanless_error
 }
+/// Run the census clippy command over the given packages (or the whole
+/// workspace) and return the JSON stream. On failure the error surfaces the
+/// first real diagnostic (file:line and message) rather than a reversed
+/// tail, so a compile error in a large crate stays actionable. Under
+/// `--message-format=json` the diagnostics live in the JSON stream (stderr
+/// only carries cargo's own messages), so the JSON stream is parsed first;
+/// the stderr text is the fallback for cargo-level failures, and the
+/// reversed tail only survives as the last resort.
+
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run_clippy(repo_root: &Path, packages: &[String]) -> Result<String, String> {
     let output = clippy_command(repo_root, packages)
@@ -1750,8 +1753,9 @@ error: could not compile `d2b-broker` due to previous error
             Some("failed to run custom build command for `d2b-broker`".to_string())
         );
         assert_eq!(
-            first_stderr_error(stderr),
-            Some("failed to run custom build command for `d2b-broker`".to_string())
+            first_json_error(json).or_else(|| first_stderr_error(stderr)),
+            Some("failed to run custom build command for `d2b-broker`".to_string()),
+            "the composed error-first chain picks the stderr cargo error over the warning-only JSON pick"
         );
     }
 
