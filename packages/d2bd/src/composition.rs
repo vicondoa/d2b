@@ -6608,7 +6608,6 @@ fn admit_gateway_zone_request(
             tracing::warn!(
                 error = ?error,
                 method = %method,
-                operation_id = %operation_id,
                 "gateway route admission denied for child-zone request"
             );
             resource_runtime::ResourceRuntimeError::ProviderPathUnavailable

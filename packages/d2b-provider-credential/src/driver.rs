@@ -681,7 +681,6 @@ impl CredentialDriver {
                 // journal is where the confirmed revocation stays observable.
                 tracing::info!(
                     credential = %self.credential_ref(ctx, op)?.to_canonical_string(),
-                    operation_id = %evidence.operation_id(),
                     outcome = evidence.outcome_code(),
                     session_generation = evidence.session_generation().get(),
                     "credential lease revocation confirmed",
@@ -692,7 +691,6 @@ impl CredentialDriver {
             CredentialRevocationOutcome::Uncertain => {
                 tracing::warn!(
                     credential = %self.credential_ref(ctx, op)?.to_canonical_string(),
-                    operation_id = %request.operation_id(),
                     session_generation = request.session_generation().get(),
                     "credential lease revocation unconfirmed; cleanup withheld",
                 );
