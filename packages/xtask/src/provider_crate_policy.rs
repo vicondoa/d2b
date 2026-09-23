@@ -4322,7 +4322,49 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "vsock",
         family: "transport-vsock",
         retires_with: "U10-U12 family rollout (transport-vsock)",
-    }
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/provider_lifecycle.rs",
+        token: "activation_nixos",
+        family: "activation-nixos",
+        retires_with: "permanent: the U15 hosting pass resolves every registered family's effects-service declaration through the hand-written decl table; a fixture set that declares only the families under test still hosts the remaining registered families' service through the declared vocabulary",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/provider_lifecycle.rs",
+        token: "nixos",
+        family: "activation-nixos",
+        retires_with: "permanent: the U15 hosting pass resolves every registered family's effects-service declaration through the hand-written decl table; a fixture set that declares only the families under test still hosts the remaining registered families' service through the declared vocabulary",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/provider_lifecycle.rs",
+        token: "device_security_key",
+        family: "device-security-key",
+        retires_with: "permanent: the U15 hosting pass resolves every registered family's effects-service declaration through the hand-written decl table; a fixture set that declares only the families under test still hosts the remaining registered families' service through the declared vocabulary",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/provider_lifecycle.rs",
+        token: "security_key",
+        family: "device-security-key",
+        retires_with: "permanent: the U15 hosting pass resolves every registered family's effects-service declaration through the hand-written decl table; a fixture set that declares only the families under test still hosts the remaining registered families' service through the declared vocabulary",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/provider_lifecycle.rs",
+        token: "device_usbip",
+        family: "device-usbip",
+        retires_with: "permanent: the U15 hosting pass resolves every registered family's effects-service declaration through the hand-written decl table; a fixture set that declares only the families under test still hosts the remaining registered families' service through the declared vocabulary",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/provider_lifecycle.rs",
+        token: "usbip",
+        family: "device-usbip",
+        retires_with: "permanent: the U15 hosting pass resolves every registered family's effects-service declaration through the hand-written decl table; a fixture set that declares only the families under test still hosts the remaining registered families' service through the declared vocabulary",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2bd/src/provider_lifecycle.rs",
+        token: "wayland",
+        family: "display-wayland",
+        retires_with: "permanent: the U15 hosting pass resolves every registered family's effects-service declaration through the hand-written decl table; a fixture set that declares only the families under test still hosts the remaining registered families' service through the declared vocabulary",
+    },
 ];
 
 
