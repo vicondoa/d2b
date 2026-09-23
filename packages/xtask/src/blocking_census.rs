@@ -1023,7 +1023,7 @@ fn first_json_error(json: &str) -> Option<String> {
 /// `--message-format=json` the diagnostics live in the JSON stream (stderr
 /// only carries cargo's own messages), so the JSON stream is parsed first;
 /// the stderr text is the fallback for cargo-level failures, and the
-/// the reversed tail only survives as the last resort.
+/// reversed tail only survives as the last resort.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run_clippy(repo_root: &Path, packages: &[String]) -> Result<String, String> {
     let output = clippy_command(repo_root, packages)
