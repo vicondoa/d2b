@@ -866,9 +866,10 @@ fn first_diagnostic(stderr: &str) -> Option<String> {
 /// are preferred over warnings - the run only fails on errors, so a leading
 /// warning would not be the cause. When no error-level record carries a
 /// primary span, the first error-level record's bare message is returned
-/// before any warning is considered; `None` only when the stream has no
-/// error or warning message (e.g. a cargo-level failure that never reached
-/// rustc).
+/// before any warning is considered; `None` when the stream has no
+/// error-level record and no warning that carries a primary span (a
+/// spanless warning is dropped, so a spanless-warning-only stream also
+/// yields `None` - e.g. a cargo-level failure that never reached rustc).
 fn first_json_diagnostic(json: &str) -> Option<String> {
     let mut first_warning: Option<String> = None;
     let mut first_spanless_error: Option<String> = None;
@@ -910,10 +911,8 @@ fn first_json_diagnostic(json: &str) -> Option<String> {
             }
             continue;
         }
-        if first_warning.is_none() {
-            if let Some(diagnostic) = spanned {
-                first_warning = Some(diagnostic);
-            }
+        if first_warning.is_none() && let Some(diagnostic) = spanned {
+            first_warning = Some(diagnostic);
         }
     }
     first_spanless_error.or(first_warning)
@@ -1024,8 +1023,7 @@ fn first_json_error(json: &str) -> Option<String> {
 /// `--message-format=json` the diagnostics live in the JSON stream (stderr
 /// only carries cargo's own messages), so the JSON stream is parsed first;
 /// the stderr text is the fallback for cargo-level failures, and the
-/// reversed tail only survives as the last resort.
-
+/// the reversed tail only survives as the last resort.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn run_clippy(repo_root: &Path, packages: &[String]) -> Result<String, String> {
     let output = clippy_command(repo_root, packages)
