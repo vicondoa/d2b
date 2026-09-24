@@ -109,14 +109,10 @@ impl AcaCpuMillis {
         } else {
             Err(AcaTypeError::InvalidResourceBounds)
         }
-    }
-
-    pub const fn get(self) -> u16 {
-        self.0
-    }
 }
-
-impl TryFrom<u16> for AcaCpuMillis {
+}
+ 
+    impl TryFrom<u16> for AcaCpuMillis {
     type Error = AcaTypeError;
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
@@ -135,14 +131,10 @@ impl AcaMemoryMib {
         } else {
             Err(AcaTypeError::InvalidResourceBounds)
         }
-    }
-
-    pub const fn get(self) -> u32 {
-        self.0
-    }
 }
-
-impl TryFrom<u32> for AcaMemoryMib {
+}
+ 
+    impl TryFrom<u32> for AcaMemoryMib {
     type Error = AcaTypeError;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
@@ -216,21 +208,7 @@ impl AcaSandboxProfile {
         &self.disk_image
     }
 
-    pub const fn cpu(&self) -> AcaCpuMillis {
-        self.cpu
-    }
-
-    pub const fn memory(&self) -> AcaMemoryMib {
-        self.memory
-    }
-
-    pub const fn auto_suspend_secs(&self) -> u32 {
-        self.auto_suspend_secs
-    }
-
-    pub fn sandbox_identity_binding_id(&self) -> Option<&AcaManagedIdentityBindingId> {
-        self.sandbox_identity_binding_id.as_ref()
-    }
+    
 }
 
 #[derive(Deserialize)]
@@ -468,20 +446,6 @@ impl AcaProviderConfig {
         })
     }
 
-    /// Require every ACA controller effect to execute in the configured
-    /// Gateway Guest. Host placement is never a valid fallback.
-    pub fn validate_gateway_execution(
-        &self,
-        execution_ref: &ResourceRef,
-    ) -> Result<(), AcaTypeError> {
-        if self.gateway_execution_ref.resource_type().as_str() != "Guest"
-            || execution_ref != &self.gateway_execution_ref
-        {
-            return Err(AcaTypeError::InvalidExecutionBoundary);
-        }
-        Ok(())
-    }
-
     /// Revalidate a Provider configuration at the admission boundary.
     pub fn validate(&self) -> Result<(), AcaTypeError> {
         Self::new(
@@ -683,19 +647,7 @@ pub enum AcaCredentialPurpose {
     Destroy,
 }
 
-impl AcaCredentialPurpose {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Health => "health",
-            Self::Ensure => "ensure",
-            Self::Start => "start",
-            Self::Stop => "stop",
-            Self::Inspect => "inspect",
-            Self::Adopt => "adopt",
-            Self::Destroy => "destroy",
-        }
-    }
-}
+
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct AcaCredentialLease {
@@ -709,10 +661,6 @@ impl AcaCredentialLease {
             metadata,
             expires_at_unix_ms,
         }
-    }
-
-    pub const fn metadata(&self) -> &CredentialLeaseHandle {
-        &self.metadata
     }
 
     pub const fn expires_at_unix_ms(&self) -> u64 {
@@ -750,14 +698,6 @@ impl AcaCredentialLeaseRequest {
         }
     }
 
-    pub const fn operation_id(&self) -> &AcaOperationId {
-        &self.operation_id
-    }
-
-    pub const fn purpose(&self) -> AcaCredentialPurpose {
-        self.purpose
-    }
-
     pub const fn requested_expiry_unix_ms(&self) -> u64 {
         self.requested_expiry_unix_ms
     }
@@ -788,14 +728,7 @@ impl AcaControlContext {
         }
     }
 
-    pub const fn operation_id(&self) -> &AcaOperationId {
-        &self.operation_id
     }
-
-    pub const fn deadline_remaining_ms(&self) -> u32 {
-        self.deadline_remaining_ms
-    }
-}
 
 impl fmt::Debug for AcaControlContext {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -947,8 +880,7 @@ pub trait AcaControl: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::{
-        AcaConfiguredDiskId, AcaCpuMillis, AcaDiskImageSource, AcaMemoryMib, AcaProfileId,
-        AcaProviderConfig, AcaReadinessPolicy, AcaRuntimeConfig, AcaSandboxProfile, ResourceRef,
+        AcaRuntimeConfig,
     };
 
     #[test]
@@ -973,44 +905,5 @@ mod tests {
         assert!(serde_json::from_str::<AcaRuntimeConfig>(&invalid).is_err());
     }
 
-    #[test]
-    fn gateway_execution_validation_has_no_host_fallback() {
-        let profile = AcaSandboxProfile::new(
-            AcaProfileId::parse("default").unwrap(),
-            AcaDiskImageSource::ConfiguredDisk {
-                binding_id: AcaConfiguredDiskId::parse("image-1").unwrap(),
-            },
-            AcaCpuMillis::new(500).unwrap(),
-            AcaMemoryMib::new(2_048).unwrap(),
-            300,
-            None,
-        )
-        .unwrap();
-        let config = AcaProviderConfig::new(
-            ResourceRef::parse("Guest/gateway").unwrap(),
-            super::OpaqueAzureRef::parse("tenant").unwrap(),
-            super::OpaqueAzureRef::parse("client").unwrap(),
-            super::OpaqueAzureRef::parse("subscription").unwrap(),
-            ResourceRef::parse("Credential/control").unwrap(),
-            None,
-            super::AcaConfiguredImageId::parse("environment").unwrap(),
-            super::AcaConfiguredImageId::parse("resource-group").unwrap(),
-            None,
-            AcaProfileId::parse("relay").unwrap(),
-            AcaRuntimeConfig::new(
-                profile,
-                AcaReadinessPolicy::new(1, 1).unwrap(),
-                1,
-                1,
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert!(config
-            .validate_gateway_execution(&ResourceRef::parse("Guest/gateway").unwrap())
-            .is_ok());
-        assert!(config
-            .validate_gateway_execution(&ResourceRef::parse("Host/host-system").unwrap())
-            .is_err());
-    }
+    
 }

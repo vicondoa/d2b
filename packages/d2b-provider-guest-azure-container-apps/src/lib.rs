@@ -8,9 +8,8 @@ mod controller;
 mod effects;
 
 pub use controller::{
-    AcaClock, AcaController, AcaControllerError, AcaPhase, AcaReconcileOutcome, AcaRecoveryState,
-    AcaStatus, AzureContainerAppsRuntimeProvider, CompletedOperationLedger, SystemAcaClock,
-    ACA_GUEST_FINALIZER, ACA_REPAIR_INTERVAL_SECS,
+    AcaClock, AcaController, AcaControllerError, AcaPhase, AcaReconcileOutcome,
+    AzureContainerAppsRuntimeProvider, ACA_GUEST_FINALIZER, ACA_REPAIR_INTERVAL_SECS,
 };
 pub use effects::*;
 

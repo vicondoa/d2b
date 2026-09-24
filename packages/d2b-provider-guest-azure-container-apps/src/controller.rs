@@ -8,7 +8,6 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio::time::{Duration, Instant, timeout_at};
 
 use d2b_contracts_resource::v3::ResourceRef;
@@ -103,45 +102,6 @@ impl fmt::Display for AcaControllerError {
 
 impl std::error::Error for AcaControllerError {}
 
-/// Redacted status projected to the Guest resource.
-#[derive(Clone, PartialEq, Eq)]
-pub struct AcaStatus {
-    phase: AcaPhase,
-    identity_digest: Option<[u8; 32]>,
-    observed_generation: u64,
-}
-
-impl AcaStatus {
-    /// Return the lifecycle phase.
-    pub const fn phase(&self) -> AcaPhase {
-        self.phase
-    }
-
-    /// Return the bounded non-authorizing identity digest.
-    pub const fn identity_digest(&self) -> Option<[u8; 32]> {
-        self.identity_digest
-    }
-
-    /// Return the observed Provider generation.
-    pub const fn observed_generation(&self) -> u64 {
-        self.observed_generation
-    }
-}
-
-impl fmt::Debug for AcaStatus {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AcaStatus")
-            .field("phase", &self.phase)
-            .field(
-                "identity_digest",
-                &self.identity_digest.map(|_| "<redacted>"),
-            )
-            .field("observed_generation", &self.observed_generation)
-            .finish()
-    }
-}
-
 /// Small bounded completed-operation ledger used by the controller adapter.
 #[derive(Debug, Default)]
 pub struct CompletedOperationLedger {
@@ -174,24 +134,6 @@ enum AcaFinalizationStage {
     Observe,
     Stop,
     Delete,
-}
-
-/// Non-secret ACA lifecycle state required for restart recovery.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AcaRecoveryState {
-    /// Current lifecycle phase.
-    pub phase: AcaPhase,
-    /// Whether the finalizer remains installed.
-    pub finalizer_installed: bool,
-    /// Generation used by the readiness attempt budget.
-    pub readiness_generation: u64,
-    /// Number of readiness attempts consumed for the current lifecycle.
-    pub readiness_attempts: u8,
-    /// Last observed lifecycle used to classify readiness retries.
-    pub readiness_lifecycle: Option<AcaSandboxLifecycle>,
-    /// Durable child-first finalization stage.
-    pub finalization_stage: String,
 }
 
 impl CompletedOperationLedger {
@@ -229,25 +171,6 @@ impl CompletedOperationLedger {
     /// Return a previously completed phase.
     pub fn get(&self, operation_id: &AcaOperationId) -> Option<AcaPhase> {
         self.completed.get(operation_id).map(|(_, phase, _)| *phase)
-    }
-}
-
-impl AcaFinalizationStage {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Observe => "observe",
-            Self::Stop => "stop",
-            Self::Delete => "delete",
-        }
-    }
-
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "observe" => Some(Self::Observe),
-            "stop" => Some(Self::Stop),
-            "delete" => Some(Self::Delete),
-            _ => None,
-        }
     }
 }
 
@@ -320,42 +243,6 @@ where
         self
     }
 
-    /// Export non-secret lifecycle state for restart recovery.
-    pub fn recovery_state(&self) -> AcaRecoveryState {
-        AcaRecoveryState {
-            phase: self.phase,
-            finalizer_installed: self.finalizer,
-            readiness_generation: self.readiness_generation,
-            readiness_attempts: self.readiness_attempts,
-            readiness_lifecycle: self.readiness_lifecycle,
-            finalization_stage: self.finalization_stage.as_str().to_owned(),
-        }
-    }
-
-    /// Restore non-secret lifecycle state after controller reconstruction.
-    pub fn restore_recovery_state(
-        mut self,
-        recovery: AcaRecoveryState,
-    ) -> Result<Self, AcaControllerError> {
-        let Some(finalization_stage) = AcaFinalizationStage::parse(&recovery.finalization_stage)
-        else {
-            return Err(AcaControllerError::InvalidState);
-        };
-        if !recovery.finalizer_installed && recovery.phase != AcaPhase::Finalized {
-            return Err(AcaControllerError::InvalidState);
-        }
-        if recovery.readiness_attempts > self.config.readiness().attempts() {
-            return Err(AcaControllerError::InvalidState);
-        }
-        self.phase = recovery.phase;
-        self.finalizer = recovery.finalizer_installed;
-        self.readiness_generation = recovery.readiness_generation;
-        self.readiness_attempts = recovery.readiness_attempts;
-        self.readiness_lifecycle = recovery.readiness_lifecycle;
-        self.finalization_stage = finalization_stage;
-        Ok(self)
-    }
-
     /// Return the current phase.
     pub const fn phase(&self) -> AcaPhase {
         self.phase
@@ -364,21 +251,6 @@ where
     /// Return whether the finalizer remains installed.
     pub const fn finalizer_installed(&self) -> bool {
         self.finalizer
-    }
-
-    /// Return the current redacted status projection.
-    pub fn status(&self) -> AcaStatus {
-        AcaStatus {
-            phase: self.phase,
-            identity_digest: self.observed.as_ref().map(|record| {
-                let mut digest = Sha256::new();
-                digest.update(record.id.as_str().as_bytes());
-                digest.update(self.binding.provider_generation.to_be_bytes());
-                digest.update(self.binding.config_fingerprint);
-                digest.finalize().into()
-            }),
-            observed_generation: self.binding.provider_generation,
-        }
     }
 
     /// Reconcile using external observation before any ensure effect.
@@ -429,92 +301,6 @@ where
                 self.ensure_sandbox(operation_id, deadline_remaining_ms)
                     .await
             }
-        }
-    }
-
-    /// Re-derive state without creating a missing sandbox.
-    pub async fn adopt(
-        &mut self,
-        operation_id: AcaOperationId,
-        deadline_remaining_ms: u32,
-    ) -> Result<AcaReconcileOutcome, AcaControllerError> {
-        self.ensure_active()?;
-        let query = AcaWorkloadQuery {
-            binding: self.binding.clone(),
-            profile_id: self.config.profile().profile_id().clone(),
-        };
-        let candidates = self
-            .with_lease(
-                operation_id.clone(),
-                AcaCredentialPurpose::Adopt,
-                deadline_remaining_ms,
-                move |control, lease, context| async move {
-                    control.find_sandboxes(&lease, &context, &query).await
-                },
-            )
-            .await?;
-        let candidate = match one_candidate(candidates) {
-            Ok(Some(candidate)) => candidate,
-            Ok(None) => {
-                tracing::warn!(
-                    resource = %self.binding.guest_uid,
-                    provider = "runtime-azure-container-apps",
-                    "adoption refused: no matching sandbox found for binding"
-                );
-                return Err(AcaControllerError::SandboxUnavailable);
-            }
-            Err(error) => {
-                tracing::warn!(
-                    resource = %self.binding.guest_uid,
-                    provider = "runtime-azure-container-apps",
-                    code = error.code(),
-                    "adoption failed while resolving sandbox candidates"
-                );
-                self.phase = AcaPhase::Degraded;
-                return Err(error);
-            }
-        };
-        self.observed = Some(candidate.clone());
-        self.ensure_sandbox_generation(&candidate)?;
-        if candidate.lifecycle == AcaSandboxLifecycle::Running {
-            match self
-                .health(operation_id.clone(), deadline_remaining_ms)
-                .await
-            {
-                Ok(AcaControlHealth::Ready) => {
-                    self.reset_readiness();
-                    self.phase = AcaPhase::Ready;
-                    self.record(operation_id);
-                    Ok(AcaReconcileOutcome::Converged)
-                }
-                Ok(AcaControlHealth::Degraded | AcaControlHealth::Unavailable) => {
-                    self.readiness_retry(AcaSandboxLifecycle::Running)
-                }
-                Err(error) if self.retryable_error(error) => {
-                    self.readiness_retry(AcaSandboxLifecycle::Running)
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        resource = %self.binding.guest_uid,
-                        provider = "runtime-azure-container-apps",
-                        code = error.code(),
-                        "adopted sandbox health probe failed non-retryably"
-                    );
-                    self.phase = AcaPhase::Degraded;
-                    Err(error)
-                }
-            }
-        } else {
-            tracing::debug!(
-                resource = %self.binding.guest_uid,
-                provider = "runtime-azure-container-apps",
-                lifecycle = ?candidate.lifecycle,
-                "adopted sandbox not running; deferring readiness"
-            );
-            self.phase = AcaPhase::Degraded;
-            Ok(AcaReconcileOutcome::Retry {
-                after_ms: self.config.readiness().interval_ms(),
-            })
         }
     }
 
