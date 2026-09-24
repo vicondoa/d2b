@@ -59,3 +59,10 @@ caller census: `--no-follow-symlinks` is passed by no caller in the workspace
 independent of the flag). LOC measured, not estimated; deps unmoved (twin is
 not a workspace member, so 0 workspace deps change; the live crate's libc +
 tempfile stays).
+
+## U2 execution (2026-09-24)
+
+- re-verified census at HEAD: literal path `nixos-modules/host-activation-helper` appears in zero tracked files outside the twin tree (only .git/index internals + this plan/lane docs); root Cargo.toml/Makefile/rust-host-tools.nix reference only `packages/d2b-host-activation-helper`.
+- applied: `nixos-modules/host-activation-helper/` tree deleted wholesale (Cargo.toml + Cargo.lock + src/) - covers findings 1+2 (consolidated).
+- applied: dropped `--no-follow-symlinks` parse arm + usage-banner token from the live crate; no caller in workspace passes the flag (re-verified).
+- tests: cargo test -p d2b-host-activation-helper 2 passed.
