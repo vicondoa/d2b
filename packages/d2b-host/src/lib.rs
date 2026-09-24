@@ -38,9 +38,6 @@ pub mod seccomp;
 // reconciliation.
 pub mod hardlink_farm;
 pub mod host_generation;
-// Live ssh-keygen fingerprint + public-key probe wrapping ssh-keygen -lf
-// and ssh-keygen -y -f for the broker-side rotate / trust / show ops.
-pub mod ssh_keygen;
 // Typed declaration + pure enforcer for the per-VM state-directory
 // ownership matrix under /var/lib/d2b/vms/<vm>/. CRITICAL: includes
 // the hardlink-farm carve-out so recursive ownership ops never leak into
@@ -53,11 +50,3 @@ pub mod host_prep_dag;
 // Pure qemu-media physical USB identity/preflight helpers. Live sysfs reads,
 // registry writes, udev reloads, and fd opens stay in the privileged broker.
 pub mod media;
-
-// v1.1.1 RenderDnsmasqEnvConf daemon-host-prep DAG op support.
-// Per ADR 0018. Pure-Rust dnsmasq config
-// rendering from typed env metadata; the broker writes the
-// rendered file to /var/lib/d2b/dnsmasq/<env>.conf
-// atomically (broker-only sole-writer invariant). Replaces the
-// retired host-singleton dnsmasq render path.
-pub mod dnsmasq;

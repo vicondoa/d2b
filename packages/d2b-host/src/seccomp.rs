@@ -249,18 +249,6 @@ mod tests {
         let codes = allowed_codes(&prog);
         assert!(codes.contains(&(constants::TUNSETIFF as u32)));
         assert!(codes.contains(&(constants::TUNSETGROUP as u32)));
-        assert!(
-            !codes.contains(&(constants::TUNSETPERSIST as u32)),
-            "TUNSETPERSIST must NOT be in NetTun BPF (broker-only)"
-        );
-        assert!(
-            !codes.contains(&(constants::TUNSETOWNER as u32)),
-            "TUNSETOWNER must NOT be in NetTun BPF (broker-only)"
-        );
-        assert!(
-            !codes.contains(&(constants::TUNATTACHFILTER as u32)),
-            "TUNATTACHFILTER must never appear in any per-role BPF"
-        );
         assert_eq!(codes.len(), 2);
     }
 
@@ -366,7 +354,6 @@ mod tests {
         ] {
             assert!(codes.contains(&c), "CH runner missing 0x{c:08x}");
         }
-        assert!(!codes.contains(&(constants::TUNATTACHFILTER as u32)));
         // Verify deduplication: no element appears twice.
         let mut sorted = codes.clone();
         sorted.sort();

@@ -50,10 +50,6 @@
 //!   activate path refuses to mutate any generation dir that lacks
 //!   the marker - protects against an operator hand-rolling a
 //!   directory and then having `d2b switch` activate it.
-//! - [`swap_current_symlink`]: atomic tmp+rename of the
-//!   `current -> generations/<N>` symlink. Crash-safe: the
-//!   intermediate `current.tmp` symlink is removed by activation
-//!   reconciliation if a previous swap crashed mid-way.
 //!
 //! All path-based primitives are async (`tokio::fs`) so the broker's
 //! store-sync path can drive them from an async runtime without
@@ -67,10 +63,8 @@
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 
-use rustix::fs::{CWD, RenameFlags, renameat_with};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
@@ -311,19 +305,6 @@ pub struct BuildStoreViewRequest {
     pub marker: GenerationMarker,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReplaceLivePathsRequest {
-    /// Per-VM farm root (`.../store-view`), not the `live/` dir.
-    pub farm_root: PathBuf,
-    /// Stage tag for crash-identifiable repair directories.
-    pub stage_tag: String,
-    /// Absolute `/nix/store/<...>` closure paths to rebuild and exchange
-    /// into `live/`.
-    pub closure_paths: Vec<PathBuf>,
-}
-
-/// Return the flat live hardlink pool served by virtiofsd.
 pub fn live_dir(store_root: &Path) -> PathBuf {
     store_root.join("live")
 }
@@ -815,7 +796,7 @@ pub async fn build_farm(
         } else {
             // Populated generation dir with no trusted marker: a build
             // that crashed before write_generation_marker. It is never
-            // activatable (swap_current_symlink + read_generation_marker
+            // activatable (the split-layout current pointers + read_generation_marker
             // both require the marker) and its contents can't be trusted
             // to belong to this closure - so a colliding closure must not
             // be hardlinked on top of it. Rebuild the generation from
@@ -944,122 +925,6 @@ async fn link_closures_into_live(
     }
     let _ = tokio::fs::remove_dir_all(&stage_dir).await;
     Ok(counts)
-}
-
-/// Atomic `renameat2(RENAME_EXCHANGE)` of two paths.
-///
-/// `tokio::fs` has no async form for `renameat2` with `RENAME_EXCHANGE`
-/// (the only atomic swap of two existing paths), and `spawn_blocking`
-/// is banned by the async-purity policy (plan KD2), so the single
-/// exchange syscall runs inline. It is the same blocking class as a
-/// plain `rename(2)` (path resolution + one metadata exchange,
-/// microseconds) - not a long op - so it adds negligible pressure to
-/// the runtime, exactly like the short-stat class the async-purity plan
-/// explicitly accepts.
-async fn rename_exchange(staged: &Path, live: &Path) -> Result<(), HardlinkFarmError> {
-    renameat_with(CWD, staged, CWD, live, RenameFlags::EXCHANGE).map_err(|e| {
-        HardlinkFarmError::Io {
-            path: live.display().to_string(),
-            detail: format!("renameat2(RENAME_EXCHANGE): {e}"),
-        }
-    })
-}
-
-pub async fn replace_live_top_level_paths(
-    store_root: &Path,
-    stage_tag: &str,
-    closure_paths: &[PathBuf],
-) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
-    let live_dir = live_dir(store_root);
-    tokio::fs::create_dir_all(&live_dir)
-        .await
-        .map_err(|e| HardlinkFarmError::Io {
-            path: live_dir.display().to_string(),
-            detail: e.to_string(),
-        })?;
-    assert_same_filesystem(store_root, &live_dir).await?;
-    let stage_dir = store_root.join(format!(
-        "live.repair.stage.{}.{}",
-        stage_tag,
-        std::process::id()
-    ));
-    if tokio::fs::try_exists(&stage_dir).await.unwrap_or(false) {
-        tokio::fs::remove_dir_all(&stage_dir)
-            .await
-            .map_err(|e| HardlinkFarmError::Io {
-                path: stage_dir.display().to_string(),
-                detail: e.to_string(),
-            })?;
-    }
-    tokio::fs::create_dir_all(&stage_dir)
-        .await
-        .map_err(|e| HardlinkFarmError::Io {
-            path: stage_dir.display().to_string(),
-            detail: e.to_string(),
-        })?;
-
-    let mut counts = StoreViewLinkCounts::default();
-    let result: Result<(), HardlinkFarmError> = async {
-        for source in closure_paths {
-            assert_same_filesystem(source, store_root).await?;
-            let file_name = source.file_name().ok_or_else(|| HardlinkFarmError::Io {
-                path: source.display().to_string(),
-                detail: "source path has no basename".to_owned(),
-            })?;
-            let staged_path = stage_dir.join(file_name);
-            let live_path = live_dir.join(file_name);
-            hardlink_tree(source, &staged_path).await?;
-            fsync_tree_bottom_up(&staged_path).await?;
-            fsync_dir(&stage_dir).await?;
-            if tokio::fs::symlink_metadata(&live_path).await.is_ok() {
-                rename_exchange(&staged_path, &live_path).await?;
-                fsync_dir(&live_dir).await?;
-                remove_path_any(&staged_path).await?;
-                fsync_dir(&stage_dir).await?;
-            } else {
-                tokio::fs::rename(&staged_path, &live_path)
-                    .await
-                    .map_err(|e| HardlinkFarmError::Io {
-                        path: live_path.display().to_string(),
-                        detail: e.to_string(),
-                    })?;
-                fsync_dir(&live_dir).await?;
-            }
-            counts.linked = counts.linked.saturating_add(1);
-        }
-        Ok(())
-    }
-    .await;
-    if let Err(err) = result {
-        let _ = tokio::fs::remove_dir_all(&stage_dir).await;
-        return Err(err);
-    }
-    let _ = tokio::fs::remove_dir_all(&stage_dir).await;
-    Ok(counts)
-}
-
-async fn remove_path_any(path: &Path) -> Result<(), HardlinkFarmError> {
-    let meta = tokio::fs::symlink_metadata(path)
-        .await
-        .map_err(|e| HardlinkFarmError::Io {
-            path: path.display().to_string(),
-            detail: format!("stat before remove: {e}"),
-        })?;
-    if meta.is_dir() {
-        tokio::fs::remove_dir_all(path)
-            .await
-            .map_err(|e| HardlinkFarmError::Io {
-                path: path.display().to_string(),
-                detail: format!("remove dir: {e}"),
-            })
-    } else {
-        tokio::fs::remove_file(path)
-            .await
-            .map_err(|e| HardlinkFarmError::Io {
-                path: path.display().to_string(),
-                detail: format!("remove file: {e}"),
-            })
-    }
 }
 
 async fn fsync_dir(path: &Path) -> Result<(), HardlinkFarmError> {
@@ -1758,205 +1623,11 @@ pub async fn read_generation_marker(
     })
 }
 
-/// Atomic swap of the `<store_root>/current` symlink to point at
-/// `<store_root>/generations/<N>`. Implementation:
-///
-/// 1. Verify the target generation has a valid marker (refuses
-///    activation of marker-less dirs).
-/// 2. Verify same-filesystem between the symlink parent and target
-///    (hardlink farms only work on the same fs; symlinks are
-///    cross-fs-tolerant, but the activation contract pins same-fs so
-///    the surface stays consistent with the farm itself).
-/// 3. Create `<store_root>/current.tmp -> generations/<N>` via
-///    `symlinkat`.
-/// 4. `renameat2` (via `nix::fcntl::renameat`) the tmp symlink over
-///    `current`. POSIX `rename(2)` is atomic for symlinks; the
-///    swap is either pre-state or post-state, never partial.
-///
-/// On a crash between step 3 and 4, `current.tmp` is left behind;
-/// [`reconcile_stale_swap_tmp`] removes it on next activate-time.
-pub async fn swap_current_symlink(
-    store_root: &Path,
-    generation_number: u32,
-) -> Result<(), HardlinkFarmError> {
-    let generation_dir = store_root
-        .join("generations")
-        .join(format!("{generation_number}"));
-    // Step 1: marker validation.
-    let marker = read_generation_marker(&generation_dir).await?;
-    if marker.generation_number != generation_number {
-        return Err(HardlinkFarmError::MarkerUnparseable {
-            path: generation_dir.join("marker.json").display().to_string(),
-            detail: format!(
-                "marker.generationNumber={} does not match directory name {generation_number}",
-                marker.generation_number
-            ),
-        });
-    }
-
-    let current_path = store_root.join("current");
-    let tmp_path = store_root.join("current.tmp");
-
-    // Step 2: same-filesystem check between store_root and the
-    // generation dir. (Both are typically under the same prefix
-    // anyway; the check catches a rare case where an operator
-    // bind-mounted `generations/` from another fs.)
-    assert_same_filesystem(store_root, &generation_dir).await?;
-
-    // Step 3: clean up any stale tmp from a previous crashed swap.
-    reconcile_stale_swap_tmp(store_root).await?;
-
-    // Step 3: write the new tmp symlink.
-    let relative_target = PathBuf::from("generations").join(format!("{generation_number}"));
-    tokio::fs::symlink(&relative_target, &tmp_path)
-        .await
-        .map_err(|e| HardlinkFarmError::Io {
-            path: tmp_path.display().to_string(),
-            detail: e.to_string(),
-        })?;
-
-    // Step 4: atomic rename over the existing current symlink.
-    tokio::fs::rename(&tmp_path, &current_path)
-        .await
-        .map_err(|e| HardlinkFarmError::Io {
-            path: current_path.display().to_string(),
-            detail: e.to_string(),
-        })?;
-
-    // Review note: fsync the store root AFTER
-    // the rename so the directory entry update is durable under
-    // power loss (ext4 with `data=writeback`, XFS, etc.). Best
-    // effort: errors are non-fatal because the rename itself is
-    // POSIX-atomic for symlinks - fsync only matters when the
-    // filesystem batches metadata updates.
-    if let Ok(dir) = tokio::fs::File::open(store_root).await {
-        let _ = dir.sync_all().await;
-    }
-
-    Ok(())
-}
-
-/// Read the current generation number from `<store_root>/current`.
-pub async fn current_generation(store_root: &Path) -> Result<Option<u64>, HardlinkFarmError> {
-    let current = store_root.join("current");
-    let target = match tokio::fs::read_link(&current).await {
-        Ok(target) => target,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => {
-            return Err(HardlinkFarmError::Io {
-                path: current.display().to_string(),
-                detail: err.to_string(),
-            });
-        }
-    };
-    let Some(name) = target.file_name().and_then(|n| n.to_str()) else {
-        return Ok(None);
-    };
-    match name.parse::<u64>() {
-        Ok(n) => Ok(Some(n)),
-        Err(_) => Ok(None),
-    }
-}
-
-/// Sweep `live/` to the union of top-level store path basenames required by
-/// `retained_generations`.
-pub async fn sweep_live_pool(
-    store_root: &Path,
-    retained_generations: &[u64],
-) -> Result<usize, HardlinkFarmError> {
-    let live = live_dir(store_root);
-    let mut desired = BTreeSet::new();
-    for generation in retained_generations {
-        let store_paths = generation_dir(store_root, *generation).join("store-paths");
-        let content = match tokio::fs::read_to_string(&store_paths).await {
-            Ok(content) => content,
-            Err(_) => return Ok(0),
-        };
-        for line in content.lines().filter(|line| !line.trim().is_empty()) {
-            let path = Path::new(line);
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                desired.insert(name.to_owned());
-            }
-        }
-    }
-
-    let mut removed = 0;
-    let mut entries = match tokio::fs::read_dir(&live).await {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(err) => {
-            return Err(HardlinkFarmError::Io {
-                path: live.display().to_string(),
-                detail: err.to_string(),
-            });
-        }
-    };
-
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| HardlinkFarmError::Io {
-            path: live.display().to_string(),
-            detail: e.to_string(),
-        })?
-    {
-        let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
-        };
-        if name_str.starts_with(".d2b-marker-") || name_str.starts_with("live.stage.") {
-            continue;
-        }
-        if desired.contains(name_str) {
-            continue;
-        }
-        let path = entry.path();
-        let meta = tokio::fs::symlink_metadata(&path)
-            .await
-            .map_err(|e| HardlinkFarmError::Io {
-                path: path.display().to_string(),
-                detail: e.to_string(),
-            })?;
-        if meta.is_dir() {
-            tokio::fs::remove_dir_all(&path)
-                .await
-                .map_err(|e| HardlinkFarmError::Io {
-                    path: path.display().to_string(),
-                    detail: e.to_string(),
-                })?;
-        } else {
-            tokio::fs::remove_file(&path)
-                .await
-                .map_err(|e| HardlinkFarmError::Io {
-                    path: path.display().to_string(),
-                    detail: e.to_string(),
-                })?;
-        }
-        removed += 1;
-    }
-    Ok(removed)
-}
-
-/// Remove a stale `current.tmp` left behind by a previous
-/// activation that crashed between symlink-write and rename.
-/// Idempotent: no error if the tmp doesn't exist.
-pub async fn reconcile_stale_swap_tmp(store_root: &Path) -> Result<(), HardlinkFarmError> {
-    let tmp_path = store_root.join("current.tmp");
-    match tokio::fs::remove_file(&tmp_path).await {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(HardlinkFarmError::Io {
-            path: tmp_path.display().to_string(),
-            detail: err.to_string(),
-        }),
-    }
-}
-
 /// Atomically point `<base_dir>/current` at `generations/<generation_id>`.
 ///
 /// `base_dir` is either `state/` or `meta/`. The target must already
 /// exist (the caller materialised it). tmp symlink + POSIX-atomic
-/// rename + directory fsync, mirroring [`swap_current_symlink`] but
+/// rename + directory fsync, keyed on the collision-free generation id
 /// keyed on the collision-free `generation_id` rather than a u32. The
 /// relative target keeps `current` valid if the farm root is moved.
 async fn swap_current_pointer(base_dir: &Path, generation_id: &str) -> Result<(), HardlinkFarmError> {
@@ -2191,12 +1862,6 @@ mod tests {
             vm: "corp-vm".to_owned(),
             generation_number: r#gen,
         }
-    }
-
-    async fn build_generation(store: &Path, r#gen: u32) {
-        let dir = store.join("generations").join(format!("{gen}"));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        write_generation_marker(&dir, &make_marker(r#gen)).await.unwrap();
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -2620,175 +2285,6 @@ mod tests {
         ));
     }
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn swap_current_creates_symlink_to_target_generation() {
-        let dir = tempdir().unwrap();
-        let store = dir.path().join("store");
-        tokio::fs::create_dir_all(&store).await.unwrap();
-        build_generation(&store, 1).await;
-
-        swap_current_symlink(&store, 1).await.unwrap();
-
-        let current = store.join("current");
-        assert!(current.exists());
-        let target = tokio::fs::read_link(&current).await.unwrap();
-        assert_eq!(target, PathBuf::from("generations/1"));
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn swap_current_overwrites_existing_symlink() {
-        let dir = tempdir().unwrap();
-        let store = dir.path().join("store");
-        tokio::fs::create_dir_all(&store).await.unwrap();
-        build_generation(&store, 1).await;
-        build_generation(&store, 2).await;
-
-        swap_current_symlink(&store, 1).await.unwrap();
-        swap_current_symlink(&store, 2).await.unwrap();
-
-        let target = tokio::fs::read_link(store.join("current")).await.unwrap();
-        assert_eq!(target, PathBuf::from("generations/2"));
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn swap_current_refuses_marker_less_generation() {
-        let dir = tempdir().unwrap();
-        let store = dir.path().join("store");
-        tokio::fs::create_dir_all(store.join("generations/5"))
-            .await
-            .unwrap();
-        // No marker written.
-
-        let result = swap_current_symlink(&store, 5).await;
-        assert!(matches!(
-            result,
-            Err(HardlinkFarmError::MarkerMissing { .. })
-        ));
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn swap_current_refuses_marker_with_wrong_generation_number() {
-        let dir = tempdir().unwrap();
-        let store = dir.path().join("store");
-        tokio::fs::create_dir_all(&store).await.unwrap();
-        let gen_dir = store.join("generations/6");
-        // Marker claims generationNumber = 99 but lives in dir "6".
-        let mut bogus_marker = make_marker(99);
-        bogus_marker.generation_number = 99;
-        write_generation_marker(&gen_dir, &bogus_marker).await.unwrap();
-
-        let result = swap_current_symlink(&store, 6).await;
-        assert!(matches!(
-            result,
-            Err(HardlinkFarmError::MarkerUnparseable { .. })
-        ));
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn reconcile_removes_stale_swap_tmp() {
-        let dir = tempdir().unwrap();
-        let store = dir.path().join("store");
-        tokio::fs::create_dir_all(&store).await.unwrap();
-        // Simulate a crashed swap: leave current.tmp behind.
-        std::os::unix::fs::symlink("generations/1", store.join("current.tmp")).unwrap();
-        // `.exists()` follows symlinks; for a dangling symlink it
-        // returns false. Use `symlink_metadata` to check link
-        // presence regardless of target.
-        assert!(tokio::fs::symlink_metadata(store.join("current.tmp"))
-            .await
-            .is_ok());
-
-        reconcile_stale_swap_tmp(&store).await.unwrap();
-        assert!(tokio::fs::symlink_metadata(store.join("current.tmp"))
-            .await
-            .is_err());
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn reconcile_is_idempotent() {
-        let dir = tempdir().unwrap();
-        let store = dir.path().join("store");
-        tokio::fs::create_dir_all(&store).await.unwrap();
-        // No current.tmp present; reconcile should be a no-op.
-        reconcile_stale_swap_tmp(&store).await.unwrap();
-        // Call twice for idempotency.
-        reconcile_stale_swap_tmp(&store).await.unwrap();
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn sweep_live_pool_keeps_retained_generations_and_removes_stale_entries() {
-        let dir = tempdir().unwrap();
-        let source_root = dir.path().join("source-store");
-        let farm_root = dir.path().join("farm");
-        let gen1_path = source_root.join("aaa-system");
-        let gen2_path = source_root.join("bbb-system");
-        let stale_path = live_dir(&farm_root).join("stale-system");
-        tokio::fs::create_dir_all(&gen1_path).await.unwrap();
-        tokio::fs::create_dir_all(&gen2_path).await.unwrap();
-        tokio::fs::write(gen1_path.join("payload"), b"a").await.unwrap();
-        tokio::fs::write(gen2_path.join("payload"), b"b").await.unwrap();
-
-        build_farm(
-            &farm_root,
-            1,
-            std::slice::from_ref(&gen1_path),
-            &GenerationMarker {
-                closure_hash: "toplevel:aaa-system".to_owned(),
-                d2b_version: "0.4.0".to_owned(),
-                activated_at: "2026-05-29T09:00:00Z".to_owned(),
-                vm: "corp-vm".to_owned(),
-                generation_number: 1,
-            },
-        )
-        .await
-        .unwrap();
-        build_farm(
-            &farm_root,
-            2,
-            std::slice::from_ref(&gen2_path),
-            &GenerationMarker {
-                closure_hash: "toplevel:bbb-system".to_owned(),
-                d2b_version: "0.4.0".to_owned(),
-                activated_at: "2026-05-29T09:00:00Z".to_owned(),
-                vm: "corp-vm".to_owned(),
-                generation_number: 2,
-            },
-        )
-        .await
-        .unwrap();
-        tokio::fs::create_dir_all(&stale_path).await.unwrap();
-        tokio::fs::write(stale_path.join("payload"), b"stale").await.unwrap();
-
-        let removed = sweep_live_pool(&farm_root, &[2]).await.unwrap();
-        assert_eq!(removed, 2);
-        assert!(!live_dir(&farm_root).join("aaa-system").exists());
-        assert!(live_dir(&farm_root).join("bbb-system/payload").exists());
-        assert!(!stale_path.exists());
-        assert!(live_dir(&farm_root).join(".d2b-marker-corp-vm").exists());
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn swap_current_cleans_up_stale_tmp_before_writing_new_one() {
-        let dir = tempdir().unwrap();
-        let store = dir.path().join("store");
-        tokio::fs::create_dir_all(&store).await.unwrap();
-        build_generation(&store, 1).await;
-        // Leave a stale tmp from a previous crashed swap.
-        std::os::unix::fs::symlink("generations/99", store.join("current.tmp")).unwrap();
-
-        swap_current_symlink(&store, 1).await.unwrap();
-        let target = tokio::fs::read_link(store.join("current")).await.unwrap();
-        assert_eq!(target, PathBuf::from("generations/1"));
-    }
-
     #[test]
     fn marker_round_trip_serializable() {
         let m = make_marker(7);
@@ -3025,51 +2521,6 @@ mod tests {
         build_store_view(&farm, &gid, &closure, &marker_a)
             .await
             .expect("idempotent rebuild");
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn replace_live_top_level_paths_exchanges_existing_tree() {
-        let dir = tempdir().unwrap();
-        let farm = dir.path().join("farm");
-        let closure = split_closure(dir.path());
-        let system = system_store_path(&closure).map(Path::to_path_buf);
-        let gid = generation_id(&closure, system.as_deref());
-        let marker = GenerationMarker {
-            closure_hash: "sha256:split".to_owned(),
-            d2b_version: "0.4.0".to_owned(),
-            activated_at: "2026-06-09T09:00:00Z".to_owned(),
-            vm: "corp-vm".to_owned(),
-            generation_number: 11,
-        };
-        build_store_view(&farm, &gid, &closure, &marker).await.unwrap();
-        let live_pkg = live_dir(&farm).join("zzz-nixos-system-host");
-        tokio::fs::remove_dir_all(&live_pkg).await.unwrap();
-        tokio::fs::create_dir_all(&live_pkg).await.unwrap();
-        tokio::fs::write(live_pkg.join("bin"), "drifted").await.unwrap();
-
-        let counts =
-            replace_live_top_level_paths(&farm, "repair-test", &closure).await.unwrap();
-        assert_eq!(counts.linked, 2);
-        assert_eq!(
-            tokio::fs::read_to_string(live_pkg.join("bin/switch-to-configuration"))
-                .await
-                .unwrap(),
-            "#!/bin/sh\n"
-        );
-        let mut farm_entries = tokio::fs::read_dir(&farm).await.unwrap();
-        let mut has_repair_stage = false;
-        while let Some(entry) = farm_entries.next_entry().await.unwrap() {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("live.repair.stage.")
-            {
-                has_repair_stage = true;
-                break;
-            }
-        }
-        assert!(!has_repair_stage, "repair stage dir should be cleaned");
     }
 
     // -- sync.lock owner record ----------------------------------------------

@@ -28,15 +28,8 @@ pub mod constants {
 
     /// `<linux/if_tun.h>` - set up the TAP/TUN interface.
     pub const TUNSETIFF: Number = 0x400454ca;
-    /// `<linux/if_tun.h>` - set persistent flag.
-    pub const TUNSETPERSIST: Number = 0x400454cb;
-    /// `<linux/if_tun.h>` - set TAP owner uid.
-    pub const TUNSETOWNER: Number = 0x400454cc;
     /// `<linux/if_tun.h>` - set TAP owner gid.
     pub const TUNSETGROUP: Number = 0x400454ce;
-    /// `<linux/if_tun.h>` - attach a BPF filter (denied because it leads
-    /// to undeclared packet inspection paths).
-    pub const TUNATTACHFILTER: Number = 0x401054d5;
 
     /// `<linux/kvm.h>` - create a VM.
     pub const KVM_CREATE_VM: Number = 0xae01;
@@ -132,7 +125,7 @@ pub struct RoleResources {
 /// Returns the per-role ioctl allowlist derived from the device classes
 /// the role declares. The result is sorted + deduplicated so
 /// fixture comparisons stay deterministic.
-pub fn ioctl_allowlist(resources: &RoleResources) -> Vec<constants::Number> {
+pub(crate) fn ioctl_allowlist(resources: &RoleResources) -> Vec<constants::Number> {
     let mut set: BTreeSet<constants::Number> = BTreeSet::new();
     for class in &resources.device_classes {
         for num in class_ioctls(*class) {
@@ -194,7 +187,8 @@ fn class_ioctls(class: DeviceClass) -> &'static [constants::Number] {
 }
 
 /// True if `ioctl` is on the allowlist derived from `resources`.
-pub fn is_allowed(resources: &RoleResources, ioctl: constants::Number) -> bool {
+#[cfg(test)]
+pub(crate) fn is_allowed(resources: &RoleResources, ioctl: constants::Number) -> bool {
     resources
         .device_classes
         .iter()
@@ -318,7 +312,6 @@ mod tests {
             device_classes: vec![DeviceClass::NetTun, DeviceClass::VhostNet],
         };
         assert!(is_allowed(&r, constants::TUNSETIFF));
-        assert!(!is_allowed(&r, constants::TUNATTACHFILTER));
         assert!(is_allowed(&r, constants::VHOST_SET_OWNER));
     }
 
