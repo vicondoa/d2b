@@ -12,6 +12,7 @@ use std::{
 use d2b_contracts_provider::v3::{
     ComponentType, ControllerInstanceScope, ControllerTargetKind, ProviderManifest,
 };
+use d2b_contracts_resource::redacted_debug;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::process::PROCESS_RESOURCE_TYPE;
 use d2b_contracts_resource::v3::{
@@ -64,11 +65,7 @@ impl AssignmentEpoch {
     }
 }
 
-impl fmt::Debug for AssignmentEpoch {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("AssignmentEpoch(<redacted>)")
-    }
-}
+redacted_debug!(AssignmentEpoch);
 
 /// The exact target selected by a contract-owned placement anchor.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
