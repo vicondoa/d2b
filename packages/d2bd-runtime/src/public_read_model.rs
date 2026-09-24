@@ -240,10 +240,7 @@ fn public_artifact_fingerprint_hash(fingerprint: &PublicArtifactFingerprint) -> 
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let digest = hasher.finalize();
-    digest[..12]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
+    crate::runtime_util::hex_bytes(&digest[..12])
 }
 
 fn system_unix_millis() -> u128 {

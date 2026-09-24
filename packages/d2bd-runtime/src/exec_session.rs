@@ -1436,7 +1436,7 @@ impl SessionTable {
         let mut handle = None;
         for _ in 0..HANDLE_RETRY_LIMIT {
             let candidate = match r#gen() {
-                Some(bytes) => hex_encode(&bytes),
+                Some(bytes) => crate::runtime_util::hex_bytes(&bytes),
                 None => return Err(SessionReserveError::HandleExhausted),
             };
             if !inner.sessions.contains_key(&candidate) {
@@ -1553,15 +1553,6 @@ fn default_handle_bytes() -> Option<[u8; 16]> {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).ok()?;
     Some(bytes)
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(char::from_digit((byte >> 4) as u32, 16).unwrap());
-        out.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap());
-    }
-    out
 }
 
 /// Map an execution-side op error onto the establish-side error surface so a

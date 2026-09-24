@@ -15,3 +15,10 @@ net: -~230 lines, -0 deps
 - hex-renderer: grep "fn hex_|hex_digest" d2bd-runtime/src -> canonical hex_bytes runtime_util.rs:24 + 6 hand-rolled: hex_lower daemon_audit.rs:1763, hex_encode exec_session.rs:1585, hex_digest guest_component_session.rs:587 + guest_mode.rs:353, inline console_session.rs:124 + resource_runtime_support.rs:1756
 ## Sources
 U19, U20, U21, U31, U38, U46, U18, U53, U54, U55, U68, U84, U97 lane files; ADR-046-provider-transport-vsock.md
+## U4 execution (2026-09-24)
+- uuid-renderer row: APPLIED (see U97 outcome; 12 sites at HEAD migrated to ResourceUid::from_bytes).
+- civil-date row: APPLIED - 2 copies folded onto civil_from_days (made pub(crate)): daemon_audit.rs ymd_from_unix (delegates via unix.div_euclid(86_400)) and runtime_process.rs days_to_ymd (delegates; pub signature kept - d2bd/src/composition.rs:179 imports it). Byte-identical behavior re-verified: both copies run the same Hinnant algorithm with floor division; only the input (unix seconds vs days) and tuple types differ. d2b-broker/src/audit.rs ymd_from_unix is a separate crate - out of lane scope, untouched. Post-fold census: 719_468/146_097 only inside civil_from_days.
+- hex-renderer row: APPLIED - 6 lane sites folded onto runtime_util::hex_bytes: daemon_audit.rs hex_lower (deleted), exec_session.rs hex_encode (deleted), guest_component_session.rs hex_digest (deleted, 3 call sites), guest_mode.rs hex_digest (deleted, 3 call sites), console_session.rs:124 inline, resource_runtime_support.rs:1687 inline. Plus 1 census-completing site found at HEAD: public_read_model.rs:244 inline (same byte-slice lowercase-hex shape; the lane's `fn hex_|hex_digest` census pattern missed it). Out-of-crate copies (d2b-telemetry audit_hash.rs hex_lower, d2b-resource-runtime guest_target.rs hex_encode) are not in this lane's scope. Post-fold census: only hex_bytes remains in d2bd-runtime.
+- vsock-framing: SKIP (lane says do NOT delete either copy; KTD2 lands in U5 wave 3).
+- credential-deadline: SKIP (owned by U5 wave 3 per plan).
+- test-support-feature: SKIP (refused per U68 family note; dep-count row for wave 5).

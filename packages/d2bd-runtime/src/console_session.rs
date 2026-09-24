@@ -121,7 +121,7 @@ impl ConsoleClientHandle {
     pub fn new() -> Result<Self, getrandom::Error> {
         let mut raw = [0u8; 16];
         getrandom::getrandom(&mut raw)?;
-        let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        let hex = crate::runtime_util::hex_bytes(&raw);
         Ok(Self(format!("console-{hex}")))
     }
     pub fn as_str(&self) -> &str {

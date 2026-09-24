@@ -394,7 +394,7 @@ impl GuestComponentSessionClient {
         .map_err(|_| GuestComponentSessionClientError::Session)?;
         let evidence = TransportEvidence::new(
             EvidenceClass::EnrolledKk,
-            BindingDigest::parse(format!("sha256:{}", hex_digest(identity.channel_binding())))
+            BindingDigest::parse(format!("sha256:{}", crate::runtime_util::hex_bytes(&identity.channel_binding())))
                 .map_err(|_| GuestComponentSessionClientError::Session)?,
         );
         let session = authenticated
@@ -406,7 +406,7 @@ impl GuestComponentSessionClient {
             Arc::new(session.into_authenticated_driver());
         let transport = SessionTtrpcClient::new(Arc::clone(&driver));
         let peer_key_fingerprint =
-            ZoneSigningKeyFingerprint::parse(format!("sha256.{}", hex_digest(guest_public)))
+            ZoneSigningKeyFingerprint::parse(format!("sha256.{}", crate::runtime_util::hex_bytes(&guest_public)))
                 .map_err(|_| GuestComponentSessionClientError::Session)?;
         Ok(Self {
             identity,
@@ -485,7 +485,7 @@ fn authenticate_guest_peer(
         || binding.transport_class() != policy.transport_binding.transport
         || binding.transport_binding().locality() != Locality::Local
         || binding.transport_binding().binding_digest()
-            != &BindingDigest::parse(format!("sha256:{}", hex_digest(identity.channel_binding())))
+            != &BindingDigest::parse(format!("sha256:{}", crate::runtime_util::hex_bytes(&identity.channel_binding())))
                 .map_err(|_| {
                 d2b_session::SessionError::new(
                     d2b_session::contract::SessionErrorCode::PolicyDenied,
@@ -582,10 +582,6 @@ fn authorize_guest_peer(
         ));
     }
     Ok(previous)
-}
-
-fn hex_digest(value: [u8; 32]) -> String {
-    value.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn monotonic_tick() -> u64 {
