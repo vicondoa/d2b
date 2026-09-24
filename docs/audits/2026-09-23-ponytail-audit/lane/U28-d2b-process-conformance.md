@@ -1,0 +1,5 @@
+# U28 d2b-process-conformance
+net: -10 lines, -0 deps
+- delete: suite::children_have_verified_stop_proofs is a shared-suite helper nobody runs — both Provider crates run siblings assert_finalizer_requires_verified_stop / children_have_verified_stop_proofs instead; the 20-cond all-of proof loop has zero workspace callers, its only refs are 3 asserts in the suite's own test module. [packages/d2b-process-conformance/src/suite.rs:297] (leaf)
+## Checked
+Read every module (suite, suite, testing, launch_identity, launch_identity, terminal, terminal, status, status, sandbox, sandbox, provider, provider, port, port, ticket×3, identity×3, error) plus all seven test files. Caller census: `children_have_verified_stop_proofs` 0 external refs (method: workspace-wide `grep -rn --include=*.rs` across all packages incl provider crates); every other pub suite helper has 2-7 external callers in d2b-provider-process-systemd and d2b-provider-process-minijail conformance tests. 18 error codes all consumed. No hand-rolled UUID rendering, hex, or stdlib duplicates in this crate — the UUID renderer lives in d2b-contracts (identity.rs:621) per the cross-crate finding. Lean otherwise.

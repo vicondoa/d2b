@@ -1,0 +1,9 @@
+# U62 d2b-provider-device-usbip
+net: 0 lines, 0 deps (this re-audit adds nothing beyond the ledger; the lane's prior applied deletions under S65/S66 stand)
+Nothing to cut. Ship.
+
+Checked: (a) prior ledger rows honored verbatim — S5 [refused] spec_ref four-copy stays (no importable shared pointer-ref parser exported by the interaction engine; toolkit metadata-specific and off-limits): verified at HEAD no new importable parser surfaced; S65 [applied] reconcile_state.rs v2: current size confirmed smaller than the 5,520-line baseline (the applied row); S66 [partial] usbip_argv.rs deleted (748 lines) + state_machine.rs refused — docs/reference/usbip-state-machine.md still pins the canonical step artifact; S67 [refused] parallel Service effect path (firewall.rs + controller.rs): confirmed the dossier-required tests (controller_state_machine.rs, wrong_zone_and_redaction.rs, effect_port_contract.rs) still exist and run; S68 [refused] Binding lifecycle (usbip_argv.rs) — the dossier pins BindingLifecycle as the attach seam; S69 [refused] arbitration.rs + never-constructed declaration modules + BusId re-wrap + token duplicate — arbitration_conflict.rs test + Processail/Firewall declaration rows exist; S70 [refused] nixos-modules wrappers — outside the lane. (b) New evidence hunt: searched the whole provider-family tree for a zero-caller production path that became reachable since the ledger was written — none appeared: every surface named by a refusal row is either dossier-pinned or declared-by-policy, and no previously-refused caller was deleted since (blocking-census non-member list preserved).
+
+Consistency notes: (none applicable — not a contracts/types crate)
+## Checked
+Full read of packages/d2b-provider-device-usbip audit surface + per-row ledger verification against the U1 constraints packet + provider_crate_policy.rs ratchet + blocking_census non-member ledger. Net: 0 new lines deleted.
