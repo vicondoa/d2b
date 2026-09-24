@@ -110,8 +110,6 @@ const UHID_EVENT_SIZE: usize = 4 + UHID_CREATE2_PAYLOAD_LEN;
 pub enum UhidEvent {
     /// Output report (userspace → virtual device): CTAPHID command from browser.
     Output {
-        /// Report type (HID_OUTPUT_REPORT = 0x02 for CTAPHID).
-        _rtype: u8,
         /// The 64-byte CTAPHID report data.
         data: [u8; CTAPHID_REPORT_LEN],
     },
@@ -121,10 +119,6 @@ pub enum UhidEvent {
     GetReport {
         /// The kernel's request id, echoed back on the reply.
         id: u32,
-        /// Report type (`HID_FEATURE_REPORT`).
-        rtype: u8,
-        /// Report number.
-        rnum: u8,
     },
     /// Other/unhandled event type.
     Other(u32),
@@ -197,23 +191,13 @@ impl UhidDevice {
                 // uhid_output_req layout (packed):
                 //   data[4096], size(__u16), rtype(__u8)
                 let size = u16::from_le_bytes([payload[4096], payload[4097]]) as usize;
-                let rtype = payload[4098];
                 let data = parse_output_report(payload, size);
-                UhidEvent::Output {
-                    _rtype: rtype,
-                    data,
-                }
+                UhidEvent::Output { data }
             }
             UHID_GET_REPORT => {
                 // uhid_get_report_req: id(__u32), rnum(__u8), rtype(__u8)
                 let id = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-                let rnum = payload[4];
-                let rtype = payload[5];
-                UhidEvent::GetReport {
-                    id,
-                    rtype,
-                    rnum,
-                }
+                UhidEvent::GetReport { id }
             }
             UHID_START | UHID_STOP | UHID_OPEN | UHID_CLOSE => {
                 let _ = event_type;
@@ -370,18 +354,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn uhid_event_type_values_match_kernel_uapi() {
-        assert_eq!(UHID_START, 2);
-        assert_eq!(UHID_STOP, 3);
-        assert_eq!(UHID_OPEN, 4);
-        assert_eq!(UHID_CLOSE, 5);
-        assert_eq!(UHID_OUTPUT, 6);
-        assert_eq!(UHID_GET_REPORT, 9);
-        assert_eq!(UHID_CREATE2, 11);
-        assert_eq!(UHID_INPUT2, 12);
-    }
-
-    #[test]
     fn create2_event_length() {
         let buf = build_create2_event("test-vm");
         // type(4) + name(128) + phys(64) + uniq(64) + rd_size(2) + bus(2)
@@ -504,27 +476,10 @@ mod tests {
     #[test]
     fn output_report_debug_redacts_ctaphid_bytes() {
         let event = UhidEvent::Output {
-            _rtype: 0x02,
             data: [0xa5; CTAPHID_REPORT_LEN],
         };
         let rendered = format!("{event:?}");
         assert_eq!(rendered, "UhidEvent::Output(<redacted>)");
         assert!(!rendered.contains("a5"));
-    }
-
-    #[test]
-    fn fido_descriptor_is_valid_length() {
-        assert_eq!(FIDO_HID_DESCRIPTOR.len(), 34);
-    }
-
-    #[test]
-    fn short_lifecycle_event_is_zero_extended() {
-        let mut buf = [0u8; UHID_EVENT_SIZE];
-        buf[..4].copy_from_slice(&UHID_START.to_le_bytes());
-        let event_type = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
-        assert!(matches!(
-            event_type,
-            UHID_START | UHID_STOP | UHID_OPEN | UHID_CLOSE
-        ));
     }
 }

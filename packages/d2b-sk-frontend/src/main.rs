@@ -34,26 +34,25 @@
 //! A frontend that was started without a placement refuses to start rather
 //! than enroll against a guess; the unit that starts it owns the restart.
 
+use std::fmt::Display;
 use std::sync::Arc;
 
 use d2b_provider_toolkit::{AllocatorEnrollment, run_guest};
 use d2b_sk_frontend::{Config, SecurityKeyFrontend, VsockAllocatorLink, uhid::UhidDevice};
 
+fn exit_on_error<T, E: Display>(result: Result<T, E>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("[d2b-sk-frontend] fatal: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
-    let config = match Config::from_env() {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("[d2b-sk-frontend] fatal: {error}");
-            std::process::exit(1);
-        }
-    };
-    let placement = match config.placement.clone().into_placement() {
-        Ok(placement) => placement,
-        Err(error) => {
-            eprintln!("[d2b-sk-frontend] fatal: {error}");
-            std::process::exit(1);
-        }
-    };
+    let config = exit_on_error(Config::from_env());
+    let placement = exit_on_error(config.placement.clone().into_placement());
 
     eprintln!(
         "[d2b-sk-frontend/{}] starting; uhid={}, allocator=vsock:{}:{}",
