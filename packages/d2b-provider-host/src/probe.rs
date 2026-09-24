@@ -108,7 +108,7 @@ impl HostProbe {
             .join(name)
     }
 
-    async fn has_render_node() -> bool {
+    async fn has_dri_node(prefix: &str) -> bool {
         let Ok(mut entries) = tokio::fs::read_dir("/dev/dri").await else {
             return false;
         };
@@ -116,23 +116,7 @@ impl HostProbe {
             if entry
                 .file_name()
                 .to_str()
-                .is_some_and(|name| name.starts_with("renderD"))
-            {
-                return true;
-            }
-        }
-        false
-    }
-
-    async fn has_primary_drm_node() -> bool {
-        let Ok(mut entries) = tokio::fs::read_dir("/dev/dri").await else {
-            return false;
-        };
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("card"))
+                .is_some_and(|name| name.starts_with(prefix))
             {
                 return true;
             }
@@ -180,23 +164,14 @@ impl HostProbeEffectPort for HostProbe {
             HostCapabilityClass::Wayland => {
                 is_socket(&self.runtime_path("wayland-0"))
             }
-            HostCapabilityClass::GpuRender => Self::has_render_node().await,
-            HostCapabilityClass::GpuDrm => Self::has_primary_drm_node().await,
+            HostCapabilityClass::GpuRender => Self::has_dri_node("renderD").await,
+            HostCapabilityClass::GpuDrm => Self::has_dri_node("card").await,
             HostCapabilityClass::Tpm2 => {
                 Path::new("/dev/tpmrm0").is_file() || Path::new("/dev/tpm0").is_file()
             }
-            HostCapabilityClass::Usbip => {
-                Path::new(&format!(
-                    "/sys/module/{}",
-                    USBIP_CORE_MODULE
-                ))
-                .exists()
-                    || Path::new(&format!(
-                        "/sys/module/{}",
-                        USBIP_HOST_MODULE
-                    ))
-                    .exists()
-            }
+            HostCapabilityClass::Usbip => [USBIP_CORE_MODULE, USBIP_HOST_MODULE]
+                .iter()
+                .any(|module| Path::new(&format!("/sys/module/{}", module)).exists()),
         };
         Ok(available)
     }

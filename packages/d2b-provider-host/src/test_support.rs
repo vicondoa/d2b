@@ -28,7 +28,8 @@ use d2b_provider_system_core::{
     HostReconciler, MinijailPlatformGate, SystemCoreError,
 };
 
-use crate::{HostDriverEffects, HostEffectFacets, MinijailPlatformGateSource};
+use crate::driver::HostDriverEffects;
+use crate::facets::{HostEffectFacets, MinijailPlatformGateSource};
 
 /// Scripted observation port: records every call order-preservingly and
 /// can fail the probe.
@@ -181,11 +182,7 @@ impl RecordingMinijailGate {
         })
     }
 
-    /// Script the gate the next probes observe.
-    pub fn set(&self, gate: MinijailPlatformGate) {
-        *self.gate.try_lock().expect("uncontended test mutex") = gate;
     }
-}
 
 impl MinijailPlatformGateSource for RecordingMinijailGate {
     fn platform_gate(&self) -> MinijailPlatformGate {

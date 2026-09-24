@@ -3,9 +3,8 @@
 //! from it.
 
 use d2b_contracts_resource::v3::ControllerGeneration;
-use d2b_provider_guest::{
-    GUEST_TYPE_NAME, GuestDriverArgs, guest_descriptor,
-};
+use d2b_provider_guest::driver::GUEST_TYPE_NAME;
+use d2b_provider_guest::{GuestDriverArgs, guest_descriptor};
 use d2b_provider_guest::test_support::ScriptedFacets;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
