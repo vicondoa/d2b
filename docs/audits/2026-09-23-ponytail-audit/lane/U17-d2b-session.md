@@ -11,3 +11,6 @@ Identical class to the already-applied cross-crate audit-vocabulary deletions in
 Read all 22 src files + tests/ (component_session.rs 2612, admission.rs 1958, noise_vectors.rs 303) + Cargo.toml, BUILD.bazel (d2b_session + d2b_session_test_support globs `src/**/*.rs`), lib.rs. Ran workspace-wide `grep -rl` caller sweeps for each of audit.rs's public items - zero external callers in every file outside the module itself.
 
 Net: -319 lines, -0 deps
+
+## U3 outcome (2026-09-24)
+- applied: src/audit.rs deleted (module + its 87-line tests) + `pub mod audit;` arm removed from lib.rs. R4 at HEAD: zero workspace callers for every public item (other crates' `crate::audit` hits are their own modules).

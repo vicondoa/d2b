@@ -19,14 +19,6 @@ pub const fn guest_control_transport_descriptor() -> TransportDescriptor {
     }
 }
 
-/// Check the transport evidence before a Guest-control session is admitted.
-pub fn is_guest_control_transport(descriptor: TransportDescriptor) -> bool {
-    descriptor.class == TransportClass::NativeVsock
-        && descriptor.locality == Locality::GuestLocal
-        && !descriptor.packet_atomic
-        && !descriptor.supports_attachments
-}
-
 pub struct FramedVsockTransport<S> {
     stream: S,
     descriptor: TransportDescriptor,

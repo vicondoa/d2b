@@ -232,7 +232,7 @@ pub use systemd::{
 #[cfg(feature = "native-vsock")]
 pub use vsock::{
     FramedVsockTransport, NativeVsockListener, NativeVsockTransport,
-    guest_control_transport_descriptor, is_guest_control_transport,
+    guest_control_transport_descriptor,
 };
 #[cfg(feature = "host-socket")]
 pub use zone_admission::{BootstrapProvider, ZoneAdmissionError, ZoneBootstrapIdentity};
