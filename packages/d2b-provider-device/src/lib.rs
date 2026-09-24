@@ -18,7 +18,6 @@
 mod driver;
 pub mod effects_service;
 pub mod facets;
-pub mod vocabulary;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
