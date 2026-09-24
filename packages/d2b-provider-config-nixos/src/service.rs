@@ -7,7 +7,7 @@ use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{ConfigCaller, ConfigError, ConfigOperation, GuestConfigDocument, SERVICE_PACKAGE};
+use crate::{ConfigCaller, ConfigError, GuestConfigDocument};
 
 /// The only Guest configuration identifier accepted by this service.
 pub const GUEST_CONFIG_IDENTIFIER: &str = "guest-config";
@@ -292,42 +292,6 @@ pub struct ConfigStatusResponse {
     pub sha256: Option<String>,
 }
 
-/// Closed descriptor for the service-only Provider.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConfigServiceDescriptor {
-    /// Service package.
-    pub package: String,
-    /// Exact generated method names.
-    pub methods: Vec<String>,
-    /// Whether this Provider owns no ResourceType.
-    pub service_only: bool,
-}
-
-impl ConfigServiceDescriptor {
-    /// Return the canonical descriptor.
-    pub fn canonical() -> Self {
-        Self {
-            package: SERVICE_PACKAGE.to_owned(),
-            methods: ConfigOperation::ALL
-                .into_iter()
-                .map(|operation| operation.as_str().to_owned())
-                .collect(),
-            service_only: true,
-        }
-    }
-
-    /// Validate an incoming descriptor.
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        let expected = Self::canonical();
-        if self == &expected {
-            Ok(())
-        } else {
-            Err(ConfigError::InvalidRequest)
-        }
-    }
-}
-
 /// Convert one response into a validated document.
 pub fn decode_document(response: &ConfigSyncResponse) -> Result<GuestConfigDocument, ConfigError> {
     response.document()
@@ -523,7 +487,7 @@ fn authorize_host_operation(
     guest_ref: &ResourceRef,
     identifier: &str,
 ) -> Result<(), ConfigError> {
-    if !matches!(caller, ConfigCaller::Admin | ConfigCaller::Lifecycle) {
+    if !matches!(caller, ConfigCaller::Admin) {
         return Err(ConfigError::Unauthorized);
     }
     validate_guest_ref(guest_ref)?;

@@ -16,8 +16,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::{
-    ConfigCaller, ConfigError, ConfigOperation, ConfigService, ConfigServiceDescriptor,
-    ConfigSyncRequest, GuestConfigDocument, GuestSessionEvidence, SERVICE_NAME, SERVICE_PACKAGE,
+    ConfigCaller, ConfigError, ConfigOperation, ConfigService, ConfigSyncRequest,
+    GuestConfigDocument, GuestSessionEvidence, SERVICE_NAME, SERVICE_PACKAGE,
 };
 use d2b_contracts_resource::v3::ResourceRef;
 
@@ -69,11 +69,6 @@ impl GuestConfigReader {
             evidence,
             path,
         })
-    }
-
-    /// Return the canonical service-only descriptor.
-    pub fn descriptor() -> ConfigServiceDescriptor {
-        ConfigService::descriptor()
     }
 }
 
