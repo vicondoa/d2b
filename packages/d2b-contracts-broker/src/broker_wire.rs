@@ -2396,8 +2396,8 @@ pub enum RunnerRole {
     SwtpmFlush,
     /// crosvm GPU sidecar. Broker invokes the device GPU Provider argv generator.
     Gpu,
-    /// vhost-device-sound audio sidecar. Broker invokes
-    /// `d2b_provider_audio_pipewire::argv`.
+    /// vhost-device-sound audio sidecar. Broker invokes the audio Provider's
+    /// argv planning.
     Audio,
     /// crosvm video-decoder sidecar. Broker invokes the device GPU Provider argv generator.
     Video,

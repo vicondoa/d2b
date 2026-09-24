@@ -40,13 +40,8 @@ mod probe;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use driver::{
-    HostDriver, HostDriverEffects, HostDriverError, HostDriverFactory, HostDriverStatus,
-    host_descriptor, host_spec_decoder,
-};
-pub use effects_service::{
-    HOST_EFFECTS_SERVICE, HostEffectsService, HostEffectsServiceFactory,
-};
+pub use driver::host_descriptor;
+pub use effects_service::{HOST_EFFECTS_SERVICE, HostEffectsServiceFactory};
 pub use facets::{HostEffectFacets, MinijailPlatformGateSource};
 pub use probe::{PIPEWIRE_RUNTIME_SOCKET, USBIP_CORE_MODULE, USBIP_HOST_MODULE, production_probe};
 // The gate type the family's facets carry: re-exported through the owning
