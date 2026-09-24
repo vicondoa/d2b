@@ -375,8 +375,6 @@ pub enum GpuProcessObservation {
     Missing,
     /// The identity was reused or could not be verified.
     StaleIdentity,
-    /// More than one process matched the expected identity.
-    Ambiguous,
 }
 
 impl fmt::Debug for GpuProcessObservation {
@@ -385,7 +383,6 @@ impl fmt::Debug for GpuProcessObservation {
             Self::Matching(_) => "GpuProcessObservation::Matching",
             Self::Missing => "GpuProcessObservation::Missing",
             Self::StaleIdentity => "GpuProcessObservation::StaleIdentity",
-            Self::Ambiguous => "GpuProcessObservation::Ambiguous",
         })
     }
 }
@@ -401,27 +398,7 @@ pub enum GpuAuthorityError {
     StaleDeviceIdentity,
     /// The arbitration and render-node settings disagree.
     ArbitrationViolation,
-    /// A full-device or render-node claim conflicts with an owner.
-    ClaimConflict,
-    /// The signed shared-holder ceiling was reached.
-    MaxClaimsExceeded,
-    /// The authority index has not completed restart rehydration.
-    StartupRehydrationRequired,
-    /// The same owner already holds the authority.
-    DuplicateActiveReservation,
-    /// A process observation used the wrong principal.
-    ProcessPrincipalMismatch,
-    /// A process observation used the wrong platform identity.
-    PlatformMismatch,
-    /// A process observation used an old resource generation.
-    GenerationMismatch,
-    /// The exact owner proof did not match the retained lease.
-    OwnerProofMismatch,
-    /// A close proof was missing or named another process.
-    CloseUnconfirmed,
-    /// A quarantined key cannot admit a new effect.
-    Quarantined,
-}
+    }
 
 impl GpuAuthorityError {
     /// Return the stable, identity-free error code.
@@ -431,16 +408,7 @@ impl GpuAuthorityError {
             Self::PrincipalNotSeparated => "gpu-principal-not-separated",
             Self::StaleDeviceIdentity => "gpu-device-identity-stale",
             Self::ArbitrationViolation => "gpu-arbitration-violation",
-            Self::ClaimConflict => "device-claim-conflict",
-            Self::MaxClaimsExceeded => "device-claim-max-exceeded",
-            Self::StartupRehydrationRequired => "authority-startup-rehydration-required",
-            Self::DuplicateActiveReservation => "authority-duplicate-active-reservation",
-            Self::ProcessPrincipalMismatch => "gpu-process-principal-mismatch",
-            Self::PlatformMismatch => "gpu-platform-mismatch",
-            Self::GenerationMismatch => "gpu-device-generation-stale",
-            Self::OwnerProofMismatch => "gpu-authority-owner-proof-mismatch",
-            Self::CloseUnconfirmed => "gpu-worker-close-unconfirmed",
-            Self::Quarantined => "gpu-authority-quarantined",
+            
         }
     }
 }

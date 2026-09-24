@@ -15,16 +15,10 @@ use crate::{
 pub enum GpuPhase {
     /// No worker effects have started.
     Pending,
-    /// The GPU/render-node worker is starting.
-    GpuStarting,
     /// The GPU/render-node worker is Ready.
     GpuReady,
-    /// The video worker is starting after GPU readiness.
-    VideoStarting,
     /// All requested workers are Ready.
     Ready,
-    /// A worker can be retried.
-    Degraded,
     /// The generation failed closed.
     Failed,
     /// Finalizer is stopping workers.
@@ -391,11 +385,7 @@ impl GpuController {
                         self.phase = GpuPhase::Quarantined;
                         return Err(GpuControllerError::Quarantined);
                     }
-                    matched.push(observed);
-                }
-                GpuProcessObservation::Ambiguous => {
-                    self.phase = GpuPhase::Quarantined;
-                    return Err(GpuControllerError::Quarantined);
+matched.push(observed);
                 }
                 GpuProcessObservation::StaleIdentity => {
                     self.phase = GpuPhase::Failed;
