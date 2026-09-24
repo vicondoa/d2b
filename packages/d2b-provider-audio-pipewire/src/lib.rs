@@ -2,15 +2,12 @@
 
 #![deny(missing_docs)]
 
-pub mod argv;
 pub mod authority;
 pub mod controller;
-pub mod manifest;
 pub mod mediator;
 pub mod resource_type;
 #[allow(missing_docs)]
 pub mod state;
-pub mod telemetry;
 
 /// The PipeWire runtime socket file name the host capability probe looks for.
 ///
@@ -20,7 +17,6 @@ pub mod telemetry;
 /// crate); this crate declares the vocabulary for its own family surfaces.
 pub const PIPEWIRE_RUNTIME_SOCKET: &str = "pipewire-0";
 
-pub use argv::{AudioComponentTemplate, AudioTemplateError, RenderedAudioTemplate};
 pub use d2b_contracts::audio::{
     AudioGrant, AudioPolicyError, AudioPolicyState, LevelPercent, LevelPercentError,
     parse_audio_state,
@@ -35,7 +31,6 @@ pub use controller::{
     AudioMicrophoneStatus, AudioReconcileResult, AudioReconcileResultWithChildren,
     AudioSpeakerStatus, AUDIO_REPAIR_INTERVAL_SECS, register_service,
 };
-pub use manifest::AudioManifest;
 pub use mediator::{
     AudioChannel, AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator,
     GuestAudioReadiness, HostAudioReadiness,
