@@ -12,3 +12,10 @@ None.
 
 ## Checked
 Read the full crate (57 LOC, lib.rs only); confirmed `echo` has three live qualified call sites in d2b-broker-composition/src/seam.rs (347, 546, 695) via seam.rs and routing.rs; ran workspace-wide reference searches for `PURE_ECHO`, `DeclaredOperation`, `OPERATIONS`, `declared_operations`, `fixture_handlers::` in Rust + BUILD.bazel + xtask + nixos-modules + tests + docs + committed JSON catalogs + Cargo.lock - no external callers for the four exports; verified the fixture crate is not provider-prefixed so gen_broker_operations skips it (PROVIDER_PREFIX filter at gen_broker_operations.rs:635) and no committed broker-operations.json pins a fixture row; U23 has no prior findings, so no ledger items to honor.
+
+## U2 execution (2026-09-24)
+
+- re-verified at HEAD: PURE_ECHO / DeclaredOperation / OPERATIONS / declared_operations have zero workspace references outside lib.rs (seam.rs links `d2b_broker_fixture_handlers::echo` by qualified path at 347/546/695).
+- applied: deleted the four exports; crate is now just the doc + echo handler.
+- applied: trimmed module doc (composition root registers the handler by qualified path, not via declared_operations()).
+- tests: cargo check -p d2b-broker-fixture-handlers green; no test surface in crate.
