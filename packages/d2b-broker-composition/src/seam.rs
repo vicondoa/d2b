@@ -45,11 +45,6 @@ impl PureTransformClaim {
     pub fn for_operation(operation: &'static str) -> Self {
         Self { operation }
     }
-
-    /// The operation the claim names.
-    pub fn operation(&self) -> &'static str {
-        self.operation
-    }
 }
 
 /// One declared handler the composition root registers.
@@ -238,12 +233,9 @@ fn admit(declaration: &HandlerDeclaration) -> Result<(), RoutingRefusal> {
             claim: declaration.pure_claim.operation,
         });
     }
-    let Some(declaring_provider) = row.declaring_provider else {
-        return Err(RoutingRefusal::Forwarded {
-            operation: row.operation,
-            class: RefusalClass::NotProviderDeclared,
-        });
-    };
+    let declaring_provider = row
+        .declaring_provider
+        .expect("route_row admitted the row, so its provider is set; unset providers route to the forward carrier");
     if declaration.source_crate != declaring_provider {
         return Err(RoutingRefusal::SourceCrateMismatch {
             operation: row.operation,
