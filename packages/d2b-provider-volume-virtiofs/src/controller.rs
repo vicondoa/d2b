@@ -7,37 +7,17 @@
 //! every reconcile.
 
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
-use d2b_contracts_resource::v3::resource_status::ResourcePhase;
+
 use d2b_contracts_resource::v3::volume::{AttachmentAccess, ViewSpec, VolumeSpec};
 use d2b_contracts_resource::v3::volume_binding::VolumeBindingStatusResource;
 
 use crate::error::VirtiofsBindingError;
-use crate::bindings::{VOLUME_BINDING_FINALIZER, VOLUME_BINDING_RESOURCE_TYPE, StoredBinding};
+use crate::bindings::{VOLUME_BINDING_FINALIZER, StoredBinding};
 use crate::port::{BindingPhase, BindingStatusReport, LaunchedWorker, VirtiofsBindingEffectPort};
 use crate::worker::{VirtiofsdWorkerPlan, WorkerSandbox};
 
-/// The exact shared-Runner contract for `volume-virtiofs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VirtiofsRunnerContract {
-    /// The standard ResourceType served by this Provider.
-    pub resource_type: &'static str,
-    /// The finalizer installed on VolumeBinding resources.
-    pub finalizer: &'static str,
-    /// Bounded repair interval in seconds.
-    pub repair_interval_secs: u64,
-    /// Whether configuration is dependency-only.
-    pub watched_configuration_is_dependency: bool,
-}
-
-/// Return the production volume-virtiofs Runner contract.
-pub const fn virtiofs_runner_contract() -> VirtiofsRunnerContract {
-    VirtiofsRunnerContract {
-        resource_type: VOLUME_BINDING_RESOURCE_TYPE,
-        finalizer: VOLUME_BINDING_FINALIZER,
-        repair_interval_secs: 30,
-        watched_configuration_is_dependency: true,
-    }
-}
+/// The bounded repair interval, in seconds, for virtiofs workers.
+pub const VIRTIOFS_REPAIR_INTERVAL_SECS: u64 = 30;
 
 /// Resolve the named view a binding selects, read-only.
 pub fn resolve_view<'spec>(
@@ -48,16 +28,6 @@ pub fn resolve_view<'spec>(
         .views()
         .get(binding.spec().view().as_str())
         .ok_or(VirtiofsBindingError::ViewNotFound)
-}
-
-/// Map a coarse serving phase onto the universal lifecycle phase.
-pub const fn binding_phase(phase: BindingPhase) -> ResourcePhase {
-    match phase {
-        BindingPhase::Pending => ResourcePhase::Pending,
-        BindingPhase::Ready => ResourcePhase::Ready,
-        BindingPhase::Degraded => ResourcePhase::Degraded,
-        BindingPhase::Failed => ResourcePhase::Failed,
-    }
 }
 
 /// The volume-virtiofs controller over its injected effect port.

@@ -21,8 +21,6 @@ pub enum VirtiofsBindingError {
     /// The worker plan would violate the frozen virtiofsd sandbox
     /// posture.
     SandboxInvariantViolated,
-    /// The worker could not be launched through the effect port.
-    WorkerLaunchFailed,
     /// The binding socket did not become ready inside the deadline.
     BindingNotReady,
     /// The guest did not report the mount present inside the deadline.
@@ -49,7 +47,6 @@ impl VirtiofsBindingError {
             Self::ViewNotFound => "view-not-found",
             Self::ViewRightsInsufficient => "view-rights-insufficient",
             Self::SandboxInvariantViolated => "sandbox-invariant-violated",
-            Self::WorkerLaunchFailed => "worker-launch-failed",
             Self::BindingNotReady => "binding-not-ready",
             Self::GuestMountNotReady => "guest-mount-not-ready",
             Self::DrainIncomplete => "drain-incomplete",
@@ -61,12 +58,11 @@ impl VirtiofsBindingError {
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 11] = [
         Self::InvalidBinding,
         Self::ViewNotFound,
         Self::ViewRightsInsufficient,
         Self::SandboxInvariantViolated,
-        Self::WorkerLaunchFailed,
         Self::BindingNotReady,
         Self::GuestMountNotReady,
         Self::DrainIncomplete,

@@ -16,8 +16,6 @@ use crate::bindings::StoredBinding;
 
 /// The frozen sandbox mode of every virtiofsd worker.
 pub const SANDBOX_MODE: &str = "chroot";
-/// The frozen inode file-handle mode of every virtiofsd worker.
-pub const INODE_FILE_HANDLES: &str = "never";
 /// The Process template every binding-owned worker uses.
 pub const WORKER_TEMPLATE: &str = "virtiofsd-worker";
 /// The user-namespace mapping class the worker resolves through its

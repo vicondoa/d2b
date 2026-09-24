@@ -107,10 +107,10 @@ pub const BINDING_CREATIONS: &[ChildCreation] = &[
 ];
 
 /// Preserved resync cadence while the derived child set is not yet current:
-/// the `volume-virtiofs` Runner contract's repair interval (the old runner's
-/// resync), not a per-pass timer.
+/// the `volume-virtiofs` repair interval (the old runner's resync), not a
+/// per-pass timer.
 const BINDING_RESYNC: Duration = Duration::from_secs(
-    d2b_provider_volume_virtiofs::virtiofs_runner_contract().repair_interval_secs,
+    d2b_provider_volume_virtiofs::VIRTIOFS_REPAIR_INTERVAL_SECS,
 );
 
 /// Teardown rank of one owned-child type, read from this family's own child

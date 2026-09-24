@@ -10,7 +10,6 @@ use d2b_provider_volume_virtiofs::testing::{PortCall, ScriptedPort, block_on, fi
 use d2b_provider_volume_virtiofs::{
     LaunchedWorker, StoredBinding, VOLUME_BINDING_FINALIZER, VOLUME_BINDING_RESOURCE_TYPE,
     VirtiofsBindingController, VirtiofsBindingEffectPort, VirtiofsBindingError, VirtiofsdWorkerPlan,
-    virtiofs_runner_contract,
 };
 
 use d2b_provider_volume_virtiofs::BindingPhase;
@@ -417,10 +416,6 @@ fn the_provider_owns_only_the_binding_resource_type_and_finalizer() {
     let controller = VirtiofsBindingController::new(&port);
     assert_eq!(controller.finalizer(), VOLUME_BINDING_FINALIZER);
     assert_eq!(controller.provider().as_str(), "volume-virtiofs");
-    let contract = virtiofs_runner_contract();
-    assert_eq!(contract.resource_type, VOLUME_BINDING_RESOURCE_TYPE);
-    assert_eq!(contract.finalizer, VOLUME_BINDING_FINALIZER);
-    assert!(contract.watched_configuration_is_dependency);
 }
 
 #[test]
