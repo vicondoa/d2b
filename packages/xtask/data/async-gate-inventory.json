@@ -1013,22 +1013,22 @@
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 980,
+      "line": 915,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1247,
+      "line": 1182,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1275,
+      "line": 1210,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1284,
+      "line": 1219,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -1043,57 +1043,72 @@
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 1744,
+      "line": 1717,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 1755,
+      "line": 1728,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 1761,
+      "line": 1734,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 1849,
+      "line": 1822,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 1851,
+      "line": 1824,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 1853,
+      "line": 1826,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 2194,
+      "line": 2167,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 2315,
+      "line": 2288,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 2333,
+      "line": 2306,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 2343,
+      "line": 2316,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 2363,
+      "line": 2336,
+      "reason": "synchronous lock acquisition, no await while the guard is held"
+    },
+    {
+      "file": "packages/d2bd-runtime/src/exec_session.rs",
+      "line": 2352,
+      "reason": "synchronous lock acquisition, no await while the guard is held"
+    },
+    {
+      "file": "packages/d2bd-runtime/src/exec_session.rs",
+      "line": 2365,
+      "reason": "synchronous lock acquisition, no await while the guard is held"
+    },
+    {
+      "file": "packages/d2bd-runtime/src/exec_session.rs",
+      "line": 2368,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -1103,27 +1118,12 @@
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 2392,
+      "line": 2389,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 2395,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 2406,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 2416,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2bd-runtime/src/exec_session.rs",
-      "line": 2457,
+      "line": 2430,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -1133,12 +1133,12 @@
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 26165,
+      "line": 26155,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 26562,
+      "line": 26552,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -1148,17 +1148,17 @@
     },
     {
       "file": "packages/d2bd/src/resource_runtime.rs",
-      "line": 2514,
+      "line": 2509,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/resource_runtime.rs",
-      "line": 7716,
+      "line": 7513,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/resource_runtime.rs",
-      "line": 8965,
+      "line": 8667,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
@@ -1253,122 +1253,72 @@
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 729,
+      "line": 725,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 753,
+      "line": 749,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 776,
+      "line": 772,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 804,
+      "line": 800,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1116,
+      "line": 1098,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1124,
+      "line": 1106,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1129,
+      "line": 1111,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1149,
+      "line": 1131,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1161,
+      "line": 1143,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1200,
+      "line": 1182,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1205,
+      "line": 1187,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1259,
+      "line": 1241,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1276,
+      "line": 1258,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1307,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1535,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1544,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1565,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1578,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1623,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1634,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1660,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1671,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1685,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2bd/tests/zone_provider_acceptance.rs",
-      "line": 1762,
+      "line": 1289,
       "reason": "test-support recorder lock"
     }
   ]
