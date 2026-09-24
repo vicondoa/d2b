@@ -4571,7 +4571,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             // grants the per-device ACL to the env's USBIP backend runner.
             let resolver = require_resolver(resolver)?;
             let lock_path = std::path::PathBuf::from(
-                d2b_contracts::usbip::UsbipDaemonClaimRecord::lock_path_for_busid(&req.bus_id),
+                d2b_contracts::usbip::lock_path_for_busid(&req.bus_id),
             );
 
             // Same-VM replay: lock is already held by this VM (e.g. daemon restart).

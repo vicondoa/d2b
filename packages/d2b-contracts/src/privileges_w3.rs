@@ -2,8 +2,10 @@
 //!
 //! The existing [`super::privileges::OperationAuthzRow`] table covers the
 //! established broker variants. This module provides the closed
-//! [`W3BrokerOperation`] inventory and [`W3OperationFlags`] helper used to
-//! audit each row's `audit`, `destructive`, and `secret_access` posture.
+//! [`W3BrokerOperation`] inventory used to enumerate broker operations
+//! without re-typing strings. Each row's `audit`, `destructive`, and
+//! `secret_access` posture lives in the broker's generated
+//! `broker_operation_catalog` rows.
 //!
 //! Established broker variants (`DelegateCgroupV2`, `OpenCgroupDir`,
 //! `OpenKvm`, `OpenVhostNet`, `OpenFuse`, `OpenDevice`, `CreateTapFd`,
@@ -95,128 +97,11 @@ impl W3BrokerOperation {
     pub const fn all() -> &'static [W3BrokerOperation] {
         include!("generated/w3_broker_operations.rs")
     }
-
-    /// Returns the audit, mutation, and secret-access posture for the row.
-    pub const fn flags(self) -> W3OperationFlags {
-        match self {
-            Self::DelegateCgroupV2 => W3OperationFlags {
-                audit: true,
-                destructive: false,
-                secret_access: false,
-            },
-            Self::OpenCgroupDir => W3OperationFlags {
-                audit: true,
-                destructive: false,
-                secret_access: false,
-            },
-            Self::PrepareStateDir | Self::PrepareRuntimeDir => W3OperationFlags {
-                audit: true,
-                destructive: true,
-                secret_access: false,
-            },
-            Self::OpenKvm | Self::OpenVhostNet | Self::OpenFuse | Self::OpenDevice => {
-                W3OperationFlags {
-                    audit: true,
-                    destructive: false,
-                    secret_access: false,
-                }
-            }
-            Self::CreateTapFd
-            | Self::CreatePersistentTap
-            | Self::DeletePersistentTap
-            | Self::CreateBridge
-            | Self::DeleteBridge
-            | Self::SetBridgePortFlags
-            | Self::ApplyNftables
-            | Self::ApplyNftablesProjection
-            | Self::ApplyRoute
-            | Self::ApplySysctl
-            | Self::ApplyNmUnmanaged
-            | Self::UpdateHostsFile => W3OperationFlags {
-                audit: true,
-                destructive: true,
-                secret_access: false,
-            },
-            Self::ModprobeIfAllowed => W3OperationFlags {
-                audit: true,
-                destructive: true,
-                secret_access: false,
-            },
-            Self::UsbipBindFirewallRule => W3OperationFlags {
-                audit: true,
-                destructive: false,
-                secret_access: false,
-            },
-            Self::MigrateLegacySwtpmState => W3OperationFlags {
-                audit: true,
-                destructive: true,
-                secret_access: false,
-            },
-            // SecurityKeyOpenDevice: opens a single FIDO hidraw fd; read-only
-            // from the broker's perspective (no state mutation, no secret data).
-            Self::SecurityKeyOpenDevice => W3OperationFlags {
-                audit: true,
-                destructive: false,
-                secret_access: false,
-            },
-            // SecurityKeyApplyUdevRules: writes udev rules (host mutation).
-            Self::SecurityKeyApplyUdevRules => W3OperationFlags {
-                audit: true,
-                destructive: true,
-                secret_access: false,
-            },
-        }
-    }
-}
-
-/// Audit, mutation, and secret-access flags for one broker operation.
-/// `default_for_unknown` is always `Deny`, so it is not stored here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct W3OperationFlags {
-    /// Whether a successful operation must emit a broker audit event.
-    pub audit: bool,
-    /// Whether the operation mutates host state.
-    pub destructive: bool,
-    /// Whether the operation can read or modify secret material.
-    pub secret_access: bool,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn every_operation_has_audit_set() {
-        for op in W3BrokerOperation::all() {
-            assert!(op.flags().audit, "broker operation {op:?} must be audited");
-        }
-    }
-
-    #[test]
-    fn destructive_flags_match_contract_table() {
-        assert!(!W3BrokerOperation::DelegateCgroupV2.flags().destructive);
-        assert!(W3BrokerOperation::PrepareStateDir.flags().destructive);
-        assert!(W3BrokerOperation::ApplyNftables.flags().destructive);
-        assert!(
-            W3BrokerOperation::ApplyNftablesProjection
-                .flags()
-                .destructive
-        );
-        assert!(W3BrokerOperation::CreateBridge.flags().destructive);
-        assert!(W3BrokerOperation::DeleteBridge.flags().destructive);
-        assert!(W3BrokerOperation::DeletePersistentTap.flags().destructive);
-        assert!(!W3BrokerOperation::UsbipBindFirewallRule.flags().destructive);
-    }
-
-    #[test]
-    fn no_remaining_operation_grants_secret_access() {
-        for op in W3BrokerOperation::all() {
-            assert!(
-                !op.flags().secret_access,
-                "unexpected secret_access flag for {op:?}"
-            );
-        }
-    }
 
     #[test]
     fn wire_tags_are_unique_pascalcase() {
