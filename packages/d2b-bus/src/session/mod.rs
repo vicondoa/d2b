@@ -21,8 +21,8 @@
 //! Two surfaces named by the work item are deliberately *not* re-exported:
 //!
 //! - `serve_ttrpc_services`, the fixed-endpoint ttrpc binding. A v3 Zone
-//!   transport descriptor arrives from the allocator through
-//!   [`crate::transport::unix`], which consults no activation protocol at all.
+//!   transport descriptor arrives from the allocator through the unix
+//!   transport, which consults no activation protocol at all.
 //!   Re-exporting a fixed-endpoint binder from here would put a second,
 //!   unaudited way to acquire a transport back into the crate.
 //! - The guest-session credential types. They are absent from the v3 contract

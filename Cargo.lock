@@ -874,7 +874,6 @@ name = "d2b-bus"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-audit",
  "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",

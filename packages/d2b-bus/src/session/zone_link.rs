@@ -15,10 +15,9 @@
 //!   granted on the *next* hop as the local side consumes, which is what keeps
 //!   a slow terminal consumer from being paid for by an intermediate Zone's
 //!   memory. [`ZoneLinkSession::forward_named_stream_credit`] is that call.
-//! - **Actual cancel delivery.** `zone_route::forward_cancel` produces a
-//!   delivery *intent*; [`ZoneLinkSession::deliver_cancel`] is the delivery,
-//!   bound to the session's own reconnect generation so a cancel can never be
-//!   applied across a reconnect fence.
+//! - **Actual cancel delivery.** [`ZoneLinkSession::deliver_cancel`] is the
+//!   delivery, bound to the session's own reconnect generation so a cancel can
+//!   never be applied across a reconnect fence.
 //!
 //! # Fencing
 //!
