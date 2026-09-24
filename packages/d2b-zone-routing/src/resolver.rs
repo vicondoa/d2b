@@ -41,21 +41,7 @@ use crate::engine::{
     ZoneRouteRequest,
 };
 
-/// Render a type's `Debug` as its bare type name.
-///
-/// Zone paths, capability sets, and route metadata must never reach a log,
-/// span, or metric through an incidental `Debug` on a container that holds
-/// them, so every public type in this module opts out of a derived `Debug`.
-/// The macro is module-private and adds no public item.
-macro_rules! redacted_topology_debug {
-    ($type_name:ident) => {
-        impl ::core::fmt::Debug for $type_name {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                f.write_str(concat!(stringify!($type_name), "(redacted)"))
-            }
-        }
-    };
-}
+use crate::service::redacted_debug;
 
 /// The sealed Zone tree topology compiled from Nix `parentZone` declarations.
 ///
@@ -170,7 +156,7 @@ impl SealedZoneTopology {
     }
 }
 
-redacted_topology_debug!(SealedZoneTopology);
+redacted_debug!(SealedZoneTopology);
 
 /// One entrypoint question posed to the resolver.
 ///
@@ -241,7 +227,7 @@ impl ZoneEntrypointRequest {
     }
 }
 
-redacted_topology_debug!(ZoneEntrypointRequest);
+redacted_debug!(ZoneEntrypointRequest);
 
 /// The resolver's answer to one entrypoint question.
 #[derive(Clone, PartialEq, Eq)]
@@ -290,7 +276,7 @@ impl ZoneEntrypointResolution {
     }
 }
 
-redacted_topology_debug!(ZoneEntrypointResolution);
+redacted_debug!(ZoneEntrypointResolution);
 
 /// Resolves a target Zone to its sealed entrypoint, then defers the route
 /// decision to [`ZoneRouteEngine`].
@@ -420,7 +406,7 @@ impl ZoneEntrypointResolver {
     }
 }
 
-redacted_topology_debug!(ZoneEntrypointResolver);
+redacted_debug!(ZoneEntrypointResolver);
 
 #[cfg(test)]
 mod tests {
