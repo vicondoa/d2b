@@ -17,7 +17,7 @@ struct Config {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: d2b-host-activation-helper chgrp-by-numeric-gid --root PATH --legacy-gids GID[,GID...] --target-gid GID [--no-follow-symlinks] [--skip-while-lock-held PATH] [--fail-closed]"
+        "usage: d2b-host-activation-helper chgrp-by-numeric-gid --root PATH --legacy-gids GID[,GID...] --target-gid GID [--skip-while-lock-held PATH] [--fail-closed]"
     );
     process::exit(64);
 }
@@ -59,7 +59,6 @@ fn parse_args() -> Result<Config, String> {
             }
             "--skip-while-lock-held" => skip_while_lock_held = args.next().map(PathBuf::from),
             "--fail-closed" => fail_closed = true,
-            "--no-follow-symlinks" => {}
             _ => return Err(format!("unknown argument: {arg}")),
         }
     }
