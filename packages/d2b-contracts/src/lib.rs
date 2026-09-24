@@ -2,7 +2,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::collections::BTreeSet;
+
 
 pub mod audio;
 pub mod audit_wire;
@@ -23,7 +23,6 @@ pub mod privileges_w3;
 pub mod realm;
 pub mod runtime;
 pub mod security_key;
-pub mod store_verify_wire;
 pub mod target;
 pub mod token;
 pub mod types;
@@ -197,41 +196,6 @@ pub struct SocketSpec {
     pub abstract_namespace: bool,
 }
 
-pub fn negotiate_hello(
-    hello: &Hello,
-    server_version: &Version,
-    server_capabilities: &[FeatureFlag],
-) -> Result<HelloOk, HelloRejected> {
-    if !hello.client_version.allows(server_version) {
-        return Err(HelloRejected {
-            reason: HelloRejectedReason::VersionMismatch,
-        });
-    }
-
-    let known_client_features: BTreeSet<_> = hello
-        .supported_features
-        .iter()
-        .filter_map(|feature| feature.known())
-        .collect();
-    let mut capabilities: Vec<_> = server_capabilities
-        .iter()
-        .filter(|feature| {
-            feature
-                .known()
-                .is_some_and(|known| known_client_features.contains(&known))
-        })
-        .cloned()
-        .collect();
-    capabilities.sort();
-    capabilities.dedup();
-
-    Ok(HelloOk {
-        server_version: server_version.clone(),
-        selected_version: server_version.clone(),
-        capabilities,
-    })
-}
-
 pub fn encode_frame<T>(message: &T) -> Result<Vec<u8>, Error>
 where
     T: Serialize,
@@ -334,8 +298,8 @@ fn extract_ifname_error(message: &str) -> Option<v3::IfNameError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FeatureFlag, Hello, KnownFeatureFlag, MAX_FRAME_SIZE, SemverRange, Version, decode_frame,
-        encode_frame, negotiate_hello,
+        FeatureFlag, Hello, KnownFeatureFlag, MAX_FRAME_SIZE, SemverRange, decode_frame,
+        encode_frame,
     };
 
     #[test]
@@ -349,33 +313,6 @@ mod tests {
         let error = decode_frame::<Hello>("Hello", &frame).expect_err("unknown field fails");
         assert_eq!(error.kind().as_str(), "wire-unknown-field");
         assert!(error.message().contains("unexpected"));
-    }
-
-    #[test]
-    fn handshake_ignores_unknown_feature_flags() {
-        let hello = Hello {
-            client_version: SemverRange::new(">=0.4.0, <0.5.0").expect("valid client range"),
-            supported_features: vec![
-                KnownFeatureFlag::TypedErrors.wire_value(),
-                FeatureFlag::new("future-thing").expect("valid unknown feature flag"),
-            ],
-        };
-        let server_version = Version::new("0.4.0").expect("valid version");
-        let reply = negotiate_hello(
-            &hello,
-            &server_version,
-            &[
-                KnownFeatureFlag::TypedErrors.wire_value(),
-                KnownFeatureFlag::ManifestV04.wire_value(),
-            ],
-        )
-        .expect("compatible version");
-
-        assert_eq!(reply.selected_version.as_str(), "0.4.0");
-        assert_eq!(
-            reply.capabilities,
-            vec![KnownFeatureFlag::TypedErrors.wire_value()]
-        );
     }
 
     #[test]

@@ -140,16 +140,6 @@ pub enum WorkloadState {
     Failed,
 }
 
-/// A selector for listing workloads.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkloadSelector {
-    /// All workloads on the node.
-    All,
-    /// A single workload by id.
-    One(WorkloadId),
-}
-
 /// A workload's advertised summary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]

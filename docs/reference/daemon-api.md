@@ -78,14 +78,14 @@ compatibility surface.
 | `Capability` | enum | [`Capability`](../../packages/d2b-contracts/src/capability.rs#L29) | `Lifecycle`; `Exec`; `Pty`; `Logs`; `FileCopy`; `PortForward`; `PersistentShell`; `Vsock`; `Virtiofs`; `WindowForwarding`; `DisplayStreaming`; `Clipboard`; `AudioPlayback`; `AudioCapture`; `Hid`; `Usb`; `GpuAccel`; `Snapshots`; `Hotplug`; `EphemeralSessions`; `ProviderManagedIsolation`; `ConfiguredLaunch` |
 | `CapabilityNegotiation` | struct | [`CapabilityNegotiation`](../../packages/d2b-contracts/src/capability.rs#L328) | struct { `schema_version`: `u32`; `capabilities`: `CapabilitySet`; `fingerprint`: `String` } |
 | `CapabilitySet` | struct | [`CapabilitySet`](../../packages/d2b-contracts/src/capability.rs#L143) | struct { `known`: `BTreeSet<Capability>`; `unknown`: `BTreeSet<ProtocolToken>` } |
-| `FeatureFlag` | struct | [`FeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L71) | empty struct |
-| `Hello` | struct | [`Hello`](../../packages/d2b-contracts/src/lib.rs#L152) | struct { `client_version`: `SemverRange`; `supported_features`: `Vec<FeatureFlag>` } |
-| `HelloOk` | struct | [`HelloOk`](../../packages/d2b-contracts/src/lib.rs#L160) | struct { `server_version`: `Version`; `selected_version`: `Version`; `capabilities`: `Vec<FeatureFlag>` } |
-| `HelloRejected` | struct | [`HelloRejected`](../../packages/d2b-contracts/src/lib.rs#L168) | struct { `reason`: `HelloRejectedReason` } |
-| `HelloRejectedReason` | enum | [`HelloRejectedReason`](../../packages/d2b-contracts/src/lib.rs#L174) | `VersionMismatch`; `CapabilityNegotiationFailed`; `InternalError` |
+| `FeatureFlag` | struct | [`FeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L70) | empty struct |
+| `Hello` | struct | [`Hello`](../../packages/d2b-contracts/src/lib.rs#L151) | struct { `client_version`: `SemverRange`; `supported_features`: `Vec<FeatureFlag>` } |
+| `HelloOk` | struct | [`HelloOk`](../../packages/d2b-contracts/src/lib.rs#L159) | struct { `server_version`: `Version`; `selected_version`: `Version`; `capabilities`: `Vec<FeatureFlag>` } |
+| `HelloRejected` | struct | [`HelloRejected`](../../packages/d2b-contracts/src/lib.rs#L167) | struct { `reason`: `HelloRejectedReason` } |
+| `HelloRejectedReason` | enum | [`HelloRejectedReason`](../../packages/d2b-contracts/src/lib.rs#L173) | `VersionMismatch`; `CapabilityNegotiationFailed`; `InternalError` |
 | `HelloRequest` | struct | [`HelloRequest`](../../packages/d2b-contracts-broker/src/broker_wire.rs#L903) | struct { `client_version`: `String`; `supported_features`: `Vec<String>` } |
 | `HelloResponse` | struct | [`HelloResponse`](../../packages/d2b-contracts-broker/src/broker_wire.rs#L997) | struct { `server_version`: `String`; `selected_version`: `String`; `capabilities`: `Vec<String>` } |
-| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L124) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
+| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L123) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
 | `SemverRange` | struct | [`SemverRange`](../../packages/d2b-contracts/src/error.rs#L1130) | empty struct |
 <!-- END AUTO-GENERATED: handshake-types -->
 
@@ -271,10 +271,6 @@ host reboot.
 | `HostPrepareRequest` | struct | [`HostPrepareRequest`](../../packages/d2b-contracts-control/src/public_wire.rs#L2041) | struct { `flags`: `MutationFlags` } |
 | `HostDestroyRequest` | struct | [`HostDestroyRequest`](../../packages/d2b-contracts-control/src/public_wire.rs#L2048) | struct { `flags`: `MutationFlags` } |
 | `HostReconcileRequest` | struct | [`HostReconcileRequest`](../../packages/d2b-contracts-control/src/public_wire.rs#L2060) | struct { `flags`: `MutationFlags`; `network`: `bool` } |
-| `UsbSecurityKeyStatusRequest` | struct | [`UsbSecurityKeyStatusRequest`](../../packages/d2b-contracts-control/src/public_wire.rs#L3755) | empty struct |
-| `UsbSecurityKeySessionsRequest` | struct | [`UsbSecurityKeySessionsRequest`](../../packages/d2b-contracts-control/src/public_wire.rs#L3841) | empty struct |
-| `UsbSecurityKeyCancelRequest` | struct | [`UsbSecurityKeyCancelRequest`](../../packages/d2b-contracts-control/src/public_wire.rs#L3895) | struct { `session_id`: `Option<String>`; `current`: `bool` } |
-| `UsbSecurityKeyTestRequest` | struct | [`UsbSecurityKeyTestRequest`](../../packages/d2b-contracts-control/src/public_wire.rs#L3920) | struct { `vm`: `String` } |
 
 ### Broker socket request types
 
@@ -388,10 +384,6 @@ see the auto-generated tables above for the committed Rust variants.
 | `StatusResponse` | struct | [`StatusResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2146) | struct { `entries`: `Vec<VmStatus>`; `read_model`: `Option<PublicReadModelMetadata>` } |
 | `AuditResponse` | struct | [`AuditResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2166) | struct { `entries`: `Vec<AuditExportEntry>`; `next_cursor`: `Option<AuditExportCursor>`; `complete`: `bool` } |
 | `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2445) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
-| `UsbSecurityKeyStatusResponse` | struct | [`UsbSecurityKeyStatusResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L3826) | struct { `host_proxy_enabled`: `bool`; `physical_keys`: `Vec<UsbSkPhysicalKeyStatus>`; `vm_devices`: `Vec<UsbSkVirtualDeviceStatus>`; `lease`: `UsbSkLeaseStatus` } |
-| `UsbSecurityKeySessionsResponse` | struct | [`UsbSecurityKeySessionsResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L3888) | struct { `sessions`: `Vec<UsbSkSession>` } |
-| `UsbSecurityKeyCancelResponse` | struct | [`UsbSecurityKeyCancelResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L3906) | struct { `cancelled_session_id`: `Option<String>`; `already_idle`: `bool` } |
-| `UsbSecurityKeyTestResponse` | struct | [`UsbSecurityKeyTestResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L3943) | struct { `vm`: `String`; `ok`: `bool`; `checks`: `Vec<UsbSkTestCheck>` } |
 
 ### Broker socket response types
 
@@ -559,10 +551,7 @@ running live guest activation.
 | `UsbProbeEntryKind` | enum | [`UsbProbeEntryKind`](../../packages/d2b-contracts-control/src/public_wire.rs#L2395) | `Usbip`; `QemuMediaSlot` |
 | `AuditFormat` | enum | [`AuditFormat`](../../packages/d2b-contracts-control/src/public_wire.rs#L2465) | `Human`; `Json` |
 | `AuthRole` | enum | [`AuthRole`](../../packages/d2b-contracts-control/src/public_wire.rs#L2473) | `None`; `Launcher`; `Admin` |
-| `UsbSkLeaseState` | enum | [`UsbSkLeaseState`](../../packages/d2b-contracts-control/src/public_wire.rs#L3793) | `Idle`; `Active`; `Queued`; `Unknown` |
-| `UsbSkSessionOutcome` | enum | [`UsbSkSessionOutcome`](../../packages/d2b-contracts-control/src/public_wire.rs#L3848) | `Success`; `Timeout`; `Cancelled`; `DeviceUnavailable`; `Active`; `Unknown` |
-| `TerminalStream` | enum | [`TerminalStream`](../../packages/d2b-contracts-control/src/terminal_wire.rs#L19) | `Stdout`; `Stderr` |
-| `TerminalStatus` | enum | [`TerminalStatus`](../../packages/d2b-contracts-control/src/terminal_wire.rs#L197) | `Exited` - struct { `code`: `i32` }; `Signaled` - struct { `signal`: `u32` }; `Error` - struct { `slug`: `String` } |
+| `TerminalStream` | enum | [`TerminalStream`](../../packages/d2b-contracts-control/src/terminal_wire.rs#L12) | `Stdout`; `Stderr` |
 | `HelperScopeKind` | enum | [`HelperScopeKind`](../../packages/d2b-contracts-control/src/unsafe_local_wire.rs#L57) | `LauncherApp`; `WaylandProxy` |
 | `HelperScopeState` | enum | [`HelperScopeState`](../../packages/d2b-contracts-control/src/unsafe_local_wire.rs#L80) | `Starting`; `Active`; `Stopping`; `Exited`; `Degraded` |
 | `HelperFailureCode` | enum | [`HelperFailureCode`](../../packages/d2b-contracts-control/src/unsafe_local_wire.rs#L263) | `InvalidRequest`; `OperationIdConflict`; `QueueFull`; `Timeout`; `UserManagerUnavailable`; `EnvironmentInvalid`; `ExecutableUnavailable`; `ScopeCreateFailed`; `ScopeIdentityMismatch`; `GraphicalSessionInactive`; `WaylandUnavailable`; `ProxyUnavailable`; `FirstClientTimeout`; `Internal` |
@@ -581,19 +570,16 @@ running live guest activation.
 | `IdentityClass` | enum | [`IdentityClass`](../../packages/d2b-contracts/src/identity.rs#L235) | `ZoneId`; `ResourceName`; `ResourceTypeName`; `ResourceUid`; `SessionPurpose`; `ServiceName`; `SchemaFingerprint`; `BindingDigest`; `ResourceBundleGenerationId`; `TranscriptHash`; `Timestamp`; `ResourceGeneration`; `ReconnectGeneration`; `ControllerGeneration`; `ConfigurationGeneration` |
 | `RealmIdentityConfigRuntimeState` | enum | [`RealmIdentityConfigRuntimeState`](../../packages/d2b-contracts/src/identity_config.rs#L179) | `MetadataOnly` |
 | `LauncherMetadataRuntimeState` | enum | [`LauncherMetadataRuntimeState`](../../packages/d2b-contracts/src/launcher.rs#L42) | `ContractOnly` |
-| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L124) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
-| `W3BrokerOperation` | enum | [`W3BrokerOperation`](../../packages/d2b-contracts/src/privileges_w3.rs#L26) | `DelegateCgroupV2`; `OpenCgroupDir`; `PrepareStateDir`; `PrepareRuntimeDir`; `OpenKvm`; `OpenVhostNet`; `OpenFuse`; `OpenDevice`; `CreateTapFd`; `CreatePersistentTap`; `DeletePersistentTap`; `CreateBridge`; `DeleteBridge`; `SetBridgePortFlags`; `ApplyNftables`; `ApplyNftablesProjection`; `ApplyRoute`; `ApplySysctl`; `ApplyNmUnmanaged`; `UpdateHostsFile`; `ModprobeIfAllowed`; `UsbipBindFirewallRule`; `MigrateLegacySwtpmState`; `SecurityKeyOpenDevice`; `SecurityKeyApplyUdevRules` |
+| `KnownFeatureFlag` | enum | [`KnownFeatureFlag`](../../packages/d2b-contracts/src/lib.rs#L123) | `TypedErrors`; `ManifestV04`; `StatusCheckBridges`; `ExportBrokerAudit`; `ConfiguredLaunchV1`; `UnsafeLocalProviderV1` |
+| `W3BrokerOperation` | enum | [`W3BrokerOperation`](../../packages/d2b-contracts/src/privileges_w3.rs#L28) | `DelegateCgroupV2`; `OpenCgroupDir`; `PrepareStateDir`; `PrepareRuntimeDir`; `OpenKvm`; `OpenVhostNet`; `OpenFuse`; `OpenDevice`; `CreateTapFd`; `CreatePersistentTap`; `DeletePersistentTap`; `CreateBridge`; `DeleteBridge`; `SetBridgePortFlags`; `ApplyNftables`; `ApplyNftablesProjection`; `ApplyRoute`; `ApplySysctl`; `ApplyNmUnmanaged`; `UpdateHostsFile`; `ModprobeIfAllowed`; `UsbipBindFirewallRule`; `MigrateLegacySwtpmState`; `SecurityKeyOpenDevice`; `SecurityKeyApplyUdevRules` |
 | `EntrypointMode` | enum | [`EntrypointMode`](../../packages/d2b-contracts/src/realm.rs#L12) | `HostResident`; `GatewayBacked` |
 | `RealmControllerPlacement` | enum | [`RealmControllerPlacement`](../../packages/d2b-contracts/src/realm.rs#L26) | `HostLocal`; `GatewayVm`; `CloudFullHost`; `ProviderController` - struct { `provider`: `ProviderId` }; `ProviderAgent` - struct { `provider`: `ProviderId` }; `ProviderSpecific` - struct { `provider`: `ProviderId`; `placement`: `ProtocolToken` } |
 | `RuntimeServiceRole` | enum | [`RuntimeServiceRole`](../../packages/d2b-contracts/src/runtime.rs#L134) | `Host`; `Hypervisor`; `Storage`; `Tpm`; `Display`; `Audio`; `Video`; `Network`; `ComponentSession`; `Usb`; `Observability` |
 | `SecurityKeyVmSessionState` | enum | [`SecurityKeyVmSessionState`](../../packages/d2b-contracts/src/security_key.rs#L165) | `Idle`; `AwaitingLease`; `Active`; `Completed`; `Cancelled` |
 | `SecurityKeySessionResult` | enum | [`SecurityKeySessionResult`](../../packages/d2b-contracts/src/security_key.rs#L230) | `InProgress`; `Success`; `CtapError`; `Timeout`; `Cancelled`; `InternalError` |
 | `SecurityKeyEvent` | enum | [`SecurityKeyEvent`](../../packages/d2b-contracts/src/security_key.rs#L290) | `SessionStarted` - struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `started_at`: `String` }; `SessionSucceeded` - struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `ended_at`: `String` }; `SessionFailed` - struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `result`: `SecurityKeySessionResult`; `ended_at`: `String` }; `SessionCancelled` - struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `ended_at`: `String` }; `DeviceRemoved` - struct { `device_label`: `SecurityKeyDeviceLabel`; `interrupted_session_id`: `Option<SecurityKeySessionId>` }; `DeviceReinserted` - struct { `device_label`: `SecurityKeyDeviceLabel` }; `SessionQueued` - struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `queued_at`: `String`; `blocking_vm`: `String` } |
-| `StoreVerifyStatus` | enum | [`StoreVerifyStatus`](../../packages/d2b-contracts/src/store_verify_wire.rs#L20) | `Ok`; `Drift`; `Unknown`; `Repaired`; `Failed`; `NotFound` |
-| `StoreVerifyUnknownReason` | enum | [`StoreVerifyUnknownReason`](../../packages/d2b-contracts/src/store_verify_wire.rs#L31) | `MarkerOrManifestMissing`; `MarkerOrManifestUnreadable`; `OlderHostGeneration`; `GenerationIdentityUnavailable` |
 | `PathClass` | enum | [`PathClass`](../../packages/d2b-contracts/src/types.rs#L170) | `Vm`; `Runtime` |
 | `UnsafeLocalLauncherItem` | enum | [`UnsafeLocalLauncherItem`](../../packages/d2b-contracts/src/unsafe_local_workloads.rs#L170) | `Exec` - (UnsafeLocalExecItem); `Shell` - (UnsafeLocalShellItem) |
-| `UsbipClaimSource` | enum | [`UsbipClaimSource`](../../packages/d2b-contracts/src/usbip.rs#L99) | `Declared` - struct { `firewall_ref`: `String`; `bind_ref`: `String` }; `Explicit` |
 | `WorkloadProviderKind` | enum | [`WorkloadProviderKind`](../../packages/d2b-contracts/src/workload.rs#L13) | `LocalVm`; `QemuMedia`; `ProviderManaged`; `UnsafeLocal` |
 | `IsolationPosture` | enum | [`IsolationPosture`](../../packages/d2b-contracts/src/workload.rs#L27) | `VirtualMachine`; `ProviderManaged`; `UnsafeLocal` |
 | `EnvironmentPosture` | enum | [`EnvironmentPosture`](../../packages/d2b-contracts/src/workload.rs#L39) | `RuntimeManaged`; `SystemdUserManagerAmbient` |
@@ -602,7 +588,6 @@ running live guest activation.
 | `SessionPersistencePosture` | enum | [`SessionPersistencePosture`](../../packages/d2b-contracts/src/workload.rs#L73) | `RuntimeManaged`; `UserManagerLifetime` |
 | `LauncherItemKind` | enum | [`LauncherItemKind`](../../packages/d2b-contracts/src/workload.rs#L94) | `Exec`; `Shell` |
 | `WorkloadState` | enum | [`WorkloadState`](../../packages/d2b-contracts/src/workload.rs#L130) | `Stopped`; `Starting`; `Running`; `Stopping`; `Failed` |
-| `WorkloadSelector` | enum | [`WorkloadSelector`](../../packages/d2b-contracts/src/workload.rs#L146) | `All`; `One` - (WorkloadId) |
 | `WorkloadBackend` | enum | [`WorkloadBackend`](../../packages/d2b-contracts/src/workload_identity.rs#L141) | `LocalVm` - (LocalVmBackendConfig); `LocalQemuMedia` - (LocalQemuMediaBackendConfig) |
 <!-- END AUTO-GENERATED: enum-variants -->
 
@@ -692,7 +677,7 @@ the failure class, for example `host check`, `audit`, `status`, or
 | `IdError` | enum | [`IdError`](../../packages/d2b-contracts/src/ids.rs#L54) | `Empty`; `TooLong`; `BadShape` |
 | `RealmTargetParseError` | enum | [`RealmTargetParseError`](../../packages/d2b-contracts/src/target.rs#L280) | `Empty`; `BareAliasRequiresContext`; `MissingSuffix`; `MissingWorkload`; `MissingRealm`; `SelectorNotAllowed`; `ReservedLabel`; `BadLabel` - (IdError); `BadRealmPath`; `AliasAmbiguous` - struct { `alias`: `WorkloadId`; `candidates`: `Vec<RealmTarget>` }; `LegacyNodeQualified` - struct { `legacy`: `LegacyNodeQualifiedTarget`; `suggested`: `RealmTarget` } |
 | `TokenError` | enum | [`TokenError`](../../packages/d2b-contracts/src/token.rs#L27) | `Empty`; `TooLong`; `BadShape` |
-| `BusIdError` | enum | [`BusIdError`](../../packages/d2b-contracts/src/usbip.rs#L22) | `Empty`; `Invalid`; `TooLong` - struct { `max`: `usize` } |
+| `BusIdError` | enum | [`BusIdError`](../../packages/d2b-contracts/src/usbip.rs#L8) | `Empty`; `Invalid`; `TooLong` - struct { `max`: `usize` } |
 <!-- END AUTO-GENERATED: error-envelope -->
 
 ## Audit
