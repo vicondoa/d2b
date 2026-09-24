@@ -14,7 +14,7 @@ use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_shell_terminal::SHELL_REPAIR_INTERVAL_SECS;
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
 use d2b_resource_runtime::identity::ResourceTypeName;
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 use serde_json::json;
 
 use d2b_provider_wayland_policy::{
@@ -146,7 +146,7 @@ pub fn shell_session_descriptor(args: InteractionDriverArgs<ShellSession>) -> Dr
     DriverDescriptor {
         resource_type: WellKnownType::SHELL_SESSION,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP | AllowedSources::RUNTIME,
-        verbs: d2b_provider_wayland_policy::INTERACTION_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: d2b_provider_wayland_policy::INTERACTION_EXECUTION_DOMAINS,
         exportable: false,
         reads: &[

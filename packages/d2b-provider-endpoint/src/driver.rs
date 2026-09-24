@@ -52,7 +52,7 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 use crate::effects_service::ENDPOINT_EFFECTS_SERVICE;
 
@@ -536,26 +536,6 @@ impl ResourceDriver for EndpointDriver {
 // Registration: the type's driver declaration
 // ---------------------------------------------------------------------------
 
-/// The resource verbs the Endpoint type supports.
-///
-/// Derived from the v3 resource plane's converted-type verb surface: the
-/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
-/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
-/// `Credential` type. Every converted type is served by the same manager
-/// verbs, and Role rules and the typed CLI nouns resolve their gating from
-/// this declaration.
-const ENDPOINT_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains the Endpoint type can be reconciled in.
 ///
 /// Derived from the placement contract: `Endpoint` names no placement anchor
@@ -593,7 +573,7 @@ pub fn endpoint_descriptor(args: EndpointDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::ENDPOINT,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-        verbs: ENDPOINT_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: ENDPOINT_EXECUTION_DOMAINS,
         exportable: false,
         reads: ENDPOINT_READS,

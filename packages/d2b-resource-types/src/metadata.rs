@@ -20,11 +20,11 @@ use std::sync::Arc;
 
 use d2b_resource_runtime::identity::ResourceKey;
 use d2b_resource_runtime::metadata::{
-    METADATA_EXECUTION_DOMAINS, METADATA_VERBS, MetadataDriverFactory, metadata_spec_decoder,
+    METADATA_EXECUTION_DOMAINS, MetadataDriverFactory, metadata_spec_decoder,
 };
 use d2b_resource_runtime::provider::{ProviderDirectory, ProviderDirectoryError};
 
-use crate::{AllowedSources, DriverDescriptor, WellKnownType};
+use crate::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 /// The driver declaration of one declaration-only metadata type.
 ///
@@ -40,7 +40,7 @@ pub fn metadata_descriptor(resource_type: WellKnownType) -> DriverDescriptor {
     DriverDescriptor {
         resource_type,
         allowed_sources: AllowedSources::BUILTIN,
-        verbs: METADATA_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: METADATA_EXECUTION_DOMAINS,
         exportable: false,
         reads: &[],
@@ -90,7 +90,7 @@ pub async fn assert_metadata_registration(descriptor: &DriverDescriptor, expecte
         "a declaration-only metadata row carries no placement anchor, so the plane reconciles it on its Host"
     );
     assert!(descriptor.reads.is_empty());
-    assert_eq!(descriptor.verbs, METADATA_VERBS);
+    assert_eq!(descriptor.verbs, CONVERTED_TYPE_VERBS);
     assert!(descriptor.operations.is_empty());
     assert!(descriptor.creations.is_empty());
     assert!(descriptor.startup.is_empty());

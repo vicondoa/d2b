@@ -66,7 +66,8 @@ use d2b_resource_runtime::driver::{
 use d2b_resource_runtime::error::{DriverFailure, DriverOp};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{
-    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+    AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
+    WellKnownType,
 };
 
 use crate::effects_service::ACTIVATION_EFFECTS_SERVICE;
@@ -882,26 +883,6 @@ impl ResourceDriver for ActivationDriver {
 // Registration: the type's driver declaration
 // ---------------------------------------------------------------------------
 
-/// The resource verbs the NixosGeneration type supports.
-///
-/// Derived from the v3 resource plane's converted-type verb surface: the
-/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
-/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
-/// `Credential` type. Every converted type is served by the same manager
-/// verbs, and Role rules and the typed CLI nouns resolve their gating from
-/// this declaration.
-const ACTIVATION_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains the NixosGeneration type can be reconciled in.
 ///
 /// Derived from the placement contract: `NixosGeneration` names the canonical
@@ -933,7 +914,7 @@ pub fn activation_descriptor(args: ActivationDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::NIXOS_GENERATION,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-        verbs: ACTIVATION_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: ACTIVATION_EXECUTION_DOMAINS,
         exportable: false,
         reads: ACTIVATION_READS,

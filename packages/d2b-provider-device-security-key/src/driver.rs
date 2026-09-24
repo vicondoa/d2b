@@ -41,7 +41,8 @@ use d2b_provider_toolkit::{
 use d2b_resource_runtime::context::{ChildEnsure, ResourceContext};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{
-    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, ServiceDecl, WellKnownType,
+    AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
+    ServiceDecl, WellKnownType,
 };
 
 use crate::effects_service::SECURITY_KEY_EFFECTS_SERVICE;
@@ -298,19 +299,6 @@ impl SharedProviderFamily for SecurityKeyFamily {
     }
 }
 
-/// The resource verbs the security-key types support.
-const SECURITY_KEY_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains the security-key types can be reconciled in.
 const SECURITY_KEY_EXECUTION_DOMAINS: &[&str] = &["host"];
 
@@ -352,7 +340,7 @@ pub fn security_key_descriptors(args: SecurityKeyDriverArgs) -> [DriverDescripto
         allowed_sources: AllowedSources::BUILTIN
             | AllowedSources::STARTUP
             | AllowedSources::RUNTIME,
-        verbs: SECURITY_KEY_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: SECURITY_KEY_EXECUTION_DOMAINS,
         exportable,
         reads,

@@ -19,7 +19,7 @@ use d2b_provider_display_wayland::{
     DISPLAY_REPAIR_INTERVAL_SECS, WaylandSessionSpec, session_children,
 };
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 use d2b_provider_wayland_policy::interaction::{
     InteractionChildContext, InteractionDriver, InteractionDriverArgs, InteractionDriverFactory,
@@ -184,7 +184,7 @@ pub fn wayland_session_descriptor(
     DriverDescriptor {
         resource_type: WellKnownType::WAYLAND_SESSION,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP | AllowedSources::RUNTIME,
-        verbs: d2b_provider_wayland_policy::INTERACTION_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: d2b_provider_wayland_policy::INTERACTION_EXECUTION_DOMAINS,
         exportable: false,
         reads: &[

@@ -43,7 +43,8 @@ use d2b_provider_toolkit::{
 use d2b_resource_runtime::context::{ChildEnsure, ResourceContext};
 use d2b_resource_runtime::identity::ResourceTypeName;
 use d2b_resource_types::{
-    AllowedSources, ChildCreation, ChildCustody, DriverDescriptor, WellKnownType,
+    AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
+    WellKnownType,
 };
 use serde_json::{Value, json};
 
@@ -220,23 +221,6 @@ impl SharedProviderFamily for NetworkFamily {
     }
 }
 
-/// The resource verbs the Network type supports.
-///
-/// Derived from the v3 resource plane's converted-type verb surface: the
-/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
-/// verbs, which the plane gates to the `Credential` type.
-const NETWORK_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains the Network type can be reconciled in.
 const NETWORK_EXECUTION_DOMAINS: &[&str] = &["host"];
 
@@ -273,7 +257,7 @@ pub fn network_descriptor(args: NetworkDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::NETWORK,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-        verbs: NETWORK_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: NETWORK_EXECUTION_DOMAINS,
         exportable: false,
         reads: NETWORK_READS,
