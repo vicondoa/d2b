@@ -1,5 +1,6 @@
 //! Instance-bound admission witnesses owned by the native evaluator.
 
+use d2b_contracts_resource::redacted_debug;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, RetryClass,
     canonical_digest,
@@ -26,11 +27,7 @@ pub(crate) struct AdmissionIssuer {
     store_identity: Arc<StoreIdentityAuthority>,
 }
 
-impl core::fmt::Debug for AdmissionIssuer {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("AdmissionIssuer(<redacted>)")
-    }
-}
+redacted_debug!(AdmissionIssuer);
 
 /// Store-side half of an instance-bound admission capability.
 #[derive(Clone)]
@@ -38,11 +35,7 @@ struct AdmissionVerifier {
     authority: Arc<AdmissionAuthority>,
 }
 
-impl core::fmt::Debug for AdmissionVerifier {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("AdmissionVerifier(<redacted>)")
-    }
-}
+redacted_debug!(AdmissionVerifier);
 
 /// Unique identity owned by one concrete resource-store backend.
 #[derive(Clone)]
@@ -50,11 +43,7 @@ struct StoreIdentity {
     authority: Arc<StoreIdentityAuthority>,
 }
 
-impl core::fmt::Debug for StoreIdentity {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("StoreIdentity(<redacted>)")
-    }
-}
+redacted_debug!(StoreIdentity);
 
 #[derive(Clone)]
 pub(super) struct StoreAdmissionBinding {
@@ -63,11 +52,7 @@ pub(super) struct StoreAdmissionBinding {
     seal_issuer: Arc<Mutex<Option<MutationSealIssuer>>>,
 }
 
-impl core::fmt::Debug for StoreAdmissionBinding {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("StoreAdmissionBinding(<redacted>)")
-    }
-}
+redacted_debug!(StoreAdmissionBinding);
 
 /// Create the evaluator capability and its single-owner store binding.
 pub(crate) fn admission_pair() -> (AdmissionIssuer, StoreAdmissionBinding) {

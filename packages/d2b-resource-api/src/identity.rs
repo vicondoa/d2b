@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use d2b_contracts_resource::redacted_debug;
 use d2b_contracts_resource::v3::identity::AuthenticatedSubjectContext as SessionClaims;
 
 use crate::authz::AuthorizationState;
@@ -42,11 +43,7 @@ impl AuthenticatedSubjectContext {
     }
 }
 
-impl core::fmt::Debug for AuthenticatedSubjectContext {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("AuthenticatedSubjectContext(<redacted>)")
-    }
-}
+redacted_debug!(AuthenticatedSubjectContext);
 
 #[cfg(test)]
 pub(crate) fn issue_test_subject(

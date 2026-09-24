@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
+use d2b_contracts_resource::redacted_debug;
 use d2b_contracts_resource::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, EvidenceClass, Locality};
 use d2b_contracts_resource::v3::{
@@ -597,11 +598,7 @@ impl core::fmt::Debug for BootstrapPhase {
     }
 }
 
-impl core::fmt::Debug for BoundSubject {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("BoundSubject(<redacted>)")
-    }
-}
+redacted_debug!(BoundSubject);
 
 impl core::fmt::Debug for BindingScope {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1214,11 +1211,7 @@ pub fn assignment_fence_for_mutation(
     Ok(fence)
 }
 
-impl core::fmt::Debug for AuthorizationGrant {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("AuthorizationGrant(<redacted>)")
-    }
-}
+redacted_debug!(AuthorizationGrant);
 
 /// Non-transferable authorization evidence for a downstream effect.
 ///
@@ -1414,11 +1407,7 @@ pub struct NativeAuthorizer {
         std::sync::Arc<Mutex<Option<d2b_contracts_resource::v3::operations::seal::MutationSealIssuer>>>,
 }
 
-impl core::fmt::Debug for NativeAuthorizer {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("NativeAuthorizer(<redacted>)")
-    }
-}
+redacted_debug!(NativeAuthorizer);
 
 impl NativeAuthorizer {
     /// Build an evaluator carrying one single-owner store binding.
