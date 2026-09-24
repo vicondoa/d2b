@@ -23,7 +23,6 @@ d2b_rust_library(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -35,7 +34,6 @@ d2b_rust_library(
     crate_name = "d2b_provider_process_minijail",
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -46,7 +44,6 @@ d2b_rust_test(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_process_minijail",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -58,7 +55,6 @@ d2b_rust_test(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_process_minijail",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -72,7 +68,7 @@ d2b_rust_test(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
+        
         "//packages/d2b-process-conformance:d2b_process_conformance",
         ":d2b_provider_process_minijail",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),

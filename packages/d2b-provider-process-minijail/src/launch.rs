@@ -48,7 +48,7 @@ pub fn validate_launch_ticket(
     gate: PlatformGate,
 ) -> Result<(), ProcessConformanceError> {
     if ticket.selected_provider().as_str() != PROVIDER_NAME
-        || ticket.provider_ref().to_canonical_string() != "Provider/system-minijail"
+        || ticket.provider_ref().to_canonical_string() != crate::PROVIDER_REF
     {
         return Err(ProcessConformanceError::ProviderMismatch);
     }
