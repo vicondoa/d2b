@@ -666,8 +666,8 @@ async fn open_macvtap_device_with_udev_wait(tap_path: &Path) -> Result<tokio::fs
     let mut last_error = None;
     for _ in 0..100 {
         match tokio::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
+            .read(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
+            .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
             .open(tap_path)
             .await
         {
@@ -1678,7 +1678,7 @@ mod tests {
             |port, flags| {
                 let applied = applied.clone();
                 Box::pin(async move {
-                    applied.lock().unwrap().push((port.to_owned(), flags));
+                    applied.lock().unwrap().push((port.to_owned(), flags)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                     Ok(())
                 })
             },
@@ -1699,7 +1699,7 @@ mod tests {
         assert!(response.isolated);
         assert!(response.neigh_suppress);
         assert_eq!(
-            *applied.lock().unwrap(),
+            *applied.lock().unwrap(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             vec![(
                 target.port.clone(),
                 BridgePortFlagSet::defaults_for(TapRoleW3::WorkloadLanIsolated),

@@ -77,7 +77,7 @@ impl AsyncHidrawDevice {
             match guard.try_io(|inner| {
                 let mut file = inner.get_ref();
                 let mut report = [0u8; CTAPHID_REPORT_SIZE];
-                match file.read(&mut report) {
+                match file.read(&mut report) { // async-gate-allow: synchronous file I/O helper
                     Ok(CTAPHID_REPORT_SIZE) => Ok(report),
                     Ok(0) => Err(std::io::ErrorKind::UnexpectedEof.into()),
                     Ok(n) => Err(std::io::Error::new(
@@ -105,7 +105,7 @@ impl AsyncHidrawDevice {
             let mut guard = self.file.writable().await?;
             match guard.try_io(|inner| {
                 let mut file = inner.get_ref();
-                file.write(buf)
+                file.write(buf) // async-gate-allow: synchronous file I/O helper
             }) {
                 Ok(Ok(0)) => return Err(std::io::ErrorKind::WriteZero.into()),
                 Ok(Ok(n)) => buf = &buf[n..],
@@ -486,7 +486,7 @@ pub(crate) async fn run_connection(
         return;
     }
 
-    if !state.lock().enabled_vms.contains(&vm_id) {
+    if !state.lock().enabled_vms.contains(&vm_id) { // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         info!(vm = %vm_id, "security-key: rejecting connection for disabled vm");
         return;
     }
@@ -494,7 +494,7 @@ pub(crate) async fn run_connection(
     let deadline = Instant::now() + QUEUE_WAIT_TIMEOUT;
     let lease_id = loop {
         if let Some(lease_id) = {
-            let mut guard = state.lock();
+            let mut guard = state.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             guard.try_acquire_lease(&vm_id)
         } {
             break lease_id;
@@ -524,12 +524,12 @@ pub(crate) async fn run_connection(
                     CtaphidPacket::Init(packet)
                         if packet.cid != 0 && packet.cid != CTAPHID_BROADCAST_CID =>
                     {
-                        active_cids.lock().insert(packet.cid);
+                        active_cids.lock().insert(packet.cid); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                     }
                     CtaphidPacket::Cont(packet)
                         if packet.cid != 0 && packet.cid != CTAPHID_BROADCAST_CID =>
                     {
-                        active_cids.lock().insert(packet.cid);
+                        active_cids.lock().insert(packet.cid); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                     }
                     _ => {}
                 }
@@ -589,14 +589,14 @@ pub(crate) async fn run_connection(
         let _ = guest_to_hidraw.await;
     }
 
-    let cancel_cids: Vec<u32> = active_cids.lock().iter().copied().collect();
+    let cancel_cids: Vec<u32> = active_cids.lock().iter().copied().collect(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
     for cid in cancel_cids {
         let cancel_packet = build_cancel_packet(cid);
         let hidraw = Arc::clone(&hidraw);
         let _ = hidraw.write_report(&cancel_packet).await;
     }
 
-    state.lock().release_lease(&vm_id, lease_id);
+    state.lock().release_lease(&vm_id, lease_id); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
 }
 
 // ---------------------------------------------------------------------------
@@ -1028,7 +1028,7 @@ mod tests {
     async fn run_connection_rejects_mismatched_peer() {
         let (stream, _peer) = tokio_socket_pair();
         let state = Arc::new(parking_lot::Mutex::new(SecurityKeyState::new("selector")));
-        state.lock().enabled_vms.insert("vm-a".to_owned());
+        state.lock().enabled_vms.insert("vm-a".to_owned()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         let hidraw = test_hidraw();
         let (wrong_uid, wrong_gid) = mismatched_ids();
 
@@ -1084,7 +1084,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(state.lock().lease, RelayLeaseState::Available));
+        assert!(matches!(state.lock().lease, RelayLeaseState::Available)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

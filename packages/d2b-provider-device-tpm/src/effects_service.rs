@@ -862,7 +862,7 @@ mod tests {
             child: ChildEnsure,
         ) -> Result<EnsureOutcome, d2b_provider_toolkit::SharedProviderEffectError> {
             self.rows
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .expect("rows")
                 .ensured
                 .push(format!("{}/{}", child.type_name.as_str(), child.name));
@@ -871,7 +871,7 @@ mod tests {
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), d2b_provider_toolkit::SharedProviderEffectError> {
             self.rows
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .expect("rows")
                 .deleted
                 .push(format!("{}/{}", key.type_name, key.name));
@@ -884,7 +884,7 @@ mod tests {
         ) -> Result<Option<ResourceView>, d2b_provider_toolkit::SharedProviderEffectError> {
             Ok(self
                 .rows
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .expect("rows")
                 .views
                 .get(&format!("{}/{}", key.type_name, key.name))

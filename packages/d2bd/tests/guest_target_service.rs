@@ -90,10 +90,10 @@ impl GuestTargetEffect for RecordingEffect {
         &self,
         request: &GuestRealizeRequest,
     ) -> Result<(), GuestTargetEffectError> {
-        if let Some(error) = *self.outcome.lock().expect("outcome") {
+        if let Some(error) = *self.outcome.lock().expect("outcome") { // async-gate-allow: test-support recorder lock
             return Err(error);
         }
-        self.realized.lock().expect("realized").push((
+        self.realized.lock().expect("realized").push(( // async-gate-allow: test-support recorder lock
             request.source().clone(),
             request.spec().to_vec(),
             request.spec_digest().to_owned(),
@@ -103,17 +103,17 @@ impl GuestTargetEffect for RecordingEffect {
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn delete(&self, source: &ResourceKey) -> Result<(), GuestTargetEffectError> {
-        self.deleted.lock().expect("deleted").push(source.clone());
+        self.deleted.lock().expect("deleted").push(source.clone()); // async-gate-allow: test-support recorder lock
         Ok(())
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn adopt(&self, source: &ResourceKey) -> Result<bool, GuestTargetEffectError> {
-        self.adopted.lock().expect("adopted").push(source.clone());
-        if let Some(error) = *self.discovery.lock().expect("discovery") {
+        self.adopted.lock().expect("adopted").push(source.clone()); // async-gate-allow: test-support recorder lock
+        if let Some(error) = *self.discovery.lock().expect("discovery") { // async-gate-allow: test-support recorder lock
             return Err(error);
         }
-        Ok(*self.present.lock().expect("present"))
+        Ok(*self.present.lock().expect("present")) // async-gate-allow: test-support recorder lock
     }
 }
 
@@ -424,7 +424,7 @@ async fn adoption_reports_missing_when_the_target_local_effect_is_gone() {
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 async fn adoption_reports_missing_when_the_effect_cannot_confirm_the_realization() {
     let effect = RecordingEffect::new();
-    *effect.discovery.lock().expect("discovery") = Some(GuestTargetEffectError::Unavailable);
+    *effect.discovery.lock().expect("discovery") = Some(GuestTargetEffectError::Unavailable); // async-gate-allow: test-support recorder lock
     let f = Fixture::new(Arc::clone(&effect), 1);
     f.realize(realize_request("relay", 1, spec())).await;
     f.service.bind_session(2).expect("reconnect generation");

@@ -383,7 +383,7 @@ mod tests {
             session.revoke_credential(&request).await.unwrap(),
             CredentialRevocationOutcome::AlreadyRevoked
         );
-        assert_eq!(session.operations.lock().len(), 1);
+        assert_eq!(session.operations.lock().len(), 1); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         let debug = format!("{request:?}");
         assert!(!debug.contains("Credential/relay"));
         assert!(!debug.contains("123e4567-e89b-42d3-a456-426614174000"));
@@ -442,7 +442,7 @@ mod tests {
         ) -> Result<CredentialRevocationOutcome, CredentialResourceRuntimeError> {
             self.attempts
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let mut operations = self.operations.lock();
+            let mut operations = self.operations.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             if operations
                 .insert(
                     request.operation_id.clone(),

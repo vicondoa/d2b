@@ -68,18 +68,18 @@ struct ScriptedSocketSource(Arc<FakeSocketEffects>);
 #[async_trait::async_trait]
 impl EndpointSocketSource for ScriptedSocketSource {
     async fn present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
-        self.0.calls.lock().push("socket-present");
+        self.0.calls.lock().push("socket-present"); // async-gate-allow: test-support recorder lock
         self.0.present.load(Ordering::SeqCst)
     }
 
     async fn ensure(&self, _producer_ref: &ResourceRef, _purpose: &str) -> Result<(), String> {
-        self.0.calls.lock().push("ensure-socket");
+        self.0.calls.lock().push("ensure-socket"); // async-gate-allow: test-support recorder lock
         self.0.make_present();
         Ok(())
     }
 
     async fn remove(&self, _producer_ref: &ResourceRef, _purpose: &str) -> Result<(), String> {
-        self.0.calls.lock().push("remove-socket");
+        self.0.calls.lock().push("remove-socket"); // async-gate-allow: test-support recorder lock
         self.0.present.store(false, Ordering::SeqCst);
         Ok(())
     }
@@ -117,7 +117,7 @@ impl EndpointPurposeVocabulary for FakeSocketEffects {
 #[async_trait::async_trait]
 impl EndpointDriverEffects for FakeSocketEffects {
     async fn socket_present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
-        self.calls.lock().push("socket-present");
+        self.calls.lock().push("socket-present"); // async-gate-allow: test-support recorder lock
         self.present.load(Ordering::SeqCst)
     }
 
@@ -126,7 +126,7 @@ impl EndpointDriverEffects for FakeSocketEffects {
         _producer_ref: &ResourceRef,
         _purpose: &str,
     ) -> Result<(), String> {
-        self.calls.lock().push("ensure-socket");
+        self.calls.lock().push("ensure-socket"); // async-gate-allow: test-support recorder lock
         self.make_present();
         Ok(())
     }
@@ -136,7 +136,7 @@ impl EndpointDriverEffects for FakeSocketEffects {
         _producer_ref: &ResourceRef,
         _purpose: &str,
     ) -> Result<(), String> {
-        self.calls.lock().push("remove-socket");
+        self.calls.lock().push("remove-socket"); // async-gate-allow: test-support recorder lock
         self.present.store(false, Ordering::SeqCst);
         Ok(())
     }

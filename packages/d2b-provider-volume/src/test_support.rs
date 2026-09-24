@@ -96,7 +96,7 @@ impl VolumeRuntime for RecordingRuntime {
         _provider: Option<&serde_json::Value>,
         _owner_ref: Option<&ResourceRef>,
     ) -> Result<bool, String> {
-        self.calls.lock().push("ensure-layout");
+        self.calls.lock().push("ensure-layout"); // async-gate-allow: test-support recorder lock
         if self.degraded.load(std::sync::atomic::Ordering::SeqCst) {
             return Ok(false);
         }
@@ -109,7 +109,7 @@ impl VolumeRuntime for RecordingRuntime {
         _volume_uid: &ResourceUid,
         _spec: &VolumeSpec,
     ) -> Result<(), String> {
-        self.calls.lock().push("remove-layout");
+        self.calls.lock().push("remove-layout"); // async-gate-allow: test-support recorder lock
         Ok(())
     }
 

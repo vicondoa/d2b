@@ -862,7 +862,7 @@ async fn blocking_effects_do_not_stall_the_async_executor() {
         percentile(9)
     );
     let launch_threads = launch_threads
-        .lock()
+        .lock() // async-gate-allow: test-support recorder lock
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     assert_eq!(
         launch_threads.len(),
@@ -1027,7 +1027,7 @@ async fn ready_process_launches_reach_the_provider_adapter_in_parallel() {
         }
         assert_eq!(
             launch_threads
-                .lock()
+                .lock() // async-gate-allow: test-support recorder lock
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .len(),
             count

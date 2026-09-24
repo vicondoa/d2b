@@ -6963,6 +6963,7 @@ fn render_dossier_citation_diagnostic(citation: &DanglingDossierCitation) -> Str
 }
 
 /// Every dangling dossier citation in the corpus globs.
+#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn dossier_dangling_citations(repo_root: &Path) -> Result<Vec<DanglingDossierCitation>, String> {
     let mut citations = Vec::new();
     for glob in DOSSIER_CORPUS_GLOBS {

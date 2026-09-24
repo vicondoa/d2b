@@ -256,8 +256,8 @@ pub(crate) async fn open_and_validate_hidraw(
     }
 
     let file = tokio::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
+        .read(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
+        .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .custom_flags(nix::libc::O_NONBLOCK | nix::libc::O_NOFOLLOW)
         .open(path)
         .await

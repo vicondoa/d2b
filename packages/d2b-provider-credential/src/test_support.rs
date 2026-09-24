@@ -94,18 +94,18 @@ impl CredentialDriverEffects for FakeEffects {
         _provider_ref: &ResourceRef,
         _execution_ref: &ResourceRef,
     ) -> Option<CredentialDependencyFacts> {
-        self.log.lock().push("dependency-facts".to_owned());
-        self.facts.lock().clone()
+        self.log.lock().push("dependency-facts".to_owned()); // async-gate-allow: test-support recorder lock
+        self.facts.lock().clone() // async-gate-allow: test-support recorder lock
     }
 
     async fn lease_facts(&self, _credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
-        self.log.lock().push("lease-facts".to_owned());
-        *self.lease.lock()
+        self.log.lock().push("lease-facts".to_owned()); // async-gate-allow: test-support recorder lock
+        *self.lease.lock() // async-gate-allow: test-support recorder lock
     }
 
     async fn agent_ready(&self, _agent_ref: &ResourceRef) -> bool {
-        self.log.lock().push("agent-ready".to_owned());
-        *self.agent_ready.lock()
+        self.log.lock().push("agent-ready".to_owned()); // async-gate-allow: test-support recorder lock
+        *self.agent_ready.lock() // async-gate-allow: test-support recorder lock
     }
 
     fn session(&self, _provider_ref: &ResourceRef) -> Option<Arc<dyn CredentialSession>> {
@@ -156,7 +156,7 @@ impl CredentialSession for RecordingSession {
         if Some(request.session_generation()) != self.generation {
             return Ok(CredentialRevocationOutcome::Uncertain);
         }
-        let mut operations = self.operations.lock();
+        let mut operations = self.operations.lock(); // async-gate-allow: test-support recorder lock
         let operation_id = request.operation_id().to_owned();
         if operations.contains(&operation_id) {
             return Ok(CredentialRevocationOutcome::AlreadyRevoked);
@@ -230,18 +230,18 @@ impl CredentialRuntime for RecordingRuntime {
         _provider_ref: &ResourceRef,
         _execution_ref: &ResourceRef,
     ) -> Option<CredentialDependencyFacts> {
-        self.log.lock().push("dependency-facts".to_owned());
-        self.facts.lock().clone()
+        self.log.lock().push("dependency-facts".to_owned()); // async-gate-allow: test-support recorder lock
+        self.facts.lock().clone() // async-gate-allow: test-support recorder lock
     }
 
     async fn lease_facts(&self, _credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
-        self.log.lock().push("lease-facts".to_owned());
-        *self.lease.lock()
+        self.log.lock().push("lease-facts".to_owned()); // async-gate-allow: test-support recorder lock
+        *self.lease.lock() // async-gate-allow: test-support recorder lock
     }
 
     async fn agent_ready(&self, _agent_ref: &ResourceRef) -> bool {
-        self.log.lock().push("agent-ready".to_owned());
-        *self.agent_ready.lock()
+        self.log.lock().push("agent-ready".to_owned()); // async-gate-allow: test-support recorder lock
+        *self.agent_ready.lock() // async-gate-allow: test-support recorder lock
     }
 
     fn session(&self, _provider_ref: &ResourceRef) -> Option<Arc<dyn CredentialSession>> {

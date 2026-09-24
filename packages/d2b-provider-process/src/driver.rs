@@ -2462,7 +2462,7 @@ mod tests {
             &self,
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned())
+            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         }
 
         async fn view(
@@ -2473,8 +2473,8 @@ mod tests {
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.deleted.lock().push(key.clone());
-            self.owned.lock().retain(|row| row.key != *key);
+            self.deleted.lock().push(key.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.owned.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
         }
 
@@ -3265,7 +3265,7 @@ mod tests {
         );
         assert_eq!(fake.launch_calls().len(), 1, "a one-shot never relaunches");
         assert!(
-            manager.deleted.lock().is_empty(),
+            manager.deleted.lock().is_empty(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             "the retention window has not elapsed"
         );
 
@@ -3275,7 +3275,7 @@ mod tests {
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
         );
-        assert_eq!(manager.deleted.lock().clone(), vec![f.row.key.clone()]);
+        assert_eq!(manager.deleted.lock().clone(), vec![f.row.key.clone()]); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
     }
 
     /// The bounded runtime: a one-shot that outlived `runtimeDeadline` stops
@@ -3380,7 +3380,7 @@ mod tests {
             ReconcileOutcome::Satisfied
         );
         assert!(
-            manager.deleted.lock().is_empty(),
+            manager.deleted.lock().is_empty(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             "an incident-held failure is never auto-retired"
         );
     }
@@ -3742,7 +3742,7 @@ mod tests {
             DriverFailure::not_yet(DriverOp::Delete, FailureKinds::CHILDREN_DRAINING)
         );
         assert_eq!(
-            manager.deleted.lock().len(),
+            manager.deleted.lock().len(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             1,
             "the owned child is nudged first"
         );

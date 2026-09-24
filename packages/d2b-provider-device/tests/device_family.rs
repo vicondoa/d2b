@@ -166,7 +166,7 @@ async fn a_row_runs_the_effect_of_the_provider_its_spec_names() {
     driver.validate(&mut ctx).await.expect("tpm row validates");
     driver.reconcile(&mut ctx).await.expect("tpm row reconciles");
     assert_eq!(
-        *runtime.reconciled.lock(),
+        *runtime.reconciled.lock(), // async-gate-allow: test-support recorder lock
         vec![DeviceComponent::Tpm],
         "the tpm Provider reference selects the tpm component"
     );

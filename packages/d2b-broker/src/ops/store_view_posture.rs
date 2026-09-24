@@ -448,7 +448,7 @@ pub(crate) async fn plant_live_marker_with_matrix_posture(
     let tmp = live.join(format!(".d2b-marker-{vm}.tmp"));
     let _ = tokio::fs::remove_file(&tmp).await;
     let file = tokio::fs::OpenOptions::new()
-        .write(true)
+        .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .create_new(true)
         .mode(level.mode)
         .open(&tmp)

@@ -689,8 +689,8 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.deleted.lock().push(key.clone());
-            self.owned.lock().retain(|row| row.key != *key);
+            self.deleted.lock().push(key.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.owned.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Err(ResourceError::ManagerRpc("dead".into()))
         }
 
@@ -916,7 +916,7 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
         let failure = d.finalize(&mut ctx).await.expect_err("owned child still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert_eq!(
-            manager.deleted.lock().len(),
+            manager.deleted.lock().len(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             1,
             "the owned child is nudged through its own finalize-before-delete pass"
         );

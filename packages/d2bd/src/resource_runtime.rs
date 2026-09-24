@@ -2511,7 +2511,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 if let Some(sink) = self.status_sink.as_ref() {
                     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
                     {
-                        *sink.lock() = Some(desired_status);
+                        *sink.lock() = Some(desired_status); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                     }
                 } else {
                     tracing::debug!(
@@ -7713,7 +7713,7 @@ impl ControllerSessionCoordinator {
         provider_ref: &ResourceRef,
     ) -> Result<(), ControllerAssignmentRefreshError> {
         self.assignments
-            .lock()
+            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .revoke_assignment(identity);
         let (driver, bytes) = self
@@ -8962,7 +8962,7 @@ impl ZoneResourceRuntime {
                 session.binding.provider_ref(),
             ) {
                 assignments
-                    .lock()
+                    .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .revoke_session_for(&session.binding);
             }

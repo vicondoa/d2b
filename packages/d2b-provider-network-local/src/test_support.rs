@@ -65,8 +65,8 @@ impl NetworkRuntime for RecordingRuntime {
         &self,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-        self.calls.lock().push("reconcile");
-        *self.reconciled.lock() += 1;
+        self.calls.lock().push("reconcile"); // async-gate-allow: test-support recorder lock
+        *self.reconciled.lock() += 1; // async-gate-allow: test-support recorder lock
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Ready,
         ))
@@ -76,8 +76,8 @@ impl NetworkRuntime for RecordingRuntime {
         &self,
         _request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        self.calls.lock().push("finalize");
-        *self.finalized.lock() += 1;
+        self.calls.lock().push("finalize"); // async-gate-allow: test-support recorder lock
+        *self.finalized.lock() += 1; // async-gate-allow: test-support recorder lock
         Ok(SharedProviderFinalize::Complete)
     }
 }

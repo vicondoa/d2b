@@ -1442,7 +1442,7 @@ impl GuestEffectsService {
         #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let published = request
             .status_sink
-            .lock()
+            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .clone()
             .or_else(|| request.status.clone());
         let phase = match published.as_ref().and_then(|status| status.get("phase")).and_then(Value::as_str) {
@@ -2193,7 +2193,7 @@ mod tests {
         let request = cloud_hypervisor_request();
         // The controller session's status write is captured into the sink
         // before the pass, exactly as the driver's effect call observes it.
-        *request.status_sink.lock() = Some(json!({ "phase": "Ready" }));
+        *request.status_sink.lock() = Some(json!({ "phase": "Ready" })); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
 
         let outcome = service
             .reconcile(crate::driver::GuestKind::CloudHypervisor, &request)
