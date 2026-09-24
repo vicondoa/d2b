@@ -30,3 +30,11 @@ net: -4,214 lines, -1 dep (island 7 mods = 4,198; four duplicate-path re-export 
 - Workspace-wide symbol census with grep across `packages/`, `nixos-modules/`, `tests/`, `docs/reference/`, `BUILD.bazel`, `*.bzl`, `*.nix`: zero callers of `d2b_bus::(relay|zone_route|service_router|audit|routing|transport|lifecycle|error|engine|driver)::` by any path (probe + per-name grep).
 - In-crate: `crate::<island>::` grep against the six live core files - all zero.
 - Verified the four shims' items are canonical at `d2b_bus::session::{…}` (session/mod.rs re-export block) and that lib.rs declares `pub mod` for each island module but publishes zero of their items on the documented surface.
+
+## U6 outcome (2026-09-24)
+
+- **applied:** 7 island modules (relay.rs, zone_route.rs, service_router.rs, audit.rs, routing.rs, transport/{mod,credit,unix}.rs) deleted with their `#[cfg(test)]` bodies; four shims (lifecycle.rs, error.rs, engine.rs, driver.rs) deleted; ten `pub mod` arms removed from lib.rs; `d2b_audit` dep edge removed from Cargo.toml + BUILD.bazel (all three edges: `d2b_bus_deps`, `d2b_bus_test_support`, `d2b_bus_test`; plus two `compile_data` entries naming the deleted `src/transport/unix.rs`). R4 re-verified at HEAD `fef6b367d`: workspace-wide zero callers of every `d2b_bus::(relay|zone_route|service_router|audit|routing|transport|lifecycle|error|engine|driver)` path; in-crate `crate::<island>::` imports zero in all live files; `d2b_audit` used in-crate only by island files (audit.rs, service_router.rs).
+- **stale lane claims (recorded, cut still valid):**
+  1. "workspace's only consumer of the `d2b_audit` crate at HEAD" - STALE. Cargo.toml grep at HEAD shows five consumers: d2b-broker, d2b-bus, d2b-session, d2bd-runtime, d2bd. Edge removal still applied (bus's only `d2b_audit` use was the island); d2b-audit crate keeps four live consumers and is NOT deleted.
+  2. "zero refs ... any doc" - two doc-comment mentions of island paths existed in live files: `[`crate::transport::unix`]` (session/mod.rs:25) and `` `zone_route::forward_cancel` `` (session/zone_link.rs:18). Both reworded minimally as deletion fallout (doc-only, no behavior change); no other live-file edit.
+- **skipped:** none. `streamlets.rs` census artifact remains as noted above (does not exist on disk).
