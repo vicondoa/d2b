@@ -31,14 +31,14 @@ pub use effects::{
 };
 pub use gpu_argv::{
     GpuArgvError, GpuArgvInput, GpuContextType, GpuDisplayConfig, GpuParams,
-    exec_arg0 as gpu_exec_arg0, generate_gpu_argv,
+    generate_gpu_argv,
 };
 pub use process::{
     GpuProcessDeclaration, GpuProcessRole, GpuProcessSelectionError, gpu_process_name,
 };
 pub use settings::{ContextType, DisplayConfig, GpuSettings, GpuSettingsError};
 pub use video_argv::{
-    VideoArgvError, VideoArgvInput, VideoBackend, exec_arg0 as video_exec_arg0,
+    VideoArgvError, VideoArgvInput, VideoBackend,
     generate_video_argv, wire_contract_snapshot as video_wire_contract_snapshot,
 };
 pub use workers::{GpuWorkerSpec, VideoWorkerSpec};

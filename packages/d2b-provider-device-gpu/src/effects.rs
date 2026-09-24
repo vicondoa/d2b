@@ -84,16 +84,12 @@ impl fmt::Debug for GpuLaunchTicket {
 pub enum GpuEffectError {
     /// More than eight device grants were requested.
     DeviceQuotaExceeded,
-    /// Core refused the opaque device open.
-    OpenRejected,
     /// Core refused a worker launch.
     SpawnRejected,
     /// A worker can be retried.
     Transient,
     /// The Core probe adapter is unavailable.
     ProbeUnavailable,
-    /// Restart observation could not prove one exact process.
-    ProcessObservationUnavailable,
     /// The request used a different worker principal.
     WrongPrincipal,
     /// The request used a different platform identity.
@@ -102,9 +98,7 @@ pub enum GpuEffectError {
     StaleDeviceIdentity,
     /// A Host-global claim conflicts with another owner.
     AuthorityConflict,
-    /// A restart observation was ambiguous and is quarantined.
-    Quarantined,
-    /// A worker closure did not prove the owned process was gone.
+/// A worker closure did not prove the owned process was gone.
     CloseUnconfirmed,
     /// The frozen GPU/video wire contract diverged.
     WireContractMismatch,
@@ -115,16 +109,13 @@ impl GpuEffectError {
     pub const fn code(self) -> &'static str {
         match self {
             Self::DeviceQuotaExceeded => "device-broker-fd-quota-exceeded",
-            Self::OpenRejected => "device-broker-inaccessible",
             Self::SpawnRejected => "device-worker-failed",
             Self::Transient => "transient",
             Self::ProbeUnavailable => "gpu-effect-unavailable",
-            Self::ProcessObservationUnavailable => "gpu-process-observation-unavailable",
             Self::WrongPrincipal => "gpu-process-principal-mismatch",
             Self::PlatformMismatch => "gpu-platform-mismatch",
             Self::StaleDeviceIdentity => "gpu-device-identity-stale",
             Self::AuthorityConflict => "device-claim-conflict",
-            Self::Quarantined => "gpu-authority-quarantined",
             Self::CloseUnconfirmed => "gpu-worker-close-unconfirmed",
             Self::WireContractMismatch => "device-wire-contract-mismatch",
         }

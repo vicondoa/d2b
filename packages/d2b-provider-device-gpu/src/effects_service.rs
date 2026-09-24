@@ -9,25 +9,17 @@
 //! daemon-supplied runtime facet ([`crate::facets::GpuRuntime`]); and the
 //! per-resource lease cache the port keeps is supplied by the driver's own
 //! state, never daemon state.
-//!
-//! The declared zone-plane service [`GPU_EFFECTS_SERVICE`] is hosted per
-//! zone by the daemon through [`GpuEffectsServiceFactory`]; its one method
-//! (`inspect-gpu`) answers the family's committed surface: the declared
-//! worker rows and the grant classes the Device's posture opens.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 use d2b_core_controller::authority::{AuthorityLease, AuthorityRequest};
-use d2b_provider_toolkit::{
-    EffectResponse, EffectService, EffectServiceError, EffectServiceFactory,
-    SharedProviderChildSurface, ServiceInvocation,
-};
+use d2b_provider_toolkit::SharedProviderChildSurface;
 use d2b_resource_runtime::identity::ResourceKey;
 use d2b_resource_runtime::manager::ResourceView;
 use d2b_resource_runtime::ResourceStatus;
-use d2b_resource_types::{ServiceDecl, ServiceMethod};
+
 use parking_lot::Mutex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -41,86 +33,8 @@ use crate::effects::{
 };
 use crate::facets::GpuRuntime;
 use crate::process::GpuProcessRole;
-use crate::vocabulary::{GPU_GRANT_CLASSES, GPU_RENDER_NODE_GRANT_CLASSES, GPU_VIDEO_GRANT_CLASSES};
+
 use crate::workers::{GpuWorkerSpec, VideoWorkerSpec};
-
-/// The GPU family's declared effects service.
-///
-/// One zone-plane method, `inspect-gpu`: it answers the family's committed
-/// surface - the declared worker rows the port reads and the grant classes
-/// the Device's posture opens. The report is hermetic: no host state is
-/// read or mutated.
-pub const GPU_EFFECTS_SERVICE: ServiceDecl = ServiceDecl {
-    id: "gpu.d2bus.org/effects",
-    methods: &[ServiceMethod::zone_plane("inspect-gpu")],
-    attach_kinds: &[],
-    streams: &[],
-    endpoint_policy: None,
-};
-
-/// The one `inspect-gpu` response payload: the family's committed surface.
-/// The payload is built through the canonical JSON object path, so a
-/// structural character in a trusted value yields a correctly escaped
-/// report rather than an unparseable one; the refusal is unreachable and
-/// names its own code.
-fn inspect_gpu_response() -> Result<EffectResponse, EffectServiceError> {
-    let payload = serde_json::from_value(serde_json::json!({
-        "family": "device-gpu",
-        "provider": crate::PROVIDER_REF,
-        "resourceType": "Device",
-        "rows": ["Process/gpu-<device>", "Process/video-<device>"],
-        "grantClasses": {
-            "full": GPU_GRANT_CLASSES,
-            "renderNode": GPU_RENDER_NODE_GRANT_CLASSES,
-            "video": GPU_VIDEO_GRANT_CLASSES,
-        },
-    }))
-    .map_err(|_| EffectServiceError::Declined {
-        service: GPU_EFFECTS_SERVICE.id.to_owned(),
-        reason: "inspect-gpu-response-invalid".to_owned(),
-    })?;
-    Ok(EffectResponse::new(payload))
-}
-
-/// The hosted `inspect-gpu` service: answers the family's committed surface
-/// report. The report is static (the family's own vocabulary), so the
-/// service holds no runtime state.
-struct GpuEffectsService;
-
-#[async_trait::async_trait]
-impl EffectService for GpuEffectsService {
-    async fn handle(
-        &self,
-        _invocation: ServiceInvocation<'_>,
-    ) -> Result<EffectResponse, EffectServiceError> {
-        inspect_gpu_response()
-    }
-}
-
-/// The composition-root factory that hosts the GPU effects service in one
-/// zone (R5): the daemon registers one per zone, carrying that zone's facet
-/// set for the respawn path, which is not yet wired.
-pub struct GpuEffectsServiceFactory {
-    // The facet set is carried for the R5 respawn contract: the daemon
-    // registers one factory per zone with that zone's facet set. The
-    // respawn path that rebuilds the service from the facets is not wired
-    // yet, and the current static inspect service does not read them.
-    #[allow(dead_code)]
-    facets: crate::facets::GpuEffectFacets,
-}
-
-impl GpuEffectsServiceFactory {
-    /// Build the factory from one zone's facet set.
-    pub fn new(facets: crate::facets::GpuEffectFacets) -> Self {
-        Self { facets }
-    }
-}
-
-impl EffectServiceFactory for GpuEffectsServiceFactory {
-    fn build(&self) -> Arc<dyn EffectService> {
-        Arc::new(GpuEffectsService)
-    }
-}
 
 /// Drive one async child-surface call on the runtime captured at
 /// construction (the sync `GpuLifecycleEffectPort` boundary, U13

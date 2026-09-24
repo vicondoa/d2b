@@ -115,7 +115,7 @@ pub struct VideoArgvInput {
     /// overlays `cargoBuildFeatures += [video-decoder,
     /// vaapi, media]` against `pkgs.crosvm`).
     pub crosvm_binary_path: String,
-    /// VM name; used by [`exec_arg0`] only.
+    /// VM name; used by the worker launch arg0 only.
     pub vm_name: String,
     /// `--socket-path` value. Per host.nix:
     /// `/run/d2b-video/<vm>/video.sock` (the video module uses its
@@ -159,15 +159,6 @@ pub fn generate_video_argv(input: &VideoArgvInput) -> Result<Vec<String>, VideoA
     ])
 }
 
-/// `arg0` for the video sidecar. Matches the systemd unit name
-/// `d2b-<vm>-video` (per `nixos-modules/components/video/host.nix`).
-pub fn exec_arg0(input: &VideoArgvInput) -> Result<String, VideoArgvError> {
-    if input.vm_name.is_empty() {
-        return Err(VideoArgvError::EmptyVmName);
-    }
-    Ok(format!("d2b-{}-video", input.vm_name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,11 +181,6 @@ mod tests {
         let joined = argv.join(" ");
         assert!(joined.contains("--socket-path /run/d2b-video/corp-desktop/video.sock"));
         assert!(joined.contains("--backend vaapi"));
-    }
-
-    #[test]
-    fn exec_arg0_matches_systemd_unit_name() {
-        assert_eq!(exec_arg0(&audit_input()).unwrap(), "d2b-corp-desktop-video");
     }
 
     /// One single-field rejection vector: mutate exactly one valid fixture
@@ -247,16 +233,6 @@ mod tests {
                 "rejection vector: {name}"
             );
         }
-    }
-
-    #[test]
-    fn exec_arg0_rejects_empty_vm_name() {
-        let mut input = audit_input();
-        input.vm_name.clear();
-        assert!(matches!(
-            exec_arg0(&input),
-            Err(VideoArgvError::EmptyVmName)
-        ));
     }
 
     #[test]

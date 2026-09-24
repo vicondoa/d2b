@@ -78,8 +78,8 @@ pub struct GpuParams {
 pub struct GpuArgvInput {
     /// Absolute store path to the `crosvm` binary.
     pub crosvm_binary_path: String,
-    /// VM name; used for [`exec_arg0`] only. The flag set does not
-    /// embed the VM name (the socket path does).
+    /// VM name; used for the worker launch arg0 only. The flag set does
+    /// not embed the VM name (the socket path does).
     pub vm_name: String,
     /// `--socket` value. Audit uses runner-cwd-relative
     /// `<vm>-gpu.sock`; the daemon uses an absolute path under
@@ -189,15 +189,6 @@ pub fn generate_gpu_argv(input: &GpuArgvInput) -> Result<Vec<String>, GpuArgvErr
     Ok(argv)
 }
 
-/// `arg0` the daemon passes to `execvp` so the process shows up in
-/// `ps` as `d2b-<vm>-gpu`.
-pub fn exec_arg0(input: &GpuArgvInput) -> Result<String, GpuArgvError> {
-    if input.vm_name.is_empty() {
-        return Err(GpuArgvError::EmptyVmName);
-    }
-    Ok(format!("d2b-{}-gpu", input.vm_name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,11 +290,6 @@ mod tests {
         assert!(joined.contains(
             "--params {\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}"
         ));
-    }
-
-    #[test]
-    fn exec_arg0_matches_systemd_unit_name() {
-        assert_eq!(exec_arg0(&audit_input()).unwrap(), "d2b-corp-desktop-gpu");
     }
 
     /// One single-field rejection vector: mutate exactly one valid fixture

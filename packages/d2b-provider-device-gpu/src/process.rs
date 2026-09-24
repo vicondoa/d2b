@@ -37,42 +37,9 @@ impl GpuProcessDeclaration {
         })
     }
 
-    /// Borrow the Process resource name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     /// Return the Process role.
     pub const fn role(&self) -> GpuProcessRole {
         self.role
-    }
-
-    /// Return the fixed Host placement.
-    pub const fn placement(&self) -> &'static str {
-        self.placement
-    }
-
-    /// Return the signed component template for this worker.
-    pub const fn template(&self) -> &'static str {
-        match self.role {
-            GpuProcessRole::FullGpu => "gpu-worker",
-            GpuProcessRole::RenderNode => "gpu-render-node",
-            GpuProcessRole::Video => "video-worker",
-        }
-    }
-
-    /// Return the signed seccomp class for this worker.
-    pub const fn seccomp_class(&self) -> &'static str {
-        match self.role {
-            GpuProcessRole::FullGpu => "w1-gpu",
-            GpuProcessRole::RenderNode => "w1-gpu-render-node",
-            GpuProcessRole::Video => "w1-video",
-        }
-    }
-
-    /// Whether this worker uses the broker-pre-established user namespace.
-    pub const fn user_namespace(&self) -> bool {
-        !matches!(self.role, GpuProcessRole::Video)
     }
 }
 
