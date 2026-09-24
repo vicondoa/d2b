@@ -8,14 +8,14 @@ net: -2 lines, -0 deps
   Zero external callers: workspace-wide reference search over `packages/**/*.rs`
   finds the alias only at its definition and at its re-export arm in lib.rs:73;
   no BUILD.bazel, nixos-modules/, test, or docs/policy reference names it.
-  The alias adds no type-level distinction — `ZoneServiceClient<R, C, W> =
-  ZoneClient<R, C, W>` with no re-bound service, verb, or carriage — so it is
+  The alias adds no type-level distinction - `ZoneServiceClient<R, C, W> =
+  ZoneClient<R, C, W>` with no re-bound service, verb, or carriage - so it is
   declared-one-purpose public surface in the #B9 family. Deleting the alias
   (1 line) and its re-export arm (1 of the line at lib.rs:73) nets -2 in-crate,
   leaves `ZoneClient` canonical. [packages/d2b-resource-client/src/zone_client.rs:598]
   (leaf)
 
-- #B9 [not applied] limits consts in call.rs — `TRACE_ID_BYTES` (0 external
+- #B9 [not applied] limits consts in call.rs - `TRACE_ID_BYTES` (0 external
   callers: grep `TRACE_ID_BYTES` workspace-wide → only def call.rs:30 + 8
   in-crate readers), `MAX_CORRELATION_ID_BYTES` (0 external), plus the
   cross-crate family at `REQUEST_ID_BYTES`/`MAX_IDEMPOTENCY_KEY_BYTES`/
@@ -40,9 +40,9 @@ net: -2 lines, -0 deps
 
 - `GuestControlEndpoint`: the two byte-identical declarations are a
   cross-crate duplicate-type finding for U97. Canonical home: none selected
-  yet — both copies carry live callers; dedup is a cross-crate move (either
+  yet - both copies carry live callers; dedup is a cross-crate move (either
   crate becomes the import site and the other becomes a re-export).
-- `ZoneServiceClient`/`ZoneClient`: naming-drift pair — `ZoneServiceClient` is
+- `ZoneServiceClient`/`ZoneClient`: naming-drift pair - `ZoneServiceClient` is
   a one-purpose alias for the same type, exported alongside the canonical
   `ZoneClient`; report to U97 as an alias-vs-canonical naming drift row.
 
@@ -54,5 +54,5 @@ zone_client.rs 1075). Caller tables per symbol via workspace-wide
 `grep -rn "\b<sym>\b" packages --include=*.rs` plus non-`.rs` surfaces
 (BUILD.bazel dep lists, nixos-modules/, docs/reference/policy/) checked for
 `ZoneServiceClient`, `GuestControlEndpoint`, and every `*_BYTES`/`*_MS` limits
-const. Both ledger rows (#B9, #C1) are [not applied] — still present, re-flagged
+const. Both ledger rows (#B9, #C1) are [not applied] - still present, re-flagged
 with fresh caller tables. No new findings beyond the two carried rows.

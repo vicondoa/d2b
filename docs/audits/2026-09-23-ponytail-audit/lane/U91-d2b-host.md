@@ -34,7 +34,7 @@ cluster; wide = cross-crate contract.
    ops/exec_reconcile.rs:257 (its own `run_ssh_keygen` trait); nothing here
    feeds it. Replacement: nothing. [packages/d2b-host/src/ssh_keygen.rs] leaf.
 
-3. [delete] Activation-helper bin: four dead verbs — `ensure-regular-file`,
+3. [delete] Activation-helper bin: four dead verbs - `ensure-regular-file`,
    `setfacl-on-path`, `clear-acl-on-path`, `chown-if-orphan` (~472 of 1453
    LOC) + their six Args fields (size_mib/acl_spec/also_spec/require_kind/
    if_owner/setfacl_bin) + 5 print_help lines + the fs_posture tests that
@@ -108,7 +108,7 @@ cluster; wide = cross-crate contract.
     leaf.
 
 11. [yagni] `host_prep_dag.rs` `build_host_prep_dag_for` (ranked ~154 LOC)
-    + `pub` topo_sort + CycleError + `HostPrepStepId::new` pub — zero
+    + `pub` topo_sort + CycleError + `HostPrepStepId::new` pub - zero
     production callers (`grep build_host_prep_dag_for|topo_sort` → only
     host_prep_dag.rs + its tests; d2bd composes via build_host_prep_dag at
     d2bd/src/composition.rs). Make private or fold; sibling topo_sort exists
@@ -116,14 +116,14 @@ cluster; wide = cross-crate contract.
     HostPrepStepFailed struct (zero construction sites). [packages/
     d2b-host/src/host_prep_dag.rs:287-318,377-533] leaf.
 
-12. [delete] `cgroup.rs` `create_d2b_slice` (~46 LOC) — zero production
+12. [delete] `cgroup.rs` `create_d2b_slice` (~46 LOC) - zero production
     callers; broker's own wrapper at ops/cgroup.rs reimplements the
     sequence. `create_vm_role_leaf` (1-line wrapper, zero callers) + dead
     `EnabledControllers` family (only read in-crate tests).
     [packages/d2b-host/src/cgroup.rs:583-628,402-449] leaf.
 
 13. [yagni] `host_generation.rs` / `HostGenerationMeta` write-only + 2
-    sibling write-only marker paths — write_host_meta + HOST_META_SCHEMA
+    sibling write-only marker paths - write_host_meta + HOST_META_SCHEMA
     _VERSION never read (`grep HostGenerationMeta` → only host_generation.
     rs + hardlink_farm tests). [packages/d2b-host/src/host_generation.rs]
     leaf.
@@ -135,7 +135,7 @@ cluster; wide = cross-crate contract.
     pub(crate). [packages/d2b-host/src/ioctl_policy.rs:135-144,32-39] leaf.
 
 15. [sig] Duplicate `ioctl_allowlist` when seccomp.rs already exports
-    `compile_ioctl_policy_to_bpf` — broker's only seccomp consumer is
+    `compile_ioctl_policy_to_bpf` - broker's only seccomp consumer is
     compiled-program → libc::sock_filter (broker sys.rs); the policy's own
     `ioctl_allowlist` pub fn is exercised only by tests. Fold.
     [packages/d2b-host/src/ioctl_policy.rs] leaf.
@@ -154,11 +154,11 @@ cluster; wide = cross-crate contract.
 ## Consistency notes
 Duplicate hand-rolled UID→UUIDv4 rendering remains (ResourceUid::from_bytes
 at d2b-contracts/src/identity.rs:621 is the shared seam; d2b-host
-ifname.rs:24-336 still hand-rolls FNV-1a + base32 — reported as finding 6;
+ifname.rs:24-336 still hand-rolls FNV-1a + base32 - reported as finding 6;
 broker-side uuid rendering at find-7/blocks not in lane). Same-filesystem
-carve-out for /nix/store is the crate's one correct divergence — keep.
+carve-out for /nix/store is the crate's one correct divergence - keep.
 Dossier/ADR 0018 + ADR 0012 document the netlink/rtnetlink migration smoke
-dossier cites this crate as authority — refs stay for the live
+dossier cites this crate as authority - refs stay for the live
 enforce-dir-posture + ownership carve-out; the retired rtnetlink backend
 copy is the cut (finding 5).
 

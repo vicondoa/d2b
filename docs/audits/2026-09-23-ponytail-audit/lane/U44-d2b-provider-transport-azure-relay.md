@@ -14,7 +14,7 @@ Scanned for the prior finding's classes: duplicate SAS mint (`mint_sas` /
 `guest_zone_link.rs:272`), duplicated identifier/namespace validators
 (`valid_namespace`/`valid_entity` once each, `transport_settings.rs:69,84`),
 and clock-seam triplication (two remote-units helpers, `guest_zone_link.rs:26`
-secs, `guest_credential.rs:665` ms — each locally used, separate units, not a
+secs, `guest_credential.rs:665` ms - each locally used, separate units, not a
 fold). Re-verifd all blocker ledger rows for this crate: prior #S9 [applied]
 (already deleted ~580 lines: sealed-credential write half, `RelayTransportService`
 and handles, `src/reconnect.rs`, duplicate `mint_sas`, unbound-acquire default,

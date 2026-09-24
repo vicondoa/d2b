@@ -24,7 +24,7 @@
 ## Consistency notes
   
   (xtask is not a contracts/types crate; wire-shape and duplicate-type gates
-  do not apply. No entity here duplicates a committed shared type — the
+  do not apply. No entity here duplicates a committed shared type - the
   island is self-contained hypothetical wire that nothing serializes.)
 
 ## Reopened refusals

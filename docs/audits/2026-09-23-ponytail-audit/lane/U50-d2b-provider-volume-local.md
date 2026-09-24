@@ -2,11 +2,11 @@
 
 net: -0 lines, -0 deps already. Ship.
 
-Crate re-audited after prior U50 pass (S51–S61). Every prior rejection and partial documented with its customer evidence re-confirmed in-tree; no new material.
+Crate re-audited after prior U50 pass (S51-S61). Every prior rejection and partial documented with its customer evidence re-confirmed in-tree; no new material.
 
 ## Findings (new)
 
-- <refusal> `yagni` nix/store.nix + nix/sync-json.nix "orphaned" (S53 refused). [packages/d2b-provider-volume-local/nix/] — still both loaded: `bazel/checks/nix/BUILD.bazel:55-56` includes `store.nix` and `sync-json.nix` in the storage-volume eval surface; `nix/` today lists both plus zones-volumes/zone-storage variants. Refusal stays.
+- <refusal> `yagni` nix/store.nix + nix/sync-json.nix "orphaned" (S53 refused). [packages/d2b-provider-volume-local/nix/] - still both loaded: `bazel/checks/nix/BUILD.bazel:55-56` includes `store.nix` and `sync-json.nix` in the storage-volume eval surface; `nix/` today lists both plus zones-volumes/zone-storage variants. Refusal stays.
 - <refusal> `shrink` zone-compiler duplicate Volume validator (S58 not applied). Duplicate remains in `nix/resources-zones-volumes.nix:11` (its own `modePattern`, already drifted from `resources-volume.nix:23`); no commit touched the crate Nix dir since. Refusal stays.
 - <refusal> `shrink` `/docs/d2b-provider-volume-local` finalization/marker/scaling module notes (S61 method note, S53/S58 collateral). No new evidence passes; stays refused.
 
