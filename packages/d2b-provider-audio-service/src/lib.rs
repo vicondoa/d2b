@@ -14,6 +14,6 @@ mod audio_service;
 
 pub use audio_service::{
     AUDIO_SERVICE_PROVIDER_REF, AUDIO_SERVICE_RESYNC,
-    AudioService, AudioServiceDriver, AudioServiceFactory,
+    AudioService, AudioServiceFactory,
     audio_service_descriptor, audio_service_spec_decoder,
 };

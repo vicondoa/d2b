@@ -30,7 +30,8 @@ use d2b_provider_system_core::{
     UserIdentityDigest, UserObservation, UserStatusReport,
 };
 
-use crate::{UserDriverEffects, UserEffectFacets};
+use crate::driver::UserDriverEffects;
+use crate::facets::UserEffectFacets;
 
 // -- the driver seam ---------------------------------------------------------
 

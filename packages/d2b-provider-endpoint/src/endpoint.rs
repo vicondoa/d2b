@@ -14,8 +14,6 @@ use d2b_contracts_resource::v3::{
     execution_policy::{BoundedText, BoundedToken, PrimitiveSpecError, redacted_debug},
 };
 
-/// The canonical ResourceType name for endpoints.
-pub const ENDPOINT_RESOURCE_TYPE: &str = "Endpoint";
 /// The maximum number of entries in one endpoint consumer allowlist.
 pub const MAX_ENDPOINT_CONSUMER_ENTRIES: usize = 64;
 /// The maximum attachment count an endpoint may advertise.
@@ -188,16 +186,6 @@ impl EndpointConsumerPolicy {
         }
     }
 
-    /// Borrow the exact subject allowlist.
-    pub fn allowed_subjects(&self) -> &[ResourceRef] {
-        &self.allowed_subjects
-    }
-
-    /// Borrow the signed Provider component allowlist.
-    pub fn allowed_provider_components(&self) -> &[BoundedToken] {
-        &self.allowed_provider_components
-    }
-
     /// Borrow the operation allowlist.
     pub fn allowed_operations(&self) -> &[EndpointOperation] {
         &self.allowed_operations
@@ -349,11 +337,6 @@ impl EndpointSpec {
     /// Return coarse visibility.
     pub const fn visibility(&self) -> EndpointVisibility {
         self.visibility
-    }
-
-    /// Borrow attachment policy.
-    pub const fn attachment_policy(&self) -> EndpointAttachmentPolicy {
-        self.attachment_policy
     }
 
     /// Borrow fine-grained consumer policy.

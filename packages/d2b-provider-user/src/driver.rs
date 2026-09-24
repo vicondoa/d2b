@@ -389,22 +389,6 @@ impl ResourceDriver for UserDriver {
 // Registration: the type's driver declaration
 // ---------------------------------------------------------------------------
 
-/// The resource verbs the User type supports.
-///
-/// Derived from the v3 resource plane's converted-type verb surface: the
-/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
-/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
-/// `Credential` type. Every converted type is served by the same manager
-/// verbs, and Role rules and the typed CLI nouns resolve their gating from
-/// this declaration.
-/// The execution domains the User type can be reconciled in.
-///
-/// Derived from the placement contract: `User` names no placement anchor
-/// (`PlacementAnchor::canonical_for` resolves none), so a User row never
-/// carries the canonical `spec.executionRef` and the plane reconciles it on
-/// its own Host domain - the machine whose local identity it names.
-const USER_EXECUTION_DOMAINS: &[&str] = &["host"];
-
 /// The User type's driver declaration.
 ///
 /// `User` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot serve the
@@ -412,7 +396,10 @@ const USER_EXECUTION_DOMAINS: &[&str] = &["host"];
 /// plane opens. The type is not exportable: `ResourceExport` admits only
 /// qualified `*.d2bus.org.*Service` types. The driver serves no broker
 /// operations, creates no children, and reads no other resource: discovery
-/// reaches the local machine through the family's own probe.
+/// reaches the local machine through the family's own probe. `User` names
+/// no placement anchor, so a User row never carries the canonical
+/// `spec.executionRef` and the plane reconciles it on its own Host domain -
+/// the machine whose local identity it names.
 ///
 /// U5: the declaration builds the family's own effects implementation from
 /// the daemon-supplied facet set - no externally built port appears at any
@@ -423,7 +410,7 @@ pub fn user_descriptor(facets: UserEffectFacets) -> DriverDescriptor {
         resource_type: WellKnownType::USER,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
         verbs: CONVERTED_TYPE_VERBS,
-        execution: USER_EXECUTION_DOMAINS,
+        execution: &["host"],
         exportable: false,
         reads: &[],
         operations: &[],

@@ -36,7 +36,7 @@ use d2b_resource_runtime::driver::{
 };
 use d2b_resource_runtime::error::{DriverFailure, DriverOp};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 /// The qualified semantic telemetry Service type this factory serves.
 pub const TELEMETRY_SERVICE_TYPE: &str = TELEMETRY_SERVICE_RESOURCE_TYPE;
@@ -394,26 +394,6 @@ fn ingest_endpoint_refs(spec: &serde_json::Value) -> Vec<ResourceRef> {
 // Registration: the type's driver declaration
 // ---------------------------------------------------------------------------
 
-/// The resource verbs the TelemetryService type supports.
-///
-/// Derived from the v3 resource plane's converted-type verb surface: the
-/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
-/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
-/// `Credential` type. Every converted type is served by the same manager
-/// verbs, and Role rules and the typed CLI nouns resolve their gating from
-/// this declaration.
-const TELEMETRY_SERVICE_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains the TelemetryService type can be reconciled in.
 ///
 /// Derived from the placement contract: `TelemetryService` names no placement
@@ -440,7 +420,7 @@ pub fn telemetry_service_descriptor() -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::TELEMETRY_SERVICE,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-        verbs: TELEMETRY_SERVICE_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: TELEMETRY_SERVICE_EXECUTION_DOMAINS,
         exportable: true,
         reads: TELEMETRY_SERVICE_READS,
