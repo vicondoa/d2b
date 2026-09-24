@@ -113,15 +113,17 @@ pub const MAX_CONFIGURED_BOUND: usize = 4096;
 /// derived `Debug` so a Zone path can never reach a log, span, or metric
 /// through an incidental format of a container that holds one. The macro is
 /// module-private and adds no public item.
-macro_rules! redacted_service_debug {
+macro_rules! redacted_debug {
     ($type_name:ident) => {
         impl ::core::fmt::Debug for $type_name {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                f.write_str(concat!(stringify!($type_name), "(redacted)"))
+                f.write_str(concat!(stringify!($type_name), "(<redacted>)"))
             }
         }
     };
 }
+
+pub(crate) use redacted_debug;
 
 /// The closed set of `d2b.zone.v3.ZoneService` methods.
 ///
@@ -312,11 +314,7 @@ impl Default for ZoneTopologyRequest {
     }
 }
 
-impl std::fmt::Debug for ZoneTopologyRequest {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ZoneTopologyRequest(<redacted>)")
-    }
-}
+redacted_debug!(ZoneTopologyRequest);
 
 /// The joined route status of one sealed topology row.
 #[derive(Clone, PartialEq, Eq)]
@@ -334,7 +332,7 @@ pub enum ZoneTopologyStatus {
     },
 }
 
-redacted_service_debug!(ZoneTopologyStatus);
+redacted_debug!(ZoneTopologyStatus);
 
 /// One projected topology row.
 ///
@@ -351,7 +349,7 @@ pub struct ZoneTopologyRow {
     pub status: ZoneTopologyStatus,
 }
 
-redacted_service_debug!(ZoneTopologyRow);
+redacted_debug!(ZoneTopologyRow);
 
 /// One topology-watch report.
 #[derive(Clone, PartialEq, Eq)]
@@ -362,7 +360,7 @@ pub struct ZoneTopologyWatchUpdate {
     pub rows: Vec<ZoneTopologyRow>,
 }
 
-redacted_service_debug!(ZoneTopologyWatchUpdate);
+redacted_debug!(ZoneTopologyWatchUpdate);
 
 /// The outcome of one shortcut mutation.
 #[derive(Clone, PartialEq, Eq)]
@@ -394,7 +392,7 @@ impl ZoneShortcutOutcome {
     }
 }
 
-redacted_service_debug!(ZoneShortcutOutcome);
+redacted_debug!(ZoneShortcutOutcome);
 
 /// One `zone-bootstrap` call as this Zone serves it.
 ///
@@ -441,11 +439,7 @@ impl ZoneBootstrapRequest {
     }
 }
 
-impl std::fmt::Debug for ZoneBootstrapRequest {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ZoneBootstrapRequest(<redacted>)")
-    }
-}
+redacted_debug!(ZoneBootstrapRequest);
 
 /// One `zone-enroll` call as this Zone serves it.
 pub struct ZoneEnrollRequest {
@@ -487,11 +481,7 @@ impl ZoneEnrollRequest {
     }
 }
 
-impl std::fmt::Debug for ZoneEnrollRequest {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ZoneEnrollRequest(<redacted>)")
-    }
-}
+redacted_debug!(ZoneEnrollRequest);
 
 /// One admitted enrollment call, after its admission was consumed.
 struct AdmittedEnrollment {
@@ -1045,7 +1035,7 @@ impl ZoneServiceServer {
     }
 }
 
-redacted_service_debug!(ZoneServiceServer);
+redacted_debug!(ZoneServiceServer);
 
 /// The closed enrollment refusal of one state-machine refusal.
 ///

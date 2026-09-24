@@ -45,6 +45,8 @@ use d2b_contracts_zone_session::v3::{
     },
 };
 
+use crate::service::redacted_debug;
+
 /// Maximum live replay-window keys one engine retains.
 ///
 /// The replay window is sized against the combined parent and route projection
@@ -214,11 +216,7 @@ impl ZoneRouteAdmissionExpectation {
     }
 }
 
-impl std::fmt::Debug for ZoneRouteAdmissionExpectation {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ZoneRouteAdmissionExpectation(<redacted>)")
-    }
-}
+redacted_debug!(ZoneRouteAdmissionExpectation);
 
 #[derive(Clone, PartialEq, Eq)]
 struct RouteAdmissionSnapshot {
@@ -267,11 +265,7 @@ enum RouteAdmissionState {
     },
 }
 
-impl std::fmt::Debug for ZoneRouteAdmission {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ZoneRouteAdmission(<redacted>)")
-    }
-}
+redacted_debug!(ZoneRouteAdmission);
 
 impl ZoneRouteAdmission {
     /// Hold runtime-issued evidence for one current, single-use decision.

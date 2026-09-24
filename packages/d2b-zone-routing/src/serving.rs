@@ -61,6 +61,7 @@ use d2b_session::{OwnedTransport, TransportPacket};
 use crate::enrollment::{
     ENROLLMENT_ADMISSION_LIFETIME_MS_DEFAULT, ZoneEnrollmentAuthority, ZoneEnrollmentExpectation,
 };
+use crate::service::redacted_debug;
 use crate::service::{
     ZoneBootstrapRequest, ZoneDispatchAdmission, ZoneEnrollRequest, ZoneServiceAuditEvent,
     ZoneServiceMethod, ZoneServiceServer,
@@ -138,11 +139,7 @@ pub struct ZoneEnrollmentServer {
     clock: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
-impl core::fmt::Debug for ZoneEnrollmentServer {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("ZoneEnrollmentServer(<redacted>)")
-    }
-}
+redacted_debug!(ZoneEnrollmentServer);
 
 impl ZoneEnrollmentServer {
     /// Build the runtime over the sealed compiler topology of one Zone.

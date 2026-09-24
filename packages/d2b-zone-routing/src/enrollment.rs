@@ -50,6 +50,8 @@ use d2b_contracts_zone_session::v3::component_session::{
 use d2b_contracts_zone_session::v3::zone_routing::{ZoneLinkControllerGeneration, ZoneTreeEdge};
 use d2b_contracts_zone_session::v3::zone_session::{ZoneEnrollmentIdentity, ZoneEnrollmentRefusal};
 
+use crate::service::redacted_debug;
+
 /// Default validity of one runtime-issued enrollment admission.
 pub const ENROLLMENT_ADMISSION_LIFETIME_MS_DEFAULT: u64 = 30_000;
 
@@ -217,11 +219,7 @@ impl ZoneEnrollmentExpectation {
     }
 }
 
-impl std::fmt::Debug for ZoneEnrollmentExpectation {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ZoneEnrollmentExpectation(<redacted>)")
-    }
-}
+redacted_debug!(ZoneEnrollmentExpectation);
 
 /// One verified, immutable, single-use enrollment admission.
 ///
@@ -245,11 +243,7 @@ enum EnrollmentAdmissionState {
     Test(Box<ZoneEnrollmentExpectation>),
 }
 
-impl std::fmt::Debug for ZoneEnrollmentAdmission {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ZoneEnrollmentAdmission(<redacted>)")
-    }
-}
+redacted_debug!(ZoneEnrollmentAdmission);
 
 impl ZoneEnrollmentAdmission {
     /// Hold runtime-issued evidence for one current, single-use enrollment.
@@ -353,11 +347,7 @@ pub struct ZoneEnrollmentAdmissionVerifier {
     authority: Arc<EnrollmentAuthorityInner>,
 }
 
-impl std::fmt::Debug for ZoneEnrollmentAdmissionVerifier {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ZoneEnrollmentAdmissionVerifier(<redacted>)")
-    }
-}
+redacted_debug!(ZoneEnrollmentAdmissionVerifier);
 
 impl ZoneEnrollmentAdmissionVerifier {
     /// Verify one evidence value issued by the paired authority.
@@ -409,11 +399,7 @@ pub struct ZoneEnrollmentAdmissionEvidence {
     expires_at_unix_ms: u64,
 }
 
-impl std::fmt::Debug for ZoneEnrollmentAdmissionEvidence {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ZoneEnrollmentAdmissionEvidence(<redacted>)")
-    }
-}
+redacted_debug!(ZoneEnrollmentAdmissionEvidence);
 
 /// Runtime-owned issuer for one Zone's enrollment-admission authority.
 ///
@@ -431,11 +417,7 @@ struct EnrollmentAuthorityInner {
     lifetime_ms: u64,
 }
 
-impl std::fmt::Debug for ZoneEnrollmentAuthority {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("ZoneEnrollmentAuthority(<redacted>)")
-    }
-}
+redacted_debug!(ZoneEnrollmentAuthority);
 
 impl ZoneEnrollmentAuthority {
     /// Bind an enrollment authority to one clock and the default lifetime.
