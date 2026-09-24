@@ -1045,45 +1045,6 @@ where
         self.interaction_identity = Some(identity.clone());
     }
 
-    /// Receive and dispatch one request that was demultiplexed by the
-    /// registrar-owned ComponentSession response task.
-    ///
-    /// The request's service/member are checked against the authenticated
-    /// route before a local operation lease is minted. Runtime methods only
-    /// receive route projections retained by this composition.
-    pub async fn dispatch_component_request(
-        &mut self,
-        service: &str,
-        frame: Vec<u8>,
-    ) -> Result<(), String> {
-        let session_key = self
-            .sessions
-            .iter()
-            .find(|(_, session)| session.service().as_str() == service)
-            .map(|(key, _)| key.clone())
-            .ok_or("interaction-session-unavailable")?;
-        self.dispatch_component_request_for_session(&session_key, frame, Vec::new())
-            .await
-    }
-
-    /// Dispatch one authenticated request together with its separately
-    /// demultiplexed attachment batch.
-    pub async fn dispatch_component_request_with_attachments(
-        &mut self,
-        service: &str,
-        frame: Vec<u8>,
-        attachments: Vec<OwnedAttachment>,
-    ) -> Result<(), String> {
-        let session_key = self
-            .sessions
-            .iter()
-            .find(|(_, session)| session.service().as_str() == service)
-            .map(|(key, _)| key.clone())
-            .ok_or("interaction-session-unavailable")?;
-        self.dispatch_component_request_for_session(&session_key, frame, attachments)
-            .await
-    }
-
     async fn dispatch_component_request_for_session(
         &mut self,
         session_key: &str,
@@ -1851,34 +1812,6 @@ where
             .ok_or(ClipboardServiceError::AttachmentRejected)
     }
 
-    /// Project the retained authenticated route into the clipboard service
-    /// identity without reconstructing ComponentSession authority.
-    pub fn clipboard_session(
-        &self,
-    ) -> Result<d2b_provider_clipboard_wayland::AuthenticatedClipboardSession, ClipboardServiceError>
-    {
-        let route = self
-            .route_for_service(d2b_provider_clipboard_wayland::BRIDGE_SERVICE)
-            .ok_or(ClipboardServiceError::SessionUnauthenticated)?;
-        d2b_provider_clipboard_wayland::AuthenticatedClipboardSession::from_authenticated_route(
-            route.clone(),
-        )
-    }
-
-    /// Project the retained authenticated route into notification evidence
-    /// for source reconciliation and bounded dispatch.
-    pub fn notification_session(
-        &self,
-    ) -> Result<
-        d2b_provider_notification_desktop::SessionEvidence,
-        d2b_provider_notification_desktop::AdmissionError,
-    > {
-        let route = self
-            .route_for_service(d2b_provider_notification_desktop::SERVICE_PACKAGE)
-            .ok_or(d2b_provider_notification_desktop::AdmissionError::SessionUnauthenticated)?;
-        d2b_provider_notification_desktop::SessionEvidence::from_authenticated_route(route.clone())
-    }
-
     fn ensure_clipboard(
         &mut self,
     ) -> Result<
@@ -2161,21 +2094,6 @@ where
         Ok(())
     }
 
-    /// Dispatch a bounded Guest clipboard capture through the authenticated
-    /// route retained by the daemon.
-    pub fn capture_guest_clipboard(
-        &mut self,
-        mime: &str,
-        bytes: &[u8],
-        now_secs: u64,
-    ) -> Result<String, ClipboardServiceError> {
-        let route = self
-            .route_for_service(d2b_provider_clipboard_wayland::BRIDGE_SERVICE)
-            .ok_or(ClipboardServiceError::SessionUnauthenticated)?
-            .clone();
-        self.capture_guest_clipboard_route(route, mime, bytes, now_secs)
-    }
-
     /// Dispatch a bounded Guest clipboard capture through one exact route.
     pub fn capture_guest_clipboard_route(
         &mut self,
@@ -2227,22 +2145,6 @@ where
             d2b_provider_clipboard_wayland::ClipboardRuntimeError::Service(error) => error,
             _ => ClipboardServiceError::SessionUnauthenticated,
         })
-    }
-
-    /// Dispatch a bounded host clipboard capture through the authenticated
-    /// route retained by the daemon.
-    pub fn capture_host_clipboard(
-        &mut self,
-        mime: &str,
-        bytes: &[u8],
-        source_event: Option<d2b_provider_clipboard_wayland::GuestSelectionEvent>,
-        now_secs: u64,
-    ) -> Result<String, ClipboardServiceError> {
-        let route = self
-            .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
-            .ok_or(ClipboardServiceError::SessionUnauthenticated)?
-            .clone();
-        self.capture_host_clipboard_route(route, mime, bytes, source_event, now_secs)
     }
 
     /// Dispatch a bounded host clipboard capture through an authenticated

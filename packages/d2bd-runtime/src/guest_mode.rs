@@ -22,7 +22,7 @@ use d2b_contracts_resource::v3::{
     },
 };
 use d2b_contracts_zone_session::v3::component_session::{
-    AttachmentPolicy, ComponentSessionPreface, EndpointPolicy, EndpointPolicyIdentity,
+    AttachmentPolicy, EndpointPolicy, EndpointPolicyIdentity,
     EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile, NoiseProfile,
     PurposeClass, ServicePackage, TransportBinding, TransportClass,
 };
@@ -57,24 +57,6 @@ pub const GUEST_COMPONENT_SESSION_PURPOSE: &str = "component-session";
 pub const GUEST_COMPONENT_SESSION_SERVICE: ServicePackage = ServicePackage::ResourceV3;
 /// The session schema domain used by the Guest target agent.
 pub const GUEST_COMPONENT_SESSION_SCHEMA_DOMAIN: &[u8] = b"d2b-guest-component-session-v3";
-
-/// Reject a retired feature-specific Guest prelude before any
-/// feature payload or per-session state is allocated.
-pub fn reject_legacy_guest_prelude(bytes: &[u8]) -> Result<(), GuestModeError> {
-    if bytes.starts_with(crate::component_session_vsock::COMPONENT_SESSION_CONNECT_LINE)
-        || bytes.starts_with(b"D2BGC")
-    {
-        return Err(GuestModeError::OldProtocol);
-    }
-    if bytes.len() < d2b_contracts_zone_session::v3::component_session::PREFACE_LEN {
-        return Err(GuestModeError::OldProtocol);
-    }
-    ComponentSessionPreface::parse(
-        &bytes[..d2b_contracts_zone_session::v3::component_session::PREFACE_LEN],
-    )
-    .map(|_| ())
-    .map_err(|_| GuestModeError::OldProtocol)
-}
 
 /// A kernel-derived boot identity. The raw boot-id text never leaves the
 /// constructor; only its domain-separated digest participates in binding.
@@ -987,17 +969,5 @@ mod tests {
         assert!(runtime.local_zone_store().is_err());
         assert!(runtime.public_operator_socket().is_err());
         assert!(runtime.realm_credentials().is_err());
-    }
-
-    #[test]
-    fn retired_guest_prelude_is_rejected_before_allocation() {
-        assert!(matches!(
-            reject_legacy_guest_prelude(b"CONNECT 14318\n"),
-            Err(GuestModeError::OldProtocol)
-        ));
-        assert!(matches!(
-            reject_legacy_guest_prelude(b"D2BGC-old"),
-            Err(GuestModeError::OldProtocol)
-        ));
     }
 }

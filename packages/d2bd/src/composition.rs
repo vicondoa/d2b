@@ -23853,11 +23853,6 @@ mod accept_loop_concurrency_tests {
             .recv_timeout(Duration::from_secs(10))
             .expect("typed shell owner was not entered");
 
-        assert_eq!(
-            semaphore.in_flight(),
-            1,
-            "owner retains the connection permit while it is alive"
-        );
         assert!(
             semaphore.try_acquire().is_none(),
             "the held owner permit keeps the connection cap saturated"
@@ -23865,11 +23860,10 @@ mod accept_loop_concurrency_tests {
 
         release_tx.send(()).expect("release typed shell owner");
         owner.join().expect("typed shell owner joins");
-        assert_eq!(
-            semaphore.in_flight(),
-            0,
-            "owner permit releases when the owner exits"
-        );
+        let reacquired = semaphore
+            .try_acquire()
+            .expect("owner permit releases when the owner exits");
+        drop(reacquired);
     }
 
     /// fix2b: SO_PEERCRED authorization runs in `handle_connection` BEFORE the
@@ -23959,7 +23953,6 @@ mod accept_loop_concurrency_tests {
     fn admission_permit_is_released_on_handler_success_and_error() {
         let _env = PeerOverrideEnv::admin();
         let (state, _state_dir) = admin_exec_state();
-        assert_eq!(state.conn_semaphore.in_flight(), 0);
 
         // --- Success path: hello, helloOk read by client, then EOF. The
         //     handler runs on a worker thread; a client thread reads the
@@ -23970,7 +23963,6 @@ mod accept_loop_concurrency_tests {
                 .conn_semaphore
                 .try_acquire()
                 .expect("cap admits first permit");
-            assert_eq!(state.conn_semaphore.in_flight(), 1);
             let (server, client) = seqpacket_pair();
             std::thread::scope(|scope| {
                 let client_thread = scope.spawn(move || {
@@ -23991,11 +23983,11 @@ mod accept_loop_concurrency_tests {
                 client_thread.join().expect("client thread joins");
                 assert!(result.is_ok(), "clean EOF handler returns Ok: {result:?}");
             });
-            assert_eq!(
-                state.conn_semaphore.in_flight(),
-                0,
-                "permit released after success"
-            );
+            let reacquired = state
+                .conn_semaphore
+                .try_acquire()
+                .expect("permit released after success");
+            drop(reacquired);
         }
 
         // --- Error path: a malformed hello -> handler returns Err. ---
@@ -24004,18 +23996,17 @@ mod accept_loop_concurrency_tests {
                 .conn_semaphore
                 .try_acquire()
                 .expect("cap admits permit again");
-            assert_eq!(state.conn_semaphore.in_flight(), 1);
             let (server, client) = seqpacket_pair();
             write_frame(&client, b"{not valid json").expect("send malformed hello");
             let result =
                 handle_connection_authorized(server, &state, admin_peer_identity(), Some(permit));
             assert!(result.is_err(), "malformed hello handler returns Err");
             drop(client);
-            assert_eq!(
-                state.conn_semaphore.in_flight(),
-                0,
-                "permit released after error"
-            );
+            let reacquired = state
+                .conn_semaphore
+                .try_acquire()
+                .expect("permit released after error");
+            drop(reacquired);
         }
     }
 
@@ -24048,17 +24039,16 @@ mod accept_loop_concurrency_tests {
         let sem = d2bd_runtime::concurrency::ConnSemaphore::new(2);
         let p1 = sem.try_acquire().expect("first admit");
         let p2 = sem.try_acquire().expect("second admit");
-        assert_eq!(sem.in_flight(), 2);
         assert!(
             sem.try_acquire().is_none(),
             "cap-hit must refuse without blocking"
         );
         drop(p1);
         let p3 = sem.try_acquire().expect("slot reopened after release");
-        assert_eq!(sem.in_flight(), 2);
         drop(p2);
         drop(p3);
-        assert_eq!(sem.in_flight(), 0);
+        let p4 = sem.try_acquire().expect("all permits released");
+        drop(p4);
     }
 }
 

@@ -507,7 +507,6 @@ pub enum WorkloadLaunchResult {
 /// pruned on open and again whenever a write crosses a day boundary
 /// (the file name itself provides day-boundary rotation).
 pub struct DaemonAuditLog {
-    state_dir: Option<PathBuf>,
     /// Queue into the appender thread. `None` only when the appender could
     /// not start, which fails every write closed.
     sink: Option<AuditSink>,
@@ -773,19 +772,6 @@ pub struct DaemonAuditSinkHealthReport {
 }
 
 impl DaemonAuditSinkHealthReport {
-    fn unavailable(
-        retention_days: i64,
-        required_retention_floor_days: i64,
-        problem: DaemonAuditSinkProblem,
-    ) -> Self {
-        Self::from_parts(
-            false,
-            retention_days,
-            required_retention_floor_days,
-            vec![problem],
-        )
-    }
-
     fn from_parts(
         writable: bool,
         retention_days: i64,
@@ -861,12 +847,6 @@ pub struct DaemonAuditChainReport {
     pub defects: Vec<DaemonAuditChainDefect>,
 }
 
-impl DaemonAuditChainReport {
-    pub fn is_clean(&self) -> bool {
-        self.defects.is_empty()
-    }
-}
-
 impl DaemonAuditLog {
     /// Production constructor. Events are appended to the day's JSONL
     /// file under `state_dir`. Prunes stale logs once on open
@@ -914,7 +894,6 @@ impl DaemonAuditLog {
             }
         };
         Self {
-            state_dir,
             sink,
             #[cfg(any(test, feature = "test-support"))]
             captured,
@@ -1014,32 +993,6 @@ impl DaemonAuditLog {
             | DaemonEvent::VmShutdownIntent { .. }
             | DaemonEvent::VmShutdownOutcome { .. } => DaemonAuditAuthority::Authoritative,
             _ => DaemonAuditAuthority::BestEffort,
-        }
-    }
-
-    /// Report explicit daemon audit sink health without changing
-    /// [`Self::write_event`]'s best-effort caller contract.
-    pub fn sink_health_report(&self) -> DaemonAuditSinkHealthReport {
-        self.sink_health_report_with_floor(AUDIT_RETENTION_FLOOR_DAYS)
-    }
-
-    /// Report explicit daemon audit sink health against a caller-provided
-    /// retention floor.
-    pub fn sink_health_report_with_floor(
-        &self,
-        required_retention_floor_days: i64,
-    ) -> DaemonAuditSinkHealthReport {
-        match self.state_dir.as_deref() {
-            Some(state_dir) => daemon_audit_sink_health_report(
-                state_dir,
-                AUDIT_RETENTION_DAYS,
-                required_retention_floor_days,
-            ),
-            None => DaemonAuditSinkHealthReport::unavailable(
-                AUDIT_RETENTION_DAYS,
-                required_retention_floor_days,
-                DaemonAuditSinkProblem::NoStateDir,
-            ),
         }
     }
 }
@@ -1235,51 +1188,6 @@ pub fn daemon_audit_sink_health_report(
         required_retention_floor_days,
         problems,
     )
-}
-
-/// Verify daemon audit JSONL records as one strict hash-chain sequence.
-pub fn verify_daemon_audit_lines<'a, I>(lines: I) -> DaemonAuditChainReport
-where
-    I: IntoIterator<Item = (Option<&'a str>, &'a str)>,
-{
-    let mut report = DaemonAuditChainReport {
-        records_scanned: 0,
-        records_ok: 0,
-        defects: Vec::new(),
-    };
-    let mut expected_prev_hash = DAEMON_AUDIT_GENESIS_HASH.to_owned();
-
-    for (idx, (source_file, line)) in lines.into_iter().enumerate() {
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
-            continue;
-        }
-        report.records_scanned += 1;
-        let line_index = idx + 1;
-        let source_owned = source_file.map(str::to_owned);
-        let mut problems = match validate_daemon_audit_chain_line(trimmed, &expected_prev_hash) {
-            Ok(record_hash) => {
-                expected_prev_hash = record_hash;
-                report.records_ok += 1;
-                Vec::new()
-            }
-            Err((line_problems, next_prev)) => {
-                if let Some(record_hash) = next_prev {
-                    expected_prev_hash = record_hash;
-                }
-                line_problems
-            }
-        };
-        for problem in problems.drain(..) {
-            report.defects.push(DaemonAuditChainDefect {
-                line_index,
-                source_file: source_owned.clone(),
-                problem,
-            });
-        }
-    }
-
-    report
 }
 
 fn validate_daemon_audit_chain_line(
@@ -2019,29 +1927,6 @@ pub fn write_vm_api_ready_state(
 mod tests {
     use super::*;
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn two_chained_records() -> Vec<String> {
-        let log = DaemonAuditLog::no_op();
-        log.write_event(&DaemonEvent::ApiReadyTimeout {
-            vm: "vm-a".to_owned(),
-            runner: "ch-runner".to_owned(),
-            elapsed_secs: 60,
-            mode: "strict".to_owned(),
-        })
-        .expect("write first audit event");
-        log.write_event(&DaemonEvent::VmStartRunnerExited {
-            vm: "vm-a".to_owned(),
-            role_id: "swtpm".to_owned(),
-            reason_kind: VmStartRunnerExitReason::RunnerExited,
-            exit_kind: Some(RunnerExitKind::Exited),
-            exit_code: Some(1),
-            exit_signal: None,
-            elapsed_ms: 12,
-        })
-        .expect("write second audit event");
-        log.captured.lock().expect("lock captured").clone()
-    }
-
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn api_ready_timeout_event_writes_jsod2b_and_captures() {
@@ -2145,112 +2030,6 @@ mod tests {
             Some(record_hash),
             "disk and captured records must carry the same record hash",
         );
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn daemon_audit_records_are_hash_chained_and_verifiable() {
-        let records = two_chained_records();
-        assert_eq!(records.len(), 2);
-        let first: Value = serde_json::from_str(&records[0]).expect("first record parses");
-        let second: Value = serde_json::from_str(&records[1]).expect("second record parses");
-        let first_hash = first["record_hash"].as_str().expect("first record hash");
-        let second_prev = second["prev_hash"].as_str().expect("second prev hash");
-        assert!(is_sha256_hex(first_hash));
-        assert!(is_sha256_hex(
-            second["record_hash"].as_str().expect("second record hash")
-        ));
-        assert_eq!(first["prev_hash"].as_str(), Some(DAEMON_AUDIT_GENESIS_HASH));
-        assert_eq!(second_prev, first_hash);
-
-        let report = verify_daemon_audit_lines(
-            records
-                .iter()
-                .map(|line| (Some("daemon-events-2026-06-20.jsonl"), line.as_str())),
-        );
-        assert_eq!(report.records_scanned, 2);
-        assert_eq!(report.records_ok, 2);
-        assert!(report.is_clean(), "chain report not clean: {:?}", report);
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn daemon_audit_verify_fails_on_altered_event() {
-        let mut records = two_chained_records();
-        let mut second: Value = serde_json::from_str(&records[1]).expect("parse second");
-        second["event"]["elapsed_ms"] = Value::from(99_u64);
-        records[1] = second.to_string();
-
-        let report =
-            verify_daemon_audit_lines(records.iter().map(|line| (None::<&str>, line.as_str())));
-        assert!(report.defects.iter().any(|defect| matches!(
-            defect.problem,
-            DaemonAuditChainProblem::RecordHashMismatch { .. }
-        )));
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn daemon_audit_verify_fails_on_missing_link() {
-        let records = two_chained_records();
-        let report = verify_daemon_audit_lines([(None, records[1].as_str())]);
-        assert!(report.defects.iter().any(|defect| matches!(
-            &defect.problem,
-            DaemonAuditChainProblem::PreviousHashMismatch { expected, .. }
-                if expected == DAEMON_AUDIT_GENESIS_HASH
-        )));
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn daemon_audit_verify_fails_on_altered_previous_hash() {
-        let mut records = two_chained_records();
-        let mut second: Value = serde_json::from_str(&records[1]).expect("parse second");
-        second["prev_hash"] = Value::String(DAEMON_AUDIT_GENESIS_HASH.to_owned());
-        records[1] = second.to_string();
-
-        let report =
-            verify_daemon_audit_lines(records.iter().map(|line| (None::<&str>, line.as_str())));
-        assert!(report.defects.iter().any(|defect| matches!(
-            defect.problem,
-            DaemonAuditChainProblem::PreviousHashMismatch { .. }
-        )));
-        assert!(report.defects.iter().any(|defect| matches!(
-            defect.problem,
-            DaemonAuditChainProblem::RecordHashMismatch { .. }
-        )));
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn daemon_audit_verify_fails_on_malformed_hash_fields() {
-        let mut records = two_chained_records();
-        let mut first: Value = serde_json::from_str(&records[0]).expect("parse first");
-        first["record_hash"] = Value::String("not-a-sha256".to_owned());
-        records[0] = first.to_string();
-
-        let report =
-            verify_daemon_audit_lines(records.iter().map(|line| (None::<&str>, line.as_str())));
-        assert!(report.defects.iter().any(|defect| matches!(
-            &defect.problem,
-            DaemonAuditChainProblem::MalformedHash { field } if field == "record_hash"
-        )));
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn daemon_audit_verify_fails_on_missing_chain_field() {
-        let mut records = two_chained_records();
-        let mut first: Value = serde_json::from_str(&records[0]).expect("parse first");
-        first.as_object_mut().unwrap().remove("prev_hash");
-        records[0] = first.to_string();
-
-        let report =
-            verify_daemon_audit_lines(records.iter().map(|line| (None::<&str>, line.as_str())));
-        assert!(report.defects.iter().any(|defect| matches!(
-            &defect.problem,
-            DaemonAuditChainProblem::MissingField { field } if field == "prev_hash"
-        )));
     }
 
     #[test]
@@ -2605,21 +2384,6 @@ mod tests {
 
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn no_op_sink_health_reports_unavailable() {
-        let log = DaemonAuditLog::no_op();
-        let report = log.sink_health_report();
-        assert_eq!(report.status, DaemonAuditSinkStatus::Unavailable);
-        assert!(!report.writable);
-        assert!(
-            report
-                .problems
-                .iter()
-                .any(|problem| matches!(problem, DaemonAuditSinkProblem::NoStateDir))
-        );
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn last_record_hash_reads_tail_without_loading_entire_file() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path().join("daemon-events-2026-06-20.jsonl");
@@ -2738,12 +2502,9 @@ mod tests {
                 serde_json::from_str(line).expect("each line is valid, line-atomic JSON");
             assert_eq!(parsed.get("source").and_then(|v| v.as_str()), Some("d2bd"),);
         }
-        let report = verify_daemon_audit_lines(lines.iter().map(|line| (None::<&str>, *line)));
-        assert!(
-            report.is_clean(),
-            "concurrent writes must preserve hash-chain order: {:?}",
-            report
-        );
+        let (_, tails) =
+            verify_daemon_audit_files(dir.path()).expect("concurrent writes must verify as one hash chain");
+        assert_eq!(tails.len(), 1, "concurrent appends land in the single daily file");
     }
 
     /// The async seat appends before it returns.
@@ -2788,12 +2549,9 @@ mod tests {
             2,
             "an async append must have landed by the time its call returns"
         );
-        let report = verify_daemon_audit_lines(lines.iter().map(|line| (None::<&str>, *line)));
-        assert!(
-            report.is_clean(),
-            "the async seat must keep record order: {:?}",
-            report
-        );
+        let (_, tails) = verify_daemon_audit_files(dir.path())
+            .expect("the async seat must keep record order");
+        assert_eq!(tails.len(), 1, "async appends land in the single daily file");
     }
 
     #[test]

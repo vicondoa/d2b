@@ -63,7 +63,6 @@ const RUNTIME_FILES: &[(&str, &str)] = &[
         "src/guest_resource_runtime.rs",
         include_str!("../src/guest_resource_runtime.rs"),
     ),
-    ("src/host_mode.rs", include_str!("../src/host_mode.rs")),
     ("src/json_io.rs", include_str!("../src/json_io.rs")),
     (
         "src/kernel_module_check.rs",
