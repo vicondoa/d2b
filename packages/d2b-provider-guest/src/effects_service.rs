@@ -829,25 +829,21 @@ impl GuestEffectsService {
         Ok(value)
     }
 
-    fn validate_qemu_guest(value: &Value) -> Result<(), GuestEffectError> {
+    fn validate_qemu_guest(
+        value: &Value,
+    ) -> Result<guest_media_runtime::GuestProviderSpecSettings, GuestEffectError> {
         let settings = value
             .pointer("/spec/provider/settings")
             .cloned()
             .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-        serde_json::from_value::<guest_media_runtime::GuestProviderSpecSettings>(
-            settings,
-        )
-        .map(|_| ())
-        .map_err(|_| GuestEffectError::InvalidResource)
+        serde_json::from_value(settings).map_err(|_| GuestEffectError::InvalidResource)
     }
 
-    fn validate_azure_vm_guest(value: &Value) -> Result<(), GuestEffectError> {
+    fn validate_azure_vm_guest(
+        value: &Value,
+    ) -> Result<azure_vm_runtime::AzureVmGuestSettings, GuestEffectError> {
         let settings = Self::azure_vm_guest_settings_value(value)?;
-        serde_json::from_value::<d2b_provider_guest_azure_virtual_machine::AzureVmGuestSettings>(
-            settings,
-        )
-        .map(|_| ())
-        .map_err(|_| GuestEffectError::InvalidResource)
+        serde_json::from_value(settings).map_err(|_| GuestEffectError::InvalidResource)
     }
 
     fn azure_vm_guest_settings_value(value: &Value) -> Result<Value, GuestEffectError> {
@@ -1091,6 +1087,8 @@ impl GuestEffectsService {
         request: &GuestEffectRequest<'_>,
         value: &Value,
         provider: &Value,
+        qemu_settings: Option<guest_media_runtime::GuestProviderSpecSettings>,
+        azure_settings: Option<azure_vm_runtime::AzureVmGuestSettings>,
     ) -> Result<GuestRuntimeController, GuestEffectError> {
         match kind {
             GuestKind::QemuMedia => {
@@ -1101,15 +1099,7 @@ impl GuestEffectsService {
                         .ok_or(GuestEffectError::InvalidResource)?,
                 )
                 .map_err(|_| GuestEffectError::InvalidResource)?;
-                let settings = serde_json::from_value::<
-                    guest_media_runtime::GuestProviderSpecSettings,
-                >(
-                    value
-                        .pointer("/spec/provider/settings")
-                        .cloned()
-                        .unwrap_or_else(|| Value::Object(serde_json::Map::new())),
-                )
-                .map_err(|_| GuestEffectError::InvalidResource)?;
+                let settings = qemu_settings.ok_or(GuestEffectError::InvalidResource)?;
                 let device_ref = value
                     .pointer("/spec/deviceAttachments")
                     .and_then(Value::as_array)
@@ -1191,10 +1181,7 @@ impl GuestEffectsService {
                         .ok_or(GuestEffectError::InvalidResource)?,
                 )
                 .map_err(|_| GuestEffectError::InvalidResource)?;
-                let settings = serde_json::from_value::<azure_vm_runtime::AzureVmGuestSettings>(
-                    Self::azure_vm_guest_settings_value(value)?,
-                )
-                .map_err(|_| GuestEffectError::InvalidResource)?;
+                let settings = azure_settings.ok_or(GuestEffectError::InvalidResource)?;
                 let state = Arc::new(tokio::sync::Mutex::new(FrameworkAzureState::new(&settings)));
                 let controller = azure_vm_runtime::AzureVmController::new(
                     config,
@@ -1268,13 +1255,16 @@ impl GuestEffectsService {
         request: &GuestEffectRequest<'_>,
         value: &Value,
         provider: &Value,
+        qemu_settings: Option<guest_media_runtime::GuestProviderSpecSettings>,
+        azure_settings: Option<azure_vm_runtime::AzureVmGuestSettings>,
     ) -> Result<GuestEffectPhase, GuestEffectError> {
         self.validate_guest_runtime_fence(kind, request).await?;
         let children = request.children.owned().await?;
         let key = self.controller_key(request)?;
         let mut controllers = self.guest_controllers.lock().await;
         if !controllers.contains_key(&key) {
-            let controller = self.build_guest_controller(kind, request, value, provider)?;
+            let controller =
+                self.build_guest_controller(kind, request, value, provider, qemu_settings, azure_settings)?;
             controllers.insert(key.clone(), controller);
         }
         let controller = controllers
@@ -1355,12 +1345,20 @@ impl GuestEffectsService {
             )
             .await?;
         }
+        let (qemu_settings, azure_settings) = match kind {
+            GuestKind::QemuMedia => (Some(Self::validate_qemu_guest(&value)?), None),
+            GuestKind::AzureVirtualMachine => (None, Some(Self::validate_azure_vm_guest(&value)?)),
+            GuestKind::AzureContainerApps => (None, None),
+            GuestKind::CloudHypervisor => return Err(GuestEffectError::InvalidResource),
+        };
         let key = self.controller_key(request)?;
         let mut controllers = self.guest_controllers.lock().await;
         if !controllers.contains_key(&key) {
             controllers.insert(
                 key.clone(),
-                self.build_guest_controller(kind, request, &value, &provider)?,
+                self.build_guest_controller(
+                    kind, request, &value, &provider, qemu_settings, azure_settings,
+                )?,
             );
         }
         let controller = controllers
@@ -1474,9 +1472,9 @@ impl GuestDriverEffects for GuestEffectsService {
         match kind {
             GuestKind::CloudHypervisor => self.reconcile_cloud_hypervisor_guest(request).await,
             GuestKind::QemuMedia => {
-                Self::validate_qemu_guest(&value)?;
+                let settings = Self::validate_qemu_guest(&value)?;
                 let phase = self
-                    .run_guest_controller(kind, request, &value, &provider)
+                    .run_guest_controller(kind, request, &value, &provider, Some(settings), None)
                     .await?;
                 Ok(GuestEffectOutcome::phase(phase))
             }
@@ -1490,18 +1488,18 @@ impl GuestDriverEffects for GuestEffectsService {
                 )
                 .await?;
                 let phase = self
-                    .run_guest_controller(kind, request, &value, &provider)
+                    .run_guest_controller(kind, request, &value, &provider, None, None)
                     .await?;
                 Ok(GuestEffectOutcome::phase(phase))
             }
             GuestKind::AzureVirtualMachine => {
-                Self::validate_azure_vm_guest(&value)?;
+                let settings = Self::validate_azure_vm_guest(&value)?;
                 let provider_ref = ResourceRef::parse(kind.provider_ref())
                     .map_err(|_| GuestEffectError::InvalidResource)?;
                 self.validate_gateway_custody(&provider_ref, &["armCredentialRef"], request)
                     .await?;
                 let phase = self
-                    .run_guest_controller(kind, request, &value, &provider)
+                    .run_guest_controller(kind, request, &value, &provider, None, Some(settings))
                     .await?;
                 Ok(GuestEffectOutcome::phase(phase))
             }

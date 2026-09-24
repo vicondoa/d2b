@@ -400,15 +400,7 @@ pub fn decode_metadata(raw: &[u8]) -> Result<Value, GuestEffectError> {
 /// persists the uid as bytes; the Provider effects key on the canonical
 /// string).
 pub fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, GuestEffectError> {
-    let mut bytes = *bytes;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let text = format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-    );
-    ResourceUid::parse(text).map_err(|_| GuestEffectError::InvalidResource)
+    ResourceUid::from_bytes(bytes).map_err(|_| GuestEffectError::InvalidResource)
 }
 
 // ---------------------------------------------------------------------------
