@@ -4597,11 +4597,11 @@ assert_eq!(
     // ungranted caller).
     // -----------------------------------------------------------------
 
-    use d2b_contracts::encode_frame as encode_broker_frame;
     use d2b_contracts::types::{BundleOpId, RoleId, VmId};
     use d2b_contracts_broker::broker_wire::{
         EnvelopeInvokeResponse, RunnerRole, UnitDomain, UnitRequest,
     };
+    use d2b_contracts_broker::kernel_client::{KernelInvocation, envelope_invoke_kernel};
     use d2b_core::bundle::{Bundle, BundleGeneration};
     use d2b_core::bundle_resolver::BundleResolver;
     use d2b_core::host::HostJson;
@@ -4837,13 +4837,72 @@ assert_eq!(
                 fd_indexes: if granted { vec![0] } else { Vec::new() },
                 fd_kinds: if granted { vec![FdKind::Any] } else { Vec::new() },
             });
-            let frame = encode_broker_frame(&response).expect("the kernel reply encodes");
+            // The reply crosses as the raw serialized body: the transport's
+            // frame writer adds the one length prefix the kernel client's
+            // decode_frame strips, exactly as the production broker's
+            // origination leg does (send_json_frame_with_fds). An
+            // already-encoded frame must not be handed to the writer - that
+            // would put a second length prefix on the wire and the caller's
+            // decode would read the inner prefix as the start of the JSON
+            // body and fail (KTD6).
+            let body = serde_json::to_vec(&response).expect("the kernel reply serializes");
             match pidfd {
-                Some(pidfd) => write_frame_with_fds(&peer, &frame, &[pidfd.as_raw_fd()])
+                Some(pidfd) => write_frame_with_fds(&peer, &body, &[pidfd.as_raw_fd()])
                     .expect("write the kernel reply with the pidfd"),
-                None => write_frame(&peer, &frame).expect("write the kernel refusal"),
+                None => write_frame(&peer, &body).expect("write the kernel refusal"),
             }
         })
+    }
+
+    /// The fd-passing kernel-leg reply transport is hermetic: a pidfd
+    /// minted by the fake broker crosses back over the origination leg
+    /// and decodes at the kernel client as a `BrokerResponse` with the
+    /// descriptor attached. This pins the wire contract the production
+    /// broker's origination leg follows - one length prefix, the
+    /// descriptor riding the same frame via SCM_RIGHTS - without any
+    /// live systemd: the fake broker grants on the chain head alone and
+    /// mints the pidfd for the test process itself.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_kernel_pidfd_reply_with_an_attached_fd_decodes_as_a_broker_response() {
+        let scratch = tempfile::tempdir().expect("test scratch");
+        let kernel_socket = scratch.path().join("kernel.sock");
+        let (seen_tx, _seen_rx) = std::sync::mpsc::channel();
+        let broker = serve_fake_kernel_broker(kernel_socket.clone(), seen_tx);
+        let uid = nix::unistd::getuid().as_raw();
+        let pid = std::process::id() as i32;
+        let reply = envelope_invoke_kernel(
+            &kernel_socket,
+            Duration::from_secs(10),
+            BrokerCallerRole::AdminUid { uid },
+            KernelInvocation {
+                operation: "open-pidfd",
+                zone: "test",
+                payload: serde_json::json!({
+                    "pid": pid,
+                    "expectedStartTimeTicks": 0_u64,
+                }),
+                fds: &[],
+                chain_root_invocation_id: Some("invocation-hermetic"),
+                chain_identities: Some(&[String::from("daemon")]),
+            },
+        )
+        .expect("the pidfd-bearing kernel reply decodes at the kernel client");
+        assert_eq!(reply.response.operation, "open-pidfd");
+        assert_eq!(reply.response.fd_indexes, vec![0]);
+        assert_eq!(reply.fds.len(), 1, "one live pidfd crossed the reply leg");
+        // The descriptor is a live pidfd for this process: a pidfd's
+        // proc-fd link names the anon-inode pidfd kind, which no other
+        // descriptor class presents.
+        let link = tokio::fs::read_link(format!("/proc/self/fd/{}", reply.fds[0].as_raw_fd()))
+            .await
+            .expect("the received descriptor's proc-fd link resolves");
+        assert_eq!(
+            link.to_string_lossy(),
+            "anon_inode:[pidfd]",
+            "the kernel reply carried a live pidfd, not a stubbed descriptor"
+        );
+        broker.join().expect("the fake broker completes");
     }
 
     /// A forwarded pidfd-minting call completes end to end with the pidfd
