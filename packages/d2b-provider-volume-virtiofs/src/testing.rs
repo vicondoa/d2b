@@ -62,7 +62,6 @@ pub struct ScriptedPort {
     socket_ready: bool,
     guest_mount_ready: bool,
     guest_mount_after_delete: bool,
-    launch_error: Option<VirtiofsBindingError>,
     launched_plans: Mutex<Vec<VirtiofsdWorkerPlan>>,
     current_fence: Mutex<Option<(ResourceUid, ResourceGeneration, ZoneRevision)>>,
     calls: Mutex<Vec<PortCall>>,
@@ -81,7 +80,6 @@ impl ScriptedPort {
             socket_ready: true,
             guest_mount_ready: true,
             guest_mount_after_delete: false,
-            launch_error: None,
             launched_plans: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
             current_fence: Mutex::new(Some((
@@ -114,12 +112,6 @@ impl ScriptedPort {
     /// A port whose guest mount survives worker deletion.
     pub const fn mount_survives_delete(mut self) -> Self {
         self.guest_mount_after_delete = true;
-        self
-    }
-
-    /// A port whose launch fails.
-    pub const fn failing_launch(mut self, error: VirtiofsBindingError) -> Self {
-        self.launch_error = Some(error);
         self
     }
 
@@ -195,9 +187,6 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
     ) -> Result<LaunchedWorker, VirtiofsBindingError> {
         self.record(PortCall::LaunchWorker).await;
         self.launched_plans.lock().await.push(plan.clone());
-        if let Some(error) = self.launch_error {
-            return Err(error);
-        }
         Ok(LaunchedWorker {
             process_ref: ResourceRef::parse("Process/vol-work-state-virtiofsd-work-vm")
                 .expect("valid fixture ref"),
@@ -258,7 +247,6 @@ impl VirtiofsBindingEffectPort for &ScriptedPort {
 
 /// Canonical binding and Volume fixtures.
 pub mod fixtures {
-    use d2b_contracts_resource::v3::ResourceRef;
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use d2b_contracts_resource::v3::volume::{ViewSpec, VolumeSpec};
     use serde_json::{Value, json};
@@ -273,11 +261,6 @@ pub mod fixtures {
     /// The dedicated per-Volume worker principal.
     pub fn principal() -> BoundedToken {
         BoundedToken::parse("vol-work-state-vfd").expect("valid fixture token")
-    }
-
-    /// The Volume every fixture binding references.
-    pub fn volume_ref() -> ResourceRef {
-        ResourceRef::parse("Volume/work-state").expect("valid fixture ref")
     }
 
     /// A read-only view granting only read and traverse.

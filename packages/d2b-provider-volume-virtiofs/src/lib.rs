@@ -41,10 +41,7 @@ mod worker;
 
 pub mod testing;
 
-pub use controller::{
-    VirtiofsBindingController, VirtiofsRunnerContract, binding_phase, resolve_view,
-    virtiofs_runner_contract,
-};
+pub use controller::{VirtiofsBindingController, VIRTIOFS_REPAIR_INTERVAL_SECS};
 pub use error::VirtiofsBindingError;
 pub use bindings::{
     VOLUME_BINDING_FINALIZER, VOLUME_BINDING_RESOURCE_TYPE, SocketIdentity, StoredBinding,
@@ -53,7 +50,4 @@ pub use port::{
     BindingPhase, BindingStatusReport, LaunchedWorker, VirtiofsBindingEffectPort,
 };
 pub use socket_path::MAX_SOCKET_PATH_BYTES;
-pub use worker::{
-    INODE_FILE_HANDLES, SANDBOX_MODE, USER_NAMESPACE_MAPPING_CLASS, VirtiofsdWorkerPlan,
-    WORKER_TEMPLATE, WorkerSandbox,
-};
+pub use worker::{VirtiofsdWorkerPlan, WORKER_TEMPLATE};
