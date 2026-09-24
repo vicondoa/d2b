@@ -10,19 +10,19 @@ search plus both Provider crates + tests, and the "refused stays refused"
 classes from the U1 ledger are honored verbatim.
 
 ## Caller-census ledger rows for this crate
-- `assert_pidfd_verification_precedes_tpm_open`: 23 refs — production callers
+- `assert_pidfd_verification_precedes_tpm_open`: 23 refs - production callers
   in both Provider crates (systemd conformance.rs:195, minijail
   conformance.rs:214) + 4 Provider-surface callbacks; stays. The same show as
   `assert_pidfd_open_follows_verification` (external 2-7) already in U28's
   lean surface.
-- `assert_status_redaction`: 8 refs — stays [packages/d2b-provider-process-systemd/src/conformance.rs:214]
-- `has_resource_client_binding`: 0 external — dead (see ticket accessor
+- `assert_status_redaction`: 8 refs - stays [packages/d2b-provider-process-systemd/src/conformance.rs:214]
+- `has_resource_client_binding`: 0 external - dead (see ticket accessor
   finding below, shares the fence with U2#S1)
 
 ## Applied finding
   `children_have_verified_stop_proofs` is the one pure-suite surface no
   Provider lands. Its body (suite.rs:297-306, 10 lines) only re-validates
-  "every owned child supplied a verified, owner-specific StopProof" — the
+  "every owned child supplied a verified, owner-specific StopProof" - the
   same obligation the live `assert_finalizer_requires_verified_stop`
   already encodes for both Providers, and its sole refs are this crate's own
   tests (415,420,425). Delete the helper with the redaction Debug surface.
@@ -33,7 +33,7 @@ classes from the U1 ledger are honored verbatim.
   callers 2-7) is the Providers' shared conformance wall; it stays.
 - `children_have_verified_stop_proofs` (WaitReapOwner::Local) was refused in
   U2#S1 application set: it reads only the suite's own owner-neutral
-  fixture? No — new evidence: the two Refusal classes in the U1 ledger for
+  fixture? No - new evidence: the two Refusal classes in the U1 ledger for
   d2b-process-conformance do not refuse this crate's surface; that row was
   about d2b-process-conformance's own suite fns, which we did not touch.
 
@@ -54,3 +54,13 @@ classes from the U1 ledger are honored verbatim.
 ## Net
 -10 lines, -0 deps. One genuine dead surface in an otherwise-lean conformance
 crate.
+## U1 execution (2026-09-24)
+
+Applied finding executed (cross-crate cut into d2b-process-conformance, per the lane].
+
+- Deleted `children_have_verified_stop_proofs` (suite.rs:297-308, 10-line pub body) from packages/d2b-process-conformance/src/suite.rs: zero workspace callers (R4 re-verified: only the 3 suite.rs test assert rows, which are also deleted - the enclosing test `reconnect_and_finalizer_proofs_fail_closed_on_stale_evidence` keeps its reconnect/finalizer asserts and the two `assert_finalizer_requires_verified_stop` calls(and the now-unused `let complete` fixture went with the asserts..
+
+`cargo test -p d2b-process-conformance`: PASS (30 unit tests + doc-tests; 0 failures..
+
+Also recorded for this lane: the device-tpm nix `user` feature fix already landed via commit `9d67062b4` (chore(d2b-provider-device-tpm): enable nix user feature explicitly) - lane note only, no code change this session.
+

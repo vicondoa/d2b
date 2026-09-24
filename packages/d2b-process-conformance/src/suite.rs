@@ -292,20 +292,6 @@ pub fn assert_finalizer_requires_verified_stop(owner: WaitReapOwner) {
     assert!(validate_stop_proof(owner, complete).is_ok());
 }
 
-/// Return whether every observed child supplied a complete, owner-specific
-/// stop proof. A controller with no owned children is already converged.
-pub fn children_have_verified_stop_proofs(
-    owner: WaitReapOwner,
-    expected_children: usize,
-    proofs: &[StopProof],
-) -> bool {
-    proofs.len() == expected_children
-        && proofs
-            .iter()
-            .copied()
-            .all(|proof| validate_stop_proof(owner, proof).is_ok())
-}
-
 /// Public status carries no PID, pidfd, unit name, cgroup, path, argv,
 /// environment, or numeric identity.
 pub fn assert_status_is_redacted<P: ProcessProvider>(provider: &P, provider_name: &str) {
@@ -406,26 +392,5 @@ mod tests {
         assert_ne!(first.assignment_epoch(), reconnect.assignment_epoch());
         assert_finalizer_requires_verified_stop(WaitReapOwner::Local);
         assert_finalizer_requires_verified_stop(WaitReapOwner::ServiceManager);
-        let complete = StopProof {
-            exact_main_signaled: true,
-            broker_reaped: true,
-            cgroup_empty: true,
-            manager_terminal: true,
-        };
-        assert!(children_have_verified_stop_proofs(
-            WaitReapOwner::Local,
-            0,
-            &[]
-        ));
-        assert!(!children_have_verified_stop_proofs(
-            WaitReapOwner::Local,
-            2,
-            &[StopProof::default(), complete]
-        ));
-        assert!(children_have_verified_stop_proofs(
-            WaitReapOwner::Local,
-            2,
-            &[complete, complete]
-        ));
-    }
+}
 }
