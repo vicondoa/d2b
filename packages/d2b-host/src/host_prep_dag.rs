@@ -14,7 +14,7 @@
 //!
 //! The daemon-only migration collapses those into a single typed DAG that
 //! the daemon walks in topo order on every VM start. Every step dispatches
-//! a typed broker op; failures surface as the typed [`HostPrepStepFailed`]
+//! a typed broker op; failures surface as the typed error envelope.
 //! error.
 //!
 //! Scope split with sibling deliverables
@@ -85,7 +85,7 @@ use std::fmt;
 pub struct HostPrepStepId(pub String);
 
 impl HostPrepStepId {
-    pub fn new(vm: &str, kind: HostPrepStepKind) -> Self {
+    fn new(vm: &str, kind: HostPrepStepKind) -> Self {
         Self(format!("{vm}:{}", kind.as_str()))
     }
 
@@ -195,7 +195,7 @@ impl HostPrepStepKind {
     }
 
     /// Name of the broker op this step dispatches. Used in
-    /// [`HostPrepStepFailed::op_kind`] for the operator-facing
+    /// `op_kind` for the operator-facing
     /// error envelope.
     pub fn broker_op_name(&self) -> &'static str {
         match self {
@@ -257,34 +257,10 @@ pub struct HostPrepStep {
     pub bundle_ref: BundleStepRef,
 }
 
-/// Typed error surfaced when a host-prep step fails. The daemon
-/// converts this into the public error envelope; the operator sees
-/// `step_id`, the broker op that was dispatched, and the raw broker
-/// error string.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HostPrepStepFailed {
-    pub step_id: HostPrepStepId,
-    pub op_kind: String,
-    pub broker_error: String,
-}
-
-impl fmt::Display for HostPrepStepFailed {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "host-prep step {} ({}) failed: {}",
-            self.step_id, self.op_kind, self.broker_error
-        )
-    }
-}
-
-impl std::error::Error for HostPrepStepFailed {}
-
 /// Cycle / unknown-edge error from [`topo_sort`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
-pub enum CycleError {
+enum CycleError {
     /// At least one dependency cycle exists; `residual` is the set
     /// of step ids that could not be sequenced.
     Cycle { residual: Vec<HostPrepStepId> },
@@ -374,7 +350,7 @@ pub fn build_host_prep_dag(
 /// Bundle-free constructor used by unit tests and integrators that
 /// already know the VM's net-VM flag + env. Keeps the production
 /// `build_host_prep_dag` thin and tests hermetic.
-pub fn build_host_prep_dag_for(
+fn build_host_prep_dag_for(
     vm: &str,
     is_net_vm: bool,
     env: Option<&str>,
@@ -547,7 +523,7 @@ pub fn build_host_prep_dag_for_runtime(
 /// Pure topological sort with cycle + dangling-edge detection.
 /// Tie-break is by [`HostPrepStepId`] string order so the output
 /// is deterministic across daemon restarts.
-pub fn topo_sort(steps: Vec<HostPrepStep>) -> Result<Vec<HostPrepStep>, CycleError> {
+fn topo_sort(steps: Vec<HostPrepStep>) -> Result<Vec<HostPrepStep>, CycleError> {
     let mut by_id: BTreeMap<HostPrepStepId, HostPrepStep> = BTreeMap::new();
     for step in steps {
         if by_id.contains_key(&step.id) {
@@ -793,18 +769,6 @@ mod tests {
     fn step_id_format_is_vm_colon_kind() {
         let id = HostPrepStepId::new("work", HostPrepStepKind::BringUpTapInterface);
         assert_eq!(id.as_str(), "work:bring-up-tap-interface");
-    }
-
-    #[test]
-    fn step_failed_implements_error_trait() {
-        let e = HostPrepStepFailed {
-            step_id: HostPrepStepId::new("work", HostPrepStepKind::ApplyNftablesRules),
-            op_kind: "ApplyNftables".into(),
-            broker_error: "broker returned Unimplemented".into(),
-        };
-        let s = format!("{e}");
-        assert!(s.contains("work:apply-nftables-rules"));
-        assert!(s.contains("ApplyNftables"));
     }
 
     fn assert_before(steps: &[HostPrepStep], earlier: &str, later: &str) {

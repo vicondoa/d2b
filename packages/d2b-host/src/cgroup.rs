@@ -576,61 +576,10 @@ pub fn chown_subtree_to_d2bd<B: CgroupBackend>(
     Ok(())
 }
 
-/// Step end-to-end (broker entry): create `d2b.slice` under the
-/// unified hierarchy with the canonical enable sequence + chown.
-///
-/// The ordering is:
-///
-/// 1. probe + require controllers at root;
-/// 2. mkdir `d2b.slice` (so the child exists for the verification
-///    re-read);
-/// 3. enable controllers on root, verifying both the root's
-///    `cgroup.subtree_control` re-read AND `d2b.slice/cgroup.controllers`
-///    after each `+<controller>` write - anything else is
-///    [`CgroupError::CgroupControllerNotExposedToChild`];
-/// 4. enable controllers on the slice itself (no child yet - the
-///    delegated subtree is empty);
-/// 5. assert `d2b.slice/cgroup.procs` is empty before chown -
-///    delegating a slice that already holds processes is a leak.
-pub fn create_d2b_slice<B: CgroupBackend>(
-    backend: &B,
-    root: &Path,
-    d2bd_uid: u32,
-    d2bd_gid: u32,
-) -> Result<PathBuf, CgroupError> {
-    probe_unified_hierarchy(backend, root)?;
-    require_controllers(backend, root, Controller::REQUIRED)?;
-
-    let slice = root.join(D2B_SLICE_NAME);
-    if !backend.exists(&slice) {
-        backend.mkdir(&slice)?;
-    }
-    assert_not_threaded(backend, &slice)?;
-    // Ancestors and `d2b.slice` itself stay `partition=member`.
-    assert_partition_member_only(&slice, "cpuset.cpus")?;
-
-    enable_subtree_controllers_with_child(
-        backend,
-        root,
-        Some(slice.as_path()),
-        Controller::ENABLE_ORDER,
-    )?;
-    enable_subtree_controllers(backend, &slice, Controller::ENABLE_ORDER)?;
-
-    // Plan step 5: d2b.slice itself must be process-free before we
-    // chown it. A delegation that hands a slice with live processes to
-    // the dropped-privilege d2bd uid would leak control of those
-    // PIDs to the delegated user.
-    assert_no_internal_processes(backend, &slice)?;
-
-    chown_subtree_to_d2bd(backend, &slice, d2bd_uid, d2bd_gid)?;
-    Ok(slice)
-}
-
 /// v1.1.1 per-VM-interior + per-role-leaf taxonomy. Creates the
 /// process-free intermediate directory `d2b.slice/<vm_id>/`
 /// (NOT a leaf). Per-role leaf cgroups are created by
-/// `create_vm_role_leaf`. Per ADR 0011 Decision item 1.
+/// the per-role leaf helper. Per ADR 0011 Decision item 1.
 pub fn create_vm_subtree<B: CgroupBackend>(
     backend: &B,
     slice: &Path,
@@ -693,21 +642,6 @@ fn create_cgroup_path<B: CgroupBackend>(
         }
     }
     Ok(cursor)
-}
-
-/// v1.1.1 per-role leaf cgroup creation. Creates
-/// `<slice>/<vm_id>/<role_id>/` under the previously-created
-/// per-VM intermediate. The leaf is the ONLY entry that carries
-/// processes; ancestors stay process-free.
-pub fn create_vm_role_leaf<B: CgroupBackend>(
-    backend: &B,
-    slice: &Path,
-    vm_id: &str,
-    role_id: &str,
-    d2bd_uid: u32,
-    d2bd_gid: u32,
-) -> Result<PathBuf, CgroupError> {
-    create_nested_subtree(backend, slice, &[vm_id, role_id], d2bd_uid, d2bd_gid)
 }
 
 // ---------------------------------------------------------------------------
@@ -1115,30 +1049,27 @@ mod tests {
         1234
     }
 
+    fn delegated_slice(backend: &FakeCgroupBackend) -> PathBuf {
+        let root = Path::new(FAKE_ROOT);
+        probe_unified_hierarchy(backend, root).unwrap();
+        require_controllers(backend, root, Controller::REQUIRED).unwrap();
+        let slice = root.join(D2B_SLICE_NAME);
+        backend.mkdir(&slice).unwrap();
+        assert_not_threaded(backend, &slice).unwrap();
+        assert_partition_member_only(&slice, "cpuset.cpus").unwrap();
+        enable_subtree_controllers_with_child(backend, root, Some(slice.as_path()), Controller::ENABLE_ORDER)
+            .unwrap();
+        enable_subtree_controllers(backend, &slice, Controller::ENABLE_ORDER).unwrap();
+        assert_no_internal_processes(backend, &slice).unwrap();
+        chown_subtree_to_d2bd(backend, &slice, d2bd_uid(), d2bd_gid()).unwrap();
+        slice
+    }
+
     fn fresh(uid: u32) -> FakeCgroupBackend {
         let b = FakeCgroupBackend::new(uid);
         b.seed_unified(Path::new(FAKE_ROOT));
         b
     }
-
-    #[test]
-    fn happy_path_delegation() {
-        let backend = fresh(d2bd_uid());
-        require_non_root_delegation(&backend).unwrap();
-        let slice = create_d2b_slice(&backend, Path::new(FAKE_ROOT), d2bd_uid(), d2bd_gid())
-            .expect("delegate ok");
-        assert!(backend.directory_exists(&slice));
-        let owner = backend.owner(&slice).expect("chowned");
-        assert_eq!(owner, (d2bd_uid(), d2bd_gid()));
-        // Subtree control on the slice covers every required controller.
-        let st = backend
-            .file_contents(&slice.join("cgroup.subtree_control"))
-            .unwrap_or_default();
-        for c in Controller::REQUIRED {
-            assert!(st.contains(c.as_str()), "{c} should be enabled");
-        }
-    }
-
     #[test]
     fn refuses_uid_zero() {
         let backend = fresh(0);
@@ -1167,8 +1098,7 @@ mod tests {
     #[test]
     fn refuses_kill_on_ancestor() {
         let backend = fresh(d2bd_uid());
-        let slice =
-            create_d2b_slice(&backend, Path::new(FAKE_ROOT), d2bd_uid(), d2bd_gid()).unwrap();
+        let slice = delegated_slice(&backend);
         let leaf = slice.join("vm-a.scope");
         backend.mkdir(&leaf).unwrap();
         let err = cgroup_kill_leaf_only(&backend, &slice, std::slice::from_ref(&leaf)).unwrap_err();
@@ -1181,8 +1111,7 @@ mod tests {
     #[test]
     fn detects_internal_processes() {
         let backend = fresh(d2bd_uid());
-        let slice =
-            create_d2b_slice(&backend, Path::new(FAKE_ROOT), d2bd_uid(), d2bd_gid()).unwrap();
+        let slice = delegated_slice(&backend);
         backend.inject_procs(&slice, &[4242]);
         let err = assert_no_internal_processes(&backend, &slice).unwrap_err();
         assert_eq!(err.code(), "cgroup-internal-processes-present");
@@ -1191,8 +1120,7 @@ mod tests {
     #[test]
     fn refuses_threaded_cgroups() {
         let backend = fresh(d2bd_uid());
-        let slice =
-            create_d2b_slice(&backend, Path::new(FAKE_ROOT), d2bd_uid(), d2bd_gid()).unwrap();
+        let slice = delegated_slice(&backend);
         backend
             .write_file(&slice.join("cgroup.type"), "threaded")
             .unwrap();
@@ -1234,33 +1162,11 @@ mod tests {
         // v1.1.1: vm_subtree now creates `<slice>/<vm>/` (interior;
         // process-free), not `<slice>/<vm>.scope` (leaf).
         let backend = fresh(d2bd_uid());
-        let slice =
-            create_d2b_slice(&backend, Path::new(FAKE_ROOT), d2bd_uid(), d2bd_gid()).unwrap();
+        let slice = delegated_slice(&backend);
         let vm = create_vm_subtree(&backend, &slice, "alpha", d2bd_uid(), d2bd_gid()).unwrap();
         assert_eq!(vm, slice.join("alpha"));
         assert_eq!(backend.owner(&vm).unwrap(), (d2bd_uid(), d2bd_gid()));
     }
-
-    #[test]
-    fn vm_role_leaf_creates_chowned_per_role_leaf_under_vm_interior() {
-        // v1.1.1: per-role leaf `<slice>/<vm>/<role>/` is the
-        // canonical placement target for SpawnRunner processes.
-        let backend = fresh(d2bd_uid());
-        let slice =
-            create_d2b_slice(&backend, Path::new(FAKE_ROOT), d2bd_uid(), d2bd_gid()).unwrap();
-        let leaf = create_vm_role_leaf(
-            &backend,
-            &slice,
-            "alpha",
-            "cloud-hypervisor",
-            d2bd_uid(),
-            d2bd_gid(),
-        )
-        .unwrap();
-        assert_eq!(leaf, slice.join("alpha").join("cloud-hypervisor"));
-        assert_eq!(backend.owner(&leaf).unwrap(), (d2bd_uid(), d2bd_gid()));
-    }
-
     #[test]
     fn enabled_controllers_missing() {
         let e = EnabledControllers::from_controllers([Controller::Cpu, Controller::Memory]);
@@ -1269,22 +1175,6 @@ mod tests {
             vec![Controller::Io, Controller::Pids, Controller::Cpuset]
         );
     }
-
-    #[test]
-    fn delegation_refused_when_slice_already_holds_processes() {
-        // Pre-seed `d2b.slice` with a pid so the no-internal-process
-        // check inside `create_d2b_slice` fires before chown.
-        let backend = fresh(d2bd_uid());
-        let slice_path = Path::new(FAKE_ROOT).join(D2B_SLICE_NAME);
-        backend.mkdir(&slice_path).unwrap();
-        backend.inject_procs(&slice_path, &[9090]);
-        let err =
-            create_d2b_slice(&backend, Path::new(FAKE_ROOT), d2bd_uid(), d2bd_gid()).unwrap_err();
-        assert_eq!(err.code(), "cgroup-internal-processes-present");
-        // Chown must not have run - owner should be unset.
-        assert!(backend.owner(&slice_path).is_none());
-    }
-
     #[test]
     fn child_controllers_verified_after_subtree_enable() {
         // Drive the new verifying variant directly to assert the
