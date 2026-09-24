@@ -10,7 +10,7 @@ use d2b_session::{
 use std::fmt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-const FRAME_HEADER_BYTES: usize = 2;
+const FRAME_HEADER_BYTES: usize = 4;
 
 /// Provider-facing descriptor for a native vsock transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +36,7 @@ impl Default for VsockTransportDescriptor {
     }
 }
 
-/// A bounded two-byte length-prefixed transport.
+/// A bounded four-byte length-prefixed transport.
 pub struct FramedVsockTransport<S> {
     stream: S,
     max_frame_bytes: usize,
@@ -78,7 +78,8 @@ impl<S> FramedVsockTransport<S> {
         }
         let mut header = [0_u8; FRAME_HEADER_BYTES];
         read_exact_classified(&mut self.stream, &mut header, false).await?;
-        let declared = usize::from(u16::from_be_bytes(header));
+        let declared =
+            usize::try_from(u32::from_be_bytes(header)).map_err(|_| TransportError::FrameTooLarge)?;
         if declared == 0 {
             self.closed = true;
             return Err(TransportError::InvalidFrame);
@@ -103,10 +104,10 @@ impl<S> FramedVsockTransport<S> {
         if bytes.is_empty() {
             return Err(TransportError::InvalidFrame);
         }
-        if bytes.len() > self.max_frame_bytes || bytes.len() > u16::MAX as usize {
+        if bytes.len() > self.max_frame_bytes || bytes.len() > u32::MAX as usize {
             return Err(TransportError::FrameTooLarge);
         }
-        let length = u16::try_from(bytes.len()).map_err(|_| TransportError::FrameTooLarge)?;
+        let length = u32::try_from(bytes.len()).map_err(|_| TransportError::FrameTooLarge)?;
         self.stream
             .write_all(&length.to_be_bytes())
             .await
@@ -236,7 +237,8 @@ where
         read_exact_classified(&mut self.stream, &mut header, false)
             .await
             .map_err(map_session_error)?;
-        let declared = usize::from(u16::from_be_bytes(header));
+        let declared = usize::try_from(u32::from_be_bytes(header))
+            .map_err(|_| d2b_session::TransportError::LimitExceeded)?;
         if declared == 0 || declared > self.max_frame_bytes || declared > protected_limit {
             self.closed = true;
             return Err(d2b_session::TransportError::LimitExceeded);
@@ -272,7 +274,7 @@ where
             return Err(d2b_session::TransportError::LimitExceeded);
         }
         let length =
-            u16::try_from(bytes.len()).map_err(|_| d2b_session::TransportError::LimitExceeded)?;
+            u32::try_from(bytes.len()).map_err(|_| d2b_session::TransportError::LimitExceeded)?;
         self.stream
             .write_all(&length.to_be_bytes())
             .await
