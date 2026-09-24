@@ -18,3 +18,7 @@ net: -437 lines, -0 deps across the two applied findings.
 
 ## Checked
 - zone_uid → `ResourceUid::parse` renderer sites; sha256 uid renderer duplicates across broker src; the U21 prior-ledger rows (#P7 partial, #S1 applied) honored - broker's remaining uid renderer consolidated via shared `ResourceUid::from_bytes`; zone_identity dead module. Scout independently verified zero-caller workspace-wide (no other crates/tests/BUILD refs). Refusal-ledger rows honored: no prior refused row for this crate contains new evidence I can reopen.
+
+## U7 outcome (2026-09-24)
+- applied: finding 1 zone_identity.rs deleted (+lib.rs:55 arm); re-verified zero-caller workspace-wide (other crates' zone_identity matches are unrelated test fn names in d2b-contracts-control/unsafe_local_wire.rs and d2b-resource-api/admission.rs).
+- finding 2 (device_worker deterministic_resource_uid hand-rolled renderer): already applied at HEAD by U4's uuid-renderer migration (ResourceUid::from_bytes at device_worker.rs:436-475); no work needed.
