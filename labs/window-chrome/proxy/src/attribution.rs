@@ -77,7 +77,7 @@ impl ClientAttributionBook {
 #[cfg(test)]
 mod tests {
     use d2b_core::workload_identity::WorkloadTarget;
-    use d2b_realm_core::WorkloadProviderKind;
+    use crate::WorkloadProviderKind;
 
     use super::*;
 
