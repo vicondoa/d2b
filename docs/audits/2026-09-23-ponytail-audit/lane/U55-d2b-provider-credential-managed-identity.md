@@ -53,3 +53,11 @@ and it uses only `ManagedIdentityPlacement::new` + `ManagedIdentityController::n
 (#PR1/#PR2/#PR9 sync-twin/shadow-type deletions) stand - nothing to reopen: the
 remaining dead surface is the test-only project vocab, not a refused sync twin.
 No caller census contradicted a deletion claim.
+
+## U5 execution (2026-09-24)
+
+- U53 family findings applied: `now_unix_ms`/`is_absolute_unix_ms`/`operation_deadline`
+  + the threshold const moved to `d2b-provider-toolkit/src/credential.rs`; lib.rs and
+  service.rs call sites re-pointed (including `revoke_owned_handles`); crate-specific
+  `is_expired` kept and re-pointed internally. `reject_process_environment_credential_chain`
+  env-scan re-pointed to the toolkit wrapper (public error surface unchanged).

@@ -20,7 +20,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use d2b_contracts_provider::v3::credential::{
     CREDENTIAL_SERVICE_NAME, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
@@ -33,6 +33,7 @@ use d2b_contracts_resource::v3::identity::{AuthenticatedSubjectContext, Locality
 use d2b_provider_toolkit::{
     AuthenticatedSessionRouteBinding, GuestCredentialBackend, GuestCredentialBackendResponse,
     ProviderFd10Spec, ProviderRuntimeError, ProviderSessionMetadata, RouteCredentialAuthorization,
+    credential::{is_absolute_unix_ms, now_unix_ms, operation_deadline},
     run_from_fd10 as run_provider_from_fd10,
 };
 
@@ -55,10 +56,6 @@ pub const CONTROLLER_BINARY: &str = "d2b-managed-identity-controller";
 pub const AGENT_BINARY: &str = "d2b-managed-identity-agent";
 /// Session purpose expected for Credential service calls.
 pub const CREDENTIAL_SESSION_PURPOSE: &str = "credential-delivery";
-/// Small values remain accepted as relative test/runtime deadlines for
-/// compatibility with the bootstrap service contract.
-const ABSOLUTE_UNIX_MS_THRESHOLD: u64 = 1_000_000_000_000;
-
 /// Reject ambient SDK credential-chain environment names.
 pub fn reject_ambient_credential_chain(
     keys: impl IntoIterator<Item = impl AsRef<str>>,
@@ -70,9 +67,8 @@ pub fn reject_ambient_credential_chain(
 /// Reject ambient SDK credential-chain variables in this process.
 pub fn reject_process_environment_credential_chain(
 ) -> Result<(), ManagedIdentityProviderError> {
-    reject_ambient_credential_chain(
-        std::env::vars_os().filter_map(|(key, _value)| key.into_string().ok()),
-    )
+    d2b_provider_toolkit::credential::reject_process_environment_credential_chain()
+        .map_err(|_| ManagedIdentityProviderError::InvalidConfig)
 }
 
 /// Enter a supervised Provider runtime through the inherited fd 10 handoff.
@@ -933,23 +929,9 @@ impl ManagedIdentityCredentialProvider {
         &self.config
     }
 
-    /// Return the current Unix millisecond clock used for bounded expiry
-    /// checks.
-    pub(crate) fn now_unix_ms() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-            .unwrap_or(0)
-    }
-
-    /// Whether a value uses the absolute Unix millisecond representation.
-    pub(crate) const fn is_absolute_unix_ms(value: u64) -> bool {
-        value >= ABSOLUTE_UNIX_MS_THRESHOLD
-    }
-
     /// Whether an absolute Unix millisecond value has elapsed.
     pub(crate) fn is_expired(value: u64, now_unix_ms: u64) -> bool {
-        Self::is_absolute_unix_ms(value) && value <= now_unix_ms
+        is_absolute_unix_ms(value) && value <= now_unix_ms
     }
 
     fn context_matches_provider(&self, subject: &AuthenticatedSubjectContext) -> bool {
@@ -987,7 +969,7 @@ impl ManagedIdentityCredentialProvider {
         let session = authorization.authenticated_session().ok_or_else(|| {
             CredentialServiceError::new(CredentialServiceErrorCode::OperationDenied)
         })?;
-        let now = Self::now_unix_ms();
+        let now = now_unix_ms();
         if Self::is_expired(session.expires_at_unix_ms(), now) {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::DeadlineExceeded,
@@ -1043,8 +1025,8 @@ impl ManagedIdentityCredentialProvider {
                     CredentialServiceErrorCode::DeadlineExceeded,
                 ));
             }
-            if Self::is_absolute_unix_ms(session.expires_at_unix_ms())
-                && Self::is_absolute_unix_ms(delivery.expiry_unix_ms())
+            if is_absolute_unix_ms(session.expires_at_unix_ms())
+                && is_absolute_unix_ms(delivery.expiry_unix_ms())
                 && session.expires_at_unix_ms() > delivery.expiry_unix_ms()
             {
                 return Err(CredentialServiceError::new(
@@ -1121,42 +1103,23 @@ impl ManagedIdentityCredentialProvider {
         }
     }
 
-    pub(crate) fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialServiceError> {
-        let now_unix_ms = Self::now_unix_ms();
-        let duration_ms = if Self::is_absolute_unix_ms(deadline_ms) {
-            deadline_ms.saturating_sub(now_unix_ms)
-        } else {
-            deadline_ms
-        };
-        if duration_ms == 0 {
-            return Err(CredentialServiceError::new(
-                CredentialServiceErrorCode::DeadlineExceeded,
-            ));
-        }
-        Instant::now()
-            .checked_add(Duration::from_millis(duration_ms))
-            .ok_or_else(|| {
-                CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
-            })
-    }
-
     pub(crate) fn bounded_expiry(
         requested_expiry_unix_ms: u64,
         session_expiry_unix_ms: u64,
         delivery_expiry_unix_ms: u64,
     ) -> Result<u64, CredentialServiceError> {
-        let absolute = Self::is_absolute_unix_ms(requested_expiry_unix_ms)
-            || Self::is_absolute_unix_ms(session_expiry_unix_ms)
-            || Self::is_absolute_unix_ms(delivery_expiry_unix_ms);
+        let absolute = is_absolute_unix_ms(requested_expiry_unix_ms)
+            || is_absolute_unix_ms(session_expiry_unix_ms)
+            || is_absolute_unix_ms(delivery_expiry_unix_ms);
         if !absolute {
             return Ok(requested_expiry_unix_ms
                 .min(session_expiry_unix_ms)
                 .min(delivery_expiry_unix_ms)
                 .min(MAX_PROVIDER_LEASE_LIFETIME_MS));
         }
-        let now = Self::now_unix_ms();
+        let now = now_unix_ms();
         let to_absolute = |value: u64| {
-            if Self::is_absolute_unix_ms(value) {
+            if is_absolute_unix_ms(value) {
                 Some(value)
             } else {
                 now.checked_add(value)
@@ -1241,8 +1204,8 @@ impl ManagedIdentityCredentialProvider {
         requested_expiry_unix_ms: u64,
         minimum_rotation_generation: u64,
     ) -> Result<CredentialMetadata, CredentialServiceError> {
-        let now_unix_ms = Self::now_unix_ms();
-        let max_expiry = if Self::is_absolute_unix_ms(requested_expiry_unix_ms) {
+        let now_unix_ms = now_unix_ms();
+        let max_expiry = if is_absolute_unix_ms(requested_expiry_unix_ms) {
             now_unix_ms
                 .checked_add(MAX_PROVIDER_LEASE_LIFETIME_MS)
                 .ok_or_else(|| {
@@ -1316,7 +1279,7 @@ impl ManagedIdentityCredentialProvider {
         &self,
         checkpoints: impl IntoIterator<Item = ManagedIdentityLeaseCheckpoint>,
     ) -> Result<(), CredentialServiceError> {
-        let now = Self::now_unix_ms();
+        let now = now_unix_ms();
         let mut restored: Vec<(String, LeaseRecord)> = Vec::new();
         for checkpoint in checkpoints {
             let ManagedIdentityLeaseCheckpoint {
@@ -1448,7 +1411,7 @@ impl ManagedIdentityCredentialProvider {
         session: &CredentialSessionBinding,
         deadline_unix_ms: u64,
     ) -> Result<usize, CredentialServiceError> {
-        let now = Self::now_unix_ms();
+        let now = now_unix_ms();
         if Self::is_expired(session.expires_at_unix_ms(), now)
             || !self.context_matches_provider(session.authenticated_subject())
         {
@@ -1456,7 +1419,7 @@ impl ManagedIdentityCredentialProvider {
                 CredentialServiceErrorCode::OperationDenied,
             ));
         }
-        let deadline = Self::operation_deadline(deadline_unix_ms)?;
+        let deadline = operation_deadline(deadline_unix_ms)?;
         let _mutation = self.mutation_guard()?;
         // Synchronous surface: non-blocking `try_lock` per plan U4 (see
         // `export_checkpoints` for why a blocking lock is unacceptable here).

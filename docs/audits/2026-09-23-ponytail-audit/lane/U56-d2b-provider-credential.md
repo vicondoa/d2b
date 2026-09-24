@@ -11,3 +11,8 @@ None. #PR15 [refused] not reopened - the cross-crate test-support blocker is unc
 
 ## Checked
 Read driver.rs (1961 LOC), effects_service.rs (293), session.rs (490), facets.rs (85), lib.rs (75), test_support.rs (256); verified caller surfaces for every pub symbol: descriptor/effects factory (d2bd credential_resource_runtime.rs + shared_provider_effects.rs), session/passages (d2bd), annotation writers (driver.rs:529-531), CREDENTIAL_TYPE_NAME reader (d2bd:88). Workspace-wide rg for each zero-caller candidate named in the 2026-09-23 packet ledger. Integration/ + tests/ are policy-required scaffolds honoring the U1 ratchet classes.
+
+## U5 execution (2026-09-24)
+
+No U5 findings for this crate: it is a credential-family consumer, not a realizer
+carrying the duplicated trio/env-scan. Nothing to apply.

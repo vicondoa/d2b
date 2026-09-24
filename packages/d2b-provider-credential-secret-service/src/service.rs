@@ -8,6 +8,7 @@ use d2b_contracts_provider::v3::credential::{
     CredentialServiceErrorCode, DeliveryResponse, MetadataResponse,
 };
 use d2b_contracts_resource::v3::ResourceRef;
+use d2b_provider_toolkit::credential::{deadline_remaining, operation_deadline};
 
 use crate::{
     LeaseRecord, OperationKind, SecretServiceCredentialProvider, SecretServiceLeaseRef,
@@ -107,7 +108,7 @@ impl SecretServiceCredentialProvider {
             .cloned()
             .ok_or_else(invariant)?;
         self.validate_delivery(CredentialMethod::AcquireToken, request, &delivery)?;
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_unlocked_async(user_ref, deadline).await?;
         if self.has_ambiguous_credential(session_key, &key).await? {
@@ -143,7 +144,7 @@ impl SecretServiceCredentialProvider {
             idempotency_key: request.idempotency_key().to_owned(),
             requested_expiry_unix_ms: request.requested_expiry_unix_ms(),
         };
-        Self::deadline_remaining(deadline)?;
+        deadline_remaining(deadline)?;
         let grant = match await_port(self.port.issue_lease(&port_request), deadline).await {
             Ok(grant) => grant,
             Err(SecretServicePollError::Port(SecretServicePortError::CompletionUnknown)) => {
@@ -204,7 +205,7 @@ impl SecretServiceCredentialProvider {
             .cloned()
             .ok_or_else(invariant)?;
         self.validate_delivery(CredentialMethod::RefreshToken, request, &delivery)?;
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_unlocked_async(user_ref, deadline).await?;
         if self.has_ambiguous_credential(session_key, &key).await? {
@@ -398,7 +399,7 @@ impl SecretServiceCredentialProvider {
         session_key: SessionKey,
         user_ref: &ResourceRef,
     ) -> Result<CredentialResponse, CredentialServiceError> {
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_unlocked_async(user_ref, deadline).await?;
         if self.has_ambiguous_credential(session_key, &key).await? {
@@ -490,7 +491,7 @@ impl SecretServiceCredentialProvider {
         session_key: SessionKey,
         user_ref: &ResourceRef,
     ) -> Result<CredentialResponse, CredentialServiceError> {
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_unlocked_async(user_ref, deadline).await?;
         if self.has_ambiguous_credential(session_key, &key).await? {
@@ -656,7 +657,7 @@ impl SecretServiceCredentialProvider {
             self.discard_session_key(session_key)?;
             return Ok(());
         }
-        let deadline = Self::operation_deadline(1_000)?;
+        let deadline = operation_deadline(1_000)?;
         self.close_session_locked(session_key, deadline)
     }
 
@@ -670,7 +671,7 @@ impl SecretServiceCredentialProvider {
         self.session_capability(authorization)?;
         self.finalized
             .store(true, std::sync::atomic::Ordering::Release);
-        self.close_all_sessions_locked(Self::operation_deadline(1_000)?)?;
+        self.close_all_sessions_locked(operation_deadline(1_000)?)?;
         self.authority.clear().map_err(|_| invariant())?;
         Ok(())
     }
@@ -680,7 +681,7 @@ impl SecretServiceCredentialProvider {
         let _mutation = self.blocking_mutation_guard();
         self.finalized
             .store(true, std::sync::atomic::Ordering::Release);
-        let deadline = Self::operation_deadline(1_000)?;
+        let deadline = operation_deadline(1_000)?;
         self.close_all_sessions_locked(deadline)?;
         self.authority.clear().map_err(|_| invariant())?;
         Ok(())

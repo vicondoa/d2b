@@ -26,6 +26,7 @@ use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_toolkit::{
     AuthenticatedSessionRouteBinding, GuestCredentialBackend, GuestCredentialBackendResponse,
     ProviderFd10Spec, ProviderRuntimeError, ProviderSessionMetadata, RouteCredentialAuthorization,
+    credential::{is_absolute_unix_ms, now_unix_ms, ABSOLUTE_UNIX_MS_THRESHOLD},
     run_from_fd10 as run_provider_from_fd10,
 };
 
@@ -46,7 +47,6 @@ pub const CREDENTIAL_SESSION_PURPOSE: &str = "credential";
 pub const MAX_LOCAL_LEASES: u32 = 256;
 /// Maximum refresh failures retained for one Credential before retry stops.
 pub const MAX_REFRESH_ATTEMPTS: u16 = 3;
-const ABSOLUTE_UNIX_MILLIS_THRESHOLD: u64 = 1_000_000_000_000;
 
 /// Reject ambient SDK credential-chain environment names.
 pub fn reject_ambient_credential_chain(
@@ -59,9 +59,8 @@ pub fn reject_ambient_credential_chain(
 /// Reject ambient SDK credential-chain variables in this process.
 pub fn reject_process_environment_credential_chain(
 ) -> Result<(), EntraProviderError> {
-    reject_ambient_credential_chain(
-        std::env::vars_os().filter_map(|(key, _value)| key.into_string().ok()),
-    )
+    d2b_provider_toolkit::credential::reject_process_environment_credential_chain()
+        .map_err(|_| EntraProviderError::InvalidConfig)
 }
 
 /// Enter the supervised Provider runtime through the inherited fd 10 handoff.
@@ -1166,19 +1165,8 @@ if primary.is_some() {
         Self::time_bound_instant(deadline_ms)
     }
 
-    pub(crate) fn now_unix_ms() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-            .unwrap_or(0)
-    }
-
-    pub(crate) const fn is_absolute_unix_ms(value_ms: u64) -> bool {
-        value_ms >= ABSOLUTE_UNIX_MILLIS_THRESHOLD
-    }
-
     pub(crate) fn is_expired_unix_ms(value_ms: u64) -> bool {
-        Self::is_absolute_unix_ms(value_ms) && value_ms <= Self::now_unix_ms()
+        is_absolute_unix_ms(value_ms) && value_ms <= now_unix_ms()
     }
 
     pub(crate) fn time_bound_instant(value_ms: u64) -> Result<Instant, CredentialServiceError> {
@@ -1217,7 +1205,7 @@ if primary.is_some() {
         now: Instant,
         now_unix_ms: u64,
     ) -> Result<Instant, CredentialServiceError> {
-        if value_ms >= ABSOLUTE_UNIX_MILLIS_THRESHOLD {
+        if value_ms >= ABSOLUTE_UNIX_MS_THRESHOLD {
             let remaining_ms = value_ms.checked_sub(now_unix_ms).ok_or_else(|| {
                 CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
             })?;

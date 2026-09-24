@@ -6,6 +6,7 @@ use d2b_contracts_provider::v3::credential::{
     CredentialServiceError, CredentialServiceErrorCode, CredentialSessionBinding, DeliveryResponse,
     MetadataResponse,
 };
+use d2b_provider_toolkit::credential::{now_unix_ms, operation_deadline};
 
 use crate::{
     LeaseRecord, ManagedIdentityCredentialProvider, ManagedIdentityLeaseRef,
@@ -63,9 +64,9 @@ impl ManagedIdentityCredentialProvider {
             session.expires_at_unix_ms(),
             delivery.expiry_unix_ms(),
         )?;
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
-        let now = Self::now_unix_ms();
+        let now = now_unix_ms();
         let rotation_generation = {
             let mut leases = self.leases.lock().await;
             Self::mark_expired_locked(&mut leases, now);
@@ -230,11 +231,11 @@ impl ManagedIdentityCredentialProvider {
             session.expires_at_unix_ms(),
             delivery.expiry_unix_ms(),
         )?;
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         let record = {
             let mut leases = self.leases.lock().await;
-            Self::mark_expired_locked(&mut leases, Self::now_unix_ms());
+            Self::mark_expired_locked(&mut leases, now_unix_ms());
             let records = leases.get(&key).ok_or_else(expired)?;
             let record = records
                 .iter()
@@ -270,7 +271,7 @@ impl ManagedIdentityCredentialProvider {
             );
             return Err(error_for_state(inspection.state));
         }
-        if Self::is_expired(inspection.expires_at_unix_ms, Self::now_unix_ms()) {
+        if Self::is_expired(inspection.expires_at_unix_ms, now_unix_ms()) {
             self.update_state(
                 &key,
                 &record,
@@ -332,11 +333,11 @@ impl ManagedIdentityCredentialProvider {
             request,
             authorization,
         )?;
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         let record = {
             let mut leases = self.leases.lock().await;
-            Self::mark_expired_locked(&mut leases, Self::now_unix_ms());
+            Self::mark_expired_locked(&mut leases, now_unix_ms());
             let records = leases.get(&key).ok_or_else(expired)?;
             records
                 .iter()
@@ -385,11 +386,11 @@ impl ManagedIdentityCredentialProvider {
             request,
             authorization,
         )?;
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         let record = {
             let mut leases = self.leases.lock().await;
-            Self::mark_expired_locked(&mut leases, Self::now_unix_ms());
+            Self::mark_expired_locked(&mut leases, now_unix_ms());
             let records = leases.get(&key).ok_or_else(expired)?;
             let record = records
                 .iter()
@@ -427,7 +428,7 @@ impl ManagedIdentityCredentialProvider {
         }
         metadata.rotation_generation = inspection.rotation_generation;
         metadata.expires_at_unix_ms = inspection.expires_at_unix_ms;
-        if Self::is_expired(metadata.expires_at_unix_ms, Self::now_unix_ms())
+        if Self::is_expired(metadata.expires_at_unix_ms, now_unix_ms())
             && metadata.state == CredentialLeaseState::Active
         {
             metadata.state = CredentialLeaseState::Expired;
