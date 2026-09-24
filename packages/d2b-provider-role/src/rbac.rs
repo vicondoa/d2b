@@ -5,7 +5,10 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
-use d2b_contracts_resource::v3::{ConfigurationGeneration, ResourceRef, ResourceUid, ZoneRevision};
+use d2b_contracts_resource::v3::{
+    ConfigurationGeneration, ResourceRef, ResourceUid, ZoneRevision,
+    execution_policy::redacted_debug,
+};
 
 /// Policy revisions that make one positive decision valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -38,17 +41,9 @@ impl AuthorizationCacheKey {
     }
 }
 
-impl core::fmt::Debug for AuthorizationCacheKey {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("AuthorizationCacheKey")
-            .field("subject_kind", self.subject_ref.resource_type())
-            .field("has_subject_uid", &true)
-            .field("has_attributes_digest", &true)
-            .finish()
-    }
-}
+redacted_debug!(AuthorizationCacheKey);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct PositiveEntry {
     revisions: PolicyRevisionSet,
     expires_at_tick: u64,
@@ -131,17 +126,12 @@ impl PositiveDecisionCache {
         );
     }
 
-    pub fn invalidate_revisions(&self, current: PolicyRevisionSet) {
-        self.lock_entries()
-            .retain(|_, entry| entry.revisions == current);
-    }
-
     pub fn clear(&self) {
         self.lock_entries().clear();
     }
 
     // The cache is a synchronous in-memory boundary behind a sync public
-    // surface (`contains`/`insert_allow`/`invalidate_revisions`/`clear`):
+    // surface (`contains`/`insert_allow`/`clear`):
     // consumers consult it on their own threads, so a short blocking
     // acquire has no async form to convert to.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
@@ -203,9 +193,8 @@ mod tests {
         ] {
             assert!(!key_debug.contains(marker), "{key_debug}");
         }
-        assert!(key_debug.contains("subject_kind"));
-        assert!(key_debug.contains("has_subject_uid: true"));
-        assert!(key_debug.contains("has_attributes_digest: true"));
+        assert!(key_debug.contains("AuthorizationCacheKey(<redacted>)"));
+        assert!(!key_debug.contains("subject_kind"));
 
         let cache = PositiveDecisionCache::new(2);
         cache.insert_allow(key, revisions(11), 23, 1);
@@ -222,8 +211,5 @@ mod tests {
         cache.insert_allow(key(1), revisions(2), 10, 1);
         assert!(cache.contains(&key(1), revisions(2), 9));
         assert!(!cache.contains(&key(1), revisions(3), 9));
-        cache.invalidate_revisions(revisions(3));
-        assert!(!cache.contains(&key(1), revisions(2), 9));
-        assert!(!cache.contains(&key(1), revisions(2), 10));
     }
 }
