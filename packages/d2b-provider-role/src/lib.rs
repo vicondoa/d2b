@@ -16,5 +16,3 @@ mod driver;
 pub mod rbac;
 
 pub use driver::role_descriptor;
-
-pub use rbac::*;

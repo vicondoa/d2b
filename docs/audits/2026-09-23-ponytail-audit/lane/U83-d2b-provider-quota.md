@@ -15,7 +15,7 @@ found **no new findings** beyond the typed-spec surface below.
   `Deserialize` impls (quota.rs:165,260,337). The admission gate converges
   the stored spec **opaque**: `d2bd/src/foundation_seed.rs:1135` admits
   quota rows by name only, and the plane's metadata driver decodes the spec
-  object as opaque `serde_json::Value` — nothing anywhere constructs,
+  object as opaque `serde_json::Value` - nothing anywhere constructs,
   decodes, or validates a typed `QuotaSpec`, `QuotaCeilings`, or
   `QuotaTypeCeiling` in production, and the `MAX_QUOTA_*` per-type bounds
   exist only to bound that dead typed spec. Workspace-wide search (all
@@ -27,7 +27,7 @@ found **no new findings** beyond the typed-spec surface below.
   that decode only that dead spec, and the spec-only `MAX_*` consts; keep
   the served typed status (`QuotaStatusResource`/`QuotaStatus`, pinned by
   the resource-api converted-status round-trip admission at
-  `d2b-resource-api/src/manager_backend/tests.rs:1046,1106` — same family
+  `d2b-resource-api/src/manager_backend/tests.rs:1046,1106` - same family
   wire-pin class the other metadata crates keep). [packages/d2b-provider-quota/src/quota.rs] (leaf) (guard)
 
 net: -360 lines (typed spec surface in quota.rs, measured 11-380),
@@ -39,13 +39,13 @@ net: -360 lines (typed spec surface in quota.rs, measured 11-380),
   metadata family keep typed specs where a live typed construction exists
   (e.g. operation spec is constructed at `d2bd/src/foundation_seed.rs:409`),
   but quota's typed spec is never constructed, decoded, or validated in
-  production — admission is name-only opaque. The crate-level divergence is
+  production - admission is name-only opaque. The crate-level divergence is
   the served **status** layer staying typed (wire-pinned family class), which
   keeps parity with role-binding/operation/volume-local.
 
 ## Reopened refusals
 
-- none — no ledger row for this crate is refused-and-still-present without
+- none - no ledger row for this crate is refused-and-still-present without
   new evidence; #P1/#P2 stay applied (shared driver + shared registration).
 
 ## Checked
@@ -53,10 +53,19 @@ net: -360 lines (typed spec surface in quota.rs, measured 11-380),
 Read `src/lib.rs`, `src/driver.rs`, `src/quota.rs` (481 lines), the shared
 metadata driver, and `tests/registration.rs`. Ran workspace-wide reader
 searches (`grep -rn` over all `packages/**/*.rs` + `BUILD.bazel` dep lists +
-`docs/reference/policy/` + `nixos-modules/`) for every typed spec item —
+`docs/reference/policy/` + `nixos-modules/`) for every typed spec item -
 `QuotaSpec`, `QuotaCeilings`, `QuotaTypeCeiling`, `QuotaEnforcementPolicy`,
 `QuotaScope`, `QuotaContractError`, `QuotaConditionType`, and the
 `MAX_QUOTA_*` consts. Only the crate's own tests and the resource-api
 converted-status wire admission (which reads the **status** layer) consume
 the crate's surface; the typed spec vocabulary has zero production readers.
 LOC claims measured, not estimated.
+## U1 execution (2026-09-24)
+
+Finding applied. R4 re-verified at HEAD: zero production readers of the typed spec surface (workspace grep; remaining `QuotaSpec` hits are the unrelated Volume-family `QuotaSpec` in d2b-contracts-resource/volume-local/network-local); resource-api pins `QuotaStatusResource` via serde round-trip only (manager_backend/tests.rs:1046,1106 - no constructor call).
+
+- Deleted from src/quota.rs: `QUOTA_RESOURCE_TYPE`, `MAX_QUOTA_PER_TYPE_ENTRIES`, `MAX_QUOTA_RESOURCES`, `MAX_QUOTA_OWNER_DEPTH`, `QUOTA_DRAIN_FINALIZER` consts; `QuotaEnforcementPolicy`, `QuotaScope`, `QuotaContractError` (+Display/Error), `QuotaCeilings` (+impl/Default/Deserialize + default_* fns), `QuotaTypeCeiling` (+impl/Deserialize), `QuotaSpec` (+impl/redacted_debug/Deserialize + default_scope/default_enforcement), `QuotaConditionType` - 373 lines; plus the crate's own spec tests mod (both tests exercised only the deleted surface).
+- `QuotaStatusResource::new` (the sole remaining `QuotaContractError` consumer - zero callers anywhere, resource-api decodes via serde) deleted with it; status struct + serde + accessors (`used_resources`/`dependent_count`/`over_quota`) + `QuotaStatus` alias stay.
+- Imports trimmed: `BTreeMap`, `Deserializer`, `redacted_debug` dropped; `ResourceTypeName` kept (status field type).
+
+`cargo test -p d2b-provider-quota`: PASS (0 unit + registration/doc-tests; 0 failures).
