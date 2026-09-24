@@ -4175,12 +4175,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: d2b-host is a shared crate that may not depend on a provider crate; the host device matrix is a committed view of the provider-declared classes",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-host/src/dnsmasq.rs",
-        token: "dnsmasq",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-host/src/host_prep_dag.rs",
         token: "dnsmasq",
         family: "network-local",
@@ -4194,24 +4188,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-host/src/lib.rs",
-        token: "dnsmasq",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-host/src/lib.rs",
-        token: "nftables",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-host/src/routes.rs",
-        token: "dnsmasq",
-        family: "network-local",
-        retires_with: "U12 network-fds step",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-host/src/routes.rs",
         token: "nftables",
         family: "network-local",
         retires_with: "U12 network-fds step",
