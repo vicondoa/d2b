@@ -40,3 +40,10 @@ telemetry-binding, volume, endpoint, zone publish independent verb consts (not b
 policy-required scaffolds skipped (README.md, BUILD.bazel, resource-types.json, integration/README.md
 are the xtask/provider_crate_policy.rs ratchet surface - kept). src/generated/ absent (out of scope).
 Ledger items honored: #PR10 partial stays; no zero-caller claims made without workspace-wide search.
+## U1 execution (2026-09-24)
+
+Finding applied. R4 re-verified at HEAD: `TELEMETRY_SERVICE_VERBS` referenced only in driver.rs (def + `verbs:` use) and tests; byte-identical to `CONVERTED_TYPE_VERBS` (d2b-resource-types/src/descriptor.rs:19-28); crate already imports `d2b_resource_types`.
+
+- Deleted the 14-line local doc + `TELEMETRY_SERVICE_VERBS` const (driver.rs:391-415); `verbs: CONVERTED_TYPE_VERBS` in the descriptor; `CONVERTED_TYPE_VERBS` added to the existing `use d2b_resource_types::{...}` import line.
+
+`cargo test -p d2b-provider-telemetry-service`: PASS (9 unit + 4 registration; doc-tests; 0 failures).

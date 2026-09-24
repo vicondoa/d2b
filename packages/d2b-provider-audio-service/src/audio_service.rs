@@ -18,7 +18,7 @@ use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
 use d2b_provider_wayland_policy::{
     AUDIO_SERVICE_TYPE,
     interaction::{
-        InteractionChildContext, InteractionDriver, InteractionDriverArgs,
+        InteractionChildContext, InteractionDriverArgs,
         InteractionDriverFactory, InteractionEffectError, InteractionKind,
         InteractionSpecEnvelope, InteractionType, spec_decoder,
     },
@@ -71,9 +71,6 @@ impl InteractionType for AudioService {
         Ok(Vec::new())
     }
 }
-
-/// The driver for one `AudioService` row.
-pub type AudioServiceDriver = InteractionDriver<AudioService>;
 
 /// The factory the registry serves for `AudioService`.
 pub type AudioServiceFactory = InteractionDriverFactory<AudioService>;

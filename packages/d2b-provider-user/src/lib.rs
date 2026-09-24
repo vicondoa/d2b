@@ -39,11 +39,6 @@ mod probe;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use driver::{
-    UserDriver, UserDriverEffects, UserDriverError, UserDriverFactory, UserDriverStatus,
-    user_descriptor, user_spec_decoder,
-};
-pub use effects_service::{
-    USER_EFFECTS_SERVICE, UserEffectsService, UserEffectsServiceFactory,
-};
+pub use driver::user_descriptor;
+pub use effects_service::{USER_EFFECTS_SERVICE, UserEffectsServiceFactory};
 pub use facets::UserEffectFacets;
