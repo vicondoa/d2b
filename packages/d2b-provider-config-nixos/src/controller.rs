@@ -123,6 +123,13 @@ impl GuestConfigDocument {
     }
 
     /// Return the document size.
+    ///
+    /// `is_empty` is deliberately absent: `new` rejects empty documents, so
+    /// a `GuestConfigDocument` is never empty by construction.
+    #[allow(
+        clippy::len_without_is_empty,
+        reason = "the constructor rejects empty bytes, so is_empty is always false"
+    )]
     pub const fn len(&self) -> usize {
         self.bytes.len()
     }

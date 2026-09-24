@@ -82,7 +82,6 @@ exports_files([
     "tests/golden/runner-shape/swtpm-argv-minimal.txt",
     "tests/golden/runner-shape/video-argv-minimal.txt",
     "tests/golden/runner-shape/virtiofsd-argv-minimal.txt",
-    "tests/golden/runner-shape/vsock-relay-argv-minimal.txt",
     "tests/golden/vms.json-signoz-v7",
     "tests/AGENTS.md",
     "tests/tools/scrub-shell-environment",
