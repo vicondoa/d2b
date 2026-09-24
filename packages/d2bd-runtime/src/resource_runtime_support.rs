@@ -11,10 +11,6 @@ use std::{
 };
 
 use crate::resource_api::{ParsedListRequest, ResourceRuntimeError};
-use crate::target_runtime::{
-    AdmissionError, AdmissionLimits, AssignmentLease, ControllerAssignmentKey, DaemonMode,
-    DeploymentError, ProviderDeployment,
-};
 use d2b_bus::{BusIngress, ZoneRegistrar};
 use d2b_contracts::identity::SYSTEM_ZONE_NAME;
 use d2b_contracts_resource::resource_proto as wire;
@@ -53,55 +49,11 @@ use d2b_core_controller::authority::HostGlobalAuthorityIndex;
 /// admission for one Zone runtime.
 pub type AssignmentRegistry = Arc<Mutex<ControllerAssignmentRegistry>>;
 
-/// Fixed Provider identities required by the generated Process resources.
-///
-/// These rows are runtime-owned bootstrap materialization, not Nix-authored
-/// declarations. Their durable UIDs and generations come from the Resource
-/// API store while the materialization operation remains bound to the
-/// verified bundle and active configuration generation.
-pub const FIXED_BOOTSTRAP_PROVIDER_IDS: [&str; 3] =
-    ["system-core", "system-minijail", "system-systemd"];
-
 /// Construct one empty Zone assignment registry.
 pub fn new_assignment_registry() -> AssignmentRegistry {
     Arc::new(Mutex::new(ControllerAssignmentRegistry::default()))
 }
 
-/// Shared target-local resource lifecycle owner.
-///
-/// Host and Guest use the same assignment/lease machinery; only the static
-/// composition chooses the mode and its effect adapter.
-#[derive(Debug, Clone)]
-pub struct TargetResourceLifecycle {
-    deployment: ProviderDeployment,
-}
-
-impl TargetResourceLifecycle {
-    pub fn new(mode: DaemonMode, limits: AdmissionLimits) -> Result<Self, AdmissionError> {
-        Ok(Self {
-            deployment: ProviderDeployment::new(mode, limits)?,
-        })
-    }
-
-    pub const fn mode(&self) -> DaemonMode {
-        self.deployment.mode()
-    }
-
-    pub fn admit_controller(
-        &self,
-        assignment: ControllerAssignmentKey,
-    ) -> Result<AssignmentLease, DeploymentError> {
-        self.deployment.admit_assignment(assignment)
-    }
-
-    pub fn revoke_session(&self, generation: u64) -> Result<usize, DeploymentError> {
-        self.deployment.revoke_session(generation)
-    }
-
-    pub fn active_assignments(&self) -> Result<usize, DeploymentError> {
-        self.deployment.active_assignments()
-    }
-}
 use d2b_resource_api::{
     ResourceApiClient, ResourceBusAdapter, ResourceService,
     authz::{

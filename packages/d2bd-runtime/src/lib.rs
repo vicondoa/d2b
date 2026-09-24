@@ -25,7 +25,6 @@ pub mod exec_support;
 pub mod guest_component_session;
 pub mod guest_mode;
 pub mod guest_resource_runtime;
-pub mod host_mode;
 pub mod json_io;
 pub mod kernel_module_check;
 pub mod metrics;

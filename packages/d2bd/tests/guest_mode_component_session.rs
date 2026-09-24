@@ -13,7 +13,7 @@ use d2b_session_unix::FramedVsockTransport;
 use d2bd_runtime::{
     guest_mode::{
         BootIdentity, GUEST_COMPONENT_SESSION_PORT, GUEST_COMPONENT_SESSION_PURPOSE, GuestIdentity,
-        GuestRuntime, reject_legacy_guest_prelude,
+        GuestRuntime,
     },
     guest_resource_runtime::{GuestResourceRuntime, GuestResourceRuntimeError},
     target_runtime::{AdmissionBudget, AdmissionKind, AdmissionLimits, ControllerAssignmentKey},
@@ -150,12 +150,6 @@ fn reconnect_and_stream_admission_refuse_floods_before_state_allocation() {
             .try_admit_reconnect(std::time::Instant::now())
             .is_err()
     );
-}
-
-#[test]
-fn old_component_session_prelude_is_rejected() {
-    assert!(reject_legacy_guest_prelude(b"CONNECT 14318\n").is_err());
-    assert!(reject_legacy_guest_prelude(b"D2BGC-old").is_err());
 }
 
 #[tokio::test]

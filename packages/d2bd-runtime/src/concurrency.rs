@@ -93,16 +93,6 @@ impl ConnSemaphore {
             }
         }
     }
-
-    /// Current number of in-flight permits. Test/observability helper.
-    pub fn in_flight(&self) -> usize {
-        self.in_flight.load(Ordering::Acquire)
-    }
-
-    /// Configured maximum.
-    pub fn cap(&self) -> usize {
-        self.cap
-    }
 }
 
 impl Drop for ConnPermit {
@@ -227,22 +217,18 @@ mod tests {
         let sem = ConnSemaphore::new(2);
         let p1 = sem.try_acquire().expect("first permit");
         let p2 = sem.try_acquire().expect("second permit");
-        assert_eq!(sem.in_flight(), 2);
         assert!(
             sem.try_acquire().is_none(),
             "cap-hit must refuse, not block"
         );
         drop(p1);
-        assert_eq!(sem.in_flight(), 1, "permit drop releases the slot");
         let _p3 = sem.try_acquire().expect("slot freed after drop");
-        assert_eq!(sem.in_flight(), 2);
         drop(p2);
     }
 
     #[test]
     fn semaphore_cap_zero_clamps_to_one() {
         let sem = ConnSemaphore::new(0);
-        assert_eq!(sem.cap(), 1);
         let _p = sem.try_acquire().expect("at least one slot");
         assert!(sem.try_acquire().is_none());
     }

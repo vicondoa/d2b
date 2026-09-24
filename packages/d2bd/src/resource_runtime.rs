@@ -44,8 +44,7 @@ use d2b_contracts_resource::v3::{
 };
 use d2b_contracts_zone_session::v3::{ZoneStatusResource, resource_bundle::ResourceBundle};
 use d2b_core_controller::authority::{
-    AuthorityOperationState, AuthorityRequest, AuthorityReservation, ExternalNicClaimRequest,
-    ExternalNicReservation, HostGlobalAuthorityIndex,
+    AuthorityOperationState, HostGlobalAuthorityIndex,
 };
 use d2b_core_controller::authority_persistence::{
     AuthorityFuture, AuthorityPersistence, AuthorityPersistenceError, AuthorityRecoveryCoordinator,
@@ -115,10 +114,6 @@ use d2bd_runtime::authority_persistence::{
 };
 pub use d2bd_runtime::resource_api::ResourceRuntimeError;
 use d2bd_runtime::resource_api::{parse_list_request, route_service_matches};
-use d2bd_runtime::resource_operator_activation::{
-    Wave6AcceptanceReport, Wave6Dependencies, Wave6ProviderBoundary, Wave6ReconcileResult,
-    select_wave6_resources,
-};
 use d2bd_runtime::resource_runtime_support::{
     AssignmentRegistry, PolicySubjectFingerprint, SystemCoreReconcileResult, ZoneApiBackend,
     configuration_cleanup_pending, current_status_timestamp, encode_public_get_response,
@@ -3655,11 +3650,6 @@ impl ZoneResourceRuntime {
         self.readiness
     }
 
-    /// Borrow the Zone-scoped Core assignment registry.
-    pub fn assignment_registry(&self) -> AssignmentRegistry {
-        Arc::clone(&self.assignments)
-    }
-
     /// Admit one controller assignment through the Zone-owned registry.
     ///
     /// Controller deployment supplies only the committed resource, signed
@@ -3741,69 +3731,6 @@ impl ZoneResourceRuntime {
         if let Some((driver, frames)) = revocation_batch {
             self.schedule_assignment_revocations(driver, frames);
         }
-    }
-
-    /// Mark one assignment as draining before a target or generation handoff.
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    pub fn drain_controller_assignment(
-        &self,
-        identity: &AssignmentIdentity,
-    ) -> Result<(), AssignmentError> {
-        let result = self
-            .assignments
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .begin_drain(identity);
-        if result.is_ok() {
-            self.schedule_controller_assignment_revocation(identity);
-        }
-        result
-    }
-
-    /// Release a drained assignment after Core has verified its child index.
-    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    pub fn release_controller_assignment(
-        &self,
-        identity: &AssignmentIdentity,
-    ) -> Result<(), AssignmentError> {
-        let revocation = self.controller_assignment_revocation(identity);
-        let result = self
-            .assignments
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .release(identity);
-        if result.is_ok()
-            && let Some((driver, bytes)) = revocation
-        {
-            self.schedule_assignment_revocations(driver, vec![bytes]);
-        }
-        result
-    }
-
-    fn controller_assignment_revocation(
-        &self,
-        identity: &AssignmentIdentity,
-    ) -> Option<(SessionDriverHandle, Vec<u8>)> {
-        // Synchronous surface: non-blocking `try_lock` per plan U4; a
-        // collision reports no revocation (fail-closed).
-        let sessions = self.controller_sessions.try_lock().ok()?;
-        sessions.values().find_map(|session| {
-            let lease = session
-                .assignments
-                .values()
-                .find(|lease| lease.identity() == identity)?;
-            let bytes =
-                ControllerAssignmentGrant::encode_revocation(lease.provider_ref(), identity)
-                    .ok()?;
-            Some((session.driver.clone(), bytes))
-        })
-    }
-
-    fn schedule_controller_assignment_revocation(&self, identity: &AssignmentIdentity) {
-        let Some((driver, bytes)) = self.controller_assignment_revocation(identity) else {
-            return;
-        };
-        self.schedule_assignment_revocations(driver, vec![bytes]);
     }
 
     fn schedule_assignment_revocations(&self, driver: SessionDriverHandle, frames: Vec<Vec<u8>>) {
@@ -4587,136 +4514,6 @@ impl ZoneResourceRuntime {
             lease: Arc::new(|_credential_ref: &ResourceRef| Box::pin(async { None })),
             agent: agent_ready,
             sessions: self.credential_sessions.clone(),
-        })
-    }
-
-    /// Drive the complete Wave 6 acceptance sequence through the
-    /// authenticated public Resource API and the production Provider
-    /// boundary.
-    ///
-    /// This is intentionally an explicit orchestration entry point rather
-    /// than a second controller implementation. The Resource API selects the
-    /// durable objects, while the supplied boundary invokes the shipped
-    /// Volume, Network, Device TPM, and Cloud Hypervisor controllers.
-    pub async fn reconcile_wave6_operator_acceptance<B>(
-        &self,
-        client: &ResourceApiClient<ZoneApiBackend, UnavailableUpgradeDispatcher>,
-        boundary: &B,
-    ) -> Result<Wave6AcceptanceReport, ResourceRuntimeError>
-    where
-        B: Wave6ProviderBoundary,
-    {
-        if !self.readiness.is_ready() {
-            return Err(ResourceRuntimeError::PlaneUnavailable);
-        }
-        let resources = select_wave6_resources(client)
-            .await
-            .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?;
-
-        let require_ready = |result: Wave6ReconcileResult| {
-            if matches!(result, Wave6ReconcileResult::Ready) {
-                Ok(())
-            } else {
-                Err(ResourceRuntimeError::Wave6AcceptanceFailed)
-            }
-        };
-
-        require_ready(
-            boundary
-                .reconcile_volume(&resources.volume)
-                .await
-                .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?,
-        )?;
-        require_ready(
-            boundary
-                .reconcile_device_tpm(&resources.device_tpm)
-                .await
-                .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?,
-        )?;
-
-        if !matches!(
-            boundary
-                .reconcile_network(
-                    &resources.network,
-                    Wave6Dependencies::network_waiting_for_volume(),
-                )
-                .await
-                .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?,
-            Wave6ReconcileResult::Waiting
-        ) {
-            return Err(ResourceRuntimeError::Wave6AcceptanceFailed);
-        }
-        if !matches!(
-            boundary
-                .reconcile_cloud_hypervisor_guest(
-                    &resources.cloud_hypervisor_guest,
-                    Wave6Dependencies::guest_waiting_for_network(),
-                )
-                .await
-                .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?,
-            Wave6ReconcileResult::Waiting
-        ) {
-            return Err(ResourceRuntimeError::Wave6AcceptanceFailed);
-        }
-
-        require_ready(
-            boundary
-                .reconcile_network(
-                    &resources.network,
-                    Wave6Dependencies::network_ready_for_guest(),
-                )
-                .await
-                .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?,
-        )?;
-        require_ready(
-            boundary
-                .reconcile_cloud_hypervisor_guest(
-                    &resources.cloud_hypervisor_guest,
-                    Wave6Dependencies::guest_ready_for_adoption(),
-                )
-                .await
-                .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?,
-        )?;
-        require_ready(
-            boundary
-                .reconcile_network(
-                    &resources.network,
-                    Wave6Dependencies::guest_ready_for_adoption(),
-                )
-                .await
-                .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?,
-        )?;
-
-        boundary
-            .adopt_after_restart(&resources)
-            .await
-            .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?;
-        boundary
-            .remove_cloud_hypervisor_guest(&resources.cloud_hypervisor_guest)
-            .await
-            .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?;
-        boundary
-            .remove_network(&resources.network)
-            .await
-            .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?;
-        let device_state_retained = boundary
-            .remove_device_tpm(&resources.device_tpm)
-            .await
-            .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?;
-        if !device_state_retained {
-            return Err(ResourceRuntimeError::Wave6AcceptanceFailed);
-        }
-        boundary
-            .remove_volume(&resources.volume)
-            .await
-            .map_err(|_| ResourceRuntimeError::Wave6AcceptanceFailed)?;
-
-        Ok(Wave6AcceptanceReport {
-            resources,
-            ready: true,
-            adopted_after_restart: true,
-            removed: true,
-            device_state_retained,
         })
     }
 
@@ -8300,101 +8097,6 @@ impl ZoneResourceRuntime {
             Arc::clone(&providers),
         )?;
         Ok(())
-    }
-
-    /// Reserve a Host-global claim in the Zone's authority ledger. The ledger
-    /// is process-local since U14: the reservation is fenced for this
-    /// daemon's lifetime, and a restart re-derives owners through the
-    /// drivers' probe/adopt path rather than replaying a durable checkpoint.
-    pub async fn reserve_authority(
-        &self,
-        operation_id: impl Into<String>,
-        request: AuthorityRequest,
-    ) -> Result<
-        AuthorityReservation,
-        d2b_core_controller::authority::AuthorityReservationError<
-            d2b_core_controller::authority::AuthorityError,
-        >,
-    > {
-        if !self.authority_index.lock().await.is_ready_for_readiness() {
-            return Err(
-                d2b_core_controller::authority::AuthorityReservationError::Effect(
-                    d2b_core_controller::authority::AuthorityError::StartupRehydrationRequired,
-                ),
-            );
-        }
-        AuthorityReservation::reserve_durable(
-            Arc::clone(&self.authority_index),
-            Arc::clone(&self.authority_ledger) as Arc<dyn AuthorityPersistence>,
-            operation_id,
-            request,
-        )
-        .await
-    }
-
-    /// Reserve an external physical-NIC claim through the same durable
-    /// startup-barrier owner as generic Host-global claims.
-    ///
-    /// The ledger re-proves every claim against the manager rows and the
-    /// trusted live external-NIC inventory; the store-era bundle inventory
-    /// that used to answer the latter is gone (U14), so until a live
-    /// inventory is installed an `ExternalNic` claim is refused rather than
-    /// assumed.
-    pub async fn reserve_external_nic(
-        &self,
-        operation_id: impl Into<String>,
-        request: ExternalNicClaimRequest,
-    ) -> Result<
-        ExternalNicReservation,
-        d2b_core_controller::authority::AuthorityReservationError<
-            d2b_core_controller::authority::AuthorityError,
-        >,
-    > {
-        if !self.authority_index.lock().await.is_ready_for_readiness() {
-            return Err(
-                d2b_core_controller::authority::AuthorityReservationError::Effect(
-                    d2b_core_controller::authority::AuthorityError::StartupRehydrationRequired,
-                ),
-            );
-        }
-        ExternalNicReservation::reserve_durable(
-            Arc::clone(&self.authority_index),
-            Arc::clone(&self.authority_ledger) as Arc<dyn AuthorityPersistence>,
-            operation_id,
-            request,
-        )
-        .await
-    }
-
-    /// Resolve one recovered authority after the authoritative effect is
-    /// observed closed. Persistence must complete before the holder is
-    /// removed from the in-memory index.
-    pub async fn resolve_recovered_authority_closed(
-        &self,
-        operation_id: &str,
-    ) -> Result<(), d2b_core_controller::authority_persistence::AuthorityPersistenceError> {
-        self.authority_recovery
-            .resolve_observed_closed(operation_id)
-            .await
-    }
-
-    /// Mark one recovered operation observed and adopted without releasing
-    /// its authority holder.
-    pub async fn resolve_recovered_authority_adopted(
-        &self,
-        operation_id: &str,
-    ) -> Result<(), d2b_core_controller::authority_persistence::AuthorityPersistenceError> {
-        self.authority_recovery
-            .resolve_observed_and_adopted(operation_id)
-            .await
-    }
-
-    /// Quarantine one recovered operation when observation is ambiguous.
-    pub async fn quarantine_recovered_authority(
-        &self,
-        operation_id: &str,
-    ) -> Result<(), d2b_core_controller::authority_persistence::AuthorityPersistenceError> {
-        self.authority_recovery.quarantine(operation_id).await
     }
 
     /// Return the first startup gate that prevents publication.

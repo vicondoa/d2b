@@ -23,22 +23,17 @@ use d2b_contracts_resource::v3::{
     SchemaFingerprint, ZoneId, ZoneRevision, identity::ReconnectGeneration,
 };
 use d2b_contracts_zone_session::v3::zone_routing::{ZoneLabelId, ZonePath};
-use d2b_provider_process::ProviderAdoption;
 use d2b_provider::instance::ProviderInstance;
 use d2b_provider::{
     ProviderCapabilitySet, ProviderClass, ProviderDescriptor, ProviderImplementationId,
     ProviderMethodName, ProviderRegistry, ProviderRegistryBuilder, ProviderRegistryManager,
     RegistryBuildError,
 };
-use sha2::{Digest, Sha256};
-
 use crate::process_provider_runtime::ProductionProcessProviders;
-use d2b_provider_process::ProviderLaunch;
 use crate::provider_effects::{
     EffectDispatch, GuestLifecycleOperation, GuestLifecycleRequest, LifecycleAuthorization,
     ProviderEffectError, ProviderLifecycleDispatch, ProviderLifecycleEffectPort,
 };
-use d2b_process_conformance::ConfigurationDigest;
 use d2bd_runtime::target_runtime::{
     ControllerProcessResource, DaemonMode, DeploymentError, ProviderDeployment,
 };
@@ -393,153 +388,6 @@ pub fn deploy_target_local_controllers(
     Ok(resources)
 }
 
-/// Launch one previously created target-local controller Process through the
-/// fixed, mode-bound Process Provider adapter.
-pub(crate) async fn launch_target_local_controller(
-    providers: &ProductionProcessProviders,
-    resource: &ControllerProcessResource,
-    target_readiness_digest: ConfigurationDigest,
-    timeout: std::time::Duration,
-) -> Result<ProviderLaunch, ProviderCompositionError> {
-    providers
-        .launch_controller(resource, target_readiness_digest, timeout)
-        .await
-        .map_err(|error| {
-            if error.contains("ambiguous")
-                || error.contains("identity")
-                || error.contains("deadline")
-                || error.contains("fate")
-            {
-                ProviderCompositionError::ControllerEffectAmbiguous
-            } else {
-                ProviderCompositionError::ControllerEffectRejected
-            }
-        })
-}
-
-/// Adopt one target-local controller Process through the same fixed adapter
-/// used for its launch.
-pub(crate) async fn adopt_target_local_controller(
-    providers: &ProductionProcessProviders,
-    resource: &ControllerProcessResource,
-    target_readiness_digest: ConfigurationDigest,
-) -> Result<ProviderAdoption, ProviderCompositionError> {
-    providers
-        .adopt_controller(resource, target_readiness_digest)
-        .await
-        .map_err(|error| {
-            if error.contains("ambiguous")
-                || error.contains("identity")
-                || error.contains("deadline")
-                || error.contains("fate")
-            {
-                ProviderCompositionError::ControllerEffectAmbiguous
-            } else {
-                ProviderCompositionError::ControllerEffectRejected
-            }
-        })
-}
-
-/// Launch one deployed controller and commit its running identity back to the
-/// ProviderDeployment state machine.
-pub async fn launch_deployed_controller(
-    deployment: &ProviderDeployment,
-    providers: &ProductionProcessProviders,
-    process_ref: &ResourceRef,
-    target_readiness: SchemaFingerprint,
-    timeout: std::time::Duration,
-) -> Result<ProviderLaunch, ProviderCompositionError> {
-    let context = deployment
-        .begin_controller_launch(process_ref, target_readiness.clone())
-        .map_err(ProviderCompositionError::ControllerDeployment)?;
-    let readiness = configuration_digest(&target_readiness);
-    let result =
-        launch_target_local_controller(providers, context.resource(), readiness, timeout).await;
-    match result {
-        Ok(launch) => {
-            let identity = identity_commitment(launch.identity);
-            match deployment.controller_launch_succeeded(process_ref, identity) {
-                Ok(()) => Ok(launch),
-                Err(error) => {
-                    let _ = deployment.controller_launch_failed(process_ref, true);
-                    Err(ProviderCompositionError::ControllerDeployment(error))
-                }
-            }
-        }
-        Err(error) => {
-            let _ = deployment.controller_launch_failed(
-                process_ref,
-                matches!(error, ProviderCompositionError::ControllerEffectAmbiguous),
-            );
-            Err(error)
-        }
-    }
-}
-
-/// Adopt one deployed controller after restart, quarantining an ambiguous
-/// child rather than handing it to a replacement controller.
-pub async fn adopt_deployed_controller(
-    deployment: &ProviderDeployment,
-    providers: &ProductionProcessProviders,
-    process_ref: &ResourceRef,
-    target_readiness: SchemaFingerprint,
-) -> Result<ProviderAdoption, ProviderCompositionError> {
-    let resource = deployment
-        .controller_process(process_ref)
-        .map_err(ProviderCompositionError::ControllerDeployment)?;
-    let adoption = match adopt_target_local_controller(
-        providers,
-        &resource,
-        configuration_digest(&target_readiness),
-    )
-    .await
-    {
-        Ok(adoption) => adoption,
-        Err(error) => {
-            if matches!(error, ProviderCompositionError::ControllerEffectAmbiguous) {
-                let _ = deployment.quarantine_controller(process_ref);
-            }
-            return Err(error);
-        }
-    };
-    match adoption {
-        ProviderAdoption::Adopted(report) => {
-            match deployment.controller_adopted(process_ref, identity_commitment(report.identity)) {
-                Ok(()) => Ok(ProviderAdoption::Adopted(report)),
-                Err(error) => {
-                    let _ = deployment.quarantine_controller(process_ref);
-                    Err(ProviderCompositionError::ControllerDeployment(error))
-                }
-            }
-        }
-        ProviderAdoption::Quarantined(report) => {
-            deployment
-                .quarantine_controller(process_ref)
-                .map_err(ProviderCompositionError::ControllerDeployment)?;
-            Ok(ProviderAdoption::Quarantined(report))
-        }
-        ProviderAdoption::ControllerBootstrapMissing => {
-            Ok(ProviderAdoption::ControllerBootstrapMissing)
-        }
-        ProviderAdoption::Stale { candidate } => Ok(ProviderAdoption::Stale { candidate }),
-        ProviderAdoption::Absent => Ok(ProviderAdoption::Absent),
-    }
-}
-
-fn configuration_digest(value: &SchemaFingerprint) -> ConfigurationDigest {
-    let mut digest = Sha256::new();
-    digest.update(b"d2bd-controller-readiness-v1\0");
-    digest.update(value.as_str().as_bytes());
-    ConfigurationDigest::from_bytes(digest.finalize().into())
-}
-
-fn identity_commitment(identity: d2b_process_conformance::ProcessIdentityDigest) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"d2bd-controller-process-identity-v1\0");
-    digest.update(identity.to_hex().as_bytes());
-    digest.finalize().into()
-}
-
 /// Result of routing a lifecycle request through the configured Provider
 /// runtime.
 #[derive(Debug, PartialEq, Eq)]
@@ -842,13 +690,6 @@ impl Default for ProviderRuntime {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Keep the ResourceType identity available to callers without accepting a
-/// free-form type alias.
-pub fn provider_resource_type() -> d2b_contracts_resource::v3::identity::ResourceTypeName {
-    d2b_contracts_resource::v3::identity::ResourceTypeName::parse("Provider")
-        .expect("Provider is in the v3 catalog")
 }
 
 #[cfg(test)]

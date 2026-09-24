@@ -20,3 +20,8 @@
 12. metrics request-head parse duplicated within metrics.rs (metrics_handler:759-764 vs metrics_handler_with_ch_stats:790-795) - one `parse_metrics_request_head` helper. ~8 lines saved. search: in-file grep `split_whitespace`.
 
 net: -246 lines, -0 deps.
+
+## U3 outcome (2026-09-24)
+- applied: host_mode.rs whole module (+ lib.rs arm + runtime_boundary.rs include_str pin); TargetResourceLifecycle + FIXED_BOOTSTRAP_PROVIDER_IDS (+ orphaned target_runtime imports); daemon_audit verify_daemon_audit_lines + DaemonAuditChainReport::is_clean + DaemonAuditLog::{sink_health_report, sink_health_report_with_floor} (+ unread state_dir field, unused unavailable() ctor, 7 subject tests, orphaned two_chained_records helper; concurrent_writes/async_seat tests re-pointed at production verify_daemon_audit_files); ExecOpError/ExecEstablishError::metric_kind; reject_legacy_guest_prelude (+ its in-crate test + d2bd/tests/guest_mode_component_session.rs test + import arm); ModeSurfaces::{host,guest} ctors; ConnSemaphore::{in_flight,cap} (+ 2 tests reworked to behavioral asserts).
+- skip (stale claim): autostart AutostartReport::{count_where, started, already_running, failed, degraded} + execute_autostart - production callers exist at HEAD: d2bd/src/composition.rs:5324-5327 (`report.started()/already_running()/failed()/degraded()`); count_where is their substrate.
+- Duplication items 9-12 (civil-date/hex/proc-stat/metrics-head) are dedup refactors, not class-(b) leaf deletes; not part of the lane's net -246; left for the dedup wave.

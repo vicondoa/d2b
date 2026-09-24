@@ -136,16 +136,6 @@ pub struct ModeSurfaces {
     pub parent_component_session: bool,
 }
 
-impl ModeSurfaces {
-    pub const fn host() -> Self {
-        DaemonMode::Host.surfaces()
-    }
-
-    pub const fn guest() -> Self {
-        DaemonMode::Guest.surfaces()
-    }
-}
-
 /// Bounded admission classes used before per-request state is allocated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AdmissionKind {

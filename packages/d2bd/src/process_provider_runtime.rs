@@ -63,7 +63,7 @@ use d2b_provider_toolkit::CredentialDeliveryKeyHandoff;
 use d2b_session::AuthenticatedSessionRouteBinding;
 use d2b_session_unix::{PeerCredentials, SeqpacketSocket, prearmed_seqpacket_pair};
 use d2bd_runtime::supervisor::readiness_liveness::RunnerLiveness;
-use d2bd_runtime::target_runtime::{ControllerProcessResource, DaemonMode};
+use d2bd_runtime::target_runtime::DaemonMode;
 use d2bd_runtime::vm_start_support::{
     is_durable_wayland_process_node, is_guest_owned_process_node,
 };
@@ -1488,159 +1488,6 @@ impl ProductionProcessProviders {
         })
     }
 
-    /// Launch a signed target-local controller Process.
-    ///
-    /// The controller is represented by a normal Process ticket. The fixed
-    /// adapter validates the target mode first, then the selected Process
-    /// Provider delivers the ticket through its mode-bound broker backend.
-    pub(crate) async fn launch_controller(
-        &self,
-        resource: &ControllerProcessResource,
-        target_readiness_digest: ConfigurationDigest,
-        timeout: Duration,
-    ) -> Result<ProviderLaunch, String> {
-        // Spawn attempts are rare; log each with its target for startup tracing.
-        tracing::warn!(
-            process = %resource.process_ref().to_canonical_string(),
-            provider = %resource.process_provider_ref().to_canonical_string(),
-            "controller launch started",
-        );
-        let provider = managed_provider_from_ref(resource.process_provider_ref())?;
-        let zone_uid = self
-            .bundle
-            .zone_uid(resource.zone())
-            .ok_or_else(|| "provider-ticket:zone-identity-missing".to_owned())?;
-        let ticket = controller_launch_ticket(
-            self.bundle.audit_bundle_hash(),
-            resource,
-            zone_uid,
-            provider,
-            target_readiness_digest,
-            timeout,
-        )?;
-        self.fixed_effect
-            .validate_controller_ticket(&ticket)
-            .map_err(|error| error.to_string())?;
-        let report = match provider {
-            ManagedProvider::Minijail => self
-                .minijail
-                .launch(&ticket)
-                .await
-                .map_err(provider_error)?,
-            ManagedProvider::Systemd => {
-                self.systemd.launch(&ticket).await.map_err(provider_error)?
-            }
-        };
-        self.remember_resource(ManagedResource {
-            zone: resource.zone().clone(),
-            zone_uid: None,
-            resource_ref: resource.process_ref().clone(),
-            provider,
-            provider_ref: resource.process_provider_ref().clone(),
-            provider_uid: None,
-            provider_generation: Some(resource.provider_generation()),
-            owner_ref: Some(resource.provider_ref().clone()),
-            owner_uid: None,
-            template: ticket.template().clone(),
-            identity: report.identity,
-            uid: resource.uid().clone(),
-            generation: resource.resource_generation(),
-            controller_generation: resource.controller_generation(),
-            execution_ref: resource.target().clone(),
-            target_ref: Some(resource.target().clone()),
-            runtime_scope: ticket.runtime_scope(),
-        })?;
-        Ok(ProviderLaunch {
-            identity: report.identity,
-        })
-    }
-
-    /// Adopt a signed target-local controller Process after daemon restart.
-    pub(crate) async fn adopt_controller(
-        &self,
-        resource: &ControllerProcessResource,
-        target_readiness_digest: ConfigurationDigest,
-    ) -> Result<ProviderAdoption, String> {
-        self.validate_controller_target(resource)?;
-        let provider = managed_provider_from_ref(resource.process_provider_ref())?;
-        let zone_uid = self
-            .bundle
-            .zone_uid(resource.zone())
-            .ok_or_else(|| "provider-ticket:zone-identity-missing".to_owned())?;
-        let ticket = controller_launch_ticket(
-            self.bundle.audit_bundle_hash(),
-            resource,
-            zone_uid,
-            provider,
-            target_readiness_digest,
-            Duration::from_secs(30),
-        )?;
-        self.fixed_effect
-            .validate_controller_ticket(&ticket)
-            .map_err(|error| error.to_string())?;
-        let outcome = match provider {
-            ManagedProvider::Minijail => {
-                self.minijail.adopt(&ticket).await.map_err(provider_error)?
-            }
-            ManagedProvider::Systemd => {
-                self.systemd.adopt(&ticket).await.map_err(provider_error)?
-            }
-        };
-        match outcome {
-            AdoptionOutcome::Absent => Ok(ProviderAdoption::Absent),
-            AdoptionOutcome::Adopted(report) => {
-                self.remember_resource(ManagedResource {
-                    zone: resource.zone().clone(),
-                    zone_uid: None,
-                    resource_ref: resource.process_ref().clone(),
-                    provider,
-                    provider_ref: resource.process_provider_ref().clone(),
-                    provider_uid: None,
-                    provider_generation: Some(resource.provider_generation()),
-                    owner_ref: Some(resource.provider_ref().clone()),
-                    owner_uid: None,
-                    template: ticket.template().clone(),
-                    identity: report.identity,
-                    uid: resource.uid().clone(),
-                    generation: resource.resource_generation(),
-                    controller_generation: resource.controller_generation(),
-                    execution_ref: resource.target().clone(),
-                    target_ref: Some(resource.target().clone()),
-                    runtime_scope: ticket.runtime_scope(),
-                })?;
-                Ok(ProviderAdoption::Adopted(report))
-            }
-            AdoptionOutcome::Stale { candidate } => {
-                self.forget_resource_in_zone(resource.zone(), None, resource.process_ref());
-                Ok(ProviderAdoption::Stale { candidate })
-            }
-            AdoptionOutcome::Quarantined(report) => {
-                self.forget_resource_in_zone(resource.zone(), None, resource.process_ref());
-                Ok(ProviderAdoption::Quarantined(report))
-            }
-        }
-    }
-
-    fn validate_controller_target(
-        &self,
-        resource: &ControllerProcessResource,
-    ) -> Result<(), String> {
-        let expected = match self.mode {
-            DaemonMode::Host => "Host",
-            DaemonMode::Guest => "Guest",
-        };
-        if resource.target().resource_type().as_str() != expected {
-            return Err("provider-controller-target-denied".to_owned());
-        }
-        if !resource
-            .required_effect_classes()
-            .contains(&d2b_contracts_provider::v3::EffectPortClass::Process)
-        {
-            return Err("provider-controller-effect-class-denied".to_owned());
-        }
-        Ok(())
-    }
-
     #[cfg(test)]
     pub(crate) fn attach_pending_controller_provider_context_for_test(
         &self,
@@ -1887,15 +1734,6 @@ impl ProductionProcessProviders {
             Err(error) if error == "pidfd-unavailable" => Err(error),
             Err(error) => Err(error),
         }
-    }
-
-    /// Return whether a generic resource retains a verified identity.
-    pub fn has_active_resource(&self, resource_ref: &ResourceRef) -> bool {
-        self.managed_resources
-            .try_lock()
-            .ok()
-            .map(|managed| managed.keys().any(|(_, _, key)| key == resource_ref))
-            .unwrap_or(false)
     }
 
     /// Return whether a specific Zone retains a verified resource identity.
@@ -3491,150 +3329,6 @@ fn is_credential_agent_context(
         })
 }
 
-fn controller_launch_ticket(
-    bundle_content_identity: &str,
-    resource: &ControllerProcessResource,
-    zone_uid: ResourceUid,
-    provider: ManagedProvider,
-    target_readiness_digest: ConfigurationDigest,
-    timeout: Duration,
-) -> Result<LaunchTicket, String> {
-    let owner_provider = BoundedToken::parse(resource.provider_ref().name().as_str())
-        .map_err(|_| "provider-ticket:invalid-owner-provider")?;
-    let selected_provider = BoundedToken::parse(resource.process_provider_ref().name().as_str())
-        .map_err(|_| "provider-ticket:invalid-process-provider")?;
-    let component = resource.component_id().clone();
-    let operation_scope = format!(
-        "{}:{}:{}:{}",
-        component.as_str(),
-        resource.provider_generation().get(),
-        resource.controller_generation().get(),
-        resource.target_session_generation().get(),
-    );
-    let operation_uid = stable_uid(
-        "controller-launch",
-        &resource.process_ref().to_canonical_string(),
-        &operation_scope,
-        resource.resource_generation().get(),
-    );
-    let deadline_ms = timeout.as_millis().clamp(1, 900_000) as u32;
-    let operation = OperationBinding::new(operation_uid, deadline_ms)
-        .map_err(|_| "provider-ticket:invalid-operation")?;
-    let ticket = LaunchTicket::new(
-        resource.process_ref().clone(),
-        resource.uid().clone(),
-        resource.resource_generation(),
-        resource.controller_generation(),
-        owner_provider,
-        component.clone(),
-        component,
-        resource.target().clone(),
-        ExecutionDomain::System,
-        None,
-        selected_provider,
-        compiled_controller_digests(resource, provider, &target_readiness_digest),
-        operation,
-        required_identity(provider),
-    )
-    .map_err(|error| format!("provider-ticket:{}", error.code()))?;
-    let mut ticket = ticket
-        .with_owner_ref(resource.provider_ref().clone())
-        .map_err(|error| format!("provider-ticket:{}", error.code()))?;
-    let sandbox = SandboxCompiler
-        .compile_plan(
-            resource.process_spec().execution().sandbox(),
-            ExecutionDomain::System,
-            false,
-        )
-        .map_err(|error| format!("provider-ticket:{}", error.code()))?;
-    let signed_descriptor_digest = configuration_digest(
-        "signed-descriptor",
-        resource.signed_descriptor_digest().as_str(),
-    );
-    let commitment = execution_commitment(
-        bundle_content_identity,
-        ticket.execution_ref(),
-        ticket.target_ref(),
-        ticket.domain(),
-        ticket.user_ref(),
-        ticket.template(),
-        ticket.selected_provider(),
-    );
-    let runtime_scope = runtime_scope_commitment(
-        &zone_uid,
-        None,
-        resource.process_ref(),
-        resource.uid(),
-        resource.process_ref().name().as_str(),
-        resource.resource_generation().get(),
-    );
-    ticket = ticket
-        .with_resource_revision(resource.resource_revision())
-        .map_err(|error| format!("provider-ticket:{}", error.code()))?
-        .with_controller_launch_binding(
-            resource.provider_generation(),
-            resource.target_session_generation(),
-            signed_descriptor_digest,
-            target_readiness_digest,
-        )
-        .map_err(|error| format!("provider-ticket:{}", error.code()))?
-        .with_execution_commitment(commitment)
-        .map_err(|error| format!("provider-ticket:{}", error.code()))?
-        .with_runtime_identity(
-            zone_uid,
-            Some(resource.provider_ref().clone()),
-            runtime_scope,
-        )
-        .map_err(|error| format!("provider-ticket:{}", error.code()))?
-        .with_sandbox_plan(sandbox)
-        .with_readiness(ReadinessExpectation::None);
-    Ok(ticket)
-}
-
-fn compiled_controller_digests(
-    resource: &ControllerProcessResource,
-    provider: ManagedProvider,
-    readiness: &ConfigurationDigest,
-) -> CompiledDigests {
-    fn digest(label: &str, bytes: &[u8]) -> ConfigurationDigest {
-        let mut hasher = Sha256::new();
-        hasher.update(b"d2bd-provider-controller-ticket-v1");
-        hasher.update(label.as_bytes());
-        hasher.update([0]);
-        hasher.update(bytes);
-        ConfigurationDigest::from_bytes(hasher.finalize().into())
-    }
-    let context = format!(
-        "{}:{}:{}:{}",
-        resource.process_ref().to_canonical_string(),
-        resource.signed_descriptor_digest().as_str(),
-        resource.artifact_digest().as_str(),
-        match provider {
-            ManagedProvider::Minijail => "system-minijail",
-            ManagedProvider::Systemd => "system-systemd",
-        },
-    );
-    let bytes = format!("{context}:{}", readiness.to_hex()).into_bytes();
-    CompiledDigests {
-        sandbox: digest("sandbox", &bytes),
-        budget: digest("budget", &bytes),
-        mounts: digest("mounts", &bytes),
-        devices: digest("devices", &bytes),
-        network: digest("network", &bytes),
-        endpoints: digest("endpoints", &bytes),
-        fd_table: digest("fd-table", &bytes),
-    }
-}
-
-fn configuration_digest(label: &str, value: &str) -> ConfigurationDigest {
-    let mut hasher = Sha256::new();
-    hasher.update(b"d2bd-provider-configuration-digest-v1");
-    hasher.update(label.as_bytes());
-    hasher.update([0]);
-    hasher.update(value.as_bytes());
-    ConfigurationDigest::from_bytes(hasher.finalize().into())
-}
-
 /// Map the daemon's own mode onto the Process family's execution domain.
 ///
 /// The family declares the Host/Guest vocabulary it admits and never reads
@@ -4819,16 +4513,10 @@ impl CommittedProviderIdentitySource for PlaneCommittedProviderIdentitySource {
 mod tests {
     use super::*;
     use d2b_provider_process::{GpuWorkerParams, SwtpmFlushParams, SwtpmWorkerParams, VideoWorkerParams};
-    use d2b_contracts_provider::v3::{
-        ArtifactDigest, BinaryRef, ComponentDescriptor, ComponentExecution,
-        ComponentTargetCapability, ComponentType, ControllerInstanceScope, ControllerTargetKind,
-        EffectPortClass,
-    };
     use d2b_contracts_resource::v3::{
         CanonicalJsonObject, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
         ResourceTypeName, Timestamp, ZoneId, ZoneRevision,
         execution_policy::{BoundedToken, ExecutionDomain},
-        identity::ReconnectGeneration,
     };
     use d2b_contracts_zone_session::v3::resource_bundle::{
         BundleResource, BundleResourceMetadata, ResourceBundle,
@@ -4837,7 +4525,6 @@ mod tests {
         bundle::{Bundle, BundleGeneration},
         processes::ProcessesJson,
     };
-    use d2bd_runtime::target_runtime::ProviderDeployment;
 
     /// The daemon's own minijail `PlatformGate` converts into the Host
     /// family's gate type field for field, including the negative posture:
@@ -5133,61 +4820,6 @@ mod tests {
         assert_eq!(rendered[wayland + 1], "/run/user/1001/wayland-7");
     }
 
-    fn controller_resource() -> ControllerProcessResource {
-        let digest = ArtifactDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap();
-        let descriptor = ComponentDescriptor::new(
-            BoundedToken::parse("process-controller").unwrap(),
-            ComponentType::Controller,
-            [ResourceTypeName::parse("Process").unwrap()],
-            [BoundedToken::parse("reconcile").unwrap()],
-            [ExecutionDomain::System],
-            8,
-            digest.clone(),
-            [],
-            false,
-        )
-        .unwrap()
-        .with_execution(ComponentExecution::Launchable {
-            binary_ref: BinaryRef::parse("process-controller").unwrap(),
-        })
-        .with_controller_placement(
-            ControllerInstanceScope::PerResourceTarget,
-            [ControllerTargetKind::Guest],
-        )
-        .unwrap()
-        .with_target_capabilities([ComponentTargetCapability::new(
-            ControllerTargetKind::Guest,
-            digest,
-            [EffectPortClass::Process],
-        )
-        .unwrap()])
-        .unwrap();
-        ProviderDeployment::new(
-            DaemonMode::Guest,
-            d2bd_runtime::target_runtime::AdmissionLimits::guest_default(),
-        )
-        .unwrap()
-        .create_controller_process(
-            ZoneId::parse("work").unwrap(),
-            ResourceRef::parse("Provider/runtime").unwrap(),
-            &descriptor,
-            ResourceGeneration::new(1).unwrap(),
-            ResourceGeneration::new(2).unwrap(),
-            ControllerGeneration::new(3).unwrap(),
-            ReconnectGeneration::new(4).unwrap(),
-            ZoneRevision::new(5),
-            ResourceRef::parse("Guest/workload").unwrap(),
-            ResourceRef::parse("Provider/system-systemd").unwrap(),
-            true,
-        )
-        .unwrap()
-    }
-
-    /// The declared GPU settings cross the family/realizer boundary as
-    /// canonical JSON, so the wire shape is pinned against a hand-written
-    /// payload rather than one produced by the same type the consumer
-    /// decodes: a payload the realizer's shape accepts renders the declared
-    /// argv, and one it refuses fails closed instead of defaulting.
     #[test]
     fn device_worker_launch_args_pin_the_gpu_settings_wire_shape() {
         let gpu = DeviceWorkerLaunch::Gpu(Box::new(GpuWorkerParams {
@@ -5578,41 +5210,6 @@ mod tests {
         assert!(retryable_stop_error("process-fate-unknown"));
         assert!(!retryable_stop_error("identity-mismatch"));
         assert!(!retryable_stop_error("permission-denied"));
-    }
-
-    #[test]
-    fn controller_launch_ticket_binds_target_descriptor_and_session_without_assignment() {
-        let resource = controller_resource();
-        let readiness = ConfigurationDigest::from_bytes([7; 32]);
-        let ticket = controller_launch_ticket(
-            "test-bundle",
-            &resource,
-            ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
-            ManagedProvider::Systemd,
-            readiness,
-            Duration::from_secs(5),
-        )
-        .expect("controller ticket");
-        assert!(ticket.validate_controller_launch().is_ok());
-        assert_eq!(ticket.process_ref(), resource.process_ref());
-        assert_eq!(ticket.execution_ref(), resource.target());
-        assert_eq!(
-            ticket.provider_generation(),
-            Some(resource.provider_generation())
-        );
-        assert_eq!(
-            ticket.target_session_generation(),
-            Some(resource.target_session_generation())
-        );
-        assert_eq!(
-            ticket.resource_revision(),
-            Some(resource.resource_revision())
-        );
-        assert!(ticket.signed_descriptor_digest().is_some());
-        assert!(!ticket.has_assignment_binding());
-        assert!(ticket.resource_client_binding().is_none());
-        assert!(ticket.execution_commitment().is_some());
-        assert!(ticket.runtime_scope().is_some());
     }
 
     /// The controller bootstrap context (what the signed controller ticket

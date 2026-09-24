@@ -117,21 +117,6 @@ impl ExecOpError {
             Self::Guest(inner) => inner.slug(),
         }
     }
-
-    /// Closed-enum `error_kind` metric label (hard allowlist).
-    pub fn metric_kind(self) -> &'static str {
-        match self {
-            Self::Transport => "transport",
-            Self::Auth => "auth",
-            Self::StaleSession => "auth",
-            Self::Protocol => "protocol",
-            Self::Timeout => "timeout",
-            Self::OldGeneration => "old-generation",
-            Self::Capability => "capability",
-            Self::DetachedUnavailable => "capability",
-            Self::Guest(_) => "guest",
-        }
-    }
 }
 
 /// Closed enum of session-establishment failures (connect + auth + cap-gate +
@@ -159,18 +144,6 @@ impl ExecEstablishError {
             Self::OldGeneration => "component-session-unavailable-old-generation",
             Self::Capability => "component-session-capability-unavailable",
             Self::Guest(inner) => inner.slug(),
-        }
-    }
-
-    pub fn metric_kind(self) -> &'static str {
-        match self {
-            Self::Transport => "transport",
-            Self::Auth => "auth",
-            Self::Protocol => "protocol",
-            Self::Timeout => "timeout",
-            Self::OldGeneration => "old-generation",
-            Self::Capability => "capability",
-            Self::Guest(_) => "guest",
         }
     }
 }
