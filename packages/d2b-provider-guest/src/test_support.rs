@@ -131,7 +131,7 @@ impl GuestDriverEffects for ScriptedEffects {
     ) -> Result<GuestEffectOutcome, GuestEffectError> {
         self.record(format!("reconcile:{}", kind.effect_id()));
         let children = request.children.owned().await?;
-        self.observations.lock().push(EffectObservation {
+        self.observations.lock().push(EffectObservation { // async-gate-allow: test-support recorder lock
             kind,
             provider_spec: request.provider_spec.clone(),
             status: request.status.clone(),
@@ -147,8 +147,8 @@ impl GuestDriverEffects for ScriptedEffects {
                 .collect(),
         });
         Ok(GuestEffectOutcome {
-            phase: *self.phase.lock(),
-            resource_projection: self.projection.lock().clone(),
+            phase: *self.phase.lock(), // async-gate-allow: test-support recorder lock
+            resource_projection: self.projection.lock().clone(), // async-gate-allow: test-support recorder lock
         })
     }
 
@@ -158,7 +158,7 @@ impl GuestDriverEffects for ScriptedEffects {
         _request: &GuestEffectRequest<'_>,
     ) -> Result<GuestFinalizeStage, GuestEffectError> {
         self.record(format!("finalize:{}", kind.effect_id()));
-        Ok(*self.finalize.lock())
+        Ok(*self.finalize.lock()) // async-gate-allow: test-support recorder lock
     }
 }
 
@@ -246,11 +246,11 @@ impl ScriptedFacets {
 #[async_trait::async_trait]
 impl GuestManagerView for ScriptedFacets {
     async fn row_view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ()> {
-        self.calls.lock().push(format!("row:{key}"));
-        if *self.fail_reads.lock() {
+        self.calls.lock().push(format!("row:{key}")); // async-gate-allow: test-support recorder lock
+        if *self.fail_reads.lock() { // async-gate-allow: test-support recorder lock
             return Err(());
         }
-        Ok(self.rows.lock().get(key).cloned())
+        Ok(self.rows.lock().get(key).cloned()) // async-gate-allow: test-support recorder lock
     }
 
     fn committed_provider_identity(
@@ -279,7 +279,7 @@ impl GuestManagerView for ScriptedFacets {
 impl CloudHypervisorGuestRuntime for ScriptedFacets {
     async fn ensure_target_session(&self, guest_ref: &ResourceRef) -> Result<(), String> {
         self.calls
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .push(format!("ensure-session:{}", guest_ref.to_canonical_string()));
         Ok(())
     }
@@ -290,9 +290,9 @@ impl CloudHypervisorGuestRuntime for ScriptedFacets {
         _status_sink: Option<crate::driver::GuestStatusSink>,
     ) -> Result<GuestCloudHypervisorOutcome, String> {
         self.calls
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .push(format!("reconcile-ch:{}", guest_ref.to_canonical_string()));
-        Ok(*self.cloud_hypervisor_outcome.lock())
+        Ok(*self.cloud_hypervisor_outcome.lock()) // async-gate-allow: test-support recorder lock
     }
 }
 

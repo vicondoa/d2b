@@ -49,6 +49,40 @@ successful. The gate then removes only these validated paths before invoking
 `grep`; if every enumerated path is exempt, it reports success without invoking
 `grep`. Any non-exempt `grep` error remains a failure.
 
+## Async-gate and the method-call lock hatch
+
+`make check-async-gate` runs the xtask async-gate scanner over the broker, the
+daemon, and every provider crate (Layer-1 policy). It flags denied blocking
+calls inside async contexts, and since U6 (issue #590) it also flags the
+conservative method-call lock shape: a `lock()`, `read()`, or `write()` method
+call inside an `async fn` (or `async` block) that is not followed by `.await`.
+The shape is deliberately conservative - the scanner does not resolve receiver
+types, so any `.lock()`/`.read()`/`.write()` method call in an async context
+matches, including `tokio::fs::OpenOptions::read(true)`-style builder flags
+and `AsyncReadExt::read` calls awaited through a timeout. An awaited
+`tokio::sync::Mutex::lock()` site passes via the `.await` exclusion, and a
+site that must stay is exempted by the source-level marker
+`// async-gate-allow: <reason>` on the call's own line, at or after the call.
+
+The marker is not an allowlist: every marked site must be recorded in
+`packages/xtask/data/async-gate-inventory.json` (the same file records the
+marker format), and every inventory entry must correspond to a marked
+method-call site in the scanned roots. A marker without an inventory entry
+fails the gate, and an inventory entry without a marked site fails it too -
+as does an entry whose file no longer exists in the tree (a deleted marked
+file is stale in every scan mode; a file that exists but is outside the
+current scan set is tolerated, so subset scans stay valid). The
+qualified-path form (`std::sync::Mutex::lock(...)`) has no hatch and
+always fails.
+
+The inventory keys sites by `(file, line)`, so a line-shifting edit above a
+marked call turns the gate red until the entry is re-recorded. Regenerate the
+inventory from the run's marker sites instead of hand-editing line numbers:
+`cargo xtask check-async-gate --write-inventory` from the repo root (the
+default scan roots only - a subset scan would drop entries for unscanned
+files). The regeneration output is byte-stable, so a no-op regeneration
+produces no diff.
+
 ## Build and validate, in detail
 
 Use top-level `Makefile` targets. Shell scripts under `tests/` are

@@ -58,7 +58,7 @@ impl AcaCredentialLeaseClient for FakeAcaLease {
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn revoke(&self, _: &AcaCredentialLease) -> Result<(), AcaControlError> {
-        self.state.lock().unwrap().revoked += 1;
+        self.state.lock().unwrap().revoked += 1; // async-gate-allow: test-support recorder lock
         Ok(())
     }
 }
@@ -77,7 +77,7 @@ impl AcaControl for FakeAcaControl {
     ) -> Result<AcaControlHealth, AcaControlError> {
         Ok(self
             .state
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .unwrap()
             .health
             .pop_front()
@@ -91,7 +91,7 @@ impl AcaControl for FakeAcaControl {
         _: &AcaControlContext,
         _: &d2b_provider_guest_azure_container_apps::AcaWorkloadQuery,
     ) -> Result<AcaSandboxCandidates, AcaControlError> {
-        AcaSandboxCandidates::new(self.state.lock().unwrap().candidates.clone())
+        AcaSandboxCandidates::new(self.state.lock().unwrap().candidates.clone()) // async-gate-allow: test-support recorder lock
             .map_err(|_| AcaControlError::new(AcaControlErrorKind::InvalidResponse))
     }
 
@@ -490,7 +490,7 @@ async fn cloud_composition_reaches_ready_through_production_controllers() {
         !format!("{:?}", aca.status()).contains("sandbox-1"),
         "Azure provider status must retain only a digest, not a cloud identity"
     );
-    assert!(aca_state.lock().unwrap().revoked > 0);
+    assert!(aca_state.lock().unwrap().revoked > 0); // async-gate-allow: test-support recorder lock
 }
 
 #[tokio::test]

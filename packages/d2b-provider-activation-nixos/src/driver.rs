@@ -1046,7 +1046,7 @@ mod tests {
             child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
             let id = format!("{}/{}", child.type_name.as_str(), child.name);
-            self.log.lock().push(format!("ensure:{id}"));
+            self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             let next = self
                 .next_uid
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1063,7 +1063,7 @@ mod tests {
                 metadata: child.metadata,
                 created_at: 0,
             };
-            let mut rows = self.rows.lock();
+            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             let outcome = match rows.iter_mut().find(|existing| existing.key == row.key) {
                 Some(existing) if existing.spec == row.spec => EnsureOutcome::Unchanged(existing.clone()),
                 Some(existing) => {
@@ -1076,7 +1076,7 @@ mod tests {
                 }
             };
             // The spawn notification the manager emits after the commit (F1).
-            self.log.lock().push(format!("spawned:{id}"));
+            self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(outcome)
         }
 
@@ -1097,11 +1097,11 @@ mod tests {
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.log.lock().push(format!(
+            self.log.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 "delete:{}/{}",
                 key.type_name, key.name
             ));
-            self.rows.lock().retain(|row| row.key != *key);
+            self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
         }
 
@@ -1124,7 +1124,7 @@ mod tests {
             registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
             assert_eq!(registration.condition, WatchCondition::Ready);
-            self.log.lock().push(format!(
+            self.log.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 "watch:{}/{}",
                 registration.target.type_name, registration.target.name
             ));

@@ -8126,7 +8126,7 @@ async fn grant_usbip_backend_device_acl(
     {
         let _ = expected_identity;
         test_usbip_backend_acl_events()
-            .lock()
+            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
             .push(TestUsbipBackendAclEvent::Grant { uid: runner.uid });
         Ok(())
@@ -8193,7 +8193,7 @@ async fn revoke_usbip_backend_device_acl(
     #[cfg(test)]
     {
         test_usbip_backend_acl_events()
-            .lock()
+            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
             .push(TestUsbipBackendAclEvent::Revoke { uid: runner.uid });
         Ok(())
@@ -8410,7 +8410,7 @@ async fn grant_explicit_usbip_backend_acl(
         let _ = bus_id;
         let _ = expected_identity;
         test_usbip_backend_acl_events()
-            .lock()
+            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
             .push(TestUsbipBackendAclEvent::Grant { uid: backend_uid });
         Ok(())
@@ -8487,7 +8487,7 @@ async fn revoke_explicit_usbip_backend_acl(
     {
         let _ = bus_id;
         test_usbip_backend_acl_events()
-            .lock()
+            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| BrokerError::Protocol("test USBIP ACL event mutex poisoned".to_owned()))?
             .push(TestUsbipBackendAclEvent::Revoke { uid: backend_uid });
         Ok(())

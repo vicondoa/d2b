@@ -726,7 +726,7 @@ impl TpmResourceEffectPort for FilesystemTpm {
     ) -> Result<ResourceRef, TpmResourceEffectError> {
         if let Some(process) = self
             .process
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| TpmResourceEffectError::Transient)?
             .as_mut()
             && process
@@ -750,7 +750,7 @@ impl TpmResourceEffectPort for FilesystemTpm {
             .map_err(|_| TpmResourceEffectError::Transient)?;
         *self
             .process
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| TpmResourceEffectError::Transient)? = Some(child);
         Ok(ResourceRef::parse("Process/device-swtpm").unwrap())
     }
@@ -773,7 +773,7 @@ impl TpmResourceEffectPort for FilesystemTpm {
     async fn stop_swtpm_process(&self, _: &ResourceRef) -> Result<(), TpmResourceEffectError> {
         let Some(mut child) = self
             .process
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| TpmResourceEffectError::Transient)?
             .take()
         else {
@@ -801,7 +801,7 @@ impl TpmResourceEffectPort for FilesystemTpm {
     ) -> Result<ResourceRef, TpmResourceEffectError> {
         let mut process = self
             .process
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| TpmResourceEffectError::Transient)?;
         if process
             .as_mut()
@@ -1113,7 +1113,7 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
             CloudHypervisorResourceRequest::GetGuest { .. } => {
                 Ok(CloudHypervisorResourceResponse::Guest(Box::new(
                     self.guest
-                        .lock()
+                        .lock() // async-gate-allow: test-support recorder lock
                         .map_err(|_| CloudHypervisorResourceApiError::Transport)?
                         .clone(),
                 )))
@@ -1121,12 +1121,12 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
             CloudHypervisorResourceRequest::RelistOwnedChildren { expected_refs, .. } => {
                 let ready = *self
                     .dependencies_ready
-                    .lock()
+                    .lock() // async-gate-allow: test-support recorder lock
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 let has_process = {
                     let mut children = self
                         .children
-                        .lock()
+                        .lock() // async-gate-allow: test-support recorder lock
                         .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                     if ready {
                         for child in children.values_mut() {
@@ -1146,7 +1146,7 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                 }
                 let children = self
                     .children
-                    .lock()
+                    .lock() // async-gate-allow: test-support recorder lock
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 Ok(CloudHypervisorResourceResponse::OwnedChildren(
                     expected_refs
@@ -1158,7 +1158,7 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
             CloudHypervisorResourceRequest::ObserveDependencies { graph, .. } => {
                 let ready = *self
                     .dependencies_ready
-                    .lock()
+                    .lock() // async-gate-allow: test-support recorder lock
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 let snapshot = if ready {
                     d2b_provider_guest_cloud_hypervisor::GuestDependencySnapshot::ready(graph)
@@ -1197,12 +1197,12 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
             CloudHypervisorResourceRequest::CommitBatch { batch } => {
                 let ready = *self
                     .dependencies_ready
-                    .lock()
+                    .lock() // async-gate-allow: test-support recorder lock
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 let mut committed = Vec::with_capacity(batch.mutations().len());
                 let mut children = self
                     .children
-                    .lock()
+                    .lock() // async-gate-allow: test-support recorder lock
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?;
                 for (index, mutation) in batch.mutations().iter().enumerate() {
                     let uid =
@@ -1256,7 +1256,7 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                 let target = update.target().clone();
                 let current = self
                     .children
-                    .lock()
+                    .lock() // async-gate-allow: test-support recorder lock
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?
                     .get(&target)
                     .cloned()
@@ -1273,7 +1273,7 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                 };
                 if let Some(desired_lifecycle) = desired_lifecycle {
                     self.lifecycle_updates
-                        .lock()
+                        .lock() // async-gate-allow: test-support recorder lock
                         .map_err(|_| CloudHypervisorResourceApiError::Transport)?
                         .push(desired_lifecycle);
                 }
@@ -1304,7 +1304,7 @@ impl AuthenticatedResourceSession for RealCloudHypervisorResourceSession {
                         .ok_or(CloudHypervisorResourceApiError::InvalidResponse)?,
                 );
                 self.children
-                    .lock()
+                    .lock() // async-gate-allow: test-support recorder lock
                     .map_err(|_| CloudHypervisorResourceApiError::Transport)?
                     .insert(target.clone(), updated);
                 Ok(CloudHypervisorResourceResponse::Updated(
@@ -1532,7 +1532,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
     ) -> Result<Wave6ReconcileResult, Wave6BoundaryError> {
         let mut controller = self
             .tpm_controller
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
             .unwrap_or(Self::tpm_controller()?);
@@ -1541,7 +1541,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             .await
             .map_err(|_| Wave6BoundaryError::Effect);
         self.tpm_controller
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| Wave6BoundaryError::Effect)?
             .replace(controller);
         result?;
@@ -1562,7 +1562,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             .map_err(|_| Wave6BoundaryError::Effect)?;
         let mut controller = self
             .guest_sessionler
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
             .unwrap_or_else(|| self.guest_sessionler());
@@ -1575,7 +1575,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             .await
             .map_err(|_| Wave6BoundaryError::Effect)?;
         self.guest_sessionler
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| Wave6BoundaryError::Effect)?
             .replace(controller);
         match outcome {
@@ -1620,7 +1620,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             .await
             .map_err(|_| Wave6BoundaryError::Effect)?;
         self.tpm_controller
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| Wave6BoundaryError::Effect)?
             .replace(tpm_controller);
 
@@ -1631,7 +1631,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             .set_dependencies_ready(true)
             .map_err(|_| Wave6BoundaryError::Effect)?;
         self.guest_sessionler
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
             .ok_or(Wave6BoundaryError::Lifecycle)?;
@@ -1657,7 +1657,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         }
         *self
             .guest_sessionler
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| Wave6BoundaryError::Effect)? = Some(restarted);
         Ok(())
     }
@@ -1668,7 +1668,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
         _resource: &Wave6Resource,
     ) -> Result<(), Wave6BoundaryError> {
         self.guest_sessionler
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
             .ok_or(Wave6BoundaryError::Lifecycle)?;
@@ -1682,7 +1682,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
             || !self
                 .cloud_session
                 .children
-                .lock()
+                .lock() // async-gate-allow: test-support recorder lock
                 .map_err(|_| Wave6BoundaryError::Effect)?
                 .is_empty()
         {
@@ -1759,7 +1759,7 @@ impl Wave6ProviderBoundary for Wave6RealBoundary {
     ) -> Result<bool, Wave6BoundaryError> {
         let mut controller = self
             .tpm_controller
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .map_err(|_| Wave6BoundaryError::Effect)?
             .take()
             .ok_or(Wave6BoundaryError::Lifecycle)?;

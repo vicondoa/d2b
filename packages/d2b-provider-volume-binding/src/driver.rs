@@ -1215,7 +1215,7 @@ mod tests {
             child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
             let id = format!("{}/{}", child.type_name.as_str(), child.name);
-            self.log.lock().push(format!("ensure:{id}"));
+            self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             let next = self
                 .next_uid
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1232,7 +1232,7 @@ mod tests {
                 metadata: child.metadata,
                 created_at: 0,
             };
-            let mut rows = self.rows.lock();
+            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             let outcome = match rows.iter_mut().find(|row| row.key == row_key(&id, &self.zone)) {
                 Some(existing) => {
                     if existing.spec == row.spec {
@@ -1248,7 +1248,7 @@ mod tests {
                 }
             };
             // Spawn notification only after the commit (F1, AE1).
-            self.log.lock().push(format!("spawned:{id}"));
+            self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(outcome)
         }
 
@@ -1259,7 +1259,7 @@ mod tests {
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(ResourceError::ManagerRpc("scripted read failure".into()));
             }
-            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned())
+            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         }
 
         async fn view(
@@ -1273,9 +1273,9 @@ mod tests {
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .push(format!("delete:{}/{}", key.type_name, key.name));
-            self.rows.lock().retain(|row| row.key != *key);
+            self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
         }
 
@@ -1299,7 +1299,7 @@ mod tests {
         ) -> Result<WatchId, ResourceError> {
             // Manager rows always exist here; the actor-side handler is the
             // runtime's, so the fake only records the registration.
-            let mut targets = self.watch_targets.lock();
+            let mut targets = self.watch_targets.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             targets.push(registration.target.clone());
             Ok(WatchId(targets.len() as u64))
         }

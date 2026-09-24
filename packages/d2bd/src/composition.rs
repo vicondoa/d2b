@@ -10698,7 +10698,7 @@ pub(crate) async fn resolve_component_session_endpoint_for_guest(
         }
         let mut buffer = [0_u8; 4096];
         use tokio::io::AsyncReadExt;
-        let Ok(Ok(read)) = tokio::time::timeout(Duration::from_millis(250), socket.read(&mut buffer)).await
+        let Ok(Ok(read)) = tokio::time::timeout(Duration::from_millis(250), socket.read(&mut buffer)).await // async-gate-allow: awaited through tokio::time::timeout
         else {
             return false;
         };
@@ -26162,7 +26162,7 @@ mod broker_dispatch_tests {
             .expect("quarantine startup snapshots");
 
         assert!(
-            opener.calls.lock().expect("lock opener calls").is_empty(),
+            opener.calls.lock().expect("lock opener calls").is_empty(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             "without current lifecycle identity, startup must not open pidfds"
         );
         assert!(!state.pidfd_table.contains("vm-a", "virtiofsd-ro-store"));
@@ -26559,7 +26559,7 @@ mod broker_dispatch_tests {
             _target: &provider_shutdown::ProviderShutdownTarget,
         ) -> provider_shutdown::ProviderGuestState {
             self.states
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .expect("scripted states")
                 .pop_front()
                 .unwrap_or(provider_shutdown::ProviderGuestState::Running)

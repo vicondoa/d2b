@@ -536,7 +536,7 @@ mod tests {
             let reloads = std::sync::Arc::clone(&reloads);
             async move |args: &[&str]| {
                 let reloads = std::sync::Arc::clone(&reloads);
-                reloads.lock().unwrap().push(args.join(" "));
+                reloads.lock().unwrap().push(args.join(" ")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 Ok(())
             }
         })
@@ -562,7 +562,7 @@ mod tests {
             other => panic!("unexpected op: {other:?}"),
         }
         assert_eq!(
-            *reloads.lock().unwrap(),
+            *reloads.lock().unwrap(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             vec!["reload NetworkManager".to_owned()]
         );
     }

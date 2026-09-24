@@ -1582,7 +1582,7 @@ impl ProductionSharedProviderEffects {
         let mut controller = {
             let mut controllers = state
                 .tpm_controllers
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .map_err(|_| SharedProviderEffectError::Unavailable)?;
             match controllers.remove(&request.uid) {
                 Some(controller) => controller,
@@ -1630,7 +1630,7 @@ impl ProductionSharedProviderEffects {
                 {
                     let mut controllers = state
                         .tpm_controllers
-                        .lock()
+                        .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
                 }
@@ -1655,7 +1655,7 @@ impl ProductionSharedProviderEffects {
                 {
                     let mut controllers = state
                         .tpm_controllers
-                        .lock()
+                        .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
                 }
@@ -2090,7 +2090,7 @@ impl ProductionSharedProviderEffects {
         }
         let (_runtime, admission, tokens, settings, holder_ref) = self.gpu_admission(request).await?;
         let mut controllers = state.gpu_controllers
-            .lock()
+            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let mut controller = match controllers.remove(&request.uid) {
             Some(controller) => controller,
@@ -2477,7 +2477,7 @@ impl ProductionSharedProviderEffects {
         let mut controller = {
             let mut controllers = state
                 .tpm_controllers
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .map_err(|_| SharedProviderEffectError::Unavailable)?;
             controllers
                 .remove(&request.uid)
@@ -2510,7 +2510,7 @@ impl ProductionSharedProviderEffects {
                 {
                     let mut controllers = state
                         .tpm_controllers
-                        .lock()
+                        .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
                 }
@@ -2566,7 +2566,7 @@ impl ProductionSharedProviderEffects {
         state: &DeviceResourceState,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let mut controllers = state.gpu_controllers
-            .lock()
+            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let admission = controllers
             .get(&request.uid)

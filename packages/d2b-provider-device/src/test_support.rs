@@ -38,8 +38,8 @@ impl DeviceDriverEffects for RecordingEffects {
         SharedProviderEffectOutcome,
         d2b_provider_toolkit::SharedProviderEffectError,
     > {
-        self.calls.lock().push("reconcile");
-        self.reconciled.lock().push(component);
+        self.calls.lock().push("reconcile"); // async-gate-allow: test-support recorder lock
+        self.reconciled.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Pending,
         ))
@@ -54,7 +54,7 @@ impl DeviceDriverEffects for RecordingEffects {
         SharedProviderFinalize,
         d2b_provider_toolkit::SharedProviderEffectError,
     > {
-        self.calls.lock().push("finalize");
+        self.calls.lock().push("finalize"); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderFinalize::Complete)
     }
 }
@@ -85,7 +85,7 @@ impl DeviceRuntime for RecordingRuntime {
         _request: &SharedProviderEffectRequest<'_>,
         _state: &DeviceResourceState,
     ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-        self.reconciled.lock().push(component);
+        self.reconciled.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderEffectOutcome::phase(
             SharedProviderEffectPhase::Pending,
         ))
@@ -97,7 +97,7 @@ impl DeviceRuntime for RecordingRuntime {
         _request: &SharedProviderEffectRequest<'_>,
         _state: &DeviceResourceState,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        self.finalized.lock().push(component);
+        self.finalized.lock().push(component); // async-gate-allow: test-support recorder lock
         Ok(SharedProviderFinalize::Complete)
     }
 }

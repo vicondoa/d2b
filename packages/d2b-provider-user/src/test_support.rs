@@ -72,14 +72,14 @@ impl UserDriverEffects for RecordingEffects {
         user_ref: &ResourceRef,
         _spec: &UserSpec,
     ) -> Result<UserStatusReport, String> {
-        self.calls.lock().push("observe-user".to_owned());
+        self.calls.lock().push("observe-user".to_owned()); // async-gate-allow: test-support recorder lock
         if self.fail.load(Ordering::SeqCst) {
             return Err("the scripted discovery refused".to_owned());
         }
         Ok(UserStatusReport {
             user_ref: user_ref.clone(),
             provider: "system-core",
-            phase: *self.phase.lock(),
+            phase: *self.phase.lock(), // async-gate-allow: test-support recorder lock
             discovery: UserDiscoveryCondition::Discovered,
             identity: None,
         })
@@ -147,7 +147,7 @@ impl UserDiscoveryEffectPort for ScriptedProbe {
         user_ref: &ResourceRef,
         spec: &UserSpec,
     ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
-        self.core.calls.lock().push(spec.os_username().clone());
+        self.core.calls.lock().push(spec.os_username().clone()); // async-gate-allow: test-support recorder lock
         if self.core.failing.load(Ordering::SeqCst) {
             return Err(SystemCoreError::DiscoveryUnavailable);
         }

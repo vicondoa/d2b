@@ -236,8 +236,8 @@ async fn ensure_route_ledger_root(root: &Path) -> Result<(), ApplyWithPreflightE
 async fn acquire_route_ledger_lock(root: &Path) -> Result<fs::File, ApplyWithPreflightError> {
     let path = root.join(".lock");
     let file = tokio::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
+        .read(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
+        .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .create(true)
         .truncate(false)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
@@ -273,7 +273,7 @@ async fn read_route_record(
     path: &Path,
 ) -> Result<Option<RouteOwnershipRecord>, ApplyWithPreflightError> {
     match tokio::fs::OpenOptions::new()
-        .read(true)
+        .read(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(path)
         .await
@@ -307,7 +307,7 @@ async fn write_route_record(
     let bytes = serde_json::to_vec(record).map_err(|_| ApplyWithPreflightError::ForeignRoute)?;
     let temp = path.with_extension("json.tmp");
     let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
+        .write(true) // async-gate-allow: tokio OpenOptions builder flag, not a lock acquisition
         .create_new(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .mode(0o640)

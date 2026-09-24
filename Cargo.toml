@@ -144,9 +144,12 @@ all = { level = "warn", priority = -1 }
 # mechanical half of the rule, though: a synchronous lock acquired lexically
 # inside an `async fn` still parks the executor worker while another thread
 # holds it, and `await_holding_lock` cannot see that because no guard crosses
-# the suspension point. Catching it needs a source-level policy check (a
-# lexical scan for `std::sync` lock acquisition inside `async fn` bodies that
-# fails closed); it is not landed here.
+# the suspension point. The source-level half is the async-gate scanner
+# (`cargo xtask check-async-gate`, Layer-1 policy): it flags the conservative
+# method-call lock shape - a `lock()`/`read()`/`write()` method call inside an async context (`async fn` or
+# async block) not followed by `.await` - and its escape hatch is the source
+# marker `// async-gate-allow: <reason>` recorded in
+# packages/xtask/data/async-gate-inventory.json.
 await_holding_refcell_ref = "deny"
 await_holding_lock = "deny"
 # U33: the workspace-wide async-purity ban. `disallowed_methods` is denied

@@ -1128,7 +1128,7 @@ mod tests {
             parent: &ResourceKey,
             child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            self.log.lock().push(format!("ensure:{}", child.name));
+            self.log.lock().push(format!("ensure:{}", child.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             let key = ResourceKey::new(&parent.zone, child.type_name.as_str(), &child.name);
             let row = StoredDesiredResource {
                 key: key.clone(),
@@ -1141,8 +1141,8 @@ mod tests {
                 metadata: child.metadata.clone(),
                 created_at: 0,
             };
-            self.ensured.lock().push(child);
-            let mut children = self.children.lock();
+            self.ensured.lock().push(child); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            let mut children = self.children.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             match children.iter().position(|existing| existing.key == key) {
                 Some(index) if children[index].deleting => Err(ResourceError::DeletingConflict {
                     zone: key.zone,
@@ -1165,11 +1165,11 @@ mod tests {
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
             self.log
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .push(format!("get:{}/{}", key.type_name, key.name));
             Ok(self
                 .children
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .iter()
                 .find(|child| child.key == *key)
                 .cloned())
@@ -1186,9 +1186,9 @@ mod tests {
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .push(format!("delete:{}/{}", key.type_name, key.name));
-            for child in self.children.lock().iter_mut() {
+            for child in self.children.lock().iter_mut() { // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 if child.key == *key {
                     child.deleting = true;
                 }
@@ -1657,7 +1657,7 @@ mod tests {
             d.classify_error(&failure).class(),
             FailureClass::Retryable
         ));
-        let entries = log.lock().clone();
+        let entries = log.lock().clone(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         assert!(
             entries.iter().any(|call| call == "delete:Process/mi-agent-relay"),
             "the owned child is nudged through its own finalize-before-delete pass: {entries:?}"
@@ -1668,10 +1668,10 @@ mod tests {
         );
 
         // The child row retires: the same pass converges without effects.
-        manager.children.lock().clear();
+        manager.children.lock().clear(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         d.finalize(&mut ctx).await.expect("converged once the child retired");
         assert!(
-            !log.lock().iter().any(|call| call == "lease-facts"),
+            !log.lock().iter().any(|call| call == "lease-facts"), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             "finalize runs no revocation effect"
         );
     }
@@ -1695,7 +1695,7 @@ mod tests {
             .await
             .expect("delete");
 
-        let calls = log.lock().clone();
+        let calls = log.lock().clone(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         let session = calls
             .iter()
             .position(|call| call == "session")
@@ -1744,7 +1744,7 @@ mod tests {
             "uncertain revocation retains the lease"
         );
         assert!(!manager.children()[0].deleting, "no child deletion");
-        assert!(effects.session.lock().is_some());
+        assert!(effects.session.lock().is_some()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -1828,7 +1828,7 @@ mod tests {
             .delete(&mut ctx)
             .await
             .expect("delete");
-        let calls = log.lock().clone();
+        let calls = log.lock().clone(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         assert!(!calls.iter().any(|call| call == "session"), "{calls:?}");
         assert!(
             calls
@@ -1884,7 +1884,7 @@ mod tests {
         );
         assert_eq!(evidence_second.1, "already-revoked");
         assert_eq!(
-            log.lock()
+            log.lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .iter()
                 .filter(|call| call.as_str() == "delete:Process/mi-agent-relay")
                 .count(),
@@ -1942,7 +1942,7 @@ mod tests {
             .reconcile(&mut ctx)
             .await
             .expect_err("drifted child");
-        let calls = log.lock().clone();
+        let calls = log.lock().clone(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         assert!(
             calls
                 .iter()

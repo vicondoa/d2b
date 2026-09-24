@@ -47,9 +47,9 @@ impl ActivationDriverEffects for FakeActivationEffects {
         target: ResourceRef,
         intent: HostGenerationHandoffIntent,
     ) -> HostHandoffResult {
-        self.dispatches.lock().push((target, intent));
+        self.dispatches.lock().push((target, intent)); // async-gate-allow: test-support recorder lock
         self.results
-            .lock()
+            .lock() // async-gate-allow: test-support recorder lock
             .pop()
             .unwrap_or(HostHandoffResult::Incomplete)
     }

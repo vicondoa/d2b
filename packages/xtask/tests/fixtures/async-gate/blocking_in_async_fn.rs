@@ -29,6 +29,13 @@ pub async fn touch(shared: &std::sync::Mutex<u32>) {
     let _guard = std::sync::Mutex::lock(shared).unwrap();
 }
 
+/// The same lock through the production method-call shape (U6, KTD4):
+/// `shared.lock()` is invisible to the qualified path the deny list names,
+/// so the conservative method-call shape must flag it.
+pub async fn touch_method(shared: &std::sync::Mutex<u32>) {
+    let _guard = shared.lock().unwrap();
+}
+
 /// An async block on the worker: the `async { }` body runs on the runtime.
 pub fn write_free() -> impl Future<Output = ()> {
     async {

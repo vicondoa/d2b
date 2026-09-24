@@ -6759,7 +6759,7 @@ HOST_EFFECTS_SERVICE.id,
         // The stall line was logged: a stalled consumer is observable.
 
 
-        let lines = String::from_utf8(captured.lock().expect("capture lock").clone()).expect("utf-8");
+        let lines = String::from_utf8(captured.lock().expect("capture lock").clone()).expect("utf-8"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         assert!(
             lines.contains("anchor projection drain window passed"),
             "stall line logged with the sustained stream: {lines}"
