@@ -18,8 +18,6 @@ pub const SECCOMP_PROFILE_RESOURCE_TYPE: &str = "SeccompProfile";
 pub const MAX_SECCOMP_SYSCALLS: usize = 1024;
 /// Maximum device-node binds in one profile.
 pub const MAX_SECCOMP_DEVICE_BINDS: usize = 64;
-/// Maximum cgroup controllers in one profile.
-pub const MAX_SECCOMP_CGROUP_CONTROLLERS: usize = 16;
 /// Maximum bytes of one device-node path.
 pub const MAX_DEVICE_NODE_PATH_BYTES: usize = 255;
 
@@ -42,11 +40,7 @@ impl DeviceNodePath {
         Ok(Self(value))
     }
 
-    /// Borrow the path.
-    pub fn as_str(&self) -> &str {
-        &self.0
     }
-}
 
 redacted_debug!(DeviceNodePath);
 
@@ -97,72 +91,6 @@ pub struct SeccompNamespaces {
     time: bool,
 }
 
-impl SeccompNamespaces {
-    /// Construct one namespace set.
-    #[allow(clippy::too_many_arguments)]
-    pub const fn new(
-        user: bool,
-        mount: bool,
-        pid: bool,
-        net: bool,
-        uts: bool,
-        ipc: bool,
-        cgroup: bool,
-        time: bool,
-    ) -> Self {
-        Self {
-            user,
-            mount,
-            pid,
-            net,
-            uts,
-            ipc,
-            cgroup,
-            time,
-        }
-    }
-
-    /// Whether a user namespace is used.
-    pub const fn user(&self) -> bool {
-        self.user
-    }
-
-    /// Whether a mount namespace is isolated.
-    pub const fn mount(&self) -> bool {
-        self.mount
-    }
-
-    /// Whether a PID namespace is isolated.
-    pub const fn pid(&self) -> bool {
-        self.pid
-    }
-
-    /// Whether a network namespace is isolated.
-    pub const fn net(&self) -> bool {
-        self.net
-    }
-
-    /// Whether a UTS namespace is isolated.
-    pub const fn uts(&self) -> bool {
-        self.uts
-    }
-
-    /// Whether an IPC namespace is isolated.
-    pub const fn ipc(&self) -> bool {
-        self.ipc
-    }
-
-    /// Whether a cgroup namespace is isolated.
-    pub const fn cgroup(&self) -> bool {
-        self.cgroup
-    }
-
-    /// Whether a time namespace is isolated.
-    pub const fn time(&self) -> bool {
-        self.time
-    }
-}
-
 /// The cgroup set one profile admits.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -172,17 +100,9 @@ pub struct SeccompCgroups {
 }
 
 impl SeccompCgroups {
-    /// Construct one cgroup set after checking the controller bound.
-    pub fn new(controllers: Vec<BoundedToken>) -> Result<Self, SeccompProfileContractError> {
-        if controllers.len() > MAX_SECCOMP_CGROUP_CONTROLLERS {
-            return Err(SeccompProfileContractError::TooManyCgroupControllers);
-        }
-        Ok(Self { controllers })
-    }
-
-    /// The admitted cgroup controller names.
-    pub fn controllers(&self) -> &[BoundedToken] {
-        &self.controllers
+    /// Construct one cgroup set.
+    pub fn new(controllers: Vec<BoundedToken>) -> Self {
+        Self { controllers }
     }
 }
 
@@ -239,31 +159,7 @@ impl DeviceBind {
         }
     }
 
-    /// The device-node path.
-    pub const fn path(&self) -> &DeviceNodePath {
-        &self.path
     }
-
-    /// The node kind.
-    pub const fn kind(&self) -> DeviceNodeKind {
-        self.kind
-    }
-
-    /// The major device number.
-    pub const fn major(&self) -> u32 {
-        self.major
-    }
-
-    /// The minor device number.
-    pub const fn minor(&self) -> u32 {
-        self.minor
-    }
-
-    /// The granted access class.
-    pub const fn access(&self) -> SeccompDeviceAccess {
-        self.access
-    }
-}
 
 /// The `SeccompProfile` desired spec.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -297,26 +193,7 @@ impl SeccompProfileSpec {
         })
     }
 
-    /// The syscall allowlist.
-    pub fn syscalls(&self) -> &[BoundedToken] {
-        &self.syscalls
     }
-
-    /// The namespace set.
-    pub const fn namespaces(&self) -> &SeccompNamespaces {
-        &self.namespaces
-    }
-
-    /// The cgroup set.
-    pub const fn cgroups(&self) -> &SeccompCgroups {
-        &self.cgroups
-    }
-
-    /// The inline device-node binds.
-    pub fn devices(&self) -> &[DeviceBind] {
-        &self.devices
-    }
-}
 
 redacted_debug!(SeccompProfileSpec);
 
@@ -350,8 +227,6 @@ pub enum SeccompProfileContractError {
     TooManySyscalls,
     /// The profile carries more device binds than the bound.
     TooManyDeviceBinds,
-    /// The profile carries more cgroup controllers than the bound.
-    TooManyCgroupControllers,
 }
 
 impl core::fmt::Display for SeccompProfileContractError {
@@ -360,9 +235,6 @@ impl core::fmt::Display for SeccompProfileContractError {
             Self::InvalidDevicePath => "device bind path is not an absolute /dev path",
             Self::TooManySyscalls => "seccomp profile declares too many syscalls",
             Self::TooManyDeviceBinds => "seccomp profile declares too many device binds",
-            Self::TooManyCgroupControllers => {
-                "seccomp profile declares too many cgroup controllers"
-            }
         };
         formatter.write_str(text)
     }
@@ -382,8 +254,17 @@ mod tests {
                 BoundedToken::parse("write").unwrap(),
                 BoundedToken::parse("exit-group").unwrap(),
             ],
-            SeccompNamespaces::new(false, true, true, true, true, true, true, false),
-            SeccompCgroups::new(vec![BoundedToken::parse("devices").unwrap()]).unwrap(),
+            SeccompNamespaces {
+                user: false,
+                mount: true,
+                pid: true,
+                net: true,
+                uts: true,
+                ipc: true,
+                cgroup: true,
+                time: false,
+            },
+            SeccompCgroups::new(vec![BoundedToken::parse("devices").unwrap()]),
             vec![DeviceBind::new(
                 DeviceNodePath::parse("/dev/dri/renderD128").unwrap(),
                 DeviceNodeKind::Char,
@@ -393,17 +274,6 @@ mod tests {
             )],
         )
         .expect("profile validates")
-    }
-
-    #[test]
-    fn a_profile_carries_its_content_inline() {
-        let profile = profile();
-        assert_eq!(profile.syscalls().len(), 3);
-        assert!(profile.namespaces().mount());
-        assert!(!profile.namespaces().user());
-        assert_eq!(profile.cgroups().controllers().len(), 1);
-        assert_eq!(profile.devices()[0].major(), 226);
-        assert_eq!(profile.devices()[0].access(), SeccompDeviceAccess::ReadWrite);
     }
 
     #[test]
@@ -428,10 +298,6 @@ mod tests {
             ),
             Err(SeccompProfileContractError::TooManySyscalls)
         );
-        let controllers = (0..MAX_SECCOMP_CGROUP_CONTROLLERS + 1)
-            .map(|_| BoundedToken::parse("devices").unwrap())
-            .collect();
-        assert!(SeccompCgroups::new(controllers).is_err());
     }
 
     #[test]

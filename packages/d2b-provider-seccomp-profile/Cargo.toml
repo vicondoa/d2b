@@ -22,4 +22,6 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 schemars.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
 serde_json.workspace = true
