@@ -23,3 +23,15 @@ Read all src files (lib, controller 1673, process 1312, runtime 1164, policy 424
 ## Reopened refusals
 
 None. No ledger row's blocking condition changed at HEAD (3f2664794).
+## U1 execution (2026-09-24)
+- applied: src/wayland_proxy/attribution.rs whole module + mod.rs arm — R4 re-verified zero external callers at HEAD.
+- applied: process.rs test-only grant/ticket surface (issue_for_supervisor, from_supervisor 2-arg, from_supervisor_for_session, into_parts, into_worker_tickets, into_worker_tickets_with_fence, LaunchTicket::new, new_with_generation,, compositor_grant/gpu_grant accessors); two subject-deleted tests removed; two tests reworked onto into_worker_tickets_with_fence_and_controller + direct field access; `new_for_role` cfg-gated to test-support (its only remaining caller is new_for_daemon)。
+- applied: controller.rs principal_release_receipt + receipt portion of the single consuming test dropped.
+- applied: clipboard.rs object_forwarding/ClipboardObjectForwarding + forwarding assertions dropped from the test that also pins live global_disposition．
+- applied: wayland_proxy/policy.rs GlobalOverride。
+
+- applied: bridge.rs test-only surface (BridgeConfig::disabled(), impl Default for BridgeReconnectPolicy,, recv_flags_are_fail_closed,, SCM_RIGHTS_* consts); bridge/filter tests reworked onto explicit policy construction/constants; subject-deleted ctruncated test removed。
+
+- applied knob-on fix: d2b-provider-device-tpm/Cargo.toml nix dep gained `features = ["user"]` — pre-existing HEAD compile breakage (nix 0.29 default = []), blocking display-wayland test build (device-tpm in graph).
+- tests: cargo test -p d2b-provider-display-wayland pass。
+

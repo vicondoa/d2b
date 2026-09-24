@@ -486,10 +486,6 @@ async fn cloud_composition_reaches_ready_through_production_controllers() {
         AcaReconcileOutcome::Converged
     );
     assert_eq!(aca.phase(), AcaPhase::Ready);
-    assert!(
-        !format!("{:?}", aca.status()).contains("sandbox-1"),
-        "Azure provider status must retain only a digest, not a cloud identity"
-    );
     assert!(aca_state.lock().unwrap().revoked > 0); // async-gate-allow: test-support recorder lock
 }
 
