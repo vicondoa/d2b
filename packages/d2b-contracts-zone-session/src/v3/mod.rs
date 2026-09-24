@@ -44,11 +44,11 @@ pub use resource_export::*;
 pub use resource_import::*;
 pub use role::{
     PrincipalRef, RoleConditionType, RoleMount, RoleMountPath, RoleNamespaces, RolePosture,
-    RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec, RoleStatus, RoleStatusResource,
+    RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec,
 };
 pub use role_binding::{
     BINDABLE_SUBJECT_TYPES, ExternalPrincipalSelector, RelayAuthority, RoleBindingConditionType,
-    RoleBindingSpec, RoleBindingStatus, RoleBindingStatusResource, ScopeNarrowing,
+    RoleBindingSpec, ScopeNarrowing,
 };
 pub use services::*;
 pub use zone::*;

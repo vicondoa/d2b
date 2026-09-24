@@ -429,56 +429,6 @@ pub enum RoleBindingConditionType {
     Revoked,
 }
 
-/// Identity-free RoleBinding status.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RoleBindingStatusResource {
-    role_resolved: bool,
-    subject_count: u32,
-    unresolved_subject_count: u32,
-    revoked: bool,
-}
-
-impl RoleBindingStatusResource {
-    /// Construct the status projection.
-    pub const fn new(
-        role_resolved: bool,
-        subject_count: u32,
-        unresolved_subject_count: u32,
-        revoked: bool,
-    ) -> Self {
-        Self {
-            role_resolved,
-            subject_count,
-            unresolved_subject_count,
-            revoked,
-        }
-    }
-
-    /// Whether the role currently resolves.
-    pub const fn role_resolved(&self) -> bool {
-        self.role_resolved
-    }
-
-    /// Number of authored subjects.
-    pub const fn subject_count(&self) -> u32 {
-        self.subject_count
-    }
-
-    /// Number of unresolved subjects.
-    pub const fn unresolved_subject_count(&self) -> u32 {
-        self.unresolved_subject_count
-    }
-
-    /// Whether the binding is revoked.
-    pub const fn revoked(&self) -> bool {
-        self.revoked
-    }
-}
-
-/// Alias used by generic status adapters.
-pub type RoleBindingStatus = RoleBindingStatusResource;
-
 #[cfg(test)]
 mod tests {
     use super::*;

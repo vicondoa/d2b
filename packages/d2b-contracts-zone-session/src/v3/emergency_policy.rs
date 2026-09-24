@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use d2b_contracts_resource::v3::{Timestamp, execution_policy::redacted_debug};
+use d2b_contracts_resource::v3::execution_policy::redacted_debug;
 
 /// Canonical EmergencyPolicy ResourceType name.
 pub const EMERGENCY_POLICY_RESOURCE_TYPE: &str = "EmergencyPolicy";
@@ -214,56 +214,6 @@ pub enum EmergencyPolicyConditionType {
     EmergencyDrainPending,
 }
 
-/// ResourceType-common EmergencyPolicy status.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EmergencyPolicyStatusResource {
-    active: bool,
-    activated_at: Option<Timestamp>,
-    deactivated_at: Option<Timestamp>,
-    drain_completed_at: Option<Timestamp>,
-}
-
-impl EmergencyPolicyStatusResource {
-    /// Construct the identity-free status projection.
-    pub const fn new(
-        active: bool,
-        activated_at: Option<Timestamp>,
-        deactivated_at: Option<Timestamp>,
-        drain_completed_at: Option<Timestamp>,
-    ) -> Self {
-        Self {
-            active,
-            activated_at,
-            deactivated_at,
-            drain_completed_at,
-        }
-    }
-
-    /// Whether effects are currently applied.
-    pub const fn active(&self) -> bool {
-        self.active
-    }
-
-    /// Borrow the most recent activation time.
-    pub const fn activated_at(&self) -> Option<&Timestamp> {
-        self.activated_at.as_ref()
-    }
-
-    /// Borrow the most recent deactivation time.
-    pub const fn deactivated_at(&self) -> Option<&Timestamp> {
-        self.deactivated_at.as_ref()
-    }
-
-    /// Borrow the drain completion time.
-    pub const fn drain_completed_at(&self) -> Option<&Timestamp> {
-        self.drain_completed_at.as_ref()
-    }
-}
-
-/// Alias used by generic status adapters.
-pub type EmergencyPolicyStatus = EmergencyPolicyStatusResource;
-
 /// Compute the effective union and tightest deadline of enabled policies.
 pub fn effective_scope<'a>(
     policies: impl IntoIterator<Item = &'a EmergencyPolicySpec>,
@@ -296,18 +246,5 @@ mod tests {
         assert!(scope.disconnect_zone_links());
         assert!(scope.stop_provider_processes());
         assert_eq!(deadline, 5);
-    }
-
-    #[test]
-    fn reason_is_bounded_and_status_has_no_reason_field() {
-        let spec = EmergencyPolicySpec::default();
-        let encoded = serde_json::to_vec(&spec).unwrap();
-        assert!(String::from_utf8(encoded).unwrap().contains("reason"));
-        assert!(
-            serde_json::to_string(&EmergencyPolicyStatusResource::new(false, None, None, None))
-                .unwrap()
-                .find("reason")
-                .is_none()
-        );
     }
 }

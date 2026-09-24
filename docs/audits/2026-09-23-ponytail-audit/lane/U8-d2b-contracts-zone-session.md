@@ -14,3 +14,6 @@ net: -303 lines, -0 deps
 
 ## Checked
 Read all of `packages/d2b-contracts-zone-session` - `lib.rs`, `src/v3/mod.rs`, all five dead-projection files (emergency_policy, resource_export, resource_import, role, role_binding) plus the two live siblings (zone, zone_link), `services.rs` with its frozen-wire golden test, and `tests/contracts.rs`. Ran grep/rg caller census across `packages/` (Rust), `packages/xtask/src/*.rs` (policy rows, incl. provider_crate_policy.rs:1795-1798 pin), BUILD.bazel, `nixos-modules/resource-schemas/`, and `tests/contracts.rs`; measured all line regions with sed/awk, not estimates. Ledger rows honored: `#B5` [partial] remainder verified and revised (five, not six), `#C4` [not applied] untouched, services.rs wire pin respected, generated/ + xtask golden test surfaces excluded as policy-required.
+
+## U3 outcome (2026-09-24)
+- applied: five dead `*StatusResource` projections (EmergencyPolicy, ResourceExport, ResourceImport, Role, RoleBinding) - structs + impls + derives + redacted_debug invokes + aliases + in-file self-tests deleted; re-export arms trimmed in v3/mod.rs; orphaned imports (Timestamp, BindingDigest, redacted_debug, ResourceGeneration) trimmed. R4 at HEAD: zero workspace callers confirmed for every surface (only mod.rs arms). Live siblings Zone/ZoneLink untouched; services.rs wire pin untouched.
