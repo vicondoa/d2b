@@ -1,4 +1,4 @@
-# U64 — d2b-provider-process (+ shared toolkit family U31)
+# U64 - d2b-provider-process (+ shared toolkit family U31)
 
 ## Verdict
 Lean already. Ship.

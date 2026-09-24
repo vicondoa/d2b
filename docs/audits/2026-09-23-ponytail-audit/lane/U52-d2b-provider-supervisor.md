@@ -2,19 +2,19 @@
 
 Lane audit (fresh pass per U1 ledger; all prior U52 findings refused).
 
-## Ledger verification (refusal-honoring — no new evidence)
+## Ledger verification (refusal-honoring - no new evidence)
 
 Prior lane ledger rows, each **refused**, re-verified against the current
 tree (HEAD `3f2664794`); refusal grounds still hold:
 
 - **#G53 [refused] hand-rolled blocking executor (16 threads, deadline
-  thread, custom waker)** — `ProviderSupervisor` ordering executor remains
+  thread, custom waker)** - `ProviderSupervisor` ordering executor remains
   the crate's blocking process-effect seam; `d2bd` awaits launch with **no
   timeout** (`packages/d2bd/src/process_provider_runtime.rs:59` names the
   generic `ProviderSupervisor<B: ProcessEffectBackend>`); tokio is
   dev-only here. `src/adapter.rs` keeps the executor, `src/broker.rs`
   keeps `MAX_PENDING_OBSERVATIONS`.
-- **#G54 [refused] hand-rolled seqpacket broker transport** — broker stub
+- **#G54 [refused] hand-rolled seqpacket broker transport** - broker stub
   `src/broker.rs` (seqpacket envelope carrier, `OpenPidfd`/`ObserveRunner`
   leg) has unambiguously live production callers in
   `packages/d2bd/src/process_provider_runtime.rs` and the daemon's
@@ -22,14 +22,14 @@ tree (HEAD `3f2664794`); refusal grounds still hold:
   profile and role seam (`with_socket_and_role`, `BrokerPidfdHandle`).
   Provider crates may not depend on d2bd transport; seam stays.
 - **#G55 [refused] generic systemd seam with exactly one production
-  implementation** — `SystemdProcessProvider::new(ProviderSupervisor::new(
+  implementation** - `SystemdProcessProvider::new(ProviderSupervisor::new(
   SystemdProcessBackend::new(...)))` is constructed in
   `process_provider_runtime.rs:59`, and `BrokerSystemdEffectOwner`
   envelope seam has a live caller in `d2bd/src/process_provider_runtime.rs`
   (constructing `BrokerSystemdEffectOwner::with_socket_and_role`);
   the generic trait surface stays behind the crate boundary as refused.
 - **#G60 [refused] suite scrapes broker error-kind string via `include_str`
-  (`packages/d2b-provider-supervisor/tests/`)** — no exported constant
+  (`packages/d2b-provider-supervisor/tests/`)** - no exported constant
   exists for the broker error kind; `d2b-contracts-broker` is out of lane.
   The scrape and cross-crate `compile_data` stay, as recorded.
 
@@ -43,7 +43,7 @@ and their callers remain (adapter.rs, broker.rs, d2bd consumer). No new
 dead string constants, no new test-only flow, no new zero-caller surface
 introduced at HEAD.
 
-net: 0 lines, 0 deps — reuse of prior refusals; nothing new to cut.
+net: 0 lines, 0 deps - reuse of prior refusals; nothing new to cut.
 
 ## Consistency notes
 

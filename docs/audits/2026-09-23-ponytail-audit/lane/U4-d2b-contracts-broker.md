@@ -6,26 +6,26 @@ Wire-only typed contract crate (~5,338 LOC across broker_wire.rs, host_generatio
 kernel_client.rs, generated broker_operation_profiles.rs, lib.rs). Audited the public surface
 that could plausibly be dead and verified every candidate against workspace-wide callers:
 
-- `BrokerRequest`/`BrokerResponse` wire envelope + 50+ typed request/response shapes —
+- `BrokerRequest`/`BrokerResponse` wire envelope + 50+ typed request/response shapes -
   live on both legs: constructed/decoded by `d2b-broker` (runtime.rs, ops/*), `d2bd`,
   `d2bd-runtime`, and the provider crates (supervisor, network-local, process, gpu...).
-- `BrokerCapabilities::w3()` — broker_operations list read by `d2b-broker` catalog.rs:751
+- `BrokerCapabilities::w3()` - broker_operations list read by `d2b-broker` catalog.rs:751
   and the profile-separation + wire tests; `HelloResponse`/`HelloRequest` exercised by
   `d2bd` composition + daemon hello frames and the socket_activation / profile tests.
-- `BrokerCapabilities` / `BrokerProfile` / `BrokerCallerRole` — `allowed_by_profile`,
+- `BrokerCapabilities` / `BrokerProfile` / `BrokerCallerRole` - `allowed_by_profile`,
   `allows_operation`, `allows_request`, `guest_operations`, `operations()` all read at
   runtime.rs:1636,1900 and tests/profile_separation.rs + host/guest profile tests.
-- `security_key_authority_binding`, `security_key_authority_binding` fingerprint helper —
+- `security_key_authority_binding`, `security_key_authority_binding` fingerprint helper -
   called by d2b-broker security_key op + effects_service; `security_key_authority_binding`
   (hash-bound selector) consumed by d2bd + d2bd-composition.
-- `KernelInvocation`/`KernelReply`/`envelope_invoke_kernel` — dialed by supervisor,
+- `KernelInvocation`/`KernelReply`/`envelope_invoke_kernel` - dialed by supervisor,
   process-systemd, process, network-local, d2bd forward_rendezvous.
-- `HandoffCoordinator`/`HandoffState`/`HostGenerationHandoffIntent` (host_generation) —
+- `HandoffCoordinator`/`HandoffState`/`HostGenerationHandoffIntent` (host_generation) -
   consumed by d2b-broker/src/runtime.rs + host_generation_handoff.rs + activation-nixos driver.
-- `AuditJoinContext`/`CanonicalAuditDigest`/audit export cursor — read in d2b-broker audit,
+- `AuditJoinContext`/`CanonicalAuditDigest`/audit export cursor - read in d2b-broker audit,
   d2bd composition, broker_transport.
 - `ForwardOperationRequest`/`Outcome::Result|Refused`, `EnvelopeInvoke` kernel frames,
-  `PipeWireAudioRequest`, `QemuMedia*`, `Usbip*` — consumed across the provider family.
+  `PipeWireAudioRequest`, `QemuMedia*`, `Usbip*` - consumed across the provider family.
 - `RunnerRole`/`BrokerProfile::as_str`, `PROTOCOL_VERSION` (wire-tagged; cross-checks in
   d2bd catalog + xtask gen_broker_operations).
 

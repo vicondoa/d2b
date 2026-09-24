@@ -1725,9 +1725,7 @@ name = "d2b-provider-process-minijail"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-process-conformance",
- "serde",
  "tracing",
 ]
 

@@ -2,7 +2,7 @@
 
 net: -434 lines, -0 deps
 
-- `delete:` `nixos-modules/host-activation-helper/` — a dead twin source tree
+- `delete:` `nixos-modules/host-activation-helper/` - a dead twin source tree
   (same crate name `d2b-host-activation-helper`, same single-verb
   `chgrp-by-numeric-gid` binary, 409-line `src/main.rs` + 9-line Cargo.toml +
   16-line Cargo.lock). **Not** a cargo workspace member (root `Cargo.toml`
@@ -12,14 +12,14 @@ net: -434 lines, -0 deps
   inventories, and not referenced by any caller in the workspace. The live
   crate is `packages/d2b-host-activation-helper` (structurally-identical
   purpose, staged and built). The twin also carries a **duplicate crate-name
-  collision** — `packages/rust-host-tools.nix:121,249` and
+  collision** - `packages/rust-host-tools.nix:121,249` and
   `nixos-modules/rust-host-tools.nix` name only the `packages/` workspace
   member, so any future name-keyed tooling (bazel binary-name resolution,
   cargo workspace-member walks, xtask crate-layout census) would resolve the
   name ambiguously across the two trees. Deleting the twin removes the
   collision at the source, alongside the duplicate LOC. [nixos-modules/host-activation-helper/] (leaf)
 - `delete:` Similarly the crate's **dead sibling twin tree**
-  `nixos-modules/host-activation-helper/src/` is the same deletion — see the
+  `nixos-modules/host-activation-helper/src/` is the same deletion - see the
   row above; a single path covers both. (consolidated into finding 1)
 - `yagni:` `--no-follow-symlinks` CLI flag accepted-and-ignored in the live
   crate's arg parse (`packages/d2b-host-activation-helper/src/main.rs:62`
@@ -32,7 +32,7 @@ net: -434 lines, -0 deps
 
 ## Consistency notes
 
-N/A — host-side binary crate, not a types-layer crate (U2-U11).
+N/A - host-side binary crate, not a types-layer crate (U2-U11).
 
 ## Reopened refusals
 
