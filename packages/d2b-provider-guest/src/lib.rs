@@ -39,16 +39,8 @@ pub mod target_service;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
-pub use driver::{
-    GUEST_REGISTRATIONS, GUEST_TYPE_NAME, GuestChildObservation, GuestChildSurface, GuestDriverArgs,
-    GuestDriverEffects, GuestDriverFactory, GuestDriverStatus, GuestEffectError, GuestEffectOutcome,
-    GuestEffectPhase, GuestEffectRequest, GuestFinalizeStage, GuestKind, GuestRegistration,
-    GuestStatusSink, declared_dependency_refs, decode_metadata, guest_descriptor,
-    guest_spec_decoder, guest_status_sink, key_ref, resource_uid, view_phase,
-};
-pub use effects_service::{
-    GUEST_EFFECTS_SERVICE, GuestEffectsService, GuestEffectsServiceFactory,
-};
+pub use driver::{GuestDriverArgs, GuestStatusSink, guest_descriptor};
+pub use effects_service::{GUEST_EFFECTS_SERVICE, GuestEffectsServiceFactory};
 pub use facets::{
     CloudHypervisorGuestRuntime, GuestCloudHypervisorOutcome, GuestEffectFacets, GuestManagerView,
 };
@@ -57,10 +49,5 @@ pub use shutdown::{
     CloudHypervisorShutdown, GracefulVmShutdown, ProviderGuestState, ProviderKind,
     ProviderRequestOutcome, ProviderShutdownTarget, ProviderVmmExitOutcome,
 };
-pub use target_control::{
-    GuestTargetSession, SessionTargetControlChannel, guest_target_ref, session_target_control,
-};
-pub use target_service::{
-    GuestTargetEffect, GuestTargetEffectError, GuestTargetEffects, GuestTargetRefusal,
-    GuestTargetService, production_guest_target_effects, target_control_services,
-};
+pub use target_control::{GuestTargetSession, guest_target_ref, session_target_control};
+pub use target_service::{GuestTargetService, production_guest_target_effects, target_control_services};
