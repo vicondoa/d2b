@@ -41,8 +41,9 @@ fn framed_transport_handles_partial_and_coalesced_records() {
     runtime.block_on(async {
         let (mut sender, receiver) = duplex(128);
         let writer = tokio::spawn(async move {
-            sender.write_all(&[0, 5, b'h', b'e']).await.unwrap();
-            sender.write_all(b"llo\0\x05world").await.unwrap();
+            sender.write_all(&[0, 0, 0, 5, b'h', b'e']).await.unwrap();
+            sender.write_all(b"llo").await.unwrap();
+            sender.write_all(&[0, 0, 0, 5, b'w', b'o', b'r', b'l', b'd']).await.unwrap();
         });
 
         let mut transport = FramedVsockTransport::new(receiver);
@@ -65,7 +66,7 @@ fn framed_transport_rejects_oversized_records_before_allocation() {
         .expect("runtime");
     runtime.block_on(async {
         let (mut sender, receiver) = duplex(16);
-        sender.write_all(&[0, 8, 1, 2]).await.unwrap();
+        sender.write_all(&[0, 0, 0, 8, 1, 2]).await.unwrap();
         let mut transport = FramedVsockTransport::with_limit(receiver, 4);
         assert_eq!(
             transport.read_frame().await,

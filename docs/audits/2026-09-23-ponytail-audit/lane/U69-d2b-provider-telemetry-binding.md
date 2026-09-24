@@ -24,3 +24,9 @@ None. U69 has no prior refused findings; the two prior rows (#PR10 partial, #S2 
 ## Checked
 
 Read `src/driver.rs` (production + tests, all 1,242 lines), `src/lib.rs`, `tests/registration.rs`, `BUILD.bazel`, `Cargo.toml`, crate README. Grep-based caller verification across the workspace (packages, d2bd, BUILD files) for every pub export. Identified zero new dead code; the crate's only filed finding (the telemetry-binding 9-verb family list in the converted-type verbs) was already reported as cross-cutting and refused under U1#S2, so no new ledget entry required. No findings.
+
+## U5 execution (2026-09-24)
+
+Verb-list row (TELEMETRY_SERVICE_VERBS -> CONVERTED_TYPE_VERBS): already applied in
+U1 - `src/driver.rs` uses `CONVERTED_TYPE_VERBS` and `TELEMETRY_SERVICE_VERBS` has zero
+workspace references. Skipped.

@@ -87,3 +87,14 @@ All 4 findings applied. R4 re-verified at HEAD: `from_core` x2 zero callers in c
 - Finding 4: deleted `OpaqueEndpointId::from_core` + `OpaqueBindingId::from_core` (service.rs; byte-identical `Self::parse` aliases.
 
 `cargo test -p d2b-provider-transport-vsock`: PASS (13 suites; 40 tests + doc-tests; 0 failures). No residual refs to deleted symbols workspace-wide (remaining grep hits: this lane file, ADR-046 historical rows for the legacy d2b-host socat path, unrelated transport-unix `TransportMetric*`.
+
+## U5 execution (2026-09-24) - KTD2 framing alignment
+
+KTD2 applied: `src/framing.rs` re-shaped from the 2-byte u16 length header to the
+session-unix 4-byte u32 shape (`FRAME_HEADER_BYTES = 4`, `u32::from_be_bytes` decode,
+`u32::try_from(...).to_be_bytes()` encode, `u16::MAX` bound -> `u32::MAX`), mirroring
+`packages/d2b-session-unix/src/vsock.rs` exactly. Round-trip tests in `tests/framing.rs`
+updated to the 4-byte header; no other consumer exists at HEAD (guest-cloud-hypervisor
+has zero framing references). ADR-046 migration-map row for vsock framing marked done;
+dossier ADR046-vsock-002 implementation state -> Done. `cargo test -p
+d2b-provider-transport-vsock` green.

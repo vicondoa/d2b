@@ -46,7 +46,7 @@ the pre-ADR-0045 v3 baseline. Do not cite them as v3 baseline behavior.
 
 | Symbol | Selected behavior |
 | --- | --- |
-| `FramedVsockTransport` | Implements `OwnedTransport` over `AF_VSOCK`; 2-byte big-endian length-prefixed framing; async tokio-vsock send/receive; no SCM_RIGHTS (no attachment support); `TransportDescriptor::class=Vsock`, `locality=NonLocal`, `atomic_transfer=false`, `attachment_support=false` |
+| `FramedVsockTransport` | Implements `OwnedTransport` over `AF_VSOCK`; 4-byte big-endian u32 length-prefixed framing; async tokio-vsock send/receive; no SCM_RIGHTS (no attachment support); `TransportDescriptor::class=Vsock`, `locality=NonLocal`, `atomic_transfer=false`, `attachment_support=false` |
 | `NativeVsockTransport` | Wraps a connected `tokio-vsock` stream as an `OwnedTransport`; per-frame bounded allocation; graceful vs. unclean EOF distinction |
 | `NativeVsockListener` | Binds `AF_VSOCK VMADDR_PORT_ANY` then hands accepted streams to callers; per-accept CID verification against expected CID range |
 | `VsockTransportError` (12 variants) | `BindFailed`, `ConnectFailed`, `CidMismatch`, `PortMismatch`, `FrameTooLarge`, `UnexpectedEof`, `WriteTimeout`, `ReadTimeout`, `ConnectionReset`, `ProtocolError`, `Backpressure`, `Shutdown` |
@@ -54,7 +54,7 @@ the pre-ADR-0045 v3 baseline. Do not cite them as v3 baseline behavior.
 
 **V3 destination - split by ownership**:
 
-- `FramedVsockTransport` framing utilities (2-byte length-prefix encode/decode,
+- `FramedVsockTransport` framing utilities (4-byte u32 length-prefix encode/decode,
   bounded frame allocation, EOF/reset classification) → `packages/d2b-provider-transport-vsock/src/framing.rs`.
   These contain no raw AF_VSOCK syscall calls; they operate on any `AsyncRead+AsyncWrite`.
 - `NativeVsockTransport` / `NativeVsockListener` (raw `AF_VSOCK socket()`,
@@ -68,7 +68,7 @@ the pre-ADR-0045 v3 baseline. Do not cite them as v3 baseline behavior.
 
 | Test function | Covers | v3 destination |
 | --- | --- | --- |
-| `vsock_framing_handles_partial_and_coalesced_records` | 2-byte prefix reassembly, partial read, coalesced frames | `tests/framing.rs` in Provider crate |
+| `vsock_framing_handles_partial_and_coalesced_records` | 4-byte u32 prefix reassembly, partial read, coalesced frames | `tests/framing.rs` in Provider crate |
 | `vsock_cid_mismatch_closes_without_processing` | `VsockEndpointPolicy::ExpectedCid` enforcement | `effect_port_mock.rs` (OpaqueEndpointId mismatch); raw CID test stays in core adapter |
 | `vsock_frame_too_large_rejects_before_allocating` | Bounded per-frame allocation | `tests/framing.rs` in Provider crate |
 | `vsock_clean_eof_versus_reset_are_distinct` | EOF/reset distinction for reconnect decision | `tests/framing.rs` in Provider crate |
@@ -163,7 +163,8 @@ Endpoint, or status handler.
   vsock socket.
 - On `ObserveTransport`: streams `TransportEvent` records (acquired,
   bytes-transferred, error, released) to the core caller.
-- Uses 2-byte big-endian length-prefixed framing for every vsock write/read.
+- Uses 4-byte big-endian u32 length-prefixed framing for every vsock write/read
+  (aligned to the session-unix `d2b-session-unix/src/vsock.rs` baseline, KTD2).
 - Never transfers file descriptors (structural: `attachment_support = false`
   on the vsock `TransportDescriptor`).
 
@@ -241,11 +242,11 @@ packages/d2b-provider-transport-vsock/
                       (VsockEffectPort + OpaqueEndpointId / OpaqueBindingId); dispatches
                       OpenTransport / CloseTransport / ObserveTransport to the stream source and bridge tasks
     bridge.rs       - named-stream ↔ opaque AsyncRead+AsyncWrite byte pump task
-    framing.rs      - 2-byte big-endian length-prefix encode / decode (no raw sockets)
+    framing.rs      - 4-byte big-endian u32 length-prefix encode / decode (no raw sockets)
     limits.rs       - per-connection and per-session constants
     errors.rs       - VsockEffectError / FramingError / ServiceError typed hierarchy
   tests/
-    framing.rs           - 2-byte framing, partial reads, frame-size bounds
+    framing.rs           - 4-byte u32 framing, partial reads, frame-size bounds
     effect_port_mock.rs  - FakeVsockEffectPort; opaque-ID mismatch / timeout injection
     open_close.rs        - OpenTransport / CloseTransport service round-trip (fake port)
     observe.rs           - ObserveTransport event stream (fake port)
@@ -807,7 +808,7 @@ produced by this Provider.
 | `unknown-transport-handle` | `CloseTransport` or `ObserveTransport` on unknown handle | No |
 | `close-unconfirmed` | Bridge or endpoint closure was not confirmed within the grace period | Yes |
 | `bridge-task-panicked` | Internal bridge task exited unexpectedly | No; core must reopen |
-| `framing-error` | 2-byte length prefix violated protocol | No |
+| `framing-error` | 4-byte u32 length prefix violated protocol | No |
 
 ---
 
@@ -999,8 +1000,8 @@ expression.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: hermetic framing tests; `tests/framing.rs` covers partial/coalesced records, oversized frames, EOF/reset classification, and no real socket. |
 | Removal proof | None for framing; raw socket portions from the source are deliberately not copied into the Provider crate. |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Done (2026-09-24, U5): framing utilities live in `framing.rs`; header aligned to the session-unix 4-byte u32 length-prefix baseline (KTD2); `tests/framing.rs` covers partial/coalesced records, oversized frames, and no real socket. |
+| Evidence | Destination and Validation obligations verified in the indexed tree (2026-09-24, U5). |
 
 ### ADR046-vsock-003
 | Field | Value |
