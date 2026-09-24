@@ -1395,19 +1395,6 @@ impl DisplayController {
         self.principal_pool.release(lease)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn principal_release_receipt(
-        &mut self,
-        session_key: &str,
-    ) -> Result<PrincipalReleaseReceipt, crate::principal::PrincipalPoolError> {
-        if !self.principals.contains_key(session_key) {
-            return Err(crate::principal::PrincipalPoolError::UnknownLease);
-        }
-        Ok(PrincipalReleaseReceipt {
-            session_key: session_key.to_owned(),
-        })
-    }
-
     fn status(
         &self,
         phase: Phase,
@@ -1515,11 +1502,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(result.status.phase, Phase::Ready);
-
-        let receipt = controller
-            .principal_release_receipt("Guest/demo|Host/demo|User/alice|1|0")
-            .unwrap();
-        controller.release_session_principal(receipt).unwrap();
     }
 
     #[test]

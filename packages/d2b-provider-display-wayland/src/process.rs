@@ -331,24 +331,6 @@ pub struct LaunchGrants {
 }
 
 impl LaunchGrants {
-    /// Issue single-use commitments for one authenticated display session.
-    ///
-    /// The daemon supplies only the already-authenticated session binding;
-    /// grant commitments are generated inside the display/supervisor boundary
-    /// and cannot be selected by callers.
-    pub fn issue_for_supervisor(
-        session_digest: [u8; 32],
-        reconnect_generation: u64,
-        teardown_generation: u64,
-    ) -> Result<Self, &'static str> {
-        Self::issue_for_supervisor_with_controller_generation(
-            session_digest,
-            reconnect_generation,
-            1,
-            teardown_generation,
-        )
-    }
-
     /// Issue grants bound to the authenticated controller generation.
     pub fn issue_for_supervisor_with_controller_generation(
         session_digest: [u8; 32],
@@ -392,46 +374,6 @@ impl LaunchGrants {
                 teardown_generation,
             ),
         )
-    }
-
-    /// Construct launch grants at the private Core/Supervisor boundary.
-    /// Construct a bounded observation from Process controller evidence.
-    ///
-    /// The daemon uses this when projecting durable Process child status into
-    /// the aggregate WaylandSession runtime. It carries no process handles or
-    /// launch authority.
-    pub const fn from_supervisor(
-        compositor: AttachmentGrantHandle,
-        gpu: AttachmentGrantHandle,
-    ) -> Self {
-        Self {
-            compositor,
-            gpu,
-            frontend_gpu: None,
-            session_digest: [0; 32],
-            reconnect_generation: 0,
-            controller_generation: 1,
-            teardown_generation: 1,
-        }
-    }
-
-    /// Construct grants bound to one authenticated display session.
-    #[allow(dead_code)]
-    pub(crate) const fn from_supervisor_for_session(
-        compositor: AttachmentGrantHandle,
-        gpu: AttachmentGrantHandle,
-        session_digest: [u8; 32],
-        reconnect_generation: u64,
-    ) -> Self {
-        Self {
-            compositor,
-            gpu,
-            frontend_gpu: None,
-            session_digest,
-            reconnect_generation,
-            controller_generation: 1,
-            teardown_generation: 1,
-        }
     }
 
     /// Construct grants for both independently supervised display workers.
@@ -500,69 +442,6 @@ impl LaunchGrants {
             session_digest,
             reconnect_generation,
             teardown_generation,
-        )
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn into_parts(
-        self,
-        expected_session_digest: [u8; 32],
-        expected_reconnect_generation: u64,
-    ) -> Option<(AttachmentGrantHandle, AttachmentGrantHandle)> {
-        if self.session_digest != expected_session_digest
-            || self.reconnect_generation != expected_reconnect_generation
-            || self.reconnect_generation == 0
-        {
-            return None;
-        }
-        Some((self.compositor, self.gpu))
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn into_worker_tickets(
-        self,
-        expected_session_digest: [u8; 32],
-        expected_reconnect_generation: u64,
-        policy_digest: &str,
-        policy_generation: u64,
-        identity_label: &str,
-        actions: &[WorkerAction],
-    ) -> Option<Vec<LaunchTicket>> {
-        self.into_worker_tickets_with_fence(
-            expected_session_digest,
-            expected_reconnect_generation,
-            1,
-            policy_digest,
-            policy_generation,
-            identity_label,
-            actions,
-        )
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the sealed launch boundary keeps all session and fence evidence explicit"
-    )]
-    pub(crate) fn into_worker_tickets_with_fence(
-        self,
-        expected_session_digest: [u8; 32],
-        expected_reconnect_generation: u64,
-        expected_teardown_generation: u64,
-        policy_digest: &str,
-        policy_generation: u64,
-        identity_label: &str,
-        actions: &[WorkerAction],
-    ) -> Option<Vec<LaunchTicket>> {
-        let expected_controller_generation = self.controller_generation;
-        self.into_worker_tickets_with_fence_and_controller(
-            expected_session_digest,
-            expected_reconnect_generation,
-            expected_controller_generation,
-            expected_teardown_generation,
-            policy_digest,
-            policy_generation,
-            identity_label,
-            actions,
         )
     }
 
@@ -919,53 +798,8 @@ impl LaunchGenerations {
 }
 
 impl LaunchTicket {
-    /// Construct a launch ticket without accepting paths or raw file
-    /// descriptors.
-    #[allow(dead_code)]
-    pub(crate) fn new(
-        compositor_grant: AttachmentGrantHandle,
-        gpu_grant: AttachmentGrantHandle,
-        policy_digest: impl Into<String>,
-        identity_label: impl Into<String>,
-    ) -> Result<Self, &'static str> {
-        Self::new_with_generation(
-            compositor_grant,
-            gpu_grant,
-            policy_digest,
-            0,
-            identity_label,
-        )
-    }
-
-    /// Construct a launch ticket bound to a Core policy generation.
-    #[allow(dead_code)]
-    pub(crate) fn new_with_generation(
-        compositor_grant: AttachmentGrantHandle,
-        gpu_grant: AttachmentGrantHandle,
-        policy_digest: impl Into<String>,
-        policy_generation: u64,
-        identity_label: impl Into<String>,
-    ) -> Result<Self, &'static str> {
-        let policy_digest = policy_digest.into();
-        let identity_label = identity_label.into();
-        if !policy_digest.starts_with("sha256:")
-            || identity_label.is_empty()
-            || identity_label.len() > 64
-        {
-            return Err("display-launch-ticket-invalid");
-        }
-        Self::new_for_role(
-            DisplayProcessRole::HostProxy,
-            Some(compositor_grant),
-            gpu_grant,
-            policy_digest,
-            policy_generation,
-            identity_label,
-            1,
-        )
-    }
-
     /// Construct one role-specific launch ticket from supervisor grants.
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_for_role(
         role: DisplayProcessRole,
         compositor_grant: Option<AttachmentGrantHandle>,
@@ -1047,18 +881,6 @@ impl LaunchTicket {
         self.role
     }
 
-    /// Borrow the compositor attachment grant.
-    #[allow(dead_code)]
-    pub(crate) const fn compositor_grant(&self) -> Option<&AttachmentGrantHandle> {
-        self.compositor_grant.as_ref()
-    }
-
-    /// Borrow the GPU attachment grant.
-    #[allow(dead_code)]
-    pub(crate) const fn gpu_grant(&self) -> &AttachmentGrantHandle {
-        &self.gpu_grant
-    }
-
     /// Borrow the sealed policy digest.
     pub fn policy_digest(&self) -> &str {
         &self.policy_digest
@@ -1099,32 +921,6 @@ impl core::fmt::Debug for LaunchTicket {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn supervisor_grants_are_non_cloneable_and_bind_one_launch_ticket() {
-        let grants = LaunchGrants::from_supervisor(
-            AttachmentGrantHandle::from_supervisor([7; 32]),
-            AttachmentGrantHandle::from_supervisor([8; 32]),
-        );
-        let ticket = LaunchTicket::new_with_generation(
-            grants.compositor,
-            grants.gpu,
-            format!("sha256:{}", "a".repeat(64)),
-            3,
-            "session",
-        )
-        .unwrap();
-        assert_eq!(ticket.policy_generation(), 3);
-        assert_eq!(ticket.identity_label(), "session");
-    }
-
-    #[test]
-    fn supervisor_grant_issuer_rejects_unbound_sessions() {
-        assert!(LaunchGrants::issue_for_supervisor([0; 32], 1, 1).is_err());
-        assert!(LaunchGrants::issue_for_supervisor([7; 32], 0, 1).is_err());
-        let grants = LaunchGrants::issue_for_supervisor([7; 32], 2, 3).unwrap();
-        assert!(grants.into_parts([7; 32], 2).is_some());
-    }
 
     #[test]
     fn frontend_restart_is_independent_from_a_ready_proxy() {
@@ -1249,9 +1045,10 @@ mod tests {
         );
         assert!(
             grants
-                .into_worker_tickets_with_fence(
+                .into_worker_tickets_with_fence_and_controller(
                     [4; 32],
                     9,
+                    1,
                     1,
                     &format!("sha256:{}", "a".repeat(64)),
                     2,
@@ -1269,9 +1066,10 @@ mod tests {
             2,
         );
         let tickets = grants
-            .into_worker_tickets_with_fence(
+            .into_worker_tickets_with_fence_and_controller(
                 [4; 32],
                 9,
+                1,
                 2,
                 &format!("sha256:{}", "a".repeat(64)),
                 2,
@@ -1294,9 +1092,11 @@ mod tests {
             1,
         );
         let tickets = grants
-            .into_worker_tickets(
+            .into_worker_tickets_with_fence_and_controller(
                 [4; 32],
                 9,
+                1,
+                1,
                 &format!("sha256:{}", "a".repeat(64)),
                 2,
                 "demo",
@@ -1306,7 +1106,7 @@ mod tests {
         assert_eq!(tickets.len(), 2);
         assert_eq!(tickets[0].role(), DisplayProcessRole::HostProxy);
         assert_eq!(tickets[1].role(), DisplayProcessRole::GuestFrontend);
-        assert!(tickets[0].compositor_grant().is_some());
-        assert!(tickets[1].compositor_grant().is_none());
+        assert!(tickets[0].compositor_grant.is_some());
+        assert!(tickets[1].compositor_grant.is_none());
     }
 }

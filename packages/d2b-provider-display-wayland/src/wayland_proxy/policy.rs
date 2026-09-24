@@ -132,14 +132,6 @@ impl PolicyWarning {
     }
 }
 
-/// Per-global override instruction from the operator.
-#[derive(Debug, Clone)]
-pub struct GlobalOverride {
-    pub interface: String,
-    pub action: GlobalAction,
-    pub max_version: Option<u32>,
-}
-
 /// Input configuration for policy construction.
 #[derive(Debug, Clone)]
 pub struct PolicyInput {

@@ -18,12 +18,6 @@ pub enum ClipboardGlobalDisposition {
     NotClipboard,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClipboardObjectForwarding {
-    NeverForwardUpstream,
-    NotClipboard,
-}
-
 pub fn global_disposition(interface: &str) -> ClipboardGlobalDisposition {
     match interface {
         "wl_data_device_manager" => ClipboardGlobalDisposition::VirtualizeLocally,
@@ -35,32 +29,6 @@ pub fn global_disposition(interface: &str) -> ClipboardGlobalDisposition {
         | "gtk_primary_selection_device_manager"
         | "xdg_toplevel_drag_manager_v1" => ClipboardGlobalDisposition::DenyGlobal,
         _ => ClipboardGlobalDisposition::NotClipboard,
-    }
-}
-
-pub fn object_forwarding(interface: &str) -> ClipboardObjectForwarding {
-    match interface {
-        "wl_data_device_manager"
-        | "wl_data_device"
-        | "wl_data_source"
-        | "wl_data_offer"
-        | "zwp_primary_selection_device_manager_v1"
-        | "zwp_primary_selection_device_v1"
-        | "zwp_primary_selection_source_v1"
-        | "zwp_primary_selection_offer_v1"
-        | "wp_primary_selection_device_manager_v1"
-        | "gtk_primary_selection_device_manager"
-        | "ext_data_control_manager_v1"
-        | "ext_data_control_device_v1"
-        | "ext_data_control_source_v1"
-        | "ext_data_control_offer_v1"
-        | "zwlr_data_control_manager_v1"
-        | "zwlr_data_control_device_v1"
-        | "zwlr_data_control_source_v1"
-        | "zwlr_data_control_offer_v1"
-        | "xdg_toplevel_drag_manager_v1"
-        | "xdg_toplevel_drag_v1" => ClipboardObjectForwarding::NeverForwardUpstream,
-        _ => ClipboardObjectForwarding::NotClipboard,
     }
 }
 
@@ -123,18 +91,6 @@ mod tests {
             global_disposition("wl_data_device_manager"),
             ClipboardGlobalDisposition::VirtualizeLocally
         );
-        for iface in [
-            "wl_data_device_manager",
-            "wl_data_device",
-            "wl_data_source",
-            "wl_data_offer",
-        ] {
-            assert_eq!(
-                object_forwarding(iface),
-                ClipboardObjectForwarding::NeverForwardUpstream,
-                "{iface} must not be forwarded into the host clipboard namespace"
-            );
-        }
     }
 
     #[test]
@@ -150,10 +106,6 @@ mod tests {
             assert_ne!(
                 global_disposition(iface),
                 ClipboardGlobalDisposition::NotClipboard
-            );
-            assert_eq!(
-                object_forwarding(iface),
-                ClipboardObjectForwarding::NeverForwardUpstream
             );
         }
     }

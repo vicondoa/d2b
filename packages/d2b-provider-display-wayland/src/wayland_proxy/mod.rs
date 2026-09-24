@@ -1,6 +1,5 @@
 //! Host-side Wayland proxy implementation owned by the display Provider.
 
-pub mod attribution;
 pub mod bridge;
 pub mod clipboard;
 pub mod decoration;
