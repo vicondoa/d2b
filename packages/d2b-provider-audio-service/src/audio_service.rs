@@ -13,7 +13,7 @@ use std::time::Duration;
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_audio_pipewire::{AUDIO_REPAIR_INTERVAL_SECS, AudioServiceSpec};
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 use d2b_provider_wayland_policy::{
     AUDIO_SERVICE_TYPE,
@@ -88,7 +88,7 @@ pub fn audio_service_descriptor(args: InteractionDriverArgs<AudioService>) -> Dr
     DriverDescriptor {
         resource_type: WellKnownType::AUDIO_SERVICE,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP | AllowedSources::RUNTIME,
-        verbs: d2b_provider_wayland_policy::INTERACTION_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: d2b_provider_wayland_policy::INTERACTION_EXECUTION_DOMAINS,
         exportable: false,
         reads: &[],

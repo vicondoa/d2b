@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use d2b_provider_display_wayland::DISPLAY_REPAIR_INTERVAL_SECS;
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 use serde_json::Value;
 
 use crate::effects_service::INTERACTION_EFFECTS_SERVICE;
@@ -96,7 +96,7 @@ pub fn wayland_policy_descriptor(
     DriverDescriptor {
         resource_type: WellKnownType::WAYLAND_POLICY,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP | AllowedSources::RUNTIME,
-        verbs: crate::INTERACTION_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: crate::INTERACTION_EXECUTION_DOMAINS,
         exportable: false,
         reads: &[],

@@ -38,7 +38,9 @@ use d2b_provider_toolkit::{
 };
 use d2b_resource_runtime::context::{ChildEnsure, ResourceContext};
 use d2b_resource_runtime::identity::ResourceTypeName;
-use d2b_resource_types::{AllowedSources, DriverDescriptor, ServiceDecl, WellKnownType};
+use d2b_resource_types::{
+    AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, ServiceDecl, WellKnownType,
+};
 use serde_json::{Value, json};
 
 use crate::effects_service::USBIP_EFFECTS_SERVICE;
@@ -189,19 +191,6 @@ impl SharedProviderFamily for UsbipFamily {
     }
 }
 
-/// The resource verbs the USB types support.
-const USBIP_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains the USB types can be reconciled in.
 const USBIP_EXECUTION_DOMAINS: &[&str] = &["host"];
 
@@ -240,7 +229,7 @@ pub fn usbip_descriptors(args: UsbipDriverArgs) -> [DriverDescriptor; 2] {
         allowed_sources: AllowedSources::BUILTIN
             | AllowedSources::STARTUP
             | AllowedSources::RUNTIME,
-        verbs: USBIP_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: USBIP_EXECUTION_DOMAINS,
         exportable,
         reads,

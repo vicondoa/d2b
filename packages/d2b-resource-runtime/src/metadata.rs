@@ -55,26 +55,6 @@ use crate::identity::{ResourceKey, ResourceTypeName};
 
 use serde_json::Value;
 
-/// The resource verbs every declaration-only metadata type supports.
-///
-/// Derived from the v3 resource plane's converted-type verb surface: the
-/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
-/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
-/// `Credential` type. Every converted type is served by the same manager
-/// verbs, and the rules and the typed CLI nouns resolve their gating from
-/// this declaration.
-pub const METADATA_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains every declaration-only metadata type is reconciled
 /// in.
 ///

@@ -69,23 +69,6 @@ pub use wayland_policy::{
     wayland_policy_descriptor, wayland_policy_spec_decoder,
 };
 
-/// The resource verbs every interaction type supports.
-///
-/// The family's rows are ordinary managed resources: they are read, watched,
-/// authored, and deleted, and their status and metadata are updated by the
-/// plane. No type of the family is created by a broker operation.
-pub const INTERACTION_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains every interaction type is driven in.
 ///
 /// A display session's workers, an audio binding's guest target, and a shell

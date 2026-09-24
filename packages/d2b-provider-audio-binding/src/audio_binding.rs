@@ -17,7 +17,7 @@ use d2b_provider_audio_pipewire::{
     AUDIO_REPAIR_INTERVAL_SECS, AudioBindingController, AudioBindingSpec, FakeAudioMediator,
 };
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 use d2b_provider_wayland_policy::{
     AUDIO_BINDING_TYPE,
@@ -169,7 +169,7 @@ pub fn audio_binding_descriptor(args: InteractionDriverArgs<AudioBinding>) -> Dr
     DriverDescriptor {
         resource_type: WellKnownType::AUDIO_BINDING,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP | AllowedSources::RUNTIME,
-        verbs: d2b_provider_wayland_policy::INTERACTION_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: d2b_provider_wayland_policy::INTERACTION_EXECUTION_DOMAINS,
         exportable: false,
         reads: &[WellKnownType::AUDIO_SERVICE, WellKnownType::GUEST],

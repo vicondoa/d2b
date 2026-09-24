@@ -19,7 +19,7 @@ use std::time::Duration;
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_shell_terminal::SHELL_REPAIR_INTERVAL_SECS;
 use d2b_resource_runtime::context::{ChildEnsure, SpecDecoder};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
 use d2b_provider_wayland_policy::{
     shell_pool_spec,
@@ -102,7 +102,7 @@ pub fn shell_pool_descriptor(args: InteractionDriverArgs<ShellPool>) -> DriverDe
     DriverDescriptor {
         resource_type: WellKnownType::SHELL_POOL,
         allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP | AllowedSources::RUNTIME,
-        verbs: d2b_provider_wayland_policy::INTERACTION_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: d2b_provider_wayland_policy::INTERACTION_EXECUTION_DOMAINS,
         exportable: false,
         reads: &[WellKnownType::HOST, WellKnownType::GUEST, WellKnownType::USER],
