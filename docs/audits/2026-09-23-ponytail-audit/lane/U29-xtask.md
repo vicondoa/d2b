@@ -42,3 +42,7 @@
   BUILD.bazel, nixos-modules, tests, and docs. Confirmed the only production
   reference point (`BINDING_REQUEST_FILE` storage guard) is a separate
   constant kept. Prior xtask ledger #A2 (generated catalog) honored.
+
+## Addendum (post-audit tree movement)
+
+- PR #600 (4d26998d8) landed after this lane was written: packages/xtask/src/async_gate.rs grew ~+1,300 lines and data/async-gate-inventory.json is new. That surface is NOT covered by this lane; audit it before acting on any xtask finding. The delivery/recovery.rs island finding is unaffected (the PR did not touch delivery/).
