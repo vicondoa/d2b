@@ -47,6 +47,7 @@ pub const MODULE_NAME: &str = "manager_backend";
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use d2b_contracts_resource::redacted_debug;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, FinalizerId, ResourceEnvelope, ResourceGeneration, ResourceRef,
     ResourceUid, RetryClass, ZoneId, ZoneRevision, canonical_digest,
@@ -908,11 +909,7 @@ pub struct ManagerBackend {
     acceptor: MutationSealAcceptor,
 }
 
-impl core::fmt::Debug for ManagerBackend {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("ManagerBackend(<redacted>)")
-    }
-}
+redacted_debug!(ManagerBackend);
 
 impl ManagerBackend {
     /// Bind the backend to one Zone manager, its watch hub, and the paired
