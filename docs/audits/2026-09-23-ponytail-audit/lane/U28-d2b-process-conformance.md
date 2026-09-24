@@ -20,3 +20,7 @@ Constraint-honored caller census, workspace-wide, both Provider crates + their c
 - Both Provider crates are stack-level consumers of this suite (leaf); no cross-crate scaffold to defend.
 
 No prior findings. Clean, ship. Remaining -10 lines.
+
+## U2 execution (2026-09-24)
+
+- no-op: the sole finding (#P0 `children_have_verified_stop_proofs`) was [applied] and already landed in commit 350cd00c6 (U61 cross-crate cut); nothing remaining to execute. cargo test -p d2b-process-conformance 30 passed.
