@@ -10,15 +10,17 @@
 //! frame, or the dispatch seam cannot reach two of the three and miss the
 //! third.
 
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
 use d2b_contracts_provider::v3::credential::{
     CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialRequest,
-    CredentialResponse, CredentialServiceError, PlacementBinding,
+    CredentialResponse, CredentialServiceError, CredentialServiceErrorCode, PlacementBinding,
     dispatch_authorized_provider_async,
 };
 use d2b_contracts_provider::v3::credential_controller::{
-    CredentialAuditDigest, CredentialAuditOutcome, CredentialAuditRecord, CredentialObservabilityError,
-    CredentialProviderKind, CredentialTelemetryFrame, CredentialTelemetryOperation,
-    CredentialTelemetryOutcome,
+    CredentialAuditDigest, CredentialAuditOutcome, CredentialAuditRecord, CredentialControllerError,
+    CredentialObservabilityError, CredentialProviderKind, CredentialTelemetryFrame,
+    CredentialTelemetryOperation, CredentialTelemetryOutcome, reject_ambient_credential_chain,
 };
 
 /// Build the one caller-initiated audit record for a Credential service call.
@@ -84,6 +86,61 @@ pub fn credential_frame(
         placement,
         rotation_generation,
         service_version,
+    )
+}
+
+/// Absolute Unix-millisecond values at or above this threshold are absolute
+/// deadlines rather than relative durations.
+pub const ABSOLUTE_UNIX_MS_THRESHOLD: u64 = 1_000_000_000_000;
+
+/// Return the current Unix millisecond clock used for bounded expiry checks.
+pub fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+/// Whether a value uses the absolute Unix millisecond representation.
+pub const fn is_absolute_unix_ms(value: u64) -> bool {
+    value >= ABSOLUTE_UNIX_MS_THRESHOLD
+}
+
+/// Convert a deadline (absolute Unix milliseconds or a relative duration) into
+/// an `Instant`, failing when the deadline is already exhausted.
+pub fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialServiceError> {
+    let now_unix_ms = now_unix_ms();
+    let duration_ms = if is_absolute_unix_ms(deadline_ms) {
+        deadline_ms.saturating_sub(now_unix_ms)
+    } else {
+        deadline_ms
+    };
+    if duration_ms == 0 {
+        return Err(CredentialServiceError::new(
+            CredentialServiceErrorCode::DeadlineExceeded,
+        ));
+    }
+    Instant::now()
+        .checked_add(Duration::from_millis(duration_ms))
+        .ok_or_else(|| {
+            CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
+        })
+}
+
+/// Fail when the deadline has already passed.
+pub fn deadline_remaining(deadline: Instant) -> Result<(), CredentialServiceError> {
+    if Instant::now() >= deadline {
+        return Err(CredentialServiceError::new(
+            CredentialServiceErrorCode::DeadlineExceeded,
+        ));
+    }
+    Ok(())
+}
+
+/// Reject ambient SDK credential-chain variables in this process.
+pub fn reject_process_environment_credential_chain() -> Result<(), CredentialControllerError> {
+    reject_ambient_credential_chain(
+        std::env::vars_os().filter_map(|(key, _value)| key.into_string().ok()),
     )
 }
 

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use tokio::sync::{Mutex, MutexGuard};
 use std::thread::{self, Thread};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use d2b_contracts_provider::v3::credential::{
     CREDENTIAL_SERVICE_NAME, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
@@ -30,6 +30,7 @@ use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ZoneId};
 use d2b_provider_toolkit::{
     AuthenticatedSessionRouteBinding, GuestCredentialBackend, GuestCredentialBackendResponse,
     ProviderFd10Spec, ProviderRuntimeError, ProviderSessionMetadata, RouteCredentialAuthorization,
+    credential::deadline_remaining,
     run_from_fd10 as run_provider_from_fd10,
 };
 
@@ -46,7 +47,6 @@ pub const PROVIDER_REF: &str = "Provider/credential-secret-service";
 pub const MAX_LOCAL_LEASES: u32 = 256;
 /// Maximum bytes in a Secret Service collection alias.
 const MAX_COLLECTION_ALIAS_BYTES: usize = 128;
-const ABSOLUTE_UNIX_MS_THRESHOLD: u64 = 1_000_000_000_000;
 
 /// Reject ambient SDK credential-chain environment names.
 pub fn reject_ambient_credential_chain(
@@ -59,9 +59,8 @@ pub fn reject_ambient_credential_chain(
 /// Reject ambient SDK credential-chain variables in this process.
 pub fn reject_process_environment_credential_chain(
 ) -> Result<(), SecretServiceProviderError> {
-    reject_ambient_credential_chain(
-        std::env::vars_os().filter_map(|(key, _value)| key.into_string().ok()),
-    )
+    d2b_provider_toolkit::credential::reject_process_environment_credential_chain()
+        .map_err(|_| SecretServiceProviderError::InvalidConfig)
 }
 
 /// Enter the supervised Provider runtime through the inherited fd 10 handoff.
@@ -1498,35 +1497,6 @@ impl SecretServiceCredentialProvider {
         })
     }
 
-    pub(crate) fn now_unix_ms() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-            .unwrap_or(0)
-    }
-
-    pub(crate) const fn is_absolute_unix_ms(value: u64) -> bool {
-        value >= ABSOLUTE_UNIX_MS_THRESHOLD
-    }
-
-    pub(crate) fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialServiceError> {
-        let duration_ms = if Self::is_absolute_unix_ms(deadline_ms) {
-            deadline_ms.saturating_sub(Self::now_unix_ms())
-        } else {
-            deadline_ms
-        };
-        if duration_ms == 0 {
-            return Err(CredentialServiceError::new(
-                CredentialServiceErrorCode::DeadlineExceeded,
-            ));
-        }
-        Instant::now()
-            .checked_add(Duration::from_millis(duration_ms))
-            .ok_or_else(|| {
-                CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
-            })
-    }
-
     pub(crate) fn poll_port_sync<T: Send>(
         mut future: SecretServiceFuture<'_, T>,
         deadline: Instant,
@@ -1590,16 +1560,7 @@ impl SecretServiceCredentialProvider {
                 CredentialServiceErrorCode::ProviderUnavailable,
             ));
         }
-        Self::deadline_remaining(deadline)
-    }
-
-    pub(crate) fn deadline_remaining(deadline: Instant) -> Result<(), CredentialServiceError> {
-        if Instant::now() >= deadline {
-            return Err(CredentialServiceError::new(
-                CredentialServiceErrorCode::DeadlineExceeded,
-            ));
-        }
-        Ok(())
+        deadline_remaining(deadline)
     }
 
     pub(crate) async fn has_ambiguous_credential(
@@ -1910,6 +1871,7 @@ impl fmt::Debug for SecretServiceCredentialProvider {
 mod tests {
     use super::*;
     use d2b_contracts_provider::v3::credential::CredentialMethod;
+    use d2b_provider_toolkit::credential::{now_unix_ms, operation_deadline};
     use d2b_contracts_resource::v3::identity::{
         AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality,
         ReconnectGeneration, ServiceName, SessionBinding as AuthSessionBinding, SessionPurpose,
@@ -2166,12 +2128,10 @@ mod tests {
 
     #[test]
     fn absolute_deadlines_use_unix_milliseconds() {
-        let now = SecretServiceCredentialProvider::now_unix_ms();
-        let deadline = SecretServiceCredentialProvider::operation_deadline(now + 100);
+        let now = now_unix_ms();
+        let deadline = operation_deadline(now + 100);
         assert!(deadline.is_ok());
-        assert!(
-            SecretServiceCredentialProvider::operation_deadline(now.saturating_sub(1)).is_err()
-        );
+        assert!(operation_deadline(now.saturating_sub(1)).is_err());
     }
 
     #[test]

@@ -13,3 +13,17 @@ README.md (106 lines) - rules pinned, zero-secret-bytes invariant, audit/telemet
 
 ## Reopened refusals
 None. U1 refusal ledger for this crate has no refused rows applicable here.
+
+## U5 execution (2026-09-24)
+
+- Finding 1 (deadline/absolute-unix-ms trio): applied. Trio moved verbatim into
+  `d2b-provider-toolkit/src/credential.rs` (`ABSOLUTE_UNIX_MS_THRESHOLD`,
+  `now_unix_ms`, `is_absolute_unix_ms`, `operation_deadline`, `deadline_remaining`);
+  this crate's lib.rs helper methods deleted and every call site (service.rs,
+  ensure_unlocked_async, tests) re-pointed to the toolkit module. R4 note: at HEAD
+  the trio is byte-identical only between secret-service and managed-identity;
+  entra's `operation_deadline` delegates to its own `time_bound_instant` (checked_sub
+  semantics, no zero-duration rejection) - see U54 note.
+- Finding 2 (env-scan): applied. `reject_process_environment_credential_chain`
+  env-scan moved into the toolkit credential module; this crate's public wrapper is
+  now a one-line mapping call (public error surface unchanged).
