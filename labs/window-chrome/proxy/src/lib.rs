@@ -12,7 +12,9 @@ pub mod dmabuf;
 pub mod filter;
 pub mod identity;
 pub mod policy;
+pub mod provider_kind;
 pub mod readiness;
 pub mod terminal;
 
 pub use policy::{FilterPolicy, GlobalAction, PolicyInput, PolicyWarning};
+pub use provider_kind::WorkloadProviderKind;

@@ -1,5 +1,5 @@
 use d2b_core::workload_identity::WorkloadTarget;
-use d2b_realm_core::WorkloadProviderKind;
+use crate::WorkloadProviderKind;
 use sha2::{Digest, Sha256};
 
 /// Authenticated provider-neutral identity for one proxy instance.

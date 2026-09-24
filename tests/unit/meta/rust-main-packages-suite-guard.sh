@@ -13,6 +13,8 @@
 # AGENTS.md ("Retired ... realm-core owners are absent from the shared Cargo,
 # copied-Guest, policy, and aggregate Bazel edges"). If a retired owner's
 # BUILD.bazel is ever dropped or its aggregate removed, remove it here too.
+# (d2b-realm-core was retired this way: its crate and BUILD.bazel are gone,
+# so the exclusion list is empty by default today.)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -22,8 +24,9 @@ CHECKS_FILE=${CHECKS_FILE:-"$ROOT/bazel/checks/BUILD.bazel"}
 PKGS_ROOT=${PKGS_ROOT:-"$ROOT/packages"}
 
 # Retired owners that keep an all-tests aggregate but are intentionally absent
-# from rust-main-packages (AGENTS.md retirement rule).
-EXCLUDED_PKGS=${EXCLUDED_PKGS-"d2b-realm-core"}
+# from rust-main-packages (AGENTS.md retirement rule). Empty today: the last
+# retired owner (d2b-realm-core) was deleted outright.
+EXCLUDED_PKGS=${EXCLUDED_PKGS-""}
 
 fail() {
     echo "rust-main-packages suite guard: $*" >&2

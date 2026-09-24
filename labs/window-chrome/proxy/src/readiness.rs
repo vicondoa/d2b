@@ -6,7 +6,7 @@ use std::{
 };
 
 use d2b_core::workload_identity::WorkloadTarget;
-use d2b_realm_core::WorkloadProviderKind;
+use crate::WorkloadProviderKind;
 use serde::{Deserialize, Serialize};
 
 use crate::identity::ProxyIdentity;

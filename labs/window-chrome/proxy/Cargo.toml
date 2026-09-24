@@ -27,7 +27,6 @@ path = "src/lib.rs"
 clap = { version = "4", features = ["derive"] }
 d2b-chrome-engine = { path = "../chrome-engine" }
 d2b-core = { path = "../../../packages/d2b-core" }
-d2b-realm-core = { path = "../../../packages/d2b-realm-core" }
 libc = "0.2"
 log = "0.4"
 env_logger = "0.11"

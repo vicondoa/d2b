@@ -700,9 +700,9 @@ fn workspace_member_paths(repo_root: &Path) -> Result<BTreeSet<String>, String> 
 
 /// Resolve the census scope: the given crate paths, or every workspace
 /// member crate (a member directory with a `Cargo.toml`) under `packages/`.
-/// Non-member directories under `packages/` (e.g. `d2b-realm-core`) are not
-/// censused: they are not workspace crates, so the workspace-wide clippy run
-/// cannot measure their instance-method classes.
+/// Non-member directories under `packages/` are not censused: they are not
+/// workspace crates, so the workspace-wide clippy run cannot measure their
+/// instance-method classes.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn resolve_crate_dirs(repo_root: &Path, crate_args: &[String]) -> Result<Vec<PathBuf>, String> {
     if crate_args.is_empty() {
@@ -1542,10 +1542,6 @@ pub fn other() {}
         let members = workspace_member_paths(&root).expect("parse root manifest");
         assert!(members.contains("packages/d2b-broker"));
         assert!(members.contains("packages/xtask"));
-        assert!(
-            !members.contains("packages/d2b-realm-core"),
-            "the excluded non-member crate must not be censused"
-        );
     }
 
     #[test]
