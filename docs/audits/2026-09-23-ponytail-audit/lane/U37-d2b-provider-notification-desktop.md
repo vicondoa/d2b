@@ -1,0 +1,18 @@
+# U37 d2b-provider-notification-desktop
+
+## Prior applied findings (honored — none refused on this crate; all U37 rows #S46..#S50 [applied] per U1 ledger, no refused-landing rows to reopen)
+- #S46..#S50 all applied (per U1 packet U37 rows): whole security_key/ island (controller runner-contract accessors + waybar renderer + second nonce store + second notification model + ceremony events), d2b-sk-waybar-helper bin + nix/site.nix + packaging, SecurityKey runner twin twins, eight unused twin entry points, re-hardcoded collector/(label-set) tables, tautological tests.
+
+## New finding (same applied class as display-crate #S28/#S31 and cross-crate #G98 metric/audit vocabulary deletion — trio built only by this crate's own tests)
+
+### F37-1 — delete the whole unproduced trio {descriptor,metrics,audit}.rs as one island
+**Physical cut**
+- `src/descriptor.rs` (62 lines) — `NotificationProviderDescriptor` (transient/stream-scoped hand-written descriptor with `validate()`, `streams()`), `NotificationDescriptorError` (one-variant `NotificationDescriptorError`), their hand-written Debug impls. Zero production callers: only reader sets are this crate's own `tests/provider_behavior.rs` (descriptor test rows 130-136) + lib.rs re-export row 40.
+- `src/metrics.rs` (181 lines) — `NotificationOutcome`/`NotificationTelemetryField`/`NotificationTelemetryFrame` (closed-label telemetry vocabulary). Zero production callers: only readers this crate's own `tests/redaction.rs` (telemetry canary half) + lib.rs re-export row 52. This is the exact vocabulary island class deleted applied-cross-crate in display-wayland find 28/31 and the five-crate #G98 (supervisor/metrics.rs, qemu-media/audit.rs, azure-vm/telemetry.rs, ACA/metrics.rs, cloud-hypervisor/metrics.rs) — plus this crate's own earlier applied security_key/ island trust.
+- `src/audit.rs` (77 lines) — `NotificationAuditKind`/`NotificationAuditRecord` — zero callers anywhere including tests, lib.rs re-export row 33 only.
+- lib.rs: `mod descriptor;` (20) + `pub use descriptor::{NotificationDescriptorError, NotificationProviderDescriptor};` (40); `mod metrics;` (25) + `pub use metrics::{NotificationOutcome, NotificationTelemetryField, NotificationTelemetryFrame};` (52); `mod audit;` (18) + `pub use audit::{NotificationAuditKind, NotificationAuditRecord};` (33).
+**Trim (keep the canary's live half)**
+- `tests/redaction.rs` — drop the NotificationOutcome telemetry-frame construction (rows 30-36) + frame render in canary loop (row 40) + `validate_collector_fields` assert (rows 44-52) + the telemetry symbols (NotificationOutcome, NotificationTelemetryField, NotificationTelemetryFrame) from the import at rows 4-6. Keep the content canary (NotificationProjection/NotificationResult/Debug + payload Debug) which pins the LIVE redact-surfaced DTOs.
+- `tests/provider_behavior.rs` — drop `NotificationProviderDescriptor` import + the descriptor test half (notification_description_returns_closed_error set + assertion block).
+**Blast radius** `leaf`. **Net**: -320 src LOC, -6 lib.rs rows, -~16 redaction test half, -~6 provider_behavior test half ≈ -348 lines; 0 deps removed (sha2/serde/serde_json/getrandom are all still used by the live admonition/redact/action_nonce admission paths).
+**Refused directly upstream / ratchet pins (checked, all absent)**: workspace-wide caller grep for all 10 exported symbols (workspace + BUILD.bazel + nixos-modules + dossier validation matrix + provider_crate_policy.rs + README + dossier §validation) — zero callers outside this crate's own src + tests; build.rs/BUILD.bazel/xtask/policy ratchet does not pin these three modules as required scaffolds.
