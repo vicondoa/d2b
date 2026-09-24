@@ -22,7 +22,6 @@ d2b_rust_library(
     compile_data = [
         "Cargo.toml",
         "//:docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json",  # keep
-        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",
     ],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
@@ -40,7 +39,6 @@ d2b_rust_test(
     crate = ":d2b_provider_transport_vsock",
     compile_data = [
         "Cargo.toml",
-        "//:tests/golden/runner-shape/vsock-relay-argv-minimal.txt",
     ],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",

@@ -49,11 +49,6 @@ impl OpaqueEndpointId {
         }
     }
 
-    /// Construct an opaque identity at a trusted Core adapter boundary.
-    pub fn from_core(value: impl Into<String>) -> Result<Self, VsockEffectError> {
-        Self::parse(value)
-    }
-
     /// Borrow the opaque value for the service stream-source boundary. The
     /// child Zone core's implementation of [`VsockEffectPort`] supplies it.
     pub fn as_str(&self) -> &str {
@@ -86,11 +81,6 @@ impl OpaqueBindingId {
         } else {
             Err(VsockEffectError::EffectRejected)
         }
-    }
-
-    /// Construct an opaque identity at a trusted Core adapter boundary.
-    pub fn from_core(value: impl Into<String>) -> Result<Self, VsockEffectError> {
-        Self::parse(value)
     }
 
     /// Borrow the opaque value for the service stream-source boundary. The
@@ -152,7 +142,6 @@ fn valid_opaque_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-const PROVIDER_REF: &str = "Provider/transport-vsock";
 const CLOSE_COMPLETION_BUDGET_MS: u64 = CLOSE_GRACE_MS * 2;
 
 /// Request to open one ZoneLink byte transport.
@@ -357,7 +346,7 @@ where
 
     /// Return the stable Provider reference.
     pub const fn provider_ref(&self) -> &'static str {
-        PROVIDER_REF
+        crate::PROVIDER_REF
     }
 
     /// Return the current service phase.

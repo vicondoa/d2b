@@ -31,12 +31,12 @@ net: -697 lines, -1 fixture/BUILD arm set
    defining modules + this crate's own lib.rs re-export arms; no dossier row
    names `src/metrics.rs`/`src/audit.rs` as a destination). Same class as the
    applied cross-crate metric/audit vocabulary deletions (supervisor, qemu-media,
-   azure-vm, ACA, cloud-hypervisor — this is the sixth application of the
+   azure-vm, ACA, cloud-hypervisor - this is the sixth application of the
    established finding): unproduced metric/audit vocabulary is deleted; the
    crate's live `VsockEffectPort` metric/audit surface is untouched
    (framing/service/errors stay). [-68] (leaf) (metrics.rs, audit.rs)
 
-3. **Delete `service.rs:155` private `const PROVIDER_REF`** — byte-identical
+3. **Delete `service.rs:155` private `const PROVIDER_REF`** - byte-identical
    duplicate of `lib.rs:54 pub const PROVIDER_REF` (same
    `"Provider/transport-vsock"` value); the two in-crate users (service.rs:444,
    986) should use `crate::PROVIDER_REF`. The dossier dossier pins the crate-root
@@ -44,21 +44,21 @@ net: -697 lines, -1 fixture/BUILD arm set
    only the service.rs private duplicate goes. [-2] (leaf) (service.rs)
 
 4. **Delete `OpaqueEndpointId::from_core` (service.rs:53) + `OpaqueBindingId::from_core`
-   (service.rs:92)** — byte-identical aliases of `parse` (both `Self::parse`)
+   (service.rs:92)** - byte-identical aliases of `parse` (both `Self::parse`)
    with zero callers in or out of crate (workspace-wide sweep; only the
    definitions + the lib.rs re-export arm). [-8] (leaf) (service.rs)
 
 ## Consistency notes
 
-None due — transport-vsock is a runtime/transport Provider crate (not a
+None due - transport-vsock is a runtime/transport Provider crate (not a
 contracts/types crate); no types-lane vocabulary feed due.
 
 ## Reopened refusals
 
-None — this crate's U46 refusal ledger row (#S8 whole-crate declaration) is
+None - this crate's U46 refusal ledger row (#S8 whole-crate declaration) is
 honored: the crate, its `framing.rs`/`errors.rs`/`service.rs`/`bridge.rs`
 dossier destinations and their tests stay; no caller verification contradicted.
-Reopened rows: none (no dossier-named socat-relay destination in this crate —
+Reopened rows: none (no dossier-named socat-relay destination in this crate -
 the dossier pins relay argv only at the legacy `d2b-host` path marked
 delete-after-cutover, which is a legacy-crate deletion, not an in-crate surface).
 
@@ -77,3 +77,13 @@ auth.rs, state_volume.rs and the dossier
 dossier pins only framing/errors/service/bridge as owned destinations and names
 no in-crate relay argv/metrics/audit surface. LOC measured: relay_argv.rs 621
 (259 prod + 362 test), metrics.rs 36, audit.rs 30, from_core x2 = 8.
+## U1 execution (2026-09-24)
+
+All 4 findings applied. R4 re-verified at HEAD: `from_core` x2 zero callers in crate (only `TransportHandle::from_core` at service.rs:524 + test - different type, kept); private `PROVIDER_REF` sole in-crate user is `provider_ref()` at service.rs:349 (topology.rs:85 already `crate::PROVIDER_REF`).
+
+- Finding 1: deleted `src/relay_argv.rs` (621 lines) + lib.rs re-export arm (already removed prior session) + root golden fixture `tests/golden/runner-shape/vsock-relay-argv-minimal.txt` + both crate `BUILD.bazel` compile_data fixture arms + root `BUILD.bazel` exports_files arm.
+- Finding 2: deleted `src/metrics.rs` (36) + `src/audit.rs` (30) + their lib.rs re-export arms (already removed prior session).
+- Finding 3: deleted private `const PROVIDER_REF` (service.rs:155); `provider_ref()` now returns `crate::PROVIDER_REF` (lib.rs pub const stays).
+- Finding 4: deleted `OpaqueEndpointId::from_core` + `OpaqueBindingId::from_core` (service.rs; byte-identical `Self::parse` aliases.
+
+`cargo test -p d2b-provider-transport-vsock`: PASS (13 suites; 40 tests + doc-tests; 0 failures). No residual refs to deleted symbols workspace-wide (remaining grep hits: this lane file, ADR-046 historical rows for the legacy d2b-host socat path, unrelated transport-unix `TransportMetric*`.
