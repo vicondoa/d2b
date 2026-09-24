@@ -1,6 +1,7 @@
 //! Trusted Core inventory receipts for irreversible state adoption.
 
 use core::fmt;
+use d2b_contracts_resource::redacted_debug;
 use d2b_contracts_resource::v3::canonical_digest;
 
 /// Opaque identity of one legacy TPM state row.
@@ -80,11 +81,7 @@ impl fmt::Debug for LegacyTpmMigrationDecision {
     }
 }
 
-impl fmt::Debug for LegacyTpmStateId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("LegacyTpmStateId(<redacted>)")
-    }
-}
+redacted_debug!(LegacyTpmStateId);
 
 #[cfg(test)]
 mod tests {

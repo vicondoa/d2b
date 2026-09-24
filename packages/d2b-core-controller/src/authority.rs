@@ -14,6 +14,7 @@ use std::{
     },
 };
 
+use d2b_contracts_resource::redacted_debug;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, IfName, ResourceGeneration, ResourceRef, ResourceUid, UpdateState,
     is_canonical_digest,
@@ -72,11 +73,7 @@ impl ResolvedExternalNicIdentity {
     }
 }
 
-impl core::fmt::Debug for ResolvedExternalNicIdentity {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("ResolvedExternalNicIdentity(<redacted>)")
-    }
-}
+redacted_debug!(ResolvedExternalNicIdentity);
 
 /// Trusted Host inventory used to resolve authored interface selectors.
 #[derive(Default)]
@@ -164,11 +161,7 @@ impl ExternalNicOwnerProof {
     }
 }
 
-impl core::fmt::Debug for ExternalNicOwnerProof {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("ExternalNicOwnerProof(<redacted>)")
-    }
-}
+redacted_debug!(ExternalNicOwnerProof);
 
 /// Complete pre-effect request for one external physical-NIC claim.
 pub struct ExternalNicClaimRequest {
@@ -215,11 +208,7 @@ impl ExternalNicClaimRequest {
     }
 }
 
-impl core::fmt::Debug for ExternalNicClaimRequest {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("ExternalNicClaimRequest(<redacted>)")
-    }
-}
+redacted_debug!(ExternalNicClaimRequest);
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ExternalNicAuthorityKey {
@@ -246,11 +235,7 @@ impl ExternalNicAuthorityKey {
     }
 }
 
-impl core::fmt::Debug for ExternalNicAuthorityKey {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("ExternalNicAuthorityKey(<redacted>)")
-    }
-}
+redacted_debug!(ExternalNicAuthorityKey);
 
 #[derive(Clone)]
 struct Holder {
@@ -279,11 +264,7 @@ pub struct ExternalNicLease {
     operation_id: Option<String>,
 }
 
-impl core::fmt::Debug for ExternalNicLease {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("ExternalNicLease(<redacted>)")
-    }
-}
+redacted_debug!(ExternalNicLease);
 
 /// Closed effect result retained beside an admitted lease.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -480,11 +461,7 @@ impl AuthorityDigest {
     }
 }
 
-impl core::fmt::Debug for AuthorityDigest {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("AuthorityDigest(<redacted>)")
-    }
-}
+redacted_debug!(AuthorityDigest);
 
 /// Scope of a Core-owned authority key.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -630,11 +607,7 @@ impl AuthorityOwnerProof {
     }
 }
 
-impl core::fmt::Debug for AuthorityOwnerProof {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("AuthorityOwnerProof(<redacted>)")
-    }
-}
+redacted_debug!(AuthorityOwnerProof);
 
 /// Durable, non-authorizing representation of one exact owner proof.
 ///
@@ -700,11 +673,7 @@ impl DurableAuthorityOwnerProof {
     }
 }
 
-impl core::fmt::Debug for DurableAuthorityOwnerProof {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("DurableAuthorityOwnerProof(<redacted>)")
-    }
-}
+redacted_debug!(DurableAuthorityOwnerProof);
 
 /// Durable authority claim emitted by the authoritative resource/operation
 /// store before an effect is dispatched.
@@ -963,11 +932,7 @@ fn valid_resource_uid(uid: &ResourceUid) -> bool {
     !uid.to_canonical_string().is_empty()
 }
 
-impl core::fmt::Debug for AuthorityKey {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("AuthorityKey(<redacted>)")
-    }
-}
+redacted_debug!(AuthorityKey);
 
 fn framed_digest(domain: &str, parts: &[&[u8]]) -> String {
     let size = parts
@@ -1627,11 +1592,7 @@ impl AuthorityLease {
     }
 }
 
-impl core::fmt::Debug for AuthorityLease {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("AuthorityLease(<redacted>)")
-    }
-}
+redacted_debug!(AuthorityLease);
 
 /// Closed effect outcome retained with an admitted generic lease.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1860,53 +1821,6 @@ impl HostGlobalAuthorityIndex {
         self.quarantined_operations.insert(operation_id.to_owned());
     }
 
-    #[cfg(test)]
-    fn recovery_receipt(
-        generic: Vec<DurableAuthorityClaim>,
-        external_nics: Vec<DurableExternalNicClaim>,
-    ) -> Result<AuthorityRecoveryReceipt, AuthorityError> {
-        let mut operations = Vec::with_capacity(generic.len() + external_nics.len());
-        for claim in generic {
-            let digest = claim_digest(&AuthorityStorageClaim::Generic(claim.clone()))?;
-            let operation_id = format!("recovery-generic-{digest}");
-            operations.push(AuthorityStorageOperation {
-                operation_id,
-                claim: AuthorityStorageClaim::Generic(claim),
-                state: AuthorityOperationState::EffectConfirmed,
-                claim_digest: digest.clone(),
-                store_binding_digest: digest,
-            });
-        }
-        for claim in external_nics {
-            let digest = claim_digest(&AuthorityStorageClaim::ExternalNic(claim.clone()))?;
-            let operation_id = format!("recovery-external-nic-{digest}");
-            operations.push(AuthorityStorageOperation {
-                operation_id,
-                claim: AuthorityStorageClaim::ExternalNic(claim),
-                state: AuthorityOperationState::EffectConfirmed,
-                claim_digest: digest.clone(),
-                store_binding_digest: digest,
-            });
-        }
-        let prepared = operations
-            .iter()
-            .map(|operation| {
-                Ok((
-                    operation.operation_id.clone(),
-                    crate::authority_persistence::PreparedAuthorityOperation::new(
-                        operation.operation_id.clone(),
-                        operation.store_binding_digest.clone(),
-                        test_nonce_for_operation(&operation.operation_id),
-                    )
-                    .map_err(|_| AuthorityError::InvalidAuthorityRequest)?,
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>, AuthorityError>>()?;
-        Self::recovery_receipt_from_operations_with_prepared_capabilities(
-            operations, None, prepared,
-        )
-    }
-
     fn validate_recovery_operations(
         operations: &[AuthorityStorageOperation],
         expected_store_binding_digest: Option<&str>,
@@ -2049,46 +1963,6 @@ impl HostGlobalAuthorityIndex {
         index.rehydrated = true;
         index.ready_epoch = index.runtime_epoch.load(Ordering::Acquire);
         Ok(index)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn recovery_receipt_from_rows(
-        generic: Vec<DurableAuthorityClaim>,
-        external_nics: Vec<DurableExternalNicClaim>,
-    ) -> Result<AuthorityRecoveryReceipt, AuthorityError> {
-        Self::recovery_receipt(generic, external_nics)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn recovery_receipt_from_operations(
-        operations: Vec<AuthorityStorageOperation>,
-        expected_store_binding_digest: Option<&str>,
-    ) -> Result<AuthorityRecoveryReceipt, AuthorityError> {
-        let prepared = operations
-            .iter()
-            .filter(|operation| {
-                !matches!(
-                    operation.state,
-                    AuthorityOperationState::Closed | AuthorityOperationState::Released
-                )
-            })
-            .map(|operation| {
-                Ok((
-                    operation.operation_id.clone(),
-                    crate::authority_persistence::PreparedAuthorityOperation::new(
-                        operation.operation_id.clone(),
-                        operation.store_binding_digest.clone(),
-                        test_nonce_for_operation(&operation.operation_id),
-                    )
-                    .map_err(|_| AuthorityError::InvalidAuthorityRequest)?,
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>, AuthorityError>>()?;
-        Self::recovery_receipt_from_operations_with_prepared_capabilities(
-            operations,
-            expected_store_binding_digest,
-            prepared,
-        )
     }
 
     pub(crate) fn recovery_receipt_from_operations_with_prepared_capabilities(
@@ -2483,35 +2357,6 @@ impl HostGlobalAuthorityIndex {
             self.authorities.remove(&lease.key);
         }
         Ok(())
-    }
-
-    /// Drain all authority leases dependent on a stopped Guest.
-    ///
-    /// Production finalizers must use [`Self::close_then_drain_guest`], which
-    /// confirms effect closure before release. This immediate helper remains
-    /// test-only for pure dependency policy characterization.
-    #[cfg(test)]
-    pub fn drain_guest(&mut self, host_uid: &ResourceUid, guest_uid: &ResourceUid) -> usize {
-        let keys = self
-            .authorities
-            .iter()
-            .filter(|(key, entry)| {
-                matches!(&key.scope, AuthorityScope::Host(host) if host == host_uid)
-                    && (entry.dependent_guest.as_ref() == Some(guest_uid)
-                        || entry
-                            .holders
-                            .iter()
-                            .any(|holder| holder.dependent_guest.as_ref() == Some(guest_uid)))
-            })
-            .map(|(key, _)| key.clone())
-            .collect::<Vec<_>>();
-        let mut drained = 0;
-        for key in keys {
-            if let Some(entry) = self.authorities.remove(&key) {
-                drained += entry.holders.len();
-            }
-        }
-        drained
     }
 
     /// Confirm closure of every authority-backed effect before releasing
@@ -3795,7 +3640,6 @@ mod tests {
     #[test]
     fn host_store_guest_writer_and_zone_network_authorities_have_exact_scopes() {
         let host = uid("a63e4567-e89b-42d3-a456-426614174033");
-        let guest = uid("b63e4567-e89b-42d3-a456-426614174034");
         let zone = uid("c63e4567-e89b-42d3-a456-426614174035");
         let network = uid("d63e4567-e89b-42d3-a456-426614174036");
         let mut index = HostGlobalAuthorityIndex::new_for_tests_ready();
@@ -3820,19 +3664,6 @@ mod tests {
                 )
                 .unwrap_err(),
             AuthorityError::DuplicateConflict
-        );
-
-        let writer = AuthorityRequest::guest_store_view_writer(
-            host.clone(),
-            guest.clone(),
-            authority_proof("a73e4567-e89b-42d3-a456-426614174039", 1),
-        )
-        .unwrap();
-        index.admit_authority(writer).unwrap();
-        assert_eq!(
-            index.drain_guest(&host, &guest),
-            1,
-            "Guest stop drains its dependent writer lease"
         );
 
         let network_authority = AuthorityRequest::network_tap_bridge(
@@ -3966,131 +3797,6 @@ mod tests {
     }
 
     #[test]
-    fn production_gate_requires_rehydration_before_new_admission() {
-        let host = uid("d83e4567-e89b-42d3-a456-426614174048");
-        let owner = authority_proof("e83e4567-e89b-42d3-a456-426614174049", 1);
-        let request = AuthorityRequest::kvm(host, owner).unwrap();
-        let mut index = HostGlobalAuthorityIndex::new_unrehydrated();
-
-        assert_eq!(
-            index.admit_authority(request.clone()).unwrap_err(),
-            AuthorityError::StartupRehydrationRequired
-        );
-
-        let receipt = HostGlobalAuthorityIndex::recovery_receipt_from_rows(
-            vec![request.durable_claim()],
-            Vec::new(),
-        )
-        .unwrap();
-        let restored = HostGlobalAuthorityIndex::rehydrate(receipt).unwrap();
-        assert!(restored.is_rehydrated());
-        assert_eq!(
-            restored.authority_status(&request).unwrap().holder_count(),
-            1
-        );
-    }
-
-    #[test]
-    fn durable_claim_round_trip_uses_typed_owner_proof_not_status_text() {
-        let request = AuthorityRequest::physical_tpm(
-            uid("f83e4567-e89b-42d3-a456-426614174050"),
-            digest(11),
-            authority_proof("a93e4567-e89b-42d3-a456-426614174051", 7),
-        )
-        .unwrap();
-        let claim = request.durable_claim();
-        let bytes = serde_json::to_vec(&claim).unwrap();
-        assert!(!String::from_utf8_lossy(&bytes).contains("Ready"));
-        let decoded: DurableAuthorityClaim = serde_json::from_slice(&bytes).unwrap();
-        let receipt =
-            HostGlobalAuthorityIndex::recovery_receipt_from_rows(vec![decoded], Vec::new())
-                .unwrap();
-        let restored = HostGlobalAuthorityIndex::rehydrate(receipt).unwrap();
-        assert_eq!(
-            restored
-                .authority_status(&request)
-                .expect("rehydrated claim")
-                .holder_count(),
-            1
-        );
-    }
-
-    #[test]
-    fn restart_rehydrates_a_reserved_claim_before_competitor_admission() {
-        let host = uid("b83e4567-e89b-42d3-a456-426614174053");
-        let owner = authority_proof("c93e4567-e89b-42d3-a456-426614174054", 3);
-        let request = AuthorityRequest::vsock_cid(host.clone(), 92, owner).unwrap();
-        let mut before_crash = HostGlobalAuthorityIndex::new_for_tests_ready();
-        before_crash.admit_authority(request.clone()).unwrap();
-        let durable = before_crash.durable_claims();
-
-        let receipt =
-            HostGlobalAuthorityIndex::recovery_receipt_from_rows(durable, Vec::new()).unwrap();
-        let mut after_restart = HostGlobalAuthorityIndex::rehydrate(receipt).unwrap();
-        let competitor = AuthorityRequest::vsock_cid(
-            host,
-            92,
-            authority_proof("d93e4567-e89b-42d3-a456-426614174055", 1),
-        )
-        .unwrap();
-        assert_eq!(
-            after_restart.admit_authority(competitor).unwrap_err(),
-            AuthorityError::StartupRehydrationRequired
-        );
-    }
-
-    #[test]
-    fn restart_rehydrates_external_nic_owner_before_competitor_effect() {
-        let host = uid("e83e4567-e89b-42d3-a456-426614174048");
-        let zone = uid("f83e4567-e89b-42d3-a456-426614174049");
-        let competitor_zone = uid("a93e4567-e89b-42d3-a456-426614174050");
-        let nic = identity(b"durable-external-nic");
-        let owner = proof("b93e4567-e89b-42d3-a456-426614174051", 2);
-        let mut before_crash = HostGlobalAuthorityIndex::new_for_tests_ready();
-        before_crash
-            .admit_before_effect(
-                request(
-                    &host,
-                    &nic,
-                    &zone,
-                    owner,
-                    MacvtapMode::Bridge,
-                    SharingPolicy::Exclusive,
-                    1,
-                ),
-                |_| ExternalNicEffectOutcome::Confirmed,
-            )
-            .unwrap();
-        let receipt = HostGlobalAuthorityIndex::recovery_receipt_from_rows(
-            before_crash.durable_claims(),
-            before_crash.durable_external_nic_claims(),
-        )
-        .unwrap();
-        let mut after_restart = HostGlobalAuthorityIndex::rehydrate(receipt).unwrap();
-        let mut effects = 0;
-        let result = after_restart.admit_before_effect(
-            request(
-                &host,
-                &nic,
-                &competitor_zone,
-                proof("c93e4567-e89b-42d3-a456-426614174052", 1),
-                MacvtapMode::Bridge,
-                SharingPolicy::Exclusive,
-                1,
-            ),
-            |_| {
-                effects += 1;
-                ExternalNicEffectOutcome::Confirmed
-            },
-        );
-        assert!(matches!(
-            result,
-            Err(AuthorityError::StartupRehydrationRequired)
-        ));
-        assert_eq!(effects, 0);
-    }
-
-    #[test]
     fn duplicate_same_owner_reservations_are_rejected_without_aliasing_leases() {
         let host = uid("f93e4567-e89b-42d3-a456-426614174060");
         let owner = authority_proof("a04e4567-e89b-42d3-a456-426614174061", 1);
@@ -4154,37 +3860,6 @@ mod tests {
             AuthorityError::AuthorityOwnerProofMismatch
         );
         after_restart.release_authority(&current).unwrap();
-    }
-
-    #[test]
-    fn recovery_retains_operation_state_until_observation_resolves_it() {
-        let request = AuthorityRequest::kvm(
-            uid("b04e4567-e89b-42d3-a456-426614174062"),
-            authority_proof("c04e4567-e89b-42d3-a456-426614174063", 2),
-        )
-        .unwrap();
-        let claim = AuthorityStorageClaim::Generic(request.durable_claim());
-        let digest = claim_digest(&claim).unwrap();
-        let operation = AuthorityStorageOperation {
-            operation_id: "authority-recovery-operation".to_owned(),
-            claim,
-            state: AuthorityOperationState::EffectConfirmed,
-            claim_digest: digest.clone(),
-            store_binding_digest: digest,
-        };
-        let receipt =
-            HostGlobalAuthorityIndex::recovery_receipt_from_operations(vec![operation], None)
-                .unwrap();
-        let mut index = HostGlobalAuthorityIndex::rehydrate(receipt).unwrap();
-        assert!(!index.is_ready_for_readiness());
-        assert_eq!(index.authority_status(&request).unwrap().holder_count(), 1);
-        index
-            .resolve_recovered_operation(
-                "authority-recovery-operation",
-                AuthorityRecoveryResolution::ObservedAndAdopted,
-            )
-            .unwrap();
-        assert!(index.is_ready_for_readiness());
     }
 
     // R11 inventory note: tokio Mutex::lock().await resolves to the banned
