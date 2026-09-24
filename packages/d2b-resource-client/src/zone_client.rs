@@ -594,9 +594,6 @@ pub struct ZoneClient<R, C, W = SystemClock> {
     connector: C,
 }
 
-/// Descriptive alias for callers using the Zone service terminology.
-pub type ZoneServiceClient<R, C, W = SystemClock> = ZoneClient<R, C, W>;
-
 impl<R, C> ZoneClient<R, C, SystemClock> {
     /// Construct a Zone client with the system wall clock.
     pub fn new(resolver: R, connector: C) -> Self {

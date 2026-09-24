@@ -56,3 +56,6 @@ zone_client.rs 1075). Caller tables per symbol via workspace-wide
 `ZoneServiceClient`, `GuestControlEndpoint`, and every `*_BYTES`/`*_MS` limits
 const. Both ledger rows (#B9, #C1) are [not applied] - still present, re-flagged
 with fresh caller tables. No new findings beyond the two carried rows.
+
+## U3 outcome (2026-09-24)
+- applied: ZoneServiceClient alias (zone_client.rs) + its re-export arm (lib.rs). R4 at HEAD: zero callers (definition + export arm only).

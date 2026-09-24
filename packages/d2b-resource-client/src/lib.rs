@@ -68,7 +68,7 @@ pub use zone_client::{
     AssignmentIdentity, AssignmentVerb, ComponentSessionConnector, ConnectedZoneClient,
     ConnectedZoneSession, GuestControlEndpoint, LocalZoneSession, OwnerChildScope,
     ResourceCallOptions, ResourceVerb, ResourceWatch, ResourceWatchTransport,
-    ScopedResourceMutation, ScopedResourceQuery, ScopedResourceScope, ZoneClient, ZonePeerIdentity,
-    ZoneServiceClient, ZoneSessionConnector, ZoneSessionPin, ZoneSocketConnector,
+    ScopedResourceMutation, ScopedResourceQuery, ScopedResourceScope, ZoneClient, ZonePeerIdentity, ZoneSessionConnector, ZoneSessionPin,
+    ZoneSocketConnector,
     resource_verb_is_mutating,
 };
