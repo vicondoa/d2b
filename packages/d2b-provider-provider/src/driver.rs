@@ -63,7 +63,7 @@ use d2b_resource_runtime::error::{
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
 use d2b_resource_runtime::manager::ResourceView;
 use d2b_resource_runtime::resource::ResourceStatus;
-use d2b_resource_types::{AllowedSources, DriverDescriptor, WellKnownType};
+use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 use serde_json::{Value, json};
 
 use crate::providers::{
@@ -91,26 +91,6 @@ pub const SYSTEM_CORE_HOST_REF: &str = "Host/host-system";
 /// row's first pass, and neither carries an edge this driver can watch, so
 /// the observation re-runs on this schedule until the phase leaves Pending.
 const PROVIDER_CONVERGENCE_POLL: Duration = Duration::from_millis(1_000);
-
-/// The resource verbs the `Provider` type supports.
-///
-/// Derived from the v3 resource plane's converted-type verb surface: the
-/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
-/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
-/// `Credential` type. Every converted type is served by the same manager
-/// verbs, and Role rules and the typed CLI nouns resolve their gating from
-/// this declaration.
-const PROVIDER_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
 
 /// The execution domains the `Provider` type can be reconciled in.
 ///
@@ -690,29 +670,7 @@ fn observed_status(view: &ResourceView) -> Value {
 /// Map a manager row's 16-byte deterministic uid onto the contracts crate's
 /// UUIDv4-shaped `ResourceUid` (the same mapping the converted drivers use).
 fn resource_uid(bytes: &[u8; 16]) -> Option<ResourceUid> {
-    let mut bytes = *bytes;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let text = format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15],
-    );
-    ResourceUid::parse(text).ok()
+    ResourceUid::from_bytes(bytes).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -732,7 +690,7 @@ pub fn provider_descriptor(args: ProviderDriverArgs) -> DriverDescriptor {
     DriverDescriptor {
         resource_type: WellKnownType::PROVIDER,
         allowed_sources: AllowedSources::BUILTIN,
-        verbs: PROVIDER_VERBS,
+        verbs: CONVERTED_TYPE_VERBS,
         execution: PROVIDER_EXECUTION_DOMAINS,
         exportable: false,
         reads: PROVIDER_READS,

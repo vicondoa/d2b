@@ -1123,7 +1123,7 @@ pub fn current_status_timestamp() -> Timestamp {
     .expect("system timestamp formatter emits canonical UTC")
 }
 
-fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+pub(crate) fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     let z = days_since_epoch + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;
@@ -1560,31 +1560,10 @@ pub fn stable_uid(domain: &str, value: &str) -> ResourceUid {
     digest.update(domain.as_bytes());
     digest.update([0]);
     digest.update(value.as_bytes());
-    let mut bytes: [u8; 16] = digest.finalize()[..16]
+    let bytes: [u8; 16] = digest.finalize()[..16]
         .try_into()
         .expect("fixed digest slice");
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let rendered = format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15],
-    );
-    ResourceUid::parse(rendered).expect("stable UUID is valid")
+    ResourceUid::from_bytes(&bytes).expect("stable UUID is valid")
 }
 
 /// The Zone's resource-API backend: the per-zone manager (R29 - the durable
@@ -1702,11 +1681,7 @@ pub fn public_operation_id(request: &Value, peer_uid: u32, method: &str) -> Stri
                 .and_then(Value::as_str)
                 .unwrap_or("unaddressed");
             let digest = Sha256::digest(format!("{method}:{resource_type}:{target}").as_bytes());
-            let suffix = digest
-                .iter()
-                .take(8)
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
+            let suffix = crate::runtime_util::hex_bytes(&digest[..8]);
             format!("public-{peer_uid}-{method}-{resource_type}-{suffix}")
         })
 }

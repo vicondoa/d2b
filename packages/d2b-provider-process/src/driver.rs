@@ -64,7 +64,10 @@ use d2b_resource_runtime::error::{
     FailureKinds,
 };
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
-use d2b_resource_types::{AllowedSources, DriverDescriptor, OperationDef, ServiceDecl, WellKnownType};
+use d2b_resource_types::{
+    AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, OperationDef, ServiceDecl,
+    WellKnownType,
+};
 
 /// The durable Process resource type this factory serves (KTD4 Phase A).
 pub(crate) const PROCESS_TYPE_NAME: &str = "Process";
@@ -369,29 +372,7 @@ pub fn device_worker_family(template: &str) -> Option<DeviceWorkerFamily> {
 /// Map the new store's 16-byte deterministic uid onto the contracts crate's
 /// UUIDv4-shaped `ResourceUid` (version nibble 4, RFC 9562 variant).
 pub fn resource_uid_from_bytes(bytes: &[u8; 16]) -> Option<ResourceUid> {
-    let mut bytes = *bytes;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let text = format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15],
-    );
-    ResourceUid::parse(text).ok()
+    ResourceUid::from_bytes(bytes).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -592,26 +573,6 @@ impl ResourceDriverFactory for ProcessDriverFactory {
 // Registration: the family's driver declarations
 // ---------------------------------------------------------------------------
 
-/// The resource verbs both Process-family types support.
-///
-/// Derived from the v3 resource plane's converted-type verb surface: the
-/// closed `RoleResourceVerb` set minus the two Credential-scoped credential
-/// verbs (`use-credential`, `admin-credential`), which the plane gates to the
-/// `Credential` type. Every converted type is served by the same manager
-/// verbs, and Role rules and the typed CLI nouns resolve their gating from
-/// this declaration.
-pub(crate) const PROCESS_FAMILY_VERBS: &[&str] = &[
-    "get",
-    "list",
-    "watch",
-    "create",
-    "update-spec",
-    "update-status",
-    "update-metadata",
-    "update-finalizers",
-    "delete",
-];
-
 /// The execution domains both Process-family types can be reconciled in.
 ///
 /// Derived from the execution contract: a Process row's `executionRef` must
@@ -663,7 +624,7 @@ pub fn process_family_descriptors(args: ProcessDriverArgs) -> [DriverDescriptor;
         DriverDescriptor {
             resource_type,
             allowed_sources: AllowedSources::BUILTIN | AllowedSources::STARTUP,
-            verbs: PROCESS_FAMILY_VERBS,
+            verbs: CONVERTED_TYPE_VERBS,
             execution: PROCESS_FAMILY_EXECUTION_DOMAINS,
             exportable: false,
             reads: PROCESS_FAMILY_READS,

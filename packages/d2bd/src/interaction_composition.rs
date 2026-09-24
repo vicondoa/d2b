@@ -4926,16 +4926,9 @@ fn unix_guest_subject_uid(uid: u32) -> ResourceUid {
     let mut digest = Sha256::new();
     digest.update(b"d2b-unix-guest-subject-v1");
     digest.update(uid.to_be_bytes());
-    let mut bytes = [0u8; 16];
+    let mut bytes: [u8; 16] = [0u8; 16];
     bytes.copy_from_slice(&digest.finalize()[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    ResourceUid::parse(format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-    ))
-    .expect("digest-derived test guest UID is valid")
+    ResourceUid::from_bytes(&bytes).expect("digest-derived test guest UID is valid")
 }
 
 /// Bind and retain the daemon-owned ComponentSession listeners for all
@@ -5759,17 +5752,10 @@ fn session_resource_uid(
     digest.update(label);
     digest.update((role as u8).to_be_bytes());
     digest.update(session_digest);
-    let mut bytes: [u8; 16] = digest.finalize()[..16]
+    let bytes: [u8; 16] = digest.finalize()[..16]
         .try_into()
         .expect("fixed digest length");
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    ResourceUid::parse(format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-    ))
-    .expect("uuid bytes are canonical")
+    ResourceUid::from_bytes(&bytes).expect("uuid bytes are canonical")
 }
 
 fn durable_display_suffix(owner_uid: &ResourceUid, role: DisplayProcessRole) -> String {

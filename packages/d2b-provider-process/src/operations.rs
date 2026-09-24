@@ -43,13 +43,13 @@ use d2b_core::bundle_resolver::{BundleResolver, ResolvedRunnerIntent, is_device_
 use d2b_core::sandbox_profile::CgroupPlacement;
 use d2b_core::processes::ProcessRole;
 use d2b_resource_types::{
-    KernelCaller, OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,
-    ValidatedPayload, WellKnownType,
+    CONVERTED_TYPE_VERBS, KernelCaller, OperationCtx, OperationDef, OperationFailure,
+    OperationHandler, OperationResult, ValidatedPayload, WellKnownType,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::driver::{PROCESS_FAMILY_EXECUTION_DOMAINS, PROCESS_FAMILY_READS, PROCESS_FAMILY_VERBS};
+use crate::driver::{PROCESS_FAMILY_EXECUTION_DOMAINS, PROCESS_FAMILY_READS};
 use d2b_core::kernel_seat;
 
 /// The operation the family declares first.
@@ -268,7 +268,7 @@ impl OperationHandler for InspectProcessFamilyHandler {
             "family": "process",
             "resourceType": resource_type.to_resource_type_name().as_str(),
             "memberTypes": member_types,
-            "verbs": PROCESS_FAMILY_VERBS,
+            "verbs": CONVERTED_TYPE_VERBS,
             "execution": PROCESS_FAMILY_EXECUTION_DOMAINS,
             "reads": reads,
             "operations": operations,
@@ -1545,29 +1545,8 @@ struct DeviceWorkerLaunch {
 /// use).
 fn deterministic_resource_uid(zone: &str, resource_type: &str, name: &str) -> ResourceUid {
     let key = d2b_resource_runtime::identity::ResourceKey::new(zone, resource_type, name);
-    let mut bytes = d2b_resource_runtime::manager::deterministic_uid(&key);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let text = format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15],
-    );
-    ResourceUid::parse(text).expect("the deterministic uid renders canonically")
+    let bytes = d2b_resource_runtime::manager::deterministic_uid(&key);
+    ResourceUid::from_bytes(&bytes).expect("the deterministic uid renders canonically")
 }
 
 /// The Zone resource bundle bytes for one Zone uid.

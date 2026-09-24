@@ -304,7 +304,7 @@ impl GuestIdentity {
             return Err(GuestModeError::SessionBindingMismatch);
         }
         let expected =
-            BindingDigest::parse(format!("sha256:{}", hex_digest(self.channel_binding())))
+            BindingDigest::parse(format!("sha256:{}", crate::runtime_util::hex_bytes(&self.channel_binding())))
                 .map_err(|_| GuestModeError::SessionBindingMismatch)?;
         if binding.transport_binding().binding_digest() != &expected
             || binding.context().transport_binding().binding_digest() != &expected
@@ -330,10 +330,6 @@ fn digest_bytes(value: &str) -> [u8; 32] {
     }
 
     bytes
-}
-
-fn hex_digest(value: [u8; 32]) -> String {
-    value.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// A Guest session lease. Dropping it closes the ComponentSession generation
@@ -656,7 +652,7 @@ impl GuestRuntime {
                     EvidenceClass::EnrolledKk,
                     BindingDigest::parse(format!(
                         "sha256:{}",
-                        hex_digest(identity.channel_binding())
+                        crate::runtime_util::hex_bytes(&identity.channel_binding())
                     ))
                     .map_err(|_| GuestModeError::SessionBindingMismatch)?,
                 ),
@@ -740,7 +736,7 @@ fn authenticate_guest_subject(
         || binding.transport_class() != policy.transport_binding.transport
         || binding.transport_binding().locality() != Locality::Local
         || binding.transport_binding().binding_digest()
-            != &BindingDigest::parse(format!("sha256:{}", hex_digest(identity.channel_binding())))
+            != &BindingDigest::parse(format!("sha256:{}", crate::runtime_util::hex_bytes(&identity.channel_binding())))
                 .map_err(|_| {
                 d2b_session::SessionError::new(
                     d2b_session::contract::SessionErrorCode::PolicyDenied,

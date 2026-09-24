@@ -1357,7 +1357,7 @@ fn compute_record_hash(
     hash_component(&mut hasher, ts_ms.to_string().as_bytes());
     hash_component(&mut hasher, prev_hash.as_bytes());
     hash_component(&mut hasher, &event_bytes);
-    Ok(hex_lower(&hasher.finalize()))
+    Ok(crate::runtime_util::hex_bytes(&hasher.finalize()))
 }
 
 const DAEMON_AUDIT_CHECKPOINT_FILE: &str = "daemon-audit-checkpoint.json";
@@ -1668,16 +1668,6 @@ fn hash_component(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
 fn is_sha256_hex(value: &str) -> bool {
     value.len() == 64
         && value
@@ -1869,18 +1859,8 @@ fn utc_date_string() -> String {
 /// Civil-from-days algorithm (Howard Hinnant, public domain). Avoids
 /// pulling in a chrono / time crate just for date stamping.
 fn ymd_from_unix(unix: i64) -> (i32, u32, u32) {
-    let days = unix.div_euclid(86_400);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
+    let (y, m, d) = crate::resource_runtime_support::civil_from_days(unix.div_euclid(86_400));
+    (y as i32, m as u32, d as u32)
 }
 
 /// Write the api-ready state for a VM to
