@@ -20,3 +20,8 @@ net: -903 lines, -0 deps
 
 ## Checked
 Full crate: 6 wire/DTO modules (public_wire.rs 3951 incl. tests, cli_output.rs 1352 incl. cli_output_tests + display_output_tests + display_output_test entity, terminal_wire.rs 606, terminal_wire unreliable? no - checked: public_wire.rs, terminal_wire.rs, cli_output.rs, cli_json_output_contract.rs, lib.rs, BUILD.bazel, BUILD.bazel, Cargo.toml, .bzl). Verification: workspace-wide grep for each family member name across packages/ + docs/ + xtask (workspace verify, workspace-wide grep): zero Rust consumers outside crate + tests + generated daemon-api.md + daemon-api.md table + daemon-api.md rows. deps unchanged.
+
+## U4 execution (2026-09-24)
+- F1 UsbSecurityKey*/UsbSk* wire-twin family (public_wire.rs tail + cli_output.rs UsbSk family): APPLIED. Zero external Rust consumers at HEAD; canonical wire = d2b_contracts::security_key (PublicRequest/PublicResponse arms unchanged). daemon-api.md regenerated.
+- F2 cli_output Vm* families (VmExec/VmDisplay/VmAudio): APPLIED. Zero Rust consumers + zero committed schema pins at HEAD.
+- F3 terminal_wire From conversions + 7 dead DTOs + conversion tests: APPLIED. Live types (TerminalStream/Size/WriteStdin/ReadOutput/Resize/WriteStdinResult/ReadOutputChunk) + their Debug redaction tests kept.
