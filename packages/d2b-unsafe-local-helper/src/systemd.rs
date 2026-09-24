@@ -1,4 +1,5 @@
 use crate::environment::{EnvironmentError, ManagerEnvironment};
+use crate::runtime::hex;
 use d2b_contracts_control::unsafe_local_wire::{HelperScopeKind, HelperScopeState, ScopeIdentity};
 use std::fmt;
 use std::path::Path;
@@ -374,16 +375,6 @@ fn control_group_matches_unit(control_group: &str, unit_name: &str) -> bool {
             .file_name()
             .and_then(|name| name.to_str())
             == Some(unit_name)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(DIGITS[(byte >> 4) as usize] as char);
-        output.push(DIGITS[(byte & 0x0f) as usize] as char);
-    }
-    output
 }
 
 #[cfg(test)]

@@ -282,24 +282,6 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
         )
     }
 
-    pub fn with_paths(
-        manager: M,
-        user_home: PathBuf,
-        ledger_path: PathBuf,
-    ) -> Result<Self, RuntimeError> {
-        let executable = std::env::current_exe().map_err(|_| RuntimeError::Internal)?;
-        Self::with_paths_and_executable(manager, user_home, ledger_path, executable)
-    }
-
-    pub fn with_paths_and_executable(
-        manager: M,
-        user_home: PathBuf,
-        ledger_path: PathBuf,
-        executable: PathBuf,
-    ) -> Result<Self, RuntimeError> {
-        Self::with_paths_executable_and_proxy(manager, user_home, ledger_path, executable, None)
-    }
-
     pub(crate) fn with_paths_executable_and_proxy(
         manager: M,
         user_home: PathBuf,
@@ -576,7 +558,7 @@ fn validate_immutable_proxy_binary(path: &Path) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
