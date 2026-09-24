@@ -18,3 +18,11 @@ Read all src files (lib 4, main 50, environment 282, protocol 523, systemd 458, 
 ## Reopened refusals
 
 None.
+## U2 execution (2026-09-24)
+
+- re-verified all four zero-caller claims at HEAD (with_paths/with_paths_and_executable, state_home, d2b_core:: refs) - all still zero external.
+- applied: deleted `ScopeRuntime::with_paths` + `with_paths_and_executable` (runtime.rs); `new` uses `with_paths_executable_and_proxy` directly.
+- applied: deleted `ManagerEnvironment::state_home`.
+- applied: deduped `hex` - runtime.rs copy is now the single `pub(crate) fn hex`; systemd.rs imports it (`use crate::runtime::hex`), local copy deleted; both call sites unchanged.
+- applied: dropped unused `d2b-core` dep from Cargo.toml + BUILD.bazel deps.
+- tests: cargo test -p d2b-unsafe-local-helper 29 passed. -35 lines, -1 dep.

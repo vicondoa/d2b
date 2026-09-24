@@ -92,14 +92,6 @@ impl ManagerEnvironment {
             .ok_or(EnvironmentError::PathMissing)
     }
 
-    pub fn state_home(&self, passwd_home: &Path) -> PathBuf {
-        self.entries
-            .get("XDG_STATE_HOME")
-            .filter(|value| value.starts_with('/') && !value.contains('\0'))
-            .map(PathBuf::from)
-            .unwrap_or_else(|| passwd_home.join(".local/state"))
-    }
-
     pub fn runtime_directory(&self) -> Result<PathBuf, EnvironmentError> {
         self.entries
             .get("XDG_RUNTIME_DIR")
