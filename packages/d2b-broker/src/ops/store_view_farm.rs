@@ -36,7 +36,7 @@ use std::process::Stdio;
 
 use d2b_host::hardlink_farm::{
     self, BuildStoreViewFarmRequest, BuildStoreViewRequest, GenerationMarker, HardlinkFarmError,
-    ReplaceLivePathsRequest, StoreViewLinkCounts,
+    StoreViewLinkCounts,
 };
 
 /// The fd-safe activation helper, installed into the system profile by
@@ -220,11 +220,6 @@ fn private_store_argv(helper_bin: &str, verb: &str) -> Vec<String> {
 fn store_view_build_argv(helper_bin: &str) -> Vec<String> {
     private_store_argv(helper_bin, "build-store-view")
 }
-
-fn replace_store_view_argv(helper_bin: &str) -> Vec<String> {
-    private_store_argv(helper_bin, "replace-store-view-live")
-}
-
 /// Run the split-layout store-view build inside a private mount namespace
 /// where `/nix/store` is lazily detached. On success the helper prints
 /// the [`StoreViewLinkCounts`] as one JSON line on stdout; on failure it
@@ -303,90 +298,6 @@ async fn build_store_view_via_namespace(
         ),
     })
 }
-
-/// Async form used by the async exec_reconcile and store_sync paths;the sync
-/// form was removed with its last sync caller (store_sync converted to async).
-pub async fn replace_live_paths_cross_mount_safe_async(
-    farm_root: &Path,
-    stage_tag: &str,
-    closure_paths: &[PathBuf],
-) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
-    match hardlink_farm::replace_live_top_level_paths(farm_root, stage_tag, closure_paths).await {
-        Ok(counts) => Ok(counts),
-        Err(HardlinkFarmError::CrossMountLink { .. }) => {
-            replace_live_paths_via_namespace(farm_root, stage_tag, closure_paths).await
-        }
-        Err(other) => Err(other),
-    }
-}
-
-async fn replace_live_paths_via_namespace(
-    farm_root: &Path,
-    stage_tag: &str,
-    closure_paths: &[PathBuf],
-) -> Result<StoreViewLinkCounts, HardlinkFarmError> {
-    let request = ReplaceLivePathsRequest {
-        farm_root: farm_root.to_path_buf(),
-        stage_tag: stage_tag.to_owned(),
-        closure_paths: closure_paths.to_vec(),
-    };
-    let payload = serde_json::to_vec(&request).map_err(|e| HardlinkFarmError::Io {
-        path: farm_root.display().to_string(),
-        detail: format!("serialise store-view replace request: {e}"),
-    })?;
-    let argv = replace_store_view_argv(HELPER_BIN);
-    let mut child = tokio::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .env_remove("NOTIFY_SOCKET")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| HardlinkFarmError::Io {
-            path: argv[0].clone(),
-            detail: format!("spawn unshare for store-view replace: {e}"),
-        })?;
-    let mut stdin = child.stdin.take().ok_or_else(|| HardlinkFarmError::Io {
-        path: farm_root.display().to_string(),
-        detail: "child stdin unavailable for store-view replace".to_owned(),
-    })?;
-    let writer = tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt;
-        let _ = stdin.write_all(&payload).await;
-    });
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| HardlinkFarmError::Io {
-            path: farm_root.display().to_string(),
-            detail: format!("await store-view replace: {e}"),
-        })?;
-    let _ = writer.await;
-    if output.status.success() {
-        return parse_store_view_counts(&output.stdout, farm_root);
-    }
-    if let Some(line) = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        && let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line)
-    {
-        return Err(typed);
-    }
-    Err(HardlinkFarmError::Io {
-        path: farm_root.display().to_string(),
-        detail: format!(
-            "store-view replace helper failed (exit {}): {}",
-            output
-                .status
-                .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "signal".to_owned()),
-            String::from_utf8_lossy(&output.stderr).trim(),
-        ),
-    })
-}
-
 fn parse_store_view_counts(
     stdout: &[u8],
     farm_root: &Path,
@@ -435,16 +346,6 @@ mod tests {
         let argv = store_view_build_argv("/h/helper");
         assert_eq!(argv, vec!["/h/helper", "private-store", "build-store-view"]);
     }
-
-    #[test]
-    fn replace_store_view_argv_wires_private_namespace_and_replace_verb() {
-        let argv = replace_store_view_argv("/h/helper");
-        assert_eq!(
-            argv,
-            vec!["/h/helper", "private-store", "replace-store-view-live"]
-        );
-    }
-
     #[test]
     fn successful_helper_without_counts_fails_closed() {
         let err = parse_store_view_counts(b"", Path::new("/tmp/store-view"))
