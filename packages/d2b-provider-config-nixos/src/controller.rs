@@ -7,11 +7,11 @@ use d2b_contracts_resource::v3::ResourceRef;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    GUEST_CONFIG_IDENTIFIER, MAX_CONFIG_BYTES, SERVICE_NAME, SERVICE_PACKAGE,
+    GUEST_CONFIG_IDENTIFIER, MAX_CONFIG_BYTES,
     service::{
-        ConfigApproveRequest, ConfigDiffRequest, ConfigRejectRequest, ConfigServiceDescriptor,
-        ConfigStageRequest, ConfigStatusRequest, ConfigSyncRequest, ConfigSyncResponse,
-        validate_destination, validate_guest_ref, validate_identifier, validate_view_identifier,
+        ConfigApproveRequest, ConfigDiffRequest, ConfigRejectRequest, ConfigStageRequest,
+        ConfigStatusRequest, ConfigSyncRequest, ConfigSyncResponse, validate_destination,
+        validate_guest_ref, validate_identifier, validate_view_identifier,
     },
 };
 
@@ -23,19 +23,11 @@ pub enum ConfigCaller {
     Guest,
     /// An administrator, allowed to operate on host staging state.
     Admin,
-    /// A lifecycle-authorized operator, allowed to operate on host staging.
-    Lifecycle,
-    /// An ordinary user, which has no config-management authority.
-    User,
 }
 
 impl ConfigCaller {
     fn can_read(self) -> bool {
-        matches!(self, Self::Guest | Self::Admin | Self::Lifecycle)
-    }
-
-    fn can_stage(self) -> bool {
-        matches!(self, Self::Admin | Self::Lifecycle)
+        matches!(self, Self::Guest | Self::Admin)
     }
 }
 
@@ -77,16 +69,6 @@ impl GuestSessionEvidence {
     /// Borrow the authenticated Guest reference.
     pub fn guest_ref(&self) -> &ResourceRef {
         &self.guest_ref
-    }
-
-    /// Borrow the bounded boot identity commitment.
-    pub fn boot_identity(&self) -> &str {
-        &self.boot_identity
-    }
-
-    /// Return the reconnect generation bound by admission.
-    pub const fn reconnect_generation(&self) -> u64 {
-        self.reconnect_generation
     }
 
     /// Return whether the evidence is still current.
@@ -143,11 +125,6 @@ impl GuestConfigDocument {
     /// Return the document size.
     pub const fn len(&self) -> usize {
         self.bytes.len()
-    }
-
-    /// Return whether the document is empty.
-    pub const fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
     }
 
     /// Return a content digest computed from the received bytes.
@@ -276,11 +253,6 @@ impl std::error::Error for ConfigError {}
 pub struct ConfigService;
 
 impl ConfigService {
-    /// Return the closed service descriptor.
-    pub fn descriptor() -> ConfigServiceDescriptor {
-        ConfigServiceDescriptor::canonical()
-    }
-
     /// Read one Guest document through current authenticated session evidence.
     pub fn read_guest_config(
         &self,
@@ -306,41 +278,6 @@ impl ConfigService {
             request.guest_ref.clone(),
             document,
         ))
-    }
-
-    /// Validate a host-side stage request without accepting a path or
-    /// arbitrary document identifier.
-    pub fn stage(
-        &self,
-        caller: ConfigCaller,
-        request: &ConfigSyncRequest,
-        document: GuestConfigDocument,
-    ) -> Result<ConfigSyncResponse, ConfigError> {
-        if !caller.can_stage() {
-            return Err(ConfigError::Unauthorized);
-        }
-        validate_guest_ref(&request.guest_ref)?;
-        validate_identifier(&request.identifier)?;
-        Ok(ConfigSyncResponse::from_document(
-            request.guest_ref.clone(),
-            document,
-        ))
-    }
-
-    /// Authorize an admin-only staging mutation.
-    pub fn authorize_admin(
-        &self,
-        caller: ConfigCaller,
-        guest_ref: &ResourceRef,
-    ) -> Result<(), ConfigError> {
-        if !caller.can_stage() || guest_ref.resource_type().as_str() != "Guest" {
-            return Err(if caller.can_stage() {
-                ConfigError::InvalidRequest
-            } else {
-                ConfigError::Unauthorized
-            });
-        }
-        Ok(())
     }
 
     /// Validate a typed operation payload against the closed service.
@@ -390,10 +327,5 @@ impl ConfigService {
                 validate_identifier(&request.identifier)
             }
         }
-    }
-
-    /// Ensure service identity remains tied to the canonical descriptor.
-    pub fn service_identity(&self) -> (&'static str, &'static str) {
-        (SERVICE_PACKAGE, SERVICE_NAME)
     }
 }

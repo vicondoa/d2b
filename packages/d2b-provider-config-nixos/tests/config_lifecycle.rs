@@ -39,7 +39,7 @@ fn stale_session_and_non_guest_callers_fail_closed() {
     assert_eq!(
         ConfigService
             .read_guest_config(
-                ConfigCaller::User,
+                ConfigCaller::Admin,
                 &request,
                 &GuestSessionEvidence::new(
                     ResourceRef::parse("Guest/work").expect("guest ref"),
@@ -49,9 +49,9 @@ fn stale_session_and_non_guest_callers_fail_closed() {
                 .expect("evidence"),
                 b"{}"
             )
-            .expect_err("user read")
+            .expect_err("admin read")
             .code(),
-        "config-unauthorized"
+        "config-session-stale"
     );
 }
 
@@ -71,7 +71,7 @@ fn host_staging_lifecycle_is_typed_and_consumes_approved_content() {
 
     let status = store
         .status(
-            ConfigCaller::Lifecycle,
+            ConfigCaller::Admin,
             &zone(),
             &ConfigStatusRequest::new(guest.clone()).expect("status request"),
         )
@@ -217,8 +217,8 @@ fn staging_rejects_paths_invalid_views_and_unauthorized_callers() {
     let stage = ConfigStageRequest::new(guest.clone(), &document).expect("stage request");
     assert_eq!(
         store
-            .stage(ConfigCaller::User, &zone(), &stage)
-            .expect_err("user must be denied")
+            .stage(ConfigCaller::Guest, &zone(), &stage)
+            .expect_err("guest must be denied")
             .code(),
         "config-unauthorized"
     );

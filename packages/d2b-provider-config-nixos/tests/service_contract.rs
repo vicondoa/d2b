@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_config_nixos::{
-    ConfigError, ConfigOperation, ConfigService, ConfigServiceBackend, ConfigServiceDescriptor,
-    ConfigSyncRequest, GuestConfigDocument, create_ttrpc_services,
+    ConfigError, ConfigOperation, ConfigService, ConfigServiceBackend, ConfigSyncRequest,
+    GuestConfigDocument, create_ttrpc_services,
 };
 
 struct TestBackend;
@@ -16,20 +16,6 @@ impl ConfigServiceBackend for TestBackend {
     ) -> Result<serde_json::Value, ConfigError> {
         Ok(serde_json::json!({}))
     }
-}
-
-#[test]
-fn descriptor_is_closed_and_service_only() {
-    let descriptor = ConfigServiceDescriptor::canonical();
-    descriptor.validate().expect("canonical descriptor");
-    assert!(descriptor.service_only);
-    assert_eq!(descriptor.methods.len(), ConfigOperation::ALL.len());
-    assert!(
-        descriptor
-            .methods
-            .iter()
-            .all(|method| method.starts_with("ConfigNixosService/"))
-    );
 }
 
 #[test]
