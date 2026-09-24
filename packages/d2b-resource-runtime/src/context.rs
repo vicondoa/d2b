@@ -169,9 +169,6 @@ pub enum LookupPlane {
     /// The v3 manager plane: the manager's row projection, the authority of
     /// every converted resource's actor.
     Manager,
-    /// The pre-v3 durable store plane: rows no actor serves (yet), read
-    /// through the store handle.
-    Store,
 }
 
 impl LookupPlane {
@@ -179,7 +176,6 @@ impl LookupPlane {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Manager => "manager",
-            Self::Store => "store",
         }
     }
 }
@@ -188,18 +184,6 @@ impl std::fmt::Display for LookupPlane {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
-}
-
-/// The default disposition of one [`RowLookup`] under issue #511's rule
-/// "defer unless proven terminal".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LookupDisposition {
-    /// The row was present; the caller proceeds with it.
-    Proceed,
-    /// The caller defers and requeues: a retryable failure (R13) - the actor
-    /// schedules exactly one reconcile after its backoff and publishes no
-    /// terminal status.
-    Defer,
 }
 
 /// One cross-plane row read's classification (issue #511): the single
@@ -223,11 +207,12 @@ pub enum LookupDisposition {
 ///   **Defer with a requeue as well**: even a failed read is not terminal by
 ///   itself.
 ///
-/// [`RowLookup::disposition`] returns that default. A call site that fails
-/// terminal must first name its terminal evidence - the committed row that
-/// cannot decode, the structurally invalid spec - and surface it (status
-/// projection or log), so a terminal status is always evidence-backed and
-/// never inferred from absence or from an unanswered plane.
+/// The default for a non-`Present` answer is to defer and requeue. A call
+/// site that fails terminal must first name its terminal evidence - the
+/// committed row that cannot decode, the structurally invalid spec - and
+/// surface it (status projection or log), so a terminal status is always
+/// evidence-backed and never inferred from absence or from an unanswered
+/// plane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowLookup<T> {
     /// The plane answered with the row.
@@ -241,28 +226,6 @@ pub enum RowLookup<T> {
 }
 
 impl<T> RowLookup<T> {
-    /// The plane this lookup was answered from.
-    pub const fn plane(&self) -> LookupPlane {
-        match self {
-            Self::Present { plane, .. }
-            | Self::Absent { plane }
-            | Self::Unavailable { plane }
-            | Self::Error { plane, .. } => *plane,
-        }
-    }
-
-    /// The rule's default disposition (issue #511): `Present` proceeds;
-    /// `Absent`, `Unavailable`, and `Error` all defer with a requeue.
-    /// Terminal is never a default of this classification.
-    pub const fn disposition(&self) -> LookupDisposition {
-        match self {
-            Self::Present { .. } => LookupDisposition::Proceed,
-            Self::Absent { .. } | Self::Unavailable { .. } | Self::Error { .. } => {
-                LookupDisposition::Defer
-            }
-        }
-    }
-
     /// The compared values one non-present lookup yields (issue #508): the
     /// caller expected `expected`, and the plane answered with the observed
     /// side this renders. `Present` returns `None` (the read proceeded).
@@ -375,12 +338,6 @@ where
 ///   through the wired [`SpecDecoder`] and is cached.
 pub struct ResourceContext {
     row: StoredDesiredResource,
-    target: TargetHandle,
-    /// Directory-backed target binding (U13): the guest handle, the session
-    /// generation it is bound to, and the directory every guest operation
-    /// re-validates through. `None` when the manager runs without a target
-    /// directory (scaffold and unit fixtures).
-    target_binding: Option<crate::target::TargetBinding>,
     decoder: Arc<dyn SpecDecoder>,
     manager: Arc<dyn ManagerEndpoint>,
     requeue: Arc<dyn RequeueScheduler>,
@@ -402,11 +359,11 @@ pub struct ResourceContext {
 }
 
 impl ResourceContext {
-    /// Assembled by the resource actor (U3) from the stored row, the
-    /// resource's target, and the manager-wired hooks.
+    /// Assembled by the resource actor (U3) from the stored row and the
+    /// manager-wired hooks.
     pub fn new(
         row: StoredDesiredResource,
-        target: TargetHandle,
+        _target: TargetHandle,
         decoder: Arc<dyn SpecDecoder>,
         manager: Arc<dyn ManagerEndpoint>,
         requeue: Arc<dyn RequeueScheduler>,
@@ -415,8 +372,6 @@ impl ResourceContext {
     ) -> Self {
         Self {
             row,
-            target,
-            target_binding: None,
             decoder,
             manager,
             requeue,
@@ -525,24 +480,6 @@ impl ResourceContext {
         self.status_projection.take()
     }
 
-    /// Execution target of this resource (R19).
-    pub fn target(&self) -> &TargetHandle {
-        &self.target
-    }
-
-    /// Attach the resolved target binding (U13, manager-wired). Drivers that
-    /// realize on a guest target work through it: every operation re-reads
-    /// the live session instead of trusting a channel the driver kept.
-    pub fn with_target_binding(mut self, binding: crate::target::TargetBinding) -> Self {
-        self.target_binding = Some(binding);
-        self
-    }
-
-    /// The resolved target binding, when the manager wired one.
-    pub fn target_binding(&self) -> Option<&crate::target::TargetBinding> {
-        self.target_binding.as_ref()
-    }
-
     /// Fetch a resource row by key through the manager.
     ///
     /// The canonical classified form is [`Self::lookup`] (issue #511):
@@ -555,10 +492,8 @@ impl ResourceContext {
     /// Fetch a resource row by key through the manager, classified per
     /// issue #511: `Present` carries the row, `Absent` is the honest
     /// not-(yet)-created answer, and a manager that cannot answer is
-    /// `Unavailable` - never absence.
-    ///
-    /// Apply [`RowLookup::disposition`] before choosing an outcome: the
-    /// default is to defer and requeue unless the call site has named
+    /// `Unavailable` - never absence. The default for a non-`Present`
+    /// answer is to defer and requeue unless the call site has named
     /// terminal evidence.
     pub async fn lookup(&mut self, key: &ResourceKey) -> RowLookup<StoredDesiredResource> {
         match self.manager.get(key).await {
@@ -615,8 +550,8 @@ impl ResourceContext {
     /// The [`RowLookup`] form of [`Self::get_view`] (issue #511): the
     /// manager plane's live runtime view for `key`, classified so absence
     /// (`Absent` - no row exists) stays distinct from a manager that cannot
-    /// answer (`Unavailable`). Apply [`RowLookup::disposition`] before
-    /// choosing an outcome.
+    /// answer (`Unavailable`). A non-`Present` answer defers by default
+    /// unless the call site names terminal evidence.
     pub async fn lookup_view(&mut self, key: &ResourceKey) -> RowLookup<ResourceView> {
         match self.manager.view(key).await {
             Ok(Some(view)) => RowLookup::Present {
@@ -1112,8 +1047,8 @@ mod tests {
 
     use super::test_support::{fixture, test_row, DeadManager, FailingDecoder, NullRequeue, TokioRequeue};
     use super::{
-        ChildEnsure, LookupDisposition, LookupPlane, ManagerEndpoint, RequeueScheduler, RowLookup,
-        WatchCondition, WatchId, WatchRegistration, WatchSatisfied, typed_spec_decoder,
+        ChildEnsure, LookupPlane, ManagerEndpoint, RequeueScheduler, RowLookup, WatchCondition,
+        WatchId, WatchRegistration, WatchSatisfied, typed_spec_decoder,
     };
     use crate::error::ResourceError;
     use crate::identity::{ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource};
@@ -1326,48 +1261,6 @@ mod tests {
         let key = ResourceKey::new("z", "Volume", "data");
         let error = endpoint.view(&key).await.unwrap_err();
         assert!(matches!(error, ResourceError::ManagerRpc(_)));
-    }
-
-    // -- Lookup classification (issue #511) -----------------------------------
-
-    /// Issue #511's default is "defer unless proven terminal": across all
-    /// four classifications only `Present` proceeds, and every classification
-    /// records the plane it was answered from.
-    #[test]
-    fn every_non_present_lookup_defers_by_default() {
-        let present: RowLookup<u8> = RowLookup::Present {
-            row: 7,
-            plane: LookupPlane::Manager,
-        };
-        assert_eq!(present.disposition(), LookupDisposition::Proceed);
-        assert_eq!(present.plane(), LookupPlane::Manager);
-
-        let absent: RowLookup<u8> = RowLookup::Absent {
-            plane: LookupPlane::Manager,
-        };
-        assert_eq!(absent.disposition(), LookupDisposition::Defer, "absence is not failure");
-        assert_eq!(absent.plane(), LookupPlane::Manager);
-
-        let unavailable: RowLookup<u8> = RowLookup::Unavailable {
-            plane: LookupPlane::Store,
-        };
-        assert_eq!(
-            unavailable.disposition(),
-            LookupDisposition::Defer,
-            "an unanswered plane is retryable"
-        );
-        assert_eq!(unavailable.plane(), LookupPlane::Store);
-
-        let error: RowLookup<u8> = RowLookup::Error {
-            plane: LookupPlane::Store,
-            detail: "row does not decode".to_owned(),
-        };
-        assert_eq!(
-            error.disposition(),
-            LookupDisposition::Defer,
-            "a failed read is not terminal by itself"
-        );
-        assert_eq!(error.plane(), LookupPlane::Store);
     }
 
     /// One classified read against a scripted manager: `respond` answers the

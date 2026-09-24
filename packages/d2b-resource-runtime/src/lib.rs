@@ -47,7 +47,7 @@ pub use crate::resource::{
 
 // Lookup classification (issue #511): the canonical classified row-read
 // result every driver and effect maps onto.
-pub use crate::context::{LookupDisposition, LookupPlane, RowLookup};
+pub use crate::context::{LookupPlane, RowLookup};
 
 // Target layer (U13): the Host/Guest directory, the generation-bound guest
 // handle it mints, and the Guest-side target runtime behind the

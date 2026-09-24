@@ -279,12 +279,8 @@ pub struct ResourceActorArgs {
     /// Committed durable row: the manager persisted it before spawning.
     pub row: StoredDesiredResource,
     /// Execution target for effects (R19); the coarse handle derived from
-    /// `target_binding` when the manager resolved one.
+    /// the resolved directory binding when the manager resolved one.
     pub target: crate::target::TargetHandle,
-    /// Directory-backed target binding (U13), resolved by the manager from
-    /// the row's declared execution reference. `None` when the manager runs
-    /// without a target directory (scaffold and unit fixtures).
-    pub target_binding: Option<crate::target::TargetBinding>,
     /// Provider directory resolved in `pre_start`. A lookup failure fails
     /// the spawn AFTER the row committed (F1): the row stays durable and a
     /// restart or Ensure recovers it.
@@ -310,8 +306,6 @@ pub struct ResourceActorState {
     manager_endpoint: Arc<dyn ManagerEndpoint>,
     decoder: Arc<dyn SpecDecoder>,
     target: crate::target::TargetHandle,
-    /// Directory-backed target binding (U13); rebuilt with the context.
-    target_binding: Option<crate::target::TargetBinding>,
     /// Runtime-only retryable-failure backoff (R13).
     backoff: Duration,
     /// The rung of the retry ladder the next operational failure schedules
@@ -569,10 +563,7 @@ impl ResourceActorState {
             self.watch_tx.clone(),
         )
         .with_owner_key(self.owner_key.clone());
-        self.ctx = match self.target_binding.clone() {
-            Some(binding) => ctx.with_target_binding(binding),
-            None => ctx,
-        };
+        self.ctx = ctx;
     }
 
     /// One reconcile pass. Callers guarantee `!effect_running` (R14: the
@@ -729,16 +720,11 @@ impl Actor for ResourceActor {
             watch_tx.clone(),
         )
         .with_owner_key(args.owner_key.clone());
-        let ctx = match args.target_binding.clone() {
-            Some(binding) => ctx.with_target_binding(binding),
-            None => ctx,
-        };
         Ok(ResourceActorState {
             manager: args.manager,
             manager_endpoint,
             decoder: args.decoder,
             target: args.target,
-            target_binding: args.target_binding,
             backoff: args.backoff,
             retry_backoff: args.backoff,
             owner_key: args.owner_key,

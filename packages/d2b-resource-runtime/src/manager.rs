@@ -646,10 +646,11 @@ impl ResourceManagerState {
         let decoder =
             self.decoders.get(&type_name).cloned().unwrap_or_else(|| self.default_decoder.clone());
         // The execution target comes from the row's own declared reference
-        // (U13): the manager resolves it, records the assignment, and hands
-        // the actor a directory-backed binding. A row whose reference cannot
-        // be resolved fails the spawn AFTER its row committed (F1): the row
-        // stays durable and a later Ensure or restart retries it.
+        // (U13): the manager resolves it, records the assignment, and derives the
+        // actor's execution handle from the directory-backed binding. A row
+        // whose reference cannot be resolved fails the spawn AFTER its row
+        // committed (F1): the row stays durable and a later Ensure or restart
+        // retries it.
         let execution_ref = self
             .target_resolver
             .execution_ref(&row.key, &row.spec)
@@ -665,7 +666,6 @@ impl ResourceManagerState {
         let args = ResourceActorArgs {
             row: row.clone(),
             target: target_binding.handle(),
-            target_binding: Some(target_binding),
             providers: self.providers.clone(),
             manager,
             decoder,
