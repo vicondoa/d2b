@@ -2899,6 +2899,16 @@ mod tests {
         )
     }
 
+    fn disabled_bridge_config() -> BridgeConfig {
+        BridgeConfig {
+            socket_path: None,
+            reconnect: BridgeReconnectPolicy {
+                initial_delay: std::time::Duration::from_millis(250),
+                max_delay: std::time::Duration::from_secs(5),
+            },
+        }
+    }
+
     fn policy() -> Rc<FilterPolicy> {
         Rc::new(FilterPolicy::build(PolicyInput::new(local_identity())))
     }
@@ -2908,7 +2918,7 @@ mod tests {
         Rc::new(RefCell::new(VirtualClipboardState::new(
             local_identity(),
             diag,
-            BridgeConfig::disabled(),
+            disabled_bridge_config(),
         )))
     }
 
@@ -2967,7 +2977,7 @@ mod tests {
         let mut clipboard = VirtualClipboardState::new(
             local_identity(),
             Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned()))),
-            BridgeConfig::disabled(),
+            disabled_bridge_config(),
         );
         let source = Rc::new(RefCell::new(VirtualSource {
             source: Weak::new(),
@@ -3024,7 +3034,10 @@ mod tests {
                 std::path::Path::new("/run/d2b/clipd"),
                 None,
                 &local_identity(),
-                BridgeReconnectPolicy::default(),
+                BridgeReconnectPolicy {
+                    initial_delay: std::time::Duration::from_millis(250),
+                    max_delay: std::time::Duration::from_secs(5),
+                },
             )
             .expect("bridge config"),
         );
@@ -3048,7 +3061,7 @@ mod tests {
     fn flush_pending_bridge_handoffs_delivers_and_removes_queue_item() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
         let mut clipboard =
-            VirtualClipboardState::new(local_identity(), diag, BridgeConfig::disabled());
+            VirtualClipboardState::new(local_identity(), diag, disabled_bridge_config());
         let (bridge, peer) = UnixStream::pair().expect("bridge pair");
         clipboard.bridge = Some(bridge);
         let (fd, _fd_peer) = UnixStream::pair().expect("transfer pair");
@@ -3069,13 +3082,7 @@ mod tests {
         assert_eq!(clipboard.pending_handoff_count_for_tests(), 0);
         let mut frame = [0_u8; 256];
         let mut iov = [IoSliceMut::new(&mut frame)];
-        let mut cmsg_space = vec![0_u8; crate::wayland_proxy::bridge::SCM_RIGHTS_MIN_CONTROL_BYTES];
-        const {
-            assert!(
-                crate::wayland_proxy::bridge::SCM_RIGHTS_CONTROL_FD_SLOTS
-                    >= crate::wayland_proxy::bridge::SCM_RIGHTS_MIN_FDS
-            )
-        };
+        let mut cmsg_space = vec![0_u8; 256];
         let msg = nix::sys::socket::recvmsg::<()>(
             peer.as_raw_fd(),
             &mut iov,
@@ -3083,9 +3090,7 @@ mod tests {
             nix::sys::socket::MsgFlags::MSG_CMSG_CLOEXEC,
         )
         .expect("recvmsg");
-        assert!(crate::wayland_proxy::bridge::recv_flags_are_fail_closed(
-            msg.flags
-        ));
+        assert!(!msg.flags.contains(nix::sys::socket::MsgFlags::MSG_CTRUNC));
         assert!(msg.bytes > 0);
         for cmsg in msg.cmsgs().expect("cmsgs") {
             if let nix::sys::socket::ControlMessageOwned::ScmRights(fds) = cmsg {
@@ -3100,7 +3105,7 @@ mod tests {
     fn pending_handoff_backpressure_stops_flush_and_requeues_front() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
         let mut clipboard =
-            VirtualClipboardState::new(local_identity(), diag, BridgeConfig::disabled());
+            VirtualClipboardState::new(local_identity(), diag, disabled_bridge_config());
         let (fd, _fd_peer) = UnixStream::pair().expect("transfer pair");
         let pending = PendingBridgeHandoff {
             fd: fd.into(),
@@ -3156,7 +3161,10 @@ mod tests {
                 std::path::Path::new("/run/d2b/clipd"),
                 None,
                 &local_identity(),
-                BridgeReconnectPolicy::default(),
+                BridgeReconnectPolicy {
+                    initial_delay: std::time::Duration::from_millis(250),
+                    max_delay: std::time::Duration::from_secs(5),
+                },
             )
             .expect("bridge config"),
         );

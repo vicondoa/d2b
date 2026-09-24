@@ -20,9 +20,6 @@ use serde::Serialize;
 use crate::wayland_proxy::identity::ProxyIdentity;
 
 const LINUX_SUN_PATH_BYTES: usize = 108;
-pub const SCM_RIGHTS_MIN_FDS: usize = 28;
-pub const SCM_RIGHTS_MIN_CONTROL_BYTES: usize = 256;
-pub const SCM_RIGHTS_CONTROL_FD_SLOTS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeConfig {
@@ -31,13 +28,6 @@ pub struct BridgeConfig {
 }
 
 impl BridgeConfig {
-    pub fn disabled() -> Self {
-        Self {
-            socket_path: None,
-            reconnect: BridgeReconnectPolicy::default(),
-        }
-    }
-
     pub fn from_identity_parts(
         explicit_socket: Option<PathBuf>,
         root: &Path,
@@ -74,15 +64,6 @@ impl BridgeConfig {
 pub struct BridgeReconnectPolicy {
     pub initial_delay: Duration,
     pub max_delay: Duration,
-}
-
-impl Default for BridgeReconnectPolicy {
-    fn default() -> Self {
-        Self {
-            initial_delay: Duration::from_millis(250),
-            max_delay: Duration::from_secs(5),
-        }
-    }
 }
 
 pub fn path_for_user_identity(
@@ -337,10 +318,6 @@ fn is_would_block_errno(error: nix::errno::Errno) -> bool {
     )
 }
 
-pub fn recv_flags_are_fail_closed(flags: nix::sys::socket::MsgFlags) -> bool {
-    !flags.contains(nix::sys::socket::MsgFlags::MSG_CTRUNC)
-}
-
 fn bridge_frame(metadata: &BridgeTransferMetadata) -> String {
     #[derive(Serialize)]
     #[serde(tag = "type", rename_all = "snake_case")]
@@ -445,7 +422,10 @@ mod tests {
             Path::new("/run/d2b/clipd"),
             Some(1001),
             &local_identity(),
-            BridgeReconnectPolicy::default(),
+            BridgeReconnectPolicy {
+            initial_delay: Duration::from_millis(250),
+            max_delay: Duration::from_secs(5),
+        },
         )
         .expect("valid config");
 
@@ -462,7 +442,10 @@ mod tests {
             Path::new("/run/d2b/clipd"),
             None,
             &local_identity(),
-            BridgeReconnectPolicy::default(),
+            BridgeReconnectPolicy {
+            initial_delay: Duration::from_millis(250),
+            max_delay: Duration::from_secs(5),
+        },
         )
         .expect("disabled config");
 
@@ -476,7 +459,10 @@ mod tests {
             Path::new("/run/d2b/clipd"),
             None,
             &local_identity(),
-            BridgeReconnectPolicy::default(),
+            BridgeReconnectPolicy {
+            initial_delay: Duration::from_millis(250),
+            max_delay: Duration::from_secs(5),
+        },
         )
         .expect("enabled config");
         let mut machine = BridgeReconnectMachine::new(&config);
@@ -580,9 +566,8 @@ mod tests {
 
         let mut frame = [0_u8; 256];
         let mut iov = [IoSliceMut::new(&mut frame)];
-        let mut cmsg_space = vec![0_u8; SCM_RIGHTS_MIN_CONTROL_BYTES];
-        const { assert!(SCM_RIGHTS_CONTROL_FD_SLOTS >= SCM_RIGHTS_MIN_FDS) };
-        assert!(cmsg_space.len() >= SCM_RIGHTS_MIN_CONTROL_BYTES);
+        let mut cmsg_space = vec![0_u8; 256];
+        assert!(cmsg_space.len() >= 256);
         let msg = nix::sys::socket::recvmsg::<()>(
             peer.as_raw_fd(),
             &mut iov,
@@ -590,7 +575,7 @@ mod tests {
             nix::sys::socket::MsgFlags::MSG_CMSG_CLOEXEC,
         )
         .expect("recvmsg");
-        assert!(recv_flags_are_fail_closed(msg.flags));
+        assert!(!msg.flags.contains(nix::sys::socket::MsgFlags::MSG_CTRUNC));
         let bytes = msg.bytes;
         let mut saw_fd = false;
         for cmsg in msg.cmsgs().expect("cmsgs") {
@@ -610,16 +595,6 @@ mod tests {
         assert!(!frame.contains("legacy_vm_name"));
         let mut buf = [0_u8; 1];
         assert_eq!(local_peer.read(&mut buf).expect("local peer EOF"), 0);
-    }
-
-    #[test]
-    fn ctruncated_scm_rights_receive_is_fail_closed() {
-        assert!(!recv_flags_are_fail_closed(
-            nix::sys::socket::MsgFlags::MSG_CTRUNC
-        ));
-        assert!(recv_flags_are_fail_closed(
-            nix::sys::socket::MsgFlags::empty()
-        ));
     }
 
     #[test]
