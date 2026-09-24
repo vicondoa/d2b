@@ -13,7 +13,7 @@ use d2b_contracts_provider::v3::provider::{
 };
 use d2b_contracts_resource::v3::identity::BindingDigest;
 use d2b_contracts_resource::v3::{
-    ResourceGeneration, ResourceRef, ResourceTypeName, SchemaFingerprint, ZoneId,
+    ResourceRef, ResourceTypeName, SchemaFingerprint, ZoneId,
     execution_policy::{BoundedToken, PrimitiveSpecError, redacted_debug},
     resource::ResourceEnvelope,
 };
@@ -721,102 +721,6 @@ impl ExportLeaseSummary {
 }
 
 redacted_debug!(ExportLeaseSummary);
-
-/// ResourceType-common ResourceExport status.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ResourceExportStatusResource {
-    state: ResourceExportState,
-    export_generation: ResourceGeneration,
-    active_consumer_count: u32,
-    pending_consumer_count: u32,
-    owner_service_ready: bool,
-    owner_service_generation: Option<ResourceGeneration>,
-    projection_schema_fingerprint: SchemaFingerprint,
-    factory_fingerprint: SchemaFingerprint,
-    lease_summaries: Vec<ExportLeaseSummary>,
-}
-
-impl ResourceExportStatusResource {
-    /// Construct a bounded status projection.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        state: ResourceExportState,
-        export_generation: ResourceGeneration,
-        active_consumer_count: u32,
-        pending_consumer_count: u32,
-        owner_service_ready: bool,
-        owner_service_generation: Option<ResourceGeneration>,
-        projection_schema_fingerprint: SchemaFingerprint,
-        factory_fingerprint: SchemaFingerprint,
-        lease_summaries: Vec<ExportLeaseSummary>,
-    ) -> Result<Self, ResourceExportContractError> {
-        if lease_summaries.len() > MAX_RESOURCE_EXPORT_LEASE_SUMMARIES {
-            return Err(ResourceExportContractError::BoundExceeded);
-        }
-        Ok(Self {
-            state,
-            export_generation,
-            active_consumer_count,
-            pending_consumer_count,
-            owner_service_ready,
-            owner_service_generation,
-            projection_schema_fingerprint,
-            factory_fingerprint,
-            lease_summaries,
-        })
-    }
-
-    /// Return the export lifecycle state.
-    pub const fn state(&self) -> ResourceExportState {
-        self.state
-    }
-
-    /// Return the monotonic export generation.
-    pub const fn export_generation(&self) -> ResourceGeneration {
-        self.export_generation
-    }
-
-    /// Return the active consumer count.
-    pub const fn active_consumer_count(&self) -> u32 {
-        self.active_consumer_count
-    }
-
-    /// Return the pending consumer count.
-    pub const fn pending_consumer_count(&self) -> u32 {
-        self.pending_consumer_count
-    }
-
-    /// Whether the owner Service is ready.
-    pub const fn owner_service_ready(&self) -> bool {
-        self.owner_service_ready
-    }
-
-    /// Borrow the owner Service generation.
-    pub const fn owner_service_generation(&self) -> Option<&ResourceGeneration> {
-        self.owner_service_generation.as_ref()
-    }
-
-    /// Borrow the projection schema fingerprint.
-    pub const fn projection_schema_fingerprint(&self) -> &SchemaFingerprint {
-        &self.projection_schema_fingerprint
-    }
-
-    /// Borrow the factory fingerprint.
-    pub const fn factory_fingerprint(&self) -> &SchemaFingerprint {
-        &self.factory_fingerprint
-    }
-
-    /// Borrow the bounded lease summaries.
-    pub fn lease_summaries(&self) -> &[ExportLeaseSummary] {
-        &self.lease_summaries
-    }
-}
-
-redacted_debug!(ResourceExportStatusResource);
-
-/// Alias used by generic status adapters.
-pub type ResourceExportStatus = ResourceExportStatusResource;
 
 /// Whether a ResourceType is a qualified semantic Service.
 pub(crate) fn is_qualified_service_type(resource_type: &ResourceTypeName) -> bool {

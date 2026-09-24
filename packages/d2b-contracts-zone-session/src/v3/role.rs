@@ -866,40 +866,6 @@ pub enum RoleConditionType {
     PendingBindingDrain,
 }
 
-/// Identity-free Role status projection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RoleStatusResource {
-    active_binding_count: u32,
-    last_validated_at: Option<d2b_contracts_resource::v3::Timestamp>,
-}
-
-impl RoleStatusResource {
-    /// Construct Role status.
-    pub const fn new(
-        active_binding_count: u32,
-        last_validated_at: Option<d2b_contracts_resource::v3::Timestamp>,
-    ) -> Self {
-        Self {
-            active_binding_count,
-            last_validated_at,
-        }
-    }
-
-    /// Return active binding count.
-    pub const fn active_binding_count(&self) -> u32 {
-        self.active_binding_count
-    }
-
-    /// Borrow last validation time.
-    pub const fn last_validated_at(&self) -> Option<&d2b_contracts_resource::v3::Timestamp> {
-        self.last_validated_at.as_ref()
-    }
-}
-
-/// Alias used by generic status adapters.
-pub type RoleStatus = RoleStatusResource;
-
 /// Validate a Role owner reference.
 pub fn validate_role_owner(owner: Option<&ResourceRef>) -> Result<(), RoleContractError> {
     if owner.is_some_and(|reference| {

@@ -12,10 +12,9 @@ use super::resource_export::{ResourceExportSpec, ShareQuota, is_qualified_servic
 use d2b_contracts_provider::v3::provider::{
     Exportability, ProjectionFactory, ProviderContractError,
 };
-use d2b_contracts_resource::v3::identity::BindingDigest;
 use d2b_contracts_resource::v3::{
-    ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName, SchemaFingerprint,
-    execution_policy::{BoundedText, BoundedToken, PrimitiveSpecError, redacted_debug},
+    ResourceName, ResourceRef, ResourceTypeName, SchemaFingerprint,
+    execution_policy::{BoundedText, BoundedToken, PrimitiveSpecError},
 };
 
 /// The canonical ResourceType name for an import declaration.
@@ -406,99 +405,6 @@ fn bounded_option_fits<T: Ord>(requested: Option<T>, exported: Option<T>) -> boo
     }
 }
 
-/// ResourceType-common ResourceImport status.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ResourceImportStatusResource {
-    state: ResourceImportState,
-    remote_export_generation: Option<ResourceGeneration>,
-    expected_service_type: ResourceTypeName,
-    projection_schema_fingerprint: SchemaFingerprint,
-    factory_fingerprint: SchemaFingerprint,
-    local_projection_ref: Option<ResourceRef>,
-    active_lease_count: u32,
-    session_generation_digest: Option<BindingDigest>,
-}
-
-impl ResourceImportStatusResource {
-    /// Construct a bounded status projection.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        state: ResourceImportState,
-        remote_export_generation: Option<ResourceGeneration>,
-        expected_service_type: ResourceTypeName,
-        projection_schema_fingerprint: SchemaFingerprint,
-        factory_fingerprint: SchemaFingerprint,
-        local_projection_ref: Option<ResourceRef>,
-        active_lease_count: u32,
-        session_generation_digest: Option<BindingDigest>,
-    ) -> Result<Self, ResourceImportContractError> {
-        if active_lease_count > MAX_RESOURCE_IMPORT_LEASE_COUNT {
-            return Err(ResourceImportContractError::BoundExceeded);
-        }
-        if let Some(reference) = &local_projection_ref
-            && reference.resource_type() != &expected_service_type
-        {
-            return Err(ResourceImportContractError::WrongResourceType);
-        }
-        Ok(Self {
-            state,
-            remote_export_generation,
-            expected_service_type,
-            projection_schema_fingerprint,
-            factory_fingerprint,
-            local_projection_ref,
-            active_lease_count,
-            session_generation_digest,
-        })
-    }
-
-    /// Return the import lifecycle state.
-    pub const fn state(&self) -> ResourceImportState {
-        self.state
-    }
-
-    /// Borrow the remote export generation.
-    pub const fn remote_export_generation(&self) -> Option<&ResourceGeneration> {
-        self.remote_export_generation.as_ref()
-    }
-
-    /// Borrow the expected Service type.
-    pub const fn expected_service_type(&self) -> &ResourceTypeName {
-        &self.expected_service_type
-    }
-
-    /// Borrow the projection schema fingerprint.
-    pub const fn projection_schema_fingerprint(&self) -> &SchemaFingerprint {
-        &self.projection_schema_fingerprint
-    }
-
-    /// Borrow the factory fingerprint.
-    pub const fn factory_fingerprint(&self) -> &SchemaFingerprint {
-        &self.factory_fingerprint
-    }
-
-    /// Borrow the local projection reference.
-    pub const fn local_projection_ref(&self) -> Option<&ResourceRef> {
-        self.local_projection_ref.as_ref()
-    }
-
-    /// Return the active lease count.
-    pub const fn active_lease_count(&self) -> u32 {
-        self.active_lease_count
-    }
-
-    /// Borrow the opaque session-generation digest.
-    pub const fn session_generation_digest(&self) -> Option<&BindingDigest> {
-        self.session_generation_digest.as_ref()
-    }
-}
-
-redacted_debug!(ResourceImportStatusResource);
-
-/// Alias used by generic status adapters.
-pub type ResourceImportStatus = ResourceImportStatusResource;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,23 +476,6 @@ mod tests {
         assert_eq!(
             subject.validate_against_export(&export()),
             Err(ResourceImportContractError::InvalidCapability)
-        );
-    }
-
-    #[test]
-    fn import_status_rejects_non_service_projection() {
-        assert_eq!(
-            ResourceImportStatusResource::new(
-                ResourceImportState::Bound,
-                None,
-                ResourceTypeName::parse("audio.d2bus.org.AudioService").unwrap(),
-                fingerprint('a'),
-                fingerprint('b'),
-                Some(ResourceRef::parse("Device/mic").unwrap()),
-                1,
-                None,
-            ),
-            Err(ResourceImportContractError::WrongResourceType)
         );
     }
 }
