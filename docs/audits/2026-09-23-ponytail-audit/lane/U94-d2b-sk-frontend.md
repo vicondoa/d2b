@@ -13,3 +13,11 @@ net: -54 lines, -0 deps
 - Refuted candidate: `HidDevice` trait + `SecurityKeyFrontend::new()` are LIVE - d2b-zone-routing/tests/guest_enrollment.rs:210,422 implements `d2b_sk_frontend::HidDevice` for `FakeHidDevice` and drives the full guest lifecycle through `new()`; d2b-zone-routing/BUILD.bazel:74 carries the lib as a test dep. Not flagged (caller verification caught the #1 false-positive class).
 - Ledger honored: no prior findings for U94; no policy scaffolds (crate is `CommittedScopeClass::Shared` at packages/xtask/src/provider_crate_policy.rs:8884 - no README/integration ratchet applies); no src/generated; ADR-046 dossier pins the crate "implemented-and-reachable" (live guest binary - no existential finding); dossier prose about obsolete `framing.rs`/`vsock.rs` refers to files already absent (current link.rs replaces them).
 - Deps all live (async-trait, contracts-resource, contracts-zone-session, toolkit, session, session-unix, libc, rustix, tokio, tokio-vsock each have call sites).
+## U2 execution (2026-09-24)
+
+- re-verified `VsockAllocatorLink::host` zero callers at HEAD (only its own test; config.rs/main.rs use consts/`new()`).
+- applied: deleted three tautological/self-pin tests in uhid.rs (uhid_event_type_values_match_kernel_uapi, fido_descriptor_is_valid_length, short_lifecycle_event_is_zero_extended).
+- applied: deleted write-only fields Output._rtype / GetReport.rtype / GetReport.rnum + parse lines + doc rows + redaction-test construction row; kernel wire bytes still skipped, just not recorded.
+- applied: deleted `VsockAllocatorLink::host()` + the_default_endpoint_is_the_hypervisor_host test (VSOCK_HOST_CID/SK_VSOCK_PORT consts stay, cross-pinned in lib.nix).
+- applied: main.rs two fatal-exit matches shrunk to `exit_on_error` helper.
+- tests: cargo test -p d2b-sk-frontend 13 passed; cargo check -p d2b-sk-frontend green.

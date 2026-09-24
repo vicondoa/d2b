@@ -30,11 +30,6 @@ impl VsockAllocatorLink {
         Self { cid, port }
     }
 
-    /// Bind the link to the hypervisor host at one port.
-    pub const fn host(port: u32) -> Self {
-        Self::new(VSOCK_HOST_CID, port)
-    }
-
     /// The allocator CID this link connects to.
     pub const fn cid(&self) -> u32 {
         self.cid
@@ -60,15 +55,4 @@ impl GuestLink for VsockAllocatorLink {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn the_default_endpoint_is_the_hypervisor_host() {
-        let link = VsockAllocatorLink::host(SK_VSOCK_PORT);
-        assert_eq!(link.cid(), 2, "VMADDR_CID_HOST is 2");
-        assert_eq!(link.port(), 14320);
-        assert_eq!(VSOCK_HOST_CID, 2);
-    }
-}
