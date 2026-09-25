@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_credential::{
     CREDENTIAL_EFFECTS_SERVICE, CREDENTIAL_TYPE_NAME, CredentialDependencyFacts,
     CredentialDriverArgs, CredentialEffectFacets, CredentialLeaseFacts, CredentialRuntime,
@@ -43,7 +43,7 @@ impl CredentialRuntime for UnusedRuntime {
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     credential_descriptor(CredentialDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").unwrap(),
         controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
             .expect("controller generation"),
         facets: CredentialEffectFacets {

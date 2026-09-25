@@ -2948,7 +2948,7 @@ impl ResourcePlaneV3 {
             // the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
             "credential" => vec![credential_descriptor(CredentialDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.credential_facets.clone(),
             })],
