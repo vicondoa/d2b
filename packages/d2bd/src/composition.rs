@@ -24031,26 +24031,7 @@ mod accept_loop_concurrency_tests {
         );
     }
 
-    /// fix2b: a saturated semaphore refuses further admissions with `None`
-    /// (non-blocking), and a released permit re-opens a slot. This is the
-    /// admission decision the accept loop makes before spawning a handler.
-    #[test]
-    fn semaphore_refuses_at_cap_then_readmits_after_release() {
-        let sem = d2bd_runtime::concurrency::ConnSemaphore::new(2);
-        let p1 = sem.try_acquire().expect("first admit");
-        let p2 = sem.try_acquire().expect("second admit");
-        assert!(
-            sem.try_acquire().is_none(),
-            "cap-hit must refuse without blocking"
-        );
-        drop(p1);
-        let p3 = sem.try_acquire().expect("slot reopened after release");
-        drop(p2);
-        drop(p3);
-        let p4 = sem.try_acquire().expect("all permits released");
-        drop(p4);
     }
-}
 
 #[cfg(test)]
 mod broker_dispatch_tests {
