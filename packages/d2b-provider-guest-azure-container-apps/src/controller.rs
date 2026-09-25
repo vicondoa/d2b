@@ -497,8 +497,9 @@ where
         deadline_remaining_ms: u32,
         record: AcaSandboxRecord,
     ) -> Result<AcaReconcileOutcome, AcaControllerError> {
-        self.observed = Some(record.clone());
-        match record.lifecycle {
+        let lifecycle = record.lifecycle;
+        self.observed = Some(record);
+        match lifecycle {
             AcaSandboxLifecycle::Running => {
                 match self
                     .health(operation_id.clone(), deadline_remaining_ms)
@@ -524,7 +525,7 @@ where
             }
             AcaSandboxLifecycle::Suspended | AcaSandboxLifecycle::Stopped => {
                 self.phase = AcaPhase::Starting;
-                let id = record.id.clone();
+                let id = self.observed.take().expect("stored above").id;
                 let resumed = self
                     .with_lease(
                         operation_id.clone(),
@@ -564,10 +565,10 @@ where
                 }
             }
             AcaSandboxLifecycle::Creating | AcaSandboxLifecycle::Stopping => {
-                self.readiness_retry(record.lifecycle)
+                self.readiness_retry(lifecycle)
             }
             AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown => {
-                self.readiness_retry(record.lifecycle)
+                self.readiness_retry(lifecycle)
             }
         }
     }
