@@ -196,6 +196,12 @@ impl<T: QmpTransport> QmpSession<T> {
     }
 
     /// Negotiate QMP capabilities.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QmpError::GreetingInvalid`] when the greeting version is
+    /// empty or overlong, and the transport and command errors when the
+    /// greeting or capabilities exchange fails.
     pub fn negotiate(&mut self) -> Result<(), QmpError> {
         self.negotiated = false;
         let greeting = self.transport.receive_greeting()?;
@@ -263,11 +269,16 @@ impl<T: QmpTransport> QmpSession<T> {
         if !matches!(command, QmpCommand::Capabilities) && !self.negotiated {
             return Err(QmpError::NotReady);
         }
-        self.commands.push_back(command.clone());
-        if self.commands.len() > 128 {
-            self.commands.pop_front();
+        let Self {
+            transport,
+            commands,
+            ..
+        } = self;
+        commands.push_back(command);
+        if commands.len() > 128 {
+            commands.pop_front();
         }
-        self.transport.execute(&command)
+        transport.execute(commands.back().expect("command just pushed"))
     }
 }
 
