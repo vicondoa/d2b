@@ -455,7 +455,7 @@ pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> Consol
         let stream = match tokio::net::UnixStream::from_std(std_stream) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("qemu console: failed to convert fd to tokio stream: {e}");
+                tracing::warn!(error = %e, "qemu console: failed to convert fd to tokio stream");
                 let mut g = ring_clone.lock().await;
                 g.ring.is_eof = true;
                 g.notify.notify_waiters();
