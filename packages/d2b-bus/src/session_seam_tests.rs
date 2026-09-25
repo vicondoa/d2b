@@ -1620,9 +1620,6 @@ async fn production_owner_child_queries_rewrite_list_and_watch_payloads() {
         Arc::new(resource_remote),
         adapter.ttrpc_services(),
     ));
-    for _ in 0..16 {
-        tokio::task::yield_now().await;
-    }
     let _resource_ingress = registrar
         .register_component_session(resource_endpoint)
         .await
@@ -1805,9 +1802,6 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
         std::sync::Arc::new(resource_remote),
         adapter.ttrpc_services(),
     ));
-    for _ in 0..16 {
-        tokio::task::yield_now().await;
-    }
     let _resource_ingress = registrar
         .register_component_session(resource_endpoint)
         .await
@@ -1878,39 +1872,24 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
             .unwrap(),
     ];
     let revoked_mutations = new_mutations.clone();
-    let mut scoped_response = None;
-    for attempt in 0..32 {
-        let operation_id = format!("scoped-valid-{attempt}");
-        let response = caller
-            .invoke_scoped_commit_batch(
-                route.clone(),
-                OperationSpec::new(OperationId::parse(&operation_id).unwrap(), 10_000).unwrap(),
-                new_identity.clone(),
-                new_mutations.clone(),
-                commit_batch_frame(&operation_id),
-            )
-            .await
-            .unwrap();
-        let response = ttrpc::proto::Response::parse_from_bytes(
-            &response.as_bytes()[ttrpc::proto::MESSAGE_HEADER_LENGTH..],
+    let response = caller
+        .invoke_scoped_commit_batch(
+            route.clone(),
+            OperationSpec::new(OperationId::parse("scoped-valid").unwrap(), 10_000).unwrap(),
+            new_identity.clone(),
+            new_mutations.clone(),
+            commit_batch_frame("scoped-valid"),
         )
+        .await
         .unwrap();
-        let response =
-            d2b_contracts_resource::resource_proto::CommitBatchResponse::parse_from_bytes(
-                &response.payload,
-            )
-            .unwrap();
-        if response.error.is_some() {
-            scoped_response = Some(response);
-            break;
-        }
-        if response.revision == 8 {
-            scoped_response = Some(response);
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
-    let response = scoped_response.expect("scoped commit response");
+    let response = ttrpc::proto::Response::parse_from_bytes(
+        &response.as_bytes()[ttrpc::proto::MESSAGE_HEADER_LENGTH..],
+    )
+    .unwrap();
+    let response = d2b_contracts_resource::resource_proto::CommitBatchResponse::parse_from_bytes(
+        &response.payload,
+    )
+    .unwrap();
     assert!(response.error.is_none());
     assert_eq!(response.revision, 8);
 
@@ -1938,30 +1917,18 @@ async fn production_scoped_commit_chain_authorizes_and_fences_store_writes() {
         BusError::Endpoint(EndpointError::Rejected)
     ));
 
-    for attempt in 0..8 {
-        if commits.lock().unwrap().len() >= 2 {
-            break;
-        }
-        let operation_id = format!("plain-commit-{attempt}");
-        caller
-            .invoke_resource(
-                route.clone(),
-                OperationSpec::new(OperationId::parse(&operation_id).unwrap(), 10_000).unwrap(),
-                ResourceCall::CommitBatch(vec![
-                    (target.clone(), ResourceVerb::UpdateStatus),
-                    (target.clone(), ResourceVerb::UpdateFinalizers),
-                ]),
-                commit_batch_frame(&operation_id),
-            )
-            .await
-            .unwrap();
-        for _ in 0..8 {
-            if commits.lock().unwrap().len() >= 2 {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    }
+    caller
+        .invoke_resource(
+            route.clone(),
+            OperationSpec::new(OperationId::parse("plain-commit").unwrap(), 10_000).unwrap(),
+            ResourceCall::CommitBatch(vec![
+                (target.clone(), ResourceVerb::UpdateStatus),
+                (target.clone(), ResourceVerb::UpdateFinalizers),
+            ]),
+            commit_batch_frame("plain-commit"),
+        )
+        .await
+        .unwrap();
 
     assignments
         .lock()

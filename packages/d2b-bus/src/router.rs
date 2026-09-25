@@ -4168,7 +4168,7 @@ impl BusStream {
         } else {
             self.outgoing.as_ref().map_or_else(
                 || Err(BusError::SessionClosed),
-                |outgoing| outgoing.send(payload).map_err(BusError::Stream),
+                |outgoing| outgoing.send(&payload).map_err(BusError::Stream),
             )
         };
         if let Err(error) = &result
@@ -4179,7 +4179,7 @@ impl BusStream {
         result
     }
 
-    async fn send_watch_payload(&self, payload: Vec<u8>) -> Result<(), BusError> {
+    async fn send_watch_payload(&self, payload: &[u8]) -> Result<(), BusError> {
         if self.cancellation.is_cancelled() {
             return Err(BusError::Cancelled);
         }
@@ -4234,7 +4234,7 @@ impl WatchSink for BusStream {
         frame: WatchFrame,
     ) -> impl std::future::Future<Output = Result<(), WatchSinkError>> + Send {
         async move {
-            match self.send_watch_payload(frame.payload().to_vec()).await {
+            match self.send_watch_payload(frame.payload()).await {
                 Ok(()) => Ok(()),
                 Err(BusError::Stream(StreamError::FrameBounds)) => {
                     Err(WatchSinkError::FrameTooLarge)
