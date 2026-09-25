@@ -28,6 +28,11 @@ result-*
 # Codegraph local index (built by `codegraph init`, never committed)
 /.codegraph/
 
+# omp project-scoped plugin state (symlinks into the user cache with
+# absolute paths; machine-local). The repository ships its skill surface
+# through the committed .agents/skills links instead.
+/.omp/plugins/
+
 # Bazel workspace output links
 /bazel-*
 .bazelrc.user

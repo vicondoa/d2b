@@ -412,6 +412,18 @@ smoke-lite:
 ##                  Run at merge time; see changelog.d/README.md.
 changelog-fold:
 	'$(BAZEL_BIN)' run --config=local //packages/xtask:xtask -- changelog-fold
+
+.PHONY: update-agent-skills
+
+## update-agent-skills - refresh the vendored agent-skill trees and the
+##                      .agents/skills links omp sessions load, so a fresh
+##                      clone is fully configured without any install step.
+##                      Sources: the Compound Engineering plugin and the
+##                      caveman suite marketplaces; ponytail stays on its
+##                      vendored copy. Commit the result afterwards.
+update-agent-skills:
+	bash tests/tools/update-agent-skills.sh
+
 # ===========================================================================
 # Disk hygiene.
 #

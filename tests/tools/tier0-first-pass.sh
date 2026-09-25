@@ -45,12 +45,12 @@ is_dash_exempt() {
     AGENTS.md|tests/AGENTS.md|labs/venus-vulkan-video/AGENTS.md|CLAUDE.md)
       return 0
       ;;
-    third_party/agent-skills/ponytail/v4.9.0/skills/*|\
-    third_party/agent-skills/caveman/v2.0.0/skills/*|\
-    third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills/*|\
-    third_party/agent-skills/ponytail/v4.9.0/LICENSE|\
-    third_party/agent-skills/caveman/v2.0.0/LICENSE|\
-    third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/LICENSE)
+    third_party/agent-skills/*/skills/*|\
+    third_party/agent-skills/*/v*/skills/*|\
+    third_party/agent-skills/*/LICENSE|\
+    third_party/agent-skills/*/v*/LICENSE|\
+    third_party/agent-skills/*/UPSTREAM.json|\
+    third_party/agent-skills/*/v*/UPSTREAM.json)
       return 0
       ;;
   esac

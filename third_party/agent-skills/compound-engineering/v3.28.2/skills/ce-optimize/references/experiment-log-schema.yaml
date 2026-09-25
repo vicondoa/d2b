@@ -1,0 +1,348 @@
+# Experiment Log Schema
+# This is the canonical schema for the experiment log file that accumulates
+# across an optimization run.
+#
+# Location: .context/compound-engineering/ce-optimize/<spec-name>/experiment-log.yaml
+#
+# PERSISTENCE MODEL:
+# The experiment log on disk is the SINGLE SOURCE OF TRUTH. The agent's
+# in-memory context is expendable and will be compacted during long runs.
+#
+# Write discipline:
+# - Each experiment gets one log entry, appended on its first measurement
+#   (SKILL.md step 3.3), before batch evaluation
+# - Later ladder samples for that experiment update the same entry in place
+# - Outcome fields may also be updated in-place after batch evaluation (step 3.5)
+# - The `best` section is updated after each batch if a new best is found
+# - The `hypothesis_backlog` is updated after each batch
+# - The agent re-reads this file from disk at every phase boundary
+#
+# The orchestrator does NOT read the full log each iteration -- it uses a
+# rolling window (last 10 experiments) + a strategy digest file for
+# hypothesis generation. But the full log exists on disk for resume,
+# crash recovery, and post-run analysis.
+
+# ============================================================================
+# TOP-LEVEL STRUCTURE
+# ============================================================================
+
+structure:
+
+  spec:
+    type: string
+    required: true
+    description: "Name of the optimization spec this log belongs to"
+
+  run_id:
+    type: string
+    required: true
+    description: "Unique identifier for this optimization run (timestamp-based). Distinguishes resumed runs from fresh starts."
+
+  started_at:
+    type: string
+    format: "ISO 8601 timestamp"
+    required: true
+
+  baseline:
+    type: object
+    required: true
+    description: "Metrics measured on the original code before any optimization"
+    children:
+      timestamp:
+        type: string
+        format: "ISO 8601 timestamp"
+      gates:
+        type: object
+        description: "Key-value pairs of gate metric names to their baseline values"
+      metrics:
+        type: object
+        description: "Required hard-objective snapshots (aggregate plus samples) that decide.mjs loads for later comparisons"
+      diagnostics:
+        type: object
+        description: "Key-value pairs of diagnostic metric names to their baseline values"
+      judge:
+        type: object
+        description: "Judge scores on the baseline (only when primary type is 'judge')"
+        children:
+          # All fields from the scoring config appear here
+          # Plus:
+          sample_seed:
+            type: integer
+          judge_cost_usd:
+            type: number
+
+  experiments:
+    type: array
+    required: true
+    description: "Ordered list of all experiments, including kept, reverted, errored, and deferred"
+    items:
+      type: object
+      # See EXPERIMENT ENTRY below
+
+  best:
+    type: object
+    required: true
+    description: "Summary of the current best result"
+    children:
+      iteration:
+        type: integer
+        description: "Iteration number of the best experiment (use 0 for the baseline snapshot before any experiment is kept)"
+      metrics:
+        type: object
+        description: "All metric values from the current best state (seed with baseline metrics during CP-1)"
+      judge:
+        type: object
+        description: "Judge scores from the best experiment (only when primary type is 'judge')"
+      total_judge_cost_usd:
+        type: number
+        description: "Running total of all judge costs across all experiments"
+
+  hypothesis_backlog:
+    type: array
+    description: "Remaining hypotheses not yet tested"
+    items:
+      type: object
+      children:
+        description:
+          type: string
+        category:
+          type: string
+        priority:
+          type: string
+          enum: [high, medium, low]
+        dep_status:
+          type: string
+          enum: [approved, needs_approval, not_applicable]
+        required_deps:
+          type: array
+          items:
+            type: string
+        opportunity:
+          type: object
+          description: "Pre-implementation opportunity record; see opportunity_record below. Optional for legacy logs."
+
+opportunity_record:
+  children:
+    workload:
+      type: string
+      description: "Representative workload and input identity"
+    baseline:
+      type: string
+      description: "Revision or recorded snapshot against which the benefit is estimated"
+    evidence:
+      type: string
+      description: "Source location and observed cost with units or workload share; rubric evidence for qualitative work"
+    expected_benefit:
+      type: string
+      description: "Target metric, units, expected reduction/increase range or upper bound, and assumptions; unknown with the missing evidence and cheapest resolving measurement when not estimable"
+    confidence:
+      type: string
+      description: "Confidence and the evidence or uncertainty that justifies it"
+    cost_and_risk:
+      type: string
+      description: "Estimated implementation and measurement effort, behavioral risk, and required correctness checks"
+
+# ============================================================================
+# EXPERIMENT ENTRY
+# ============================================================================
+
+experiment_entry:
+  required_children:
+
+    iteration:
+      type: integer
+      description: "Sequential experiment number (1-indexed, monotonically increasing)"
+
+    batch:
+      type: integer
+      description: "Batch number this experiment was part of. Multiple experiments in the same batch ran in parallel."
+
+    hypothesis:
+      type: string
+      description: "Human-readable description of what this experiment tried"
+
+    category:
+      type: string
+      description: "Category for grouping and diversity selection (e.g., signal-extraction, graph-signals, embedding, algorithm, preprocessing)"
+
+    outcome:
+      type: enum
+      values:
+        - measured                # measurement finished and metrics were persisted, awaiting batch evaluation / integration
+        - promising               # eligible on current samples but the ladder still needs confirmation before keep
+        - kept                    # eligible, confirmed, and integrated onto the optimization branch
+        - not_selected            # eligible after comparison but not integrated (not the winner, overlapping, or past the runner-up cap)
+        - reverted                # compared and not eligible (regressed a required objective, or none improved)
+        - inconclusive            # delta inside the comparison threshold; not a keep and not a demonstrated regression
+        - censored                # aborted as noncompetitive under the predeclared futility bound
+        - degenerate              # degenerate gate or smoke test failed -> immediately reverted, no judge evaluation
+        - error                   # measurement command crashed, timed out, or produced malformed output
+        - deferred_needs_approval # experiment needs an unapproved dependency -> set aside for batch approval
+        - timeout                 # measurement command exceeded timeout_seconds
+        - runner_up_kept          # file-disjoint runner-up that was cherry-picked and re-measured successfully
+        - runner_up_reverted      # file-disjoint runner-up that was cherry-picked but combined measurement was not better
+      description: >
+        The loop branches on this value.
+        'measured' and 'promising' are non-terminal: CP-3 persists raw metrics
+        before batch-level comparison, and 'promising' means the ladder still
+        needs confirmation samples. An eligible decide `keep` stays `measured`
+        until its diff is on the optimization branch. 'kept' and 'runner_up_kept'
+        mean that integration happened. 'not_selected' is terminal for an
+        eligible candidate that was not integrated. 'deferred_needs_approval'
+        items are re-presented at wrap-up. All other states are terminal for
+        that experiment.
+
+  optional_children:
+
+    opportunity:
+      type: object
+      description: "Copy of opportunity_record made before this experiment's implementation; never reconstructed from its result. Missing in legacy logs means unrecorded."
+
+    comparisons:
+      type: array
+      description: "One record per distinct reference/candidate/workload pairing used in a decision. Later in-place updates must not replace a previously persisted distinct pairing. Absent legacy evidence is unknown, not inferred from the current best."
+      items:
+        type: object
+        children:
+          kind:
+            type: string
+            enum: [standalone, integrated]
+          reference_revision:
+            type: string
+            description: "Identity that uniquely identifies the measured reference bytes. A revision is enough when it names those bytes; a HEAD shared by different uncommitted trees is not."
+          candidate_revision:
+            type: string
+            description: "Identity that uniquely identifies the measured candidate bytes. A revision is enough when it names those bytes; a HEAD shared by different uncommitted trees is not."
+          workload:
+            type: string
+          reference:
+            type: object
+            description: "Existing snapshot shape: metrics and judge, with aggregates and samples where available"
+          candidate:
+            type: object
+            description: "Existing snapshot shape: metrics and judge, with aggregates and samples where available"
+          uncertainty:
+            type: string
+            description: "Configured comparison method, observed variability, confirmation status, and any missing uncertainty evidence"
+          correctness:
+            type: string
+            description: "Checks performed and results or exact unverified constraints; passing a timing comparison alone is not correctness evidence"
+
+    changes:
+      type: array
+      description: "Files modified by this experiment"
+      items:
+        type: object
+        children:
+          file:
+            type: string
+          summary:
+            type: string
+
+    gates:
+      type: object
+      description: "Gate metric values from the measurement command"
+
+    gates_passed:
+      type: boolean
+      description: "Whether all degenerate gates passed"
+
+    diagnostics:
+      type: object
+      description: "Diagnostic metric values from the measurement command"
+
+    metrics:
+      type: object
+      description: "Required hard-objective snapshots (aggregate plus samples) that decide.mjs loads"
+
+    judge:
+      type: object
+      description: "Judge evaluation scores (only when primary type is 'judge' and gates passed)"
+      children:
+        # All fields from scoring.primary and scoring.secondary appear here
+        # Plus:
+        judge_cost_usd:
+          type: number
+          description: "Cost of judge calls for this experiment"
+
+    primary_delta:
+      type: string
+      description: "Change in primary metric from current best (e.g., '+0.7', '-0.3')"
+
+    objective_results:
+      type: object
+      description: "Per-required-objective comparison from decide.mjs (verdict, delta, relative)"
+
+    sample_count:
+      type: integer
+      description: "How many harness samples were spent on this experiment"
+
+    next_measurement:
+      type: string
+      enum: [none, smoke, exploratory, add_sample, confirm]
+      description: "Ladder next step from decide.mjs; none when the decision is terminal"
+
+    learnings:
+      type: string
+      description: "What was learned from this experiment. The agent reads these to avoid re-trying similar approaches and to inform new hypothesis generation."
+
+    commit:
+      type: string
+      description: "Git commit SHA on the optimization branch (only for 'kept' and 'runner_up_kept' outcomes)"
+
+    deferred_reason:
+      type: string
+      description: "Why this experiment was deferred (only for 'deferred_needs_approval' outcome)"
+
+    error_message:
+      type: string
+      description: "Error details (only for 'error' and 'timeout' outcomes)"
+
+    merged_with:
+      type: integer
+      description: "Iteration number of the experiment this was merged with (only for 'runner_up_kept' and 'runner_up_reverted')"
+
+# ============================================================================
+# OUTCOME STATE TRANSITIONS
+# ============================================================================
+#
+# proposed (in hypothesis_backlog)
+#   -> selected for batch
+#     -> experiment dispatched
+#       -> measurement completed
+#         -> gates failed           -> outcome: degenerate
+#         -> measurement error      -> outcome: error
+#         -> measurement timeout    -> outcome: timeout
+#         -> smoke failed           -> outcome: degenerate
+#         -> futile / censored      -> outcome: censored
+#         -> gates passed
+#           -> persist raw metrics   -> outcome: measured or promising
+#           -> judge evaluated (if type: judge)
+#             -> decide.mjs eligible, next_measurement none -> stay measured until integration
+#               -> diff on optimization branch -> outcome: kept
+#               -> eligible leftover             -> outcome: not_selected
+#             -> runner-up, file-disjoint -> cherry-pick + re-measure
+#               -> combined eligible and integrated -> outcome: runner_up_kept
+#               -> combined not kept              -> outcome: runner_up_reverted
+#             -> inconclusive             -> outcome: inconclusive
+#             -> not eligible             -> outcome: reverted
+#       -> needs unapproved dep    -> outcome: deferred_needs_approval
+#
+# Only 'kept' and 'runner_up_kept' produce a commit on the optimization branch.
+# Only 'deferred_needs_approval' items are re-presented at wrap-up for approval.
+
+# ============================================================================
+# STRATEGY DIGEST (separate file)
+# ============================================================================
+#
+# Written after each batch to:
+#   .context/compound-engineering/ce-optimize/<spec-name>/strategy-digest.md
+#
+# Contains a compressed summary of:
+# - What hypothesis categories have been tried
+# - Which approaches succeeded (kept) and which failed (reverted)
+# - The exploration frontier: what hasn't been tried yet
+# - Key learnings that should inform next hypotheses
+#
+# The orchestrator reads the strategy digest (not the full experiment log)
+# when generating new hypotheses between batches.

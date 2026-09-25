@@ -1,0 +1,4 @@
+# Compound Engineering artifact root. Pipeline plans land in docs/plans/
+# and captured solutions in docs/solutions/; review reports stay inline on
+# the pull request. See docs/contributing/ for repository workflow.
+docs_root: docs

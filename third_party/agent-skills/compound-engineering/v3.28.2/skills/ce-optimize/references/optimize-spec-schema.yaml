@@ -1,0 +1,498 @@
+# Optimization Spec Schema
+# This is the canonical schema for optimization spec files created by users
+# to configure a /ce-optimize run. The orchestrating agent validates specs
+# against this schema before proceeding.
+#
+# Usage: Create a YAML file matching this schema and pass it to /ce-optimize.
+# The agent reads this spec, validates required fields, and uses it to
+# configure the entire optimization run.
+
+# ============================================================================
+# REQUIRED FIELDS
+# ============================================================================
+
+required_fields:
+
+  name:
+    type: string
+    pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    description: "Unique identifier for this optimization run (lowercase kebab-case, safe for git refs and worktree paths)"
+    example: "improve-issue-clustering"
+
+  description:
+    type: string
+    description: "Human-readable description of the optimization goal"
+    example: "Improve coherence and coverage of issue/PR clusters"
+
+  metric:
+    type: object
+    description: "Three-tier metric configuration"
+    required_children:
+
+      primary:
+        type: object
+        description: "The metric the loop optimizes against"
+        required_children:
+
+          type:
+            type: enum
+            values:
+              - hard    # scalar metric from measurement command (e.g., build time, test pass rate)
+              - judge   # LLM-as-judge quality score from sampled outputs
+            description: "Whether the primary metric comes from the measurement command directly or from LLM-as-judge evaluation"
+
+          name:
+            type: string
+            description: "Metric name: must match a key in the measurement command's JSON output (for hard type) or a scoring field (for judge type)"
+            example: "cluster_coherence"
+
+          direction:
+            type: enum
+            values:
+              - maximize
+              - minimize
+            description: "Whether higher or lower is better"
+
+        optional_children:
+
+          baseline:
+            type: number
+            default: null
+            description: "Filled automatically during Phase 1 baseline measurement. Do not set manually."
+
+          target:
+            type: number
+            default: null
+            description: "Optional target value. Loop stops when this is reached. When metric.objectives is set, target_reached instead requires every required objective that declares a target."
+            example: 4.2
+
+      degenerate_gates:
+        type: array
+        description: "Fast boolean checks that reject obviously broken solutions before expensive evaluation. Run first, before the primary metric or judge."
+        required: true
+        items:
+          type: object
+          required_children:
+            name:
+              type: string
+              description: "Metric name: must match a key in the measurement command's JSON output"
+            check:
+              type: string
+              description: "Comparison operator and threshold. Supported operators: >=, <=, >, <, ==, !="
+              example: "<= 0.10"
+          optional_children:
+            description:
+              type: string
+              description: "Human-readable explanation of what this gate catches"
+
+    optional_children:
+
+      objectives:
+        type: array
+        default: []
+        description: >
+          Additional required or secondary hard targets. The primary is always
+          a required comparison, even when this list omits it. An experiment is
+          eligible when it improves at least one required objective beyond the
+          comparison threshold and does not violate any other required
+          objective. Completion via target_reached requires every declared
+          required target. A spec without metric.objectives keeps single-primary
+          acceptance: the primary is the only required objective.
+        items:
+          type: object
+          required_children:
+            name:
+              type: string
+              description: "Metric name: must match a key in the measurement command's JSON output"
+            direction:
+              type: enum
+              values:
+                - maximize
+                - minimize
+          optional_children:
+            role:
+              type: enum
+              values:
+                - required
+                - secondary
+              default: required
+              description: "required objectives participate in eligibility and completion; secondary objectives are logged only"
+            type:
+              type: enum
+              values:
+                - hard
+              default: hard
+              description: "Always hard. Additional objectives come from the measurement command."
+            target:
+              type: number
+              default: null
+              description: "Declared success value for this objective. target_reached requires every required objective that sets this."
+            max_regression:
+              type: object
+              description: "Optional explicit violation bound. When set, violation uses this bound rather than the comparison threshold, including when the bound is looser. When unset, a comparison-threshold regression is a violation."
+              required_children:
+                type:
+                  type: enum
+                  values:
+                    - relative
+                    - absolute
+                value:
+                  type: number
+
+      diagnostics:
+        type: array
+        default: []
+        description: "Metrics logged for understanding but never gated on. Useful for understanding WHY a primary metric changed."
+        items:
+          type: object
+          required_children:
+            name:
+              type: string
+              description: "Metric name: must match a key in the measurement command's JSON output"
+
+      judge:
+        type: object
+        description: "LLM-as-judge configuration. Required when metric.primary.type is 'judge'. Ignored when type is 'hard'."
+        required_when: "metric.primary.type == 'judge'"
+        required_children:
+          rubric:
+            type: string
+            description: "Multi-line rubric text sent to the judge model. Must instruct the judge to return JSON."
+            example: |
+              Rate this cluster 1-5:
+              - 5: All items clearly about the same issue/feature
+              - 4: Strong theme, minor outliers
+              - 3: Related but covers 2-3 sub-topics
+              - 2: Weak connection
+              - 1: Unrelated items grouped together
+          scoring:
+            type: object
+            required_children:
+              primary:
+                type: string
+                description: "Field name from judge JSON output to use as the primary optimization target"
+                example: "mean_score"
+            optional_children:
+              secondary:
+                type: array
+                default: []
+                description: "Additional scoring fields to log (not optimized against)"
+        optional_children:
+          model:
+            type: enum
+            values:
+              - haiku
+              - sonnet
+            default: haiku
+            description: "Model to use for judge evaluation. Haiku is cheaper and faster; Sonnet is more nuanced."
+          sample_size:
+            type: integer
+            default: 10
+            description: "Total number of output items to sample for judge evaluation per experiment"
+          stratification:
+            type: array
+            default: null
+            description: "Stratified sampling buckets. If null, uses uniform random sampling."
+            items:
+              type: object
+              required_children:
+                bucket:
+                  type: string
+                  description: "Bucket name for this stratum"
+                count:
+                  type: integer
+                  description: "Number of items to sample from this bucket"
+          singleton_sample:
+            type: integer
+            default: 0
+            description: "Number of singleton items to sample for false-negative evaluation"
+          singleton_rubric:
+            type: string
+            default: null
+            description: "Rubric for evaluating sampled singletons. Required if singleton_sample > 0."
+          sample_seed:
+            type: integer
+            default: 42
+            description: "Fixed seed for reproducible sampling across experiments"
+          batch_size:
+            type: integer
+            default: 5
+            description: "Number of samples per judge sub-agent batch. Controls parallelism vs overhead."
+          minimum_improvement:
+            type: number
+            default: 0.3
+            description: "Minimum judge score improvement required to accept an experiment as 'better'. Accounts for sample-composition variance when output structure changes between experiments. Distinct from measurement.stability.noise_threshold which handles run-to-run flakiness."
+          max_total_cost_usd:
+            type: number
+            default: 5
+            description: "Stop judge evaluation when cumulative judge spend reaches this cap. This is a first-run safety default; raise it only after the rubric and harness are trustworthy. Set to null only with explicit user approval."
+
+  measurement:
+    type: object
+    description: "How to run the measurement harness"
+    required_children:
+      command:
+        type: string
+        description: "Shell command that runs the evaluation and outputs JSON to stdout. The JSON must contain keys matching all gate names and diagnostic names."
+        example: "python evaluate.py"
+    optional_children:
+      timeout_seconds:
+        type: integer
+        default: 600
+        description: "Maximum seconds for the measurement command to run before being killed"
+      output_format:
+        type: enum
+        values:
+          - json
+        default: json
+        description: "Format of the measurement command's stdout. Currently only JSON is supported."
+      working_directory:
+        type: string
+        default: "."
+        description: "Working directory for the measurement command, relative to the repo root"
+      stability:
+        type: object
+        default: { mode: "stable" }
+        description: "How to handle metric variance across runs"
+        required_children:
+          mode:
+            type: enum
+            values:
+              - stable   # run once, trust the result
+              - repeat   # run N times, aggregate
+              - ladder   # smoke, one paired exploratory sample, adaptive extras, full protocol only before keep
+            default: stable
+        optional_children:
+          repeat_count:
+            type: integer
+            default: 5
+            description: "Number of times to run the harness when mode is 'repeat', and the confirmation sample count when mode is 'ladder'"
+          aggregation:
+            type: enum
+            values:
+              - median
+              - mean
+              - min
+              - max
+            default: median
+            description: "How to combine repeated measurements into a single value"
+          noise_threshold:
+            type: number
+            default: 0.02
+            description: "Absolute improvement that must be exceeded when comparison.method is absolute (the default). Applied to hard metrics only."
+          comparison:
+            type: object
+            default: { method: "absolute" }
+            description: "How to decide keep / revert / inconclusive. Unset method preserves the legacy absolute noise_threshold rule."
+            required_children:
+              method:
+                type: enum
+                values:
+                  - absolute
+                  - relative
+                  - paired
+                default: absolute
+                description: "absolute uses noise_threshold; relative uses relative_threshold; paired uses sample ranges / paired diffs and may return inconclusive"
+            optional_children:
+              relative_threshold:
+                type: number
+                default: 0.05
+                description: "Fraction of the current-best value that counts as a real change when method is relative or paired"
+          ladder:
+            type: object
+            description: "Cost-aware measurement stages. Used when mode is ladder; ignored otherwise."
+            optional_children:
+              smoke_command:
+                type: string
+                default: null
+                description: "Cheap correctness check. Failure is degenerate and skips timed measurement."
+              exploratory_pairs:
+                type: integer
+                default: 1
+                description: "Paired exploratory samples before deciding whether to spend more. Must be a positive integer."
+              confirmation_repeats:
+                type: integer
+                default: null
+                description: "Full protocol sample count before keep. Defaults to repeat_count. Must be a positive integer at least as large as exploratory_pairs."
+              futility:
+                type: object
+                description: "Predeclared abort bound for a clearly noncompetitive live run"
+                optional_children:
+                  worse_factor:
+                    type: number
+                    default: 1.2
+                    description: "Censor after the first sample if the candidate is this multiple worse than the current best (minimize: candidate >= best * factor)"
+                  after_elapsed_seconds:
+                    type: number
+                    default: null
+                    description: "Censor a still-noncompetitive live run once elapsed time reaches this bound. When set, must be a positive number."
+
+  scope:
+    type: object
+    description: "What the experiment agent is allowed to modify"
+    required_children:
+      mutable:
+        type: array
+        description: "Files and directories the agent MAY modify during experiments"
+        items:
+          type: string
+          description: "File path or directory (relative to repo root). Directories match all files within."
+        example:
+          - "src/clustering/"
+          - "src/preprocessing/"
+          - "config/clustering.yaml"
+      immutable:
+        type: array
+        description: "Files and directories the agent MUST NOT modify. The measurement harness should always be listed here."
+        items:
+          type: string
+        example:
+          - "evaluate.py"
+          - "tests/fixtures/"
+          - "data/"
+
+# ============================================================================
+# OPTIONAL FIELDS
+# ============================================================================
+
+optional_fields:
+
+  execution:
+    type: object
+    default: { mode: "parallel", backend: "worktree", max_concurrent: 4 }
+    description: "How experiments are executed"
+    optional_children:
+      mode:
+        type: enum
+        values:
+          - parallel  # run experiments simultaneously (default)
+          - serial    # run one at a time
+        default: parallel
+      backend:
+        type: enum
+        values:
+          - worktree  # git worktrees for isolation (default)
+          - codex     # Codex sandboxes for isolation
+        default: worktree
+      max_concurrent:
+        type: integer
+        default: 4
+        minimum: 1
+        description: "Maximum experiments to run in parallel. Capped at 6 for worktree backend. 8+ only valid for Codex backend."
+      codex_security:
+        type: enum
+        values:
+          - full-auto                                # --full-auto (workspace write)
+          - yolo                                     # --dangerously-bypass-approvals-and-sandbox
+        default: null
+        description: "Codex security posture. If null, user is asked once per session."
+
+  parallel:
+    type: object
+    default: {}
+    description: "Parallelism configuration discovered or set during Phase 1"
+    optional_children:
+      port_strategy:
+        type: enum
+        values:
+          - parameterized  # use env var for port
+          - none           # no port parameterization needed
+        default: null
+        description: "If null, auto-detected during Phase 1 parallelism probe"
+      port_env_var:
+        type: string
+        default: null
+        description: "Environment variable name for port parameterization (e.g., EVAL_PORT)"
+      port_base:
+        type: integer
+        default: null
+        description: "Base port number. Each experiment gets port_base + experiment_index."
+      shared_files:
+        type: array
+        default: []
+        description: "Files that must be copied into each experiment worktree (e.g., SQLite databases)"
+        items:
+          type: string
+      exclusive_resources:
+        type: array
+        default: []
+        description: "Resources requiring exclusive access (e.g., 'gpu'). If non-empty, forces serial mode."
+        items:
+          type: string
+
+  dependencies:
+    type: object
+    default: { approved: [] }
+    description: "Dependency management for experiments"
+    optional_children:
+      approved:
+        type: array
+        default: []
+        description: "Pre-approved new dependencies that experiments may add"
+        items:
+          type: string
+
+  constraints:
+    type: array
+    default: []
+    description: "Free-text constraints that experiment agents must follow"
+    items:
+      type: string
+    example:
+      - "Do not change the output format of clusters"
+      - "Preserve backward compatibility with existing cluster consumers"
+
+  stopping:
+    type: object
+    default: { max_iterations: 100, max_hours: 8, plateau_iterations: 10, target_reached: true }
+    description: "When the optimization loop should stop. Any criterion can trigger a stop."
+    optional_children:
+      max_iterations:
+        type: integer
+        default: 100
+        description: "Stop after this many total experiments"
+      max_hours:
+        type: number
+        default: 8
+        description: "Stop after this many hours of wall-clock time"
+      plateau_iterations:
+        type: integer
+        default: 10
+        description: "Stop if no improvement for this many consecutive experiments"
+      target_reached:
+        type: boolean
+        default: true
+        description: "Stop when the primary metric reaches the target value (if set)"
+
+  max_runner_up_merges_per_batch:
+    type: integer
+    default: 1
+    description: "Maximum number of file-disjoint runner-up experiments to attempt merging per batch after keeping the best experiment"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation_rules:
+  - "All required fields must be present"
+  - "name must be lowercase kebab-case (`^[a-z0-9]+(?:-[a-z0-9]+)*$`)"
+  - "metric.primary.type must be 'hard' or 'judge'"
+  - "If metric.primary.type is 'judge', metric.judge must be present with rubric and scoring"
+  - "metric.degenerate_gates must have at least one entry"
+  - "measurement.command must be a non-empty string"
+  - "scope.mutable must have at least one entry"
+  - "scope.immutable must have at least one entry"
+  - "Gate check operators must be one of: >=, <=, >, <, ==, !="
+  - "execution.max_concurrent must be >= 1"
+  - "execution.max_concurrent must not exceed 6 when execution.backend is 'worktree'"
+  - "If parallel.exclusive_resources is non-empty, execution.mode should be 'serial'"
+  - "If metric.judge.singleton_sample > 0, metric.judge.singleton_rubric must be present"
+  - "If metric.primary.type is 'judge' and metric.judge.max_total_cost_usd is null, the user should explicitly approve uncapped spend"
+  - "stopping must have at least one non-default criterion or use defaults"
+  - "If metric.objectives is set, each additional objective is a hard metric whose name is unique and matches a measurement JSON key"
+  - "The primary is always a required comparison, including when metric.objectives omits it"
+  - "If measurement.stability.mode is 'ladder', comparison.method should be relative or paired unless the user explicitly keeps absolute"
+  - "A spec without metric.objectives keeps single-primary acceptance"
+  - "comparison.method, when set, must be one of: absolute, relative, paired"
+  - "If measurement.stability.mode is 'ladder', exploratory_pairs and confirmation_repeats (or repeat_count) must be positive integers, and confirmation must be at least exploratory_pairs"
+  - "futility.after_elapsed_seconds, when set, must be a positive number"
