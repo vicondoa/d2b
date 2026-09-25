@@ -1,0 +1,3 @@
+interface:
+  display_name: "Type-Driven Design"
+  short_description: "Make illegal states unrepresentable in the type system"

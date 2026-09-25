@@ -1,0 +1,3 @@
+interface:
+  display_name: "Async Rust"
+  short_description: "Runtimes, Send bounds, cancellation safety, and blocking work"

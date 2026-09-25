@@ -419,9 +419,10 @@ changelog-fold:
 ##                      .agents/skills and .claude/skills links agent
 ##                      sessions load, so a fresh clone is fully configured
 ##                      without any install step.
-##                      Sources: the Compound Engineering plugin and the
-##                      caveman suite marketplaces; ponytail stays on its
-##                      vendored copy. Commit the result afterwards.
+##                      Sources: the Compound Engineering plugin, the
+##                      caveman suite, and the rewrite-rs Rust skills;
+##                      ponytail stays on its vendored copy. Commit the
+##                      result afterwards.
 update-agent-skills:
 	bash tests/tools/update-agent-skills.sh
 

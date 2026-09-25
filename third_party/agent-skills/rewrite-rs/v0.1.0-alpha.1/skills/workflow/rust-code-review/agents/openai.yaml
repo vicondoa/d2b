@@ -1,0 +1,3 @@
+interface:
+  display_name: "Rust Code Review"
+  short_description: "Two-axis review — standards and spec — over a Rust diff"

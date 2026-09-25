@@ -1,0 +1,3 @@
+interface:
+  display_name: "Rust Concurrency"
+  short_description: "Model choice by workload shape, and the weakest correct ordering"

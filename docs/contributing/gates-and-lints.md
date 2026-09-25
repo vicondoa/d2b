@@ -22,8 +22,9 @@ The exact instruction files are `AGENTS.md`, `tests/AGENTS.md`,
 are exempt only below the canonical version directory that each committed
 `.agents/skills/<skill>` link resolves into - one vendored tree per upstream
 source (`third_party/agent-skills/compound-engineering`,
-`third_party/agent-skills/caveman`, `third_party/agent-skills/ponytail`;
-currently v3.28.2, v2.7.0, and v4.9.0) - and only for the skill directories
+`third_party/agent-skills/caveman`, `third_party/agent-skills/ponytail`,
+`third_party/agent-skills/rewrite-rs`; currently v3.28.2, v2.7.0, v4.9.0,
+and v0.1.0-alpha.1) - and only for the skill directories
 those links admit. The matching root `LICENSE` and `UPSTREAM.json` provenance
 manifest under each of those version directories is also exempt so upstream
 bytes, legal notice, and provenance stay exact. No other notice file, source,

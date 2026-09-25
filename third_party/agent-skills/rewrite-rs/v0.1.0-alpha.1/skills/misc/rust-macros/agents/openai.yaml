@@ -1,0 +1,3 @@
+interface:
+  display_name: "Rust Macros"
+  short_description: "Macros as a last resort, by-example first, with spanned errors"
