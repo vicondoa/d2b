@@ -5,10 +5,6 @@
 //! sandbox, and privacy obligations without a virtiofsd binary, a socket,
 //! a broker, or a guest.
 
-use std::future::Future;
-use std::pin::pin;
-use std::task::{Context, Poll, Waker};
-
 use tokio::sync::Mutex;
 
 use d2b_contracts_resource::v3::{ResourceGeneration, ResourceRef, ResourceUid, ZoneRevision};
@@ -18,19 +14,6 @@ use crate::error::VirtiofsBindingError;
 use crate::bindings::StoredBinding;
 use crate::port::{LaunchedWorker, VirtiofsBindingEffectPort};
 use crate::worker::VirtiofsdWorkerPlan;
-
-/// Drive a future to completion on the calling thread.
-pub fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = pin!(future);
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => continue,
-        }
-    }
-}
 
 /// One recorded effect-port call.
 #[derive(Debug, Clone, PartialEq, Eq)]

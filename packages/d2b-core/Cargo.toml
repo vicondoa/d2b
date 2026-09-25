@@ -70,3 +70,16 @@ required-features = ["fuzz"]
 [[test]]
 name = "bundle-resolver-tamper"
 path = "tests/bundle_resolver_tamper.rs"
+
+# The loader-worker contract tests drive futures through the no-op-waker
+# driver in `test_support`, so they need the library built with the
+# `test-support` feature (same pattern as the provider registration tests).
+[[test]]
+name = "loader_worker"
+path = "tests/loader_worker.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "loader_worker_panic"
+path = "tests/loader_worker_panic.rs"
+required-features = ["test-support"]

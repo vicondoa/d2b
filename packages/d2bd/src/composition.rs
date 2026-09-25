@@ -30008,6 +30008,7 @@ mod g5_provider_identity_seed_tests {
 mod loader_worker_refusal_tests {
     use super::*;
     use d2b_core::loader_worker::{self, LoaderRefusal, MAX_LOADER_QUEUE_DEPTH};
+    use d2b_core::test_support::block_on;
     use std::{
         pin::Pin,
         process::Command,
@@ -30057,19 +30058,6 @@ mod loader_worker_refusal_tests {
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
         future.poll(&mut context)
-    }
-
-    /// Drive a future with no executor, reactor, or timer.
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let waker = Waker::noop();
-        let mut context = Context::from_waker(waker);
-        let mut future = std::pin::pin!(future);
-        loop {
-            match future.as_mut().poll(&mut context) {
-                Poll::Ready(value) => return value,
-                Poll::Pending => std::thread::yield_now(),
-            }
-        }
     }
 
     /// Releases the parked job even when an assertion unwinds first, so a

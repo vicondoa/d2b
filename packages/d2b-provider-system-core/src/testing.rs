@@ -4,10 +4,7 @@
 //! account, reads an account database, or touches the machine the tests run
 //! on, so the reconcilers can be exercised on any host as any user.
 
-use std::future::Future;
-use std::pin::pin;
 use tokio::sync::Mutex;
-use std::task::{Context, Poll, Waker};
 
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::user::{OsUsername, UserSpec};
@@ -19,18 +16,9 @@ use crate::user::{DiscoveredUser, UserBinding, UserDiscoveryEffectPort, UserIden
 ///
 /// The suite is hermetic and never waits on I/O or wall time, so a
 /// single-threaded driver is sufficient and keeps this crate free of an
-/// async runtime dependency.
-pub fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = pin!(future);
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => std::hint::spin_loop(),
-        }
-    }
-}
+/// async runtime dependency. The driver itself lives in the Provider
+/// toolkit, once.
+pub use d2b_provider_toolkit::testing::block_on;
 
 /// The canonical scripted identity digest.
 pub const SCRIPTED_IDENTITY: UserIdentityDigest = UserIdentityDigest::from_bytes([0x22; 32]);

@@ -6,7 +6,8 @@ use d2b_contracts_resource::v3::{
     ResourceUid,
     volume_binding::{VolumeBindingReadinessFence, VolumeBindingStatusResource},
 };
-use d2b_provider_volume_virtiofs::testing::{PortCall, ScriptedPort, block_on, fixtures};
+use d2b_core::test_support::block_on;
+use d2b_provider_volume_virtiofs::testing::{PortCall, ScriptedPort, fixtures};
 use d2b_provider_volume_virtiofs::{
     LaunchedWorker, StoredBinding, VOLUME_BINDING_FINALIZER, VOLUME_BINDING_RESOURCE_TYPE,
     VirtiofsBindingController, VirtiofsBindingEffectPort, VirtiofsBindingError, VirtiofsdWorkerPlan,

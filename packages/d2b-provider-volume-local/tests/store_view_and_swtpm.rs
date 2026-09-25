@@ -1,6 +1,7 @@
 //! Public Volume status stays free of paths, policy ids, and numeric identity.
 
-use d2b_provider_volume_local::testing::{ScriptedPort, block_on, fixtures};
+use d2b_core::test_support::block_on;
+use d2b_provider_volume_local::testing::{ScriptedPort, fixtures};
 use d2b_provider_volume_local::{VolumeLocalController, VolumeLocalProfile};
 
 /// Fragments that must never appear in a public Volume status document.

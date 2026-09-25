@@ -1552,14 +1552,11 @@ fn map_broker_error(error: NetworkBrokerError) -> NetworkEffectError {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        future::Future,
-        sync::Arc,
-        task::{Context, Poll, Waker},
-    };
+    use std::sync::Arc;
 
     use super::*;
     use crate::controller::{NetworkAdmissionIntent, NetworkAdmissionKey};
+    use d2b_provider_toolkit::testing::block_on;
     use d2b_contracts::types::{BundleOpId, VmId};
     use d2b_contracts_resource::v3::{
         ResourceBundleGenerationId, ResourceUid,
@@ -1649,18 +1646,6 @@ mod tests {
         ) -> Result<(), NetworkBrokerError> {
             self.record("tap-delete");
             Ok(())
-        }
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let waker = Waker::noop();
-        let mut context = Context::from_waker(waker);
-        let mut future = Box::pin(future);
-        loop {
-            match future.as_mut().poll(&mut context) {
-                Poll::Ready(output) => return output,
-                Poll::Pending => std::thread::yield_now(),
-            }
         }
     }
 

@@ -1,9 +1,5 @@
 use parking_lot::Mutex;
-use std::{
-    future::Future,
-    sync::Arc,
-    task::{Context, Poll, Waker},
-};
+use std::sync::Arc;
 
 use d2b_contracts_resource::v3::{
     ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
@@ -23,6 +19,7 @@ use d2b_provider_network_local::{
     },
     plan::{PlanStep, compute_plan, ActualState},
 };
+use d2b_provider_toolkit::testing::block_on;
 
 #[derive(Clone, Default)]
 struct FakePorts {
@@ -58,18 +55,6 @@ impl FakePorts {
 
     fn events(&self) -> Vec<&'static str> {
         self.inner.events.lock().clone()
-    }
-}
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::yield_now(),
-        }
     }
 }
 

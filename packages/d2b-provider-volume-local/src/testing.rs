@@ -6,10 +6,7 @@
 //! socket, a privileged host, or a real Volume root.
 
 use std::collections::BTreeMap;
-use std::future::Future;
-use std::pin::pin;
 use std::sync::Mutex;
-use std::task::{Context, Poll, Waker};
 
 use d2b_contracts_resource::v3::ResourceUid;
 use d2b_contracts_resource::v3::execution_policy::BoundedToken;
@@ -21,22 +18,6 @@ use crate::layout::EntryRequest;
 use crate::port::{
     DriftClass, ObservedEntry, QuotaCapability, VolumeLayoutEffectPort, VolumeSourceEffectPort,
 };
-
-/// Drive a future to completion on the calling thread.
-///
-/// The suite never waits on I/O or wall time, so a single-threaded
-/// driver keeps the crate free of an async runtime dependency.
-pub fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = pin!(future);
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => std::hint::spin_loop(),
-        }
-    }
-}
 
 /// One recorded effect-port call.
 #[derive(Debug, Clone, PartialEq, Eq)]

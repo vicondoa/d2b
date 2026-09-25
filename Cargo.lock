@@ -1035,6 +1035,7 @@ name = "d2b-process-conformance"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
+ "d2b-core",
  "serde",
  "serde_json",
  "sha2",
@@ -1743,6 +1744,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts-resource",
+ "d2b-provider-toolkit",
  "serde",
  "serde_json",
  "tokio",
@@ -1945,6 +1947,7 @@ name = "d2b-provider-volume-virtiofs"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
+ "d2b-core",
  "serde",
  "serde_json",
  "sha2",

@@ -85,6 +85,7 @@ d2b_rust_test(
         "//packages/d2b-provider-guest:d2b_provider_guest",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_provider_network_local",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

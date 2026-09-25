@@ -1960,7 +1960,7 @@ mod tests {
             ]),
         };
         let adapter = AnchoredVolumeEffectAdapter::new(resolver);
-        let handle = crate::testing::block_on(adapter.resolve_root_for(
+        let handle = d2b_core::test_support::block_on(adapter.resolve_root_for(
             &volume_uid,
             None,
             None,
@@ -1968,7 +1968,7 @@ mod tests {
         ))
         .expect("root handle");
         let entry = EntryRequest::resolve(&volume_uid, &acl_layout_entry()).expect("entry");
-        crate::testing::block_on(adapter.apply_acl(&handle, &entry))
+        d2b_core::test_support::block_on(adapter.apply_acl(&handle, &entry))
             .expect("acl applied");
 
         let expected_access = acl_entries(
@@ -2033,7 +2033,7 @@ mod tests {
             uids: std::collections::BTreeMap::from([("owner".to_owned(), Uid::current().as_raw())]),
         };
         let adapter = AnchoredVolumeEffectAdapter::new(resolver);
-        let handle = crate::testing::block_on(adapter.resolve_root_for(
+        let handle = d2b_core::test_support::block_on(adapter.resolve_root_for(
             &volume_uid,
             None,
             None,
@@ -2049,7 +2049,7 @@ mod tests {
         )
         .expect("entry");
         assert!(
-            crate::testing::block_on(adapter.apply_acl(&handle, &entry))
+            d2b_core::test_support::block_on(adapter.apply_acl(&handle, &entry))
                 .is_err()
         );
     }

@@ -2,6 +2,7 @@
 
 use std::os::unix::fs::PermissionsExt;
 
+use d2b_core::test_support::block_on;
 use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid,
     volume::SourceKind,
@@ -119,9 +120,9 @@ fn production_controller_materializes_and_adopts_a_marker_bound_root() {
     let spec = volume_spec();
 
     let first =
-        d2b_provider_volume_local::testing::block_on(controller.reconcile(&uid, &spec, None, None))
+        block_on(controller.reconcile(&uid, &spec, None, None))
         .expect("first reconcile");
-    let restarted = d2b_provider_volume_local::testing::block_on(
+    let restarted = block_on(
         controller.reconcile(&uid, &spec, None, None),
     )
         .expect("restart adoption");
@@ -144,7 +145,7 @@ fn production_content_status_is_published_only_after_full_readback() {
     let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
     let uid = volume_uid();
     let spec = volume_spec();
-    d2b_provider_volume_local::testing::block_on(controller.reconcile(&uid, &spec, None, None))
+    block_on(controller.reconcile(&uid, &spec, None, None))
         .expect("layout reconcile");
     let owner = ResourceRef::parse("User/d2bd").expect("owner");
     let projection = ContentProjection::new(
@@ -169,13 +170,13 @@ fn production_content_status_is_published_only_after_full_readback() {
     )
     .expect("projection");
 
-    let evidence = d2b_provider_volume_local::testing::block_on(controller.reconcile_content(
+    let evidence = block_on(controller.reconcile_content(
         &uid,
         &spec,
         &projection,
     ))
     .expect("materialization evidence");
-    let adopted = d2b_provider_volume_local::testing::block_on(controller.reconcile_content(
+    let adopted = block_on(controller.reconcile_content(
         &uid,
         &spec,
         &projection,
@@ -258,7 +259,7 @@ fn production_network_content_materializes_and_preserves_a_foreign_marker() {
             "content": projection,
         },
     });
-    let status = d2b_provider_volume_local::testing::block_on(controller.reconcile(
+    let status = block_on(controller.reconcile(
         &volume_uid,
         &volume_spec,
         Some(&provider),
@@ -293,7 +294,7 @@ fn production_network_content_materializes_and_preserves_a_foreign_marker() {
     std::fs::write(base.join(".d2b-volume-marker"), b"foreign-marker")
         .expect("foreign marker");
     assert_eq!(
-        d2b_provider_volume_local::testing::block_on(controller.reconcile(
+        block_on(controller.reconcile(
             &volume_uid,
             &volume_spec,
             Some(&provider),
@@ -329,7 +330,7 @@ fn production_store_view_marker_evidence_requires_a_zero_length_file() {
     let uid = volume_uid();
     let spec = volume_spec();
     std::fs::create_dir_all(base.join("live")).expect("live directory");
-    let root = d2b_provider_volume_local::testing::block_on(adapter.resolve_root_for(
+    let root = block_on(adapter.resolve_root_for(
         &uid,
         spec.source().settings().source_policy_id(),
         spec.source().settings().system_artifact_id(),
@@ -338,7 +339,7 @@ fn production_store_view_marker_evidence_requires_a_zero_length_file() {
     .expect("resolve anchored root");
     let marker_path = "live/.d2b-marker-work-vm";
 
-    let missing = d2b_provider_volume_local::testing::block_on(
+    let missing = block_on(
         adapter.observe_store_view_marker(&root, marker_path),
     )
     .expect("missing marker evidence");
@@ -346,7 +347,7 @@ fn production_store_view_marker_evidence_requires_a_zero_length_file() {
     assert!(!missing.zero_length);
 
     std::fs::write(base.join(marker_path), b"not-ready").expect("non-empty marker");
-    let non_empty = d2b_provider_volume_local::testing::block_on(
+    let non_empty = block_on(
         adapter.observe_store_view_marker(&root, marker_path),
     )
     .expect("non-empty marker evidence");
@@ -354,7 +355,7 @@ fn production_store_view_marker_evidence_requires_a_zero_length_file() {
     assert!(!non_empty.zero_length);
 
     std::fs::write(base.join(marker_path), []).expect("zero-length marker");
-    let ready = d2b_provider_volume_local::testing::block_on(
+    let ready = block_on(
         adapter.observe_store_view_marker(&root, marker_path),
     )
     .expect("ready marker evidence");
@@ -391,7 +392,7 @@ fn broker_owned_final_symlink_is_observed_without_metadata_repair() {
         .find(|entry| entry.path() == "meta/current")
         .expect("current layout entry");
     let entry = EntryRequest::resolve(&uid, declared).expect("entry request");
-    let root = d2b_provider_volume_local::testing::block_on(adapter.resolve_root_for(
+    let root = block_on(adapter.resolve_root_for(
         &uid,
         spec.source().settings().source_policy_id(),
         spec.source().settings().system_artifact_id(),
@@ -399,7 +400,7 @@ fn broker_owned_final_symlink_is_observed_without_metadata_repair() {
     ))
     .expect("resolve root");
 
-    let observed = d2b_provider_volume_local::testing::block_on(adapter.observe(&root, &entry))
+    let observed = block_on(adapter.observe(&root, &entry))
         .expect("observe final symlink");
     assert!(observed.present);
     assert!(observed.drift.is_empty());
@@ -417,10 +418,10 @@ fn production_nix_closure_store_view_materializes_without_a_source_policy() {
     let spec = d2b_provider_volume_local::testing::fixtures::nix_closure_store_view_volume();
 
     let first =
-        d2b_provider_volume_local::testing::block_on(controller.reconcile(&uid, &spec, None, None))
+        block_on(controller.reconcile(&uid, &spec, None, None))
             .expect("Nix closure Volume reconcile");
     let restarted =
-        d2b_provider_volume_local::testing::block_on(controller.reconcile(&uid, &spec, None, None))
+        block_on(controller.reconcile(&uid, &spec, None, None))
             .expect("Nix closure Volume restart adoption");
 
     assert_eq!(
@@ -455,7 +456,7 @@ fn broker_owned_sync_lock_record_converges_the_store_view_layout() {
     let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
     let uid = volume_uid();
     let spec = d2b_provider_volume_local::testing::fixtures::store_view_volume();
-    let report = d2b_provider_volume_local::testing::block_on(
+    let report = block_on(
         controller.reconcile(&uid, &spec, None, None),
     )
     .expect("store-view Volume reconcile");
@@ -491,7 +492,7 @@ fn unprovable_sync_lock_owner_still_quarantines_the_store_view_layout() {
     let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
     let uid = volume_uid();
     let spec = d2b_provider_volume_local::testing::fixtures::store_view_volume();
-    let report = d2b_provider_volume_local::testing::block_on(
+    let report = block_on(
         controller.reconcile(&uid, &spec, None, None),
     )
     .expect("store-view Volume reconcile");
@@ -528,7 +529,7 @@ fn unrecorded_sync_lock_owner_still_quarantines_the_store_view_layout() {
     let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
     let uid = volume_uid();
     let spec = d2b_provider_volume_local::testing::fixtures::store_view_volume();
-    let report = d2b_provider_volume_local::testing::block_on(
+    let report = block_on(
         controller.reconcile(&uid, &spec, None, None),
     )
     .expect("store-view Volume reconcile");
@@ -556,7 +557,7 @@ fn foreign_marker_is_preserved_and_blocks_the_controller() {
     let (base, adapter) = adapter_root("foreign-marker");
     std::fs::write(base.join(".d2b-volume-marker"), b"foreign-marker").expect("foreign marker");
     let controller = VolumeLocalController::new(VolumeLocalProfile::shipped(), &adapter, &adapter);
-    let error = d2b_provider_volume_local::testing::block_on(
+    let error = block_on(
         controller.reconcile(&volume_uid(), &volume_spec(), None, None),
     )
     .expect_err("foreign marker must fail closed");

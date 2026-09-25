@@ -8,7 +8,28 @@ use crate::sandbox_profile::{
     BindMount, CgroupPlacement, MountPolicy, NamespaceSet, WritablePath,
 };
 use crate::processes::{ProcessRole, RoleProfile, RoleUserNamespace};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::pin;
+use std::task::{Context, Poll, Waker};
+
+/// Drive a future to completion on the calling thread.
+///
+/// A no-op-waker poll loop: every seam this workspace tests is immediately
+/// ready, so the driver needs no executor, reactor, or timer. This is the
+/// sanctioned home for the `block_on` helpers that Provider and daemon
+/// crates used to carry as private copies.
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => std::hint::spin_loop(),
+        }
+    }
+}
 
 // ── RoleProfileBuilder ──────────────────────────────────────────────────────
 
