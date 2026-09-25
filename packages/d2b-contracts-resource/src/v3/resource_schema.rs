@@ -374,6 +374,11 @@ impl CanonicalJsonObject {
         self.0.keys().map(String::as_str)
     }
 
+    /// Iterate over top-level fields in canonical order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &CanonicalJsonValue)> {
+        self.0.iter().map(|(key, value)| (key.as_str(), value))
+    }
+
     /// Look up one field.
     pub fn get(&self, key: &str) -> Option<&CanonicalJsonValue> {
         self.0.get(key)

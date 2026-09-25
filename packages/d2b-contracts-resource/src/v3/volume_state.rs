@@ -135,7 +135,7 @@ impl StateDigest {
     /// Parse exactly `sha256:<64 lower-case hex>`.
     pub fn parse(value: impl Into<String>) -> Result<Self, VolumeStateError> {
         let value = value.into();
-        SchemaFingerprint::parse(value.clone()).map_err(|_| VolumeStateError::CanonicalJson)?;
+        SchemaFingerprint::parse(value.as_str()).map_err(|_| VolumeStateError::CanonicalJson)?;
         Ok(Self(value))
     }
 

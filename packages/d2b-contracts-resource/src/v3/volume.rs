@@ -20,7 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::{
     ResourceRef,
     execution_policy::{
-        BoundedToken, PrimitiveSpecError, redacted_debug, require_execution_ref,
+        BoundedToken, PrimitiveSpecError, ensure_unique, redacted_debug, require_execution_ref,
         require_resource_type,
     },
     process::validate_octal_mode,
@@ -1207,17 +1207,9 @@ impl VolumeSpec {
         for name in views.keys() {
             BoundedToken::parse(name.clone())?;
         }
-        let mut paths: Vec<&str> = layout.iter().map(LayoutEntry::path).collect();
-        let declared = paths.len();
-        paths.sort_unstable();
-        paths.dedup();
-        if paths.len() != declared {
-            return Err(PrimitiveSpecError::DuplicateEntry);
-        }
+        let paths: Vec<&str> = layout.iter().map(LayoutEntry::path).collect();
+        ensure_unique(&paths)?;
         for attachment in &attachments {
-            if !views.contains_key(attachment.view.as_str()) {
-                return Err(PrimitiveSpecError::MissingRequiredField);
-            }
             let view = views
                 .get(attachment.view.as_str())
                 .ok_or(PrimitiveSpecError::MissingRequiredField)?;
@@ -1245,16 +1237,11 @@ impl VolumeSpec {
         {
             return Err(PrimitiveSpecError::ConflictingFields);
         }
-        let mut execution_refs: Vec<String> = attachments
+        let execution_refs: Vec<String> = attachments
             .iter()
             .map(|attachment| attachment.execution_ref.to_canonical_string())
             .collect();
-        let declared_execution_refs = execution_refs.len();
-        execution_refs.sort_unstable();
-        execution_refs.dedup();
-        if execution_refs.len() != declared_execution_refs {
-            return Err(PrimitiveSpecError::DuplicateEntry);
-        }
+        ensure_unique(&execution_refs)?;
         if source.settings().kind() == SourceKind::Tmpfs {
             if !matches!(kind, VolumeKind::Ephemeral | VolumeKind::Tmp) {
                 return Err(PrimitiveSpecError::ConflictingFields);

@@ -617,13 +617,8 @@ impl Serialize for ResourceSpec {
         if let Some(update_policy) = &self.update_policy {
             map.serialize_entry("updatePolicy", update_policy)?;
         }
-        for key in self.base.keys() {
-            map.serialize_entry(
-                key,
-                self.base
-                    .get(key)
-                    .expect("key returned by canonical object"),
-            )?;
+        for (key, value) in self.base.iter() {
+            map.serialize_entry(key, value)?;
         }
         if let Some(provider) = &self.provider {
             map.serialize_entry("provider", provider)?;
