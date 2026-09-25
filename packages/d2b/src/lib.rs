@@ -25,7 +25,7 @@ mod exec_client;
 mod generated;
 mod guest;
 mod host;
-pub mod host_generation;
+mod host_generation;
 mod host_validate;
 mod provider;
 mod resource;
@@ -41,11 +41,12 @@ mod zone_support_bundle;
 pub(crate) const MAX_FRAME_BYTES: usize = d2b_contracts::MAX_FRAME_SIZE;
 
 /// Exit code for api-ready timeout in strict mode.
-pub const EXIT_API_TIMEOUT: i32 = 33;
+pub(crate) const EXIT_API_TIMEOUT: i32 = 33;
 
 #[derive(Debug)]
 pub(crate) struct CliFailure {
     pub(crate) exit_code: i32,
+    pub(crate) code: String,
     pub(crate) message: String,
     pub(crate) rendered_stderr: Option<String>,
     pub(crate) admission_recovery: bool,
@@ -55,6 +56,7 @@ impl CliFailure {
     pub(crate) fn new(exit_code: i32, message: impl Into<String>) -> Self {
         Self {
             exit_code,
+            code: String::from("cli-error"),
             message: message.into(),
             rendered_stderr: None,
             admission_recovery: false,

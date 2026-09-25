@@ -966,15 +966,7 @@ fn reconcile_deadline(
     mode: OutputMode,
 ) -> Result<Option<u64>, CliFailure> {
     crate::context::ZoneContext::expedited_deadline(value).map_err(|error| {
-        context.failure(
-            "ref-invalid",
-            error
-                .message
-                .strip_prefix("ref-invalid: ")
-                .unwrap_or(&error.message),
-            mode,
-            error.exit_code,
-        )
+        context.failure("ref-invalid", &error.message, mode, error.exit_code)
     })
 }
 

@@ -59,7 +59,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 /// Stable per-check severity for `d2b host doctor` output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum DoctorStatus {
+pub(crate) enum DoctorStatus {
     Pass,
     Warn,
     Fail,
@@ -77,7 +77,7 @@ impl DoctorStatus {
 
 /// One row in the doctor's `checks[]` array.
 #[derive(Debug, Clone)]
-pub struct DoctorCheck {
+pub(crate) struct DoctorCheck {
     /// Stable kebab-case identifier (e.g. `broker-ready`).
     pub name: &'static str,
     pub status: DoctorStatus,
@@ -89,7 +89,7 @@ pub struct DoctorCheck {
 
 #[derive(Debug, Clone, Default)]
 /// Ordered check list produced by one doctor run.
-pub struct DoctorReport {
+pub(crate) struct DoctorReport {
     pub checks: Vec<DoctorCheck>,
 }
 
@@ -162,7 +162,7 @@ impl DoctorReport {
 }
 
 /// Run every doctor probe against one CLI context and aggregate the results.
-pub fn run_doctor(context: &CliContext) -> DoctorReport {
+pub(crate) fn run_doctor(context: &CliContext) -> DoctorReport {
     let mut report = DoctorReport::default();
     check_broker_socket(context, &mut report);
     check_daemon_socket(context, &mut report);
@@ -1694,7 +1694,7 @@ fn run_sysctl_n(key: &str) -> Result<String, String> {
 // ---------------------------------------------------------------
 
 /// Render the doctor report as the structured JSON doctor output.
-pub fn render_summary(report: &DoctorReport) -> Value {
+pub(crate) fn render_summary(report: &DoctorReport) -> Value {
     let checks: Vec<Value> = report
         .checks
         .iter()
@@ -1744,7 +1744,7 @@ pub fn render_summary(report: &DoctorReport) -> Value {
 }
 
 /// Render the doctor report as human-readable terminal text.
-pub fn render_human(report: &DoctorReport) -> String {
+pub(crate) fn render_human(report: &DoctorReport) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     let _ = writeln!(

@@ -2880,9 +2880,13 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let mut outbound_frame = request.payload().to_vec();
         rewrite_ttrpc_stream_id(&mut outbound_frame, internal_stream_id)
             .map_err(|_| EndpointError::Rejected)?;
-        if let Some((query, watch)) = match request.resource_call() {
-            Some(ResourceCall::List(query)) if query.scope().is_some() => Some((query, false)),
-            Some(ResourceCall::Watch(query)) if query.scope().is_some() => Some((query, true)),
+        if let Some((query, method)) = match request.resource_call() {
+            Some(ResourceCall::List(query)) if query.scope().is_some() => {
+                Some((query, d2b_resource_api::ScopedQueryMethod::List))
+            }
+            Some(ResourceCall::Watch(query)) if query.scope().is_some() => {
+                Some((query, d2b_resource_api::ScopedQueryMethod::Watch))
+            }
             _ => None,
         } {
             let filters = query
@@ -2898,7 +2902,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
                 query.resource_types(),
                 query.resource_names(),
                 &filters,
-                watch,
+                method,
             )
             .map_err(|_| EndpointError::Rejected)?;
         }

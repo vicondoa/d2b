@@ -850,16 +850,6 @@ where
         self.commit_batch_with_scope(trusted, None, None).await
     }
 
-    /// Commit an integrity-verified configuration bundle from in-process Core.
-    pub async fn commit_configuration_batch(
-        &self,
-        trusted: TrustedRequest<wire::CommitBatchRequest>,
-        configuration_generation: ConfigurationGeneration,
-    ) -> wire::CommitBatchResponse {
-        self.commit_batch_with_scope(trusted, None, Some(configuration_generation))
-            .await
-    }
-
     pub(crate) fn invalid_commit_batch(reason: &'static str) -> wire::CommitBatchResponse {
         batch_error(schema_error(reason))
     }
@@ -882,7 +872,7 @@ where
         configuration_generation: Option<ConfigurationGeneration>,
     ) -> wire::CommitBatchResponse {
         if trusted.request.mutations.is_empty() {
-            return batch_error(schema_error("batch mutation count exceeds its bound"));
+            return batch_error(schema_error("batch mutation count is zero"));
         }
         let routes = match trusted
             .request
@@ -2006,7 +1996,7 @@ fn parse_create_payload(
     );
     let envelope = ResourceEnvelope::from_json(&validation_value.to_canonical_bytes())
         .map_err(|error| {
-            eprintln!("resource-api:create-envelope-validation-failed error={error}");
+            tracing::debug!(error = %error, "create envelope validation failed");
             schema_error("create resource payload is malformed")
         })?;
     let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_resource);

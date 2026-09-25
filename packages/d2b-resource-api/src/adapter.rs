@@ -120,6 +120,15 @@ pub fn attach_scoped_commit_frame(
     Ok(result)
 }
 
+/// The query method a scoped frame must carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopedQueryMethod {
+    /// A List selector.
+    List,
+    /// A Watch selector.
+    Watch,
+}
+
 /// Attach an admitted List or Watch selector to the existing ttrpc request.
 ///
 /// The selector inputs are transport-neutral so the resource API does not
@@ -136,7 +145,7 @@ pub fn attach_scoped_query_frame(
     resource_types: &[ResourceTypeName],
     resource_names: &[ResourceName],
     filters: &[StoreFilter],
-    watch: bool,
+    method: ScopedQueryMethod,
 ) -> Result<Vec<u8>, ScopedQueryFrameError> {
     let header_bytes: [u8; MESSAGE_HEADER_LENGTH] = frame
         .get(..MESSAGE_HEADER_LENGTH)
@@ -153,7 +162,10 @@ pub fn attach_scoped_query_frame(
     }
     let mut rpc = TtrpcRequest::parse_from_bytes(&frame[MESSAGE_HEADER_LENGTH..])
         .map_err(|_| ScopedQueryFrameError::InvalidRequest)?;
-    let expected_method = if watch { "Watch" } else { "List" };
+    let expected_method = match method {
+        ScopedQueryMethod::List => "List",
+        ScopedQueryMethod::Watch => "Watch",
+    };
     if rpc.service != "d2b.resource.v3.ResourceService" || rpc.method != expected_method {
         return Err(ScopedQueryFrameError::InvalidRequest);
     }
@@ -179,7 +191,7 @@ pub fn attach_scoped_query_frame(
         .iter()
         .map(|resource_type| resource_type.as_str().to_owned())
         .collect();
-    if watch {
+    if matches!(method, ScopedQueryMethod::Watch) {
         let mut request = wire::WatchRequest::parse_from_bytes(&rpc.payload)
             .map_err(|_| ScopedQueryFrameError::InvalidRequest)?;
         request.resource_types = resource_types;
@@ -266,15 +278,6 @@ impl core::fmt::Display for AdapterBindingError {
 }
 
 impl std::error::Error for AdapterBindingError {}
-
-/// Current production reachability of the resource service.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResourceApiReachability {
-    RegisteredOnAuthenticatedComponentSession,
-}
-
-pub const RESOURCE_API_REACHABILITY: ResourceApiReachability =
-    ResourceApiReachability::RegisteredOnAuthenticatedComponentSession;
 
 /// Session-scoped dispatcher registered on an authenticated Resource server.
 pub struct ResourceBusAdapter<S, U> {
@@ -646,8 +649,11 @@ mod tests {
             values: vec![owner_uid.as_str().to_owned()],
         }];
 
-        for (method, watch) in [("List", false), ("Watch", true)] {
-            let payload = if watch {
+        for (method, query_method) in [
+            ("List", ScopedQueryMethod::List),
+            ("Watch", ScopedQueryMethod::Watch),
+        ] {
+            let payload = if matches!(query_method, ScopedQueryMethod::Watch) {
                 let mut request = wire::WatchRequest::new();
                 request.resource_types.push("Host".to_owned());
                 request.filters.push(wire::ListFilter {
@@ -678,10 +684,16 @@ mod tests {
             frame.extend_from_slice(&Vec::from(header));
             frame.extend_from_slice(&body);
 
-            let rewritten =
-                attach_scoped_query_frame(&frame, &resource_types, &[], &filters, watch).unwrap();
+            let rewritten = attach_scoped_query_frame(
+                &frame,
+                &resource_types,
+                &[],
+                &filters,
+                query_method,
+            )
+            .unwrap();
             let rpc = TtrpcRequest::parse_from_bytes(&rewritten[MESSAGE_HEADER_LENGTH..]).unwrap();
-            if watch {
+            if matches!(query_method, ScopedQueryMethod::Watch) {
                 let request = wire::WatchRequest::parse_from_bytes(&rpc.payload).unwrap();
                 assert_eq!(
                     request.resource_types,
@@ -1226,10 +1238,6 @@ mod tests {
 
     #[test]
     fn authenticated_service_map_contains_the_exact_thirteen_method_surface() {
-        assert_eq!(
-            RESOURCE_API_REACHABILITY,
-            ResourceApiReachability::RegisteredOnAuthenticatedComponentSession
-        );
         let services = denied_adapter().ttrpc_services();
         assert_eq!(services.len(), 1);
         let methods = &services["d2b.resource.v3.ResourceService"].methods;

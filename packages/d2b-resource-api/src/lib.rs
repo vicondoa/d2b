@@ -16,9 +16,9 @@ mod store;
 pub mod watch;
 
 pub use adapter::{
-    AdapterBindingError, RESOURCE_API_REACHABILITY, ResourceApiReachability, ResourceBusAdapter,
-    ScopedCommitFrameError, ScopedQueryFrameError, attach_scoped_commit_frame,
-    attach_scoped_query_frame, decode_scoped_commit_request, reject_scoped_commit_frame,
+    AdapterBindingError, ResourceBusAdapter, ScopedCommitFrameError, ScopedQueryFrameError,
+    ScopedQueryMethod, attach_scoped_commit_frame, attach_scoped_query_frame,
+    decode_scoped_commit_request, reject_scoped_commit_frame,
 };
 pub use admission::{AdmissionError, AdmittedMutation};
 pub use protobuf;

@@ -710,7 +710,7 @@ impl std::fmt::Debug for ContextBackend {
 
 /// The selected Zone and its authenticated-session request facade.
 pub(crate) struct ZoneContext {
-    zone_name: String,
+    zone_name: ZoneId,
     explicit_zone: bool,
     socket_path: PathBuf,
     zone_path: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
@@ -721,7 +721,7 @@ impl std::fmt::Debug for ZoneContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ZoneContext")
-            .field("zone_name", &self.zone_name)
+            .field("zone_name", &self.zone_name.as_str())
             .field("explicit_zone", &self.explicit_zone)
             .field("backend", &self.backend)
             .finish()
@@ -733,7 +733,10 @@ impl ZoneContext {
         let socket_path = env::var_os("D2B_PUBLIC_SOCKET")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/run/d2b/public.sock"));
-        Self::from_socket("local-root".to_owned(), socket_path)
+        Self::from_socket(
+            ZoneId::parse("local-root").expect("local-root is a valid Zone name"),
+            socket_path,
+        )
     }
 
     pub(crate) fn local_only_with_explicit_zone(explicit_zone: bool) -> Self {
@@ -744,12 +747,12 @@ impl ZoneContext {
 
     /// Select the root public listener and an optional Zone routing target.
     pub(crate) fn discover(zone_arg: Option<&str>) -> Result<Self, CliFailure> {
-        let requested_zone = zone_arg
+let requested_zone = zone_arg
             .map(str::to_owned)
             .or_else(|| env::var("D2B_ZONE").ok().filter(|value| !value.is_empty()));
         let explicit_zone = requested_zone.is_some();
-        let zone_name = requested_zone.as_deref().unwrap_or("local-root").to_owned();
-        validate_zone_name(&zone_name)?;
+        let zone_name = ZoneId::parse(requested_zone.as_deref().unwrap_or("local-root"))
+            .map_err(|_| CliFailure::new(2, "ref-invalid: invalid Zone name"))?;
 
         let direct_override = env::var_os("D2B_PUBLIC_SOCKET").is_some();
         let socket_path = env::var_os("D2B_PUBLIC_SOCKET")
@@ -759,14 +762,11 @@ impl ZoneContext {
             return Err(CliFailure::new(1, "zone-unavailable"));
         }
 
-        let selected_zone = requested_zone.unwrap_or_else(|| "local-root".to_owned());
-        validate_zone_name(&selected_zone)?;
-
-        let zone_path = zone_path(&selected_zone)
+        let zone_path = zone_path(zone_name.as_str())
             .map_err(|_| CliFailure::new(2, "ref-invalid: invalid Zone name"))?;
-        let backend = canonical_backend(&selected_zone, &socket_path)?;
+        let backend = canonical_backend(zone_name.as_str(), &socket_path)?;
         Ok(Self {
-            zone_name: selected_zone,
+            zone_name,
             explicit_zone,
             socket_path,
             zone_path,
@@ -781,12 +781,12 @@ impl ZoneContext {
         socket_path: impl Into<PathBuf>,
         session_client: Arc<dyn SessionClient>,
     ) -> Result<Self, CliFailure> {
-        let zone_name = zone_name.into();
-        validate_zone_name(&zone_name)?;
-        let socket_path = socket_path.into();
-        let zone_path = zone_path(&zone_name)
+let zone_name = ZoneId::parse(zone_name)
             .map_err(|_| CliFailure::new(2, "ref-invalid: invalid Zone name"))?;
-        let mut backend = canonical_backend(&zone_name, &socket_path)?;
+        let socket_path = socket_path.into();
+        let zone_path = zone_path(zone_name.as_str())
+            .map_err(|_| CliFailure::new(2, "ref-invalid: invalid Zone name"))?;
+        let mut backend = canonical_backend(zone_name.as_str(), &socket_path)?;
         backend.injected = Some(session_client);
         Ok(Self {
             zone_name,
@@ -797,9 +797,9 @@ impl ZoneContext {
         })
     }
 
-    fn from_socket(zone_name: String, socket_path: PathBuf) -> Self {
-        let zone_path = zone_path(&zone_name).expect("validated local Zone name");
-        let backend = canonical_backend(&zone_name, &socket_path)
+    fn from_socket(zone_name: ZoneId, socket_path: PathBuf) -> Self {
+        let zone_path = zone_path(zone_name.as_str()).expect("validated local Zone name");
+        let backend = canonical_backend(zone_name.as_str(), &socket_path)
             .expect("validated local Zone socket backend");
         Self {
             zone_name,
@@ -811,7 +811,7 @@ impl ZoneContext {
     }
 
     pub(crate) fn zone_name(&self) -> &str {
-        &self.zone_name
+        self.zone_name.as_str()
     }
 
     pub(crate) const fn has_explicit_zone(&self) -> bool {
@@ -819,7 +819,7 @@ impl ZoneContext {
     }
 
     pub(crate) fn zone_ref(&self) -> String {
-        format!("Zone/{}", self.zone_name)
+        format!("Zone/{}", self.zone_name.as_str())
     }
 
     pub(crate) fn public_socket_path(&self) -> &Path {
@@ -1187,6 +1187,7 @@ impl ZoneContext {
     ) -> CliFailure {
         let message = bounded_message(message);
         let mut failure = CliFailure::new(exit_code, format!("{error_class}: {message}"));
+        failure.code = error_class.to_owned();
         if mode.is_json() {
             let envelope = json!({
                 "ok": false,
@@ -2746,12 +2747,6 @@ pub(crate) fn bounded_message(message: &str) -> String {
         bounded.push(character);
     }
     bounded
-}
-
-fn validate_zone_name(value: &str) -> Result<(), CliFailure> {
-    ZoneId::parse(value.to_owned())
-        .map(|_| ())
-        .map_err(|_| CliFailure::new(2, "ref-invalid: invalid Zone name"))
 }
 
 fn parse_duration(value: &str) -> Result<Duration, CliFailure> {
