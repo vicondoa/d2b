@@ -386,19 +386,19 @@ pub fn build_usbip_explicit_plan(
 /// after a partial failure are expected.
 pub trait UsbipStepExecutor {
     /// Ensure the usbip-host kernel module is loaded.
-    fn modprobe(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    fn modprobe(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
     /// Acquire the broker-mediated claim lock.
-    fn acquire_lock(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    fn acquire_lock(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
     /// Withhold non-owner VMs from the physical device.
-    fn withhold_non_owners(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    fn withhold_non_owners(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
     /// Apply host firewalling for the claim.
-    fn apply_firewall(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    fn apply_firewall(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
     /// Start the per-environment USBIP backend.
-    fn start_backend(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    fn start_backend(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
     /// Bind the device to the host USBIP export.
-    fn bind(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    fn bind(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
     /// Start the per-environment USBIP proxy.
-    fn start_proxy(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    fn start_proxy(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError>;
 }
 
 /// Per-step outcome recorded during execution. Successful steps
@@ -475,22 +475,17 @@ pub fn execute_usbip_plan<E: UsbipStepExecutor>(
         };
         match result {
             Ok(()) => report.completed.push(*step),
-            Err(reason) => {
-                report.failed = Some((*step, reason.clone()));
+            Err(error) => {
+                report.failed = Some((*step, error.reason.clone()));
                 tracing::warn!(
                     busid = %plan.busid,
                     env = %plan.env,
                     vm = %plan.vm,
                     step = %step,
-                    reason = %reason,
+                    reason = %error.reason,
                     "usbip bring-up plan step failed",
                 );
-                let err = UsbipPlanError {
-                    busid: plan.busid.clone(),
-                    step: *step,
-                    reason,
-                };
-                return Err((Box::new(report), err));
+                return Err((Box::new(report), error));
             }
         }
     }
@@ -521,38 +516,46 @@ mod tests {
                 fail_at: Some((step, reason)),
             }
         }
-        fn dispatch(&mut self, step: UsbipBusidStep) -> Result<(), String> {
+        fn dispatch(
+            &mut self,
+            plan: &UsbipBusidPlan,
+            step: UsbipBusidStep,
+        ) -> Result<(), UsbipPlanError> {
             self.calls.push(step);
             if let Some((target, reason)) = self.fail_at
                 && target == step
             {
-                return Err(reason.to_owned());
+                return Err(UsbipPlanError {
+                    busid: plan.busid.clone(),
+                    step,
+                    reason: reason.to_owned(),
+                });
             }
             Ok(())
         }
     }
 
     impl UsbipStepExecutor for FixtureExecutor {
-        fn modprobe(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Modprobe)
+        fn modprobe(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Modprobe)
         }
-        fn acquire_lock(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Lock)
+        fn acquire_lock(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Lock)
         }
-        fn withhold_non_owners(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Withhold)
+        fn withhold_non_owners(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Withhold)
         }
-        fn apply_firewall(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Firewall)
+        fn apply_firewall(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Firewall)
         }
-        fn start_backend(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Backend)
+        fn start_backend(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Backend)
         }
-        fn bind(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Bind)
+        fn bind(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Bind)
         }
-        fn start_proxy(&mut self, _: &UsbipBusidPlan) -> Result<(), String> {
-            self.dispatch(UsbipBusidStep::Proxy)
+        fn start_proxy(&mut self, plan: &UsbipBusidPlan) -> Result<(), UsbipPlanError> {
+            self.dispatch(plan, UsbipBusidStep::Proxy)
         }
     }
 
