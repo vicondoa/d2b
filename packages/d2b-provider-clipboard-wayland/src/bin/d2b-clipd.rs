@@ -124,13 +124,13 @@ fn main() {
 // binary, so these blocking calls are sync-by-construction.
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
+fn run(args_iter: impl IntoIterator<Item = String>) -> anyhow::Result<()> {
     let args = parse_args(args_iter)?;
 
     let config_text = std::fs::read_to_string(&args.config)
-        .map_err(|e| format!("failed to read config {}: {e}", args.config.display()))?;
+        .map_err(|e| anyhow::anyhow!("failed to read config {}: {e}", args.config.display()))?;
     let config_json: serde_json::Value = serde_json::from_str(&config_text)
-        .map_err(|e| format!("invalid config JSON {}: {e}", args.config.display()))?;
+        .map_err(|e| anyhow::anyhow!("invalid config JSON {}: {e}", args.config.display()))?;
 
     // Picker: CLI arg takes precedence, then config file key.
     let picker_from_config = config_json
@@ -142,10 +142,10 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     if let Some(p) = &picker
         && !p.is_absolute()
     {
-        return Err(format!("picker path must be absolute: {}", p.display()));
+        return Err(anyhow::anyhow!("picker path must be absolute: {}", p.display()));
     }
     if !args.bridge_root.is_absolute() {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "--bridge-root path must be absolute: {}",
             args.bridge_root.display()
         ));
@@ -156,7 +156,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     }
 
     // ── Wayland data-control ─────────────────────────────────────────────────
-    let mut data_control = DataControlClient::connect().map_err(|e| e.to_string())?;
+    let mut data_control = DataControlClient::connect().map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let niri_socket: Option<PathBuf> = args
         .niri_socket
@@ -190,10 +190,10 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     let control_socket = control_socket_path()?;
     install_control_socket_parent(&control_socket)?;
     let listener =
-        UnixListener::bind(&control_socket).map_err(|e| format!("bind control socket: {e}"))?;
+        UnixListener::bind(&control_socket).map_err(|e| anyhow::anyhow!("bind control socket: {e}"))?;
     listener
         .set_nonblocking(true)
-        .map_err(|e| format!("set_nonblocking: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("set_nonblocking: {e}"))?;
     let bridge_listeners = install_bridge_listeners(&args.bridge_root, &bridge_peers)?;
 
     // ── Niri IPC event stream thread ─────────────────────────────────────────
@@ -246,10 +246,10 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     event_loop.run()
 }
 
-fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerConfig>, String> {
+fn parse_bridge_peers(config_json: &serde_json::Value) -> anyhow::Result<Vec<BridgePeerConfig>> {
     if let Some(value) = config_json.pointer("/runtime/bridgeEndpoints") {
         let Some(items) = value.as_array() else {
-            return Err("runtime.bridgeEndpoints must be an array".to_owned());
+            return Err(anyhow::anyhow!("runtime.bridgeEndpoints must be an array"));
         };
         return items
             .iter()
@@ -258,20 +258,20 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
                     .get("canonicalTarget")
                     .and_then(|value| value.as_str())
                     .ok_or_else(|| {
-                        "runtime.bridgeEndpoints[].canonicalTarget must be a string".to_owned()
+                        anyhow::anyhow!("runtime.bridgeEndpoints[].canonicalTarget must be a string")
                     })
                     .and_then(|value| {
                         WorkloadTarget::parse(value).map_err(|_| {
-                            "runtime.bridgeEndpoints[].canonicalTarget must be canonical".to_owned()
+                            anyhow::anyhow!("runtime.bridgeEndpoints[].canonicalTarget must be canonical")
                         })
                     })?;
                 let provider_kind = item
                     .get("providerKind")
                     .cloned()
-                    .ok_or_else(|| "runtime.bridgeEndpoints[].providerKind is required".to_owned())
+                    .ok_or_else(|| anyhow::anyhow!("runtime.bridgeEndpoints[].providerKind is required"))
                     .and_then(|value| {
                         serde_json::from_value::<WorkloadProviderKind>(value).map_err(|_| {
-                            "runtime.bridgeEndpoints[].providerKind is invalid".to_owned()
+                            anyhow::anyhow!("runtime.bridgeEndpoints[].providerKind is invalid")
                         })
                     })?;
                 let legacy_vm_name = item
@@ -280,7 +280,7 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
                     .map(str::to_owned);
                 if provider_kind == WorkloadProviderKind::UnsafeLocal && legacy_vm_name.is_some() {
                     return Err(
-                        "unsafe-local bridge endpoint must not carry legacyVmName".to_owned()
+                        anyhow::anyhow!("unsafe-local bridge endpoint must not carry legacyVmName")
                     );
                 }
                 let identity = ClipboardEndpointIdentity {
@@ -298,21 +298,20 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
                     .is_some_and(|declared| declared != socket_component)
                 {
                     return Err(
-                        "runtime.bridgeEndpoints[].socketComponent does not match canonical identity"
-                            .to_owned(),
+                        anyhow::anyhow!("runtime.bridgeEndpoints[].socketComponent does not match canonical identity"),
                     );
                 }
                 let expected_uid = item
                     .get("expectedUid")
                     .and_then(|value| value.as_u64())
                     .ok_or_else(|| {
-                        "runtime.bridgeEndpoints[].expectedUid must be an integer".to_owned()
+                        anyhow::anyhow!("runtime.bridgeEndpoints[].expectedUid must be an integer")
                     })?;
                 Ok(BridgePeerConfig {
                     identity,
                     socket_component,
                     expected_uid: expected_uid.try_into().map_err(|_| {
-                        "runtime.bridgeEndpoints[].expectedUid too large".to_owned()
+                        anyhow::anyhow!("runtime.bridgeEndpoints[].expectedUid too large")
                     })?,
                 })
             })
@@ -320,7 +319,7 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
     }
     if let Some(value) = config_json.pointer("/runtime/bridgePeers") {
         let Some(items) = value.as_array() else {
-            return Err("runtime.bridgePeers must be an array".to_owned());
+            return Err(anyhow::anyhow!("runtime.bridgePeers must be an array"));
         };
         return items
             .iter()
@@ -328,20 +327,20 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
                 let vm_name = item
                     .get("vmName")
                     .and_then(|value| value.as_str())
-                    .ok_or_else(|| "runtime.bridgePeers[].vmName must be a string".to_owned())?
+                    .ok_or_else(|| anyhow::anyhow!("runtime.bridgePeers[].vmName must be a string"))?
                     .to_owned();
                 let expected_uid = item
                     .get("expectedUid")
                     .and_then(|value| value.as_u64())
                     .ok_or_else(|| {
-                        "runtime.bridgePeers[].expectedUid must be an integer".to_owned()
+                        anyhow::anyhow!("runtime.bridgePeers[].expectedUid must be an integer")
                     })?;
                 Ok(BridgePeerConfig {
                     identity: legacy_vm_endpoint(&vm_name)?,
                     socket_component: vm_name,
                     expected_uid: expected_uid
                         .try_into()
-                        .map_err(|_| "runtime.bridgePeers[].expectedUid too large".to_owned())?,
+                        .map_err(|_| anyhow::anyhow!("runtime.bridgePeers[].expectedUid too large"))?,
                 })
             })
             .collect();
@@ -350,7 +349,7 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
         return Ok(Vec::new());
     };
     let Some(items) = value.as_array() else {
-        return Err("runtime.bridgeVms must be an array".to_owned());
+        return Err(anyhow::anyhow!("runtime.bridgeVms must be an array"));
     };
     items
         .iter()
@@ -358,7 +357,7 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
             let vm_name = item
                 .as_str()
                 .map(str::to_owned)
-                .ok_or_else(|| "runtime.bridgeVms entries must be strings".to_owned())?;
+                .ok_or_else(|| anyhow::anyhow!("runtime.bridgeVms entries must be strings"))?;
             Ok(BridgePeerConfig {
                 identity: legacy_vm_endpoint(&vm_name)?,
                 socket_component: vm_name,
@@ -368,9 +367,9 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
         .collect()
 }
 
-fn legacy_vm_endpoint(vm_name: &str) -> Result<ClipboardEndpointIdentity, String> {
+fn legacy_vm_endpoint(vm_name: &str) -> anyhow::Result<ClipboardEndpointIdentity> {
     let canonical_target = WorkloadTarget::parse(&format!("{vm_name}.local.d2b"))
-        .map_err(|_| "bridge VM name cannot form a canonical target".to_owned())?;
+        .map_err(|_| anyhow::anyhow!("bridge VM name cannot form a canonical target"))?;
     Ok(ClipboardEndpointIdentity {
         canonical_target,
         provider_kind: WorkloadProviderKind::LocalVm,
@@ -410,7 +409,7 @@ struct EventLoop<'a> {
 
 impl EventLoop<'_> {
     #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-    fn run(&mut self) -> Result<(), String> {
+    fn run(&mut self) -> anyhow::Result<()> {
         loop {
             self.drain_async_materialization();
             // Flush pending Wayland requests before polling.
@@ -473,7 +472,7 @@ impl EventLoop<'_> {
                 match poll(&mut poll_fds, self.poll_timeout_ms()) {
                     Ok(_) => {}
                     Err(rustix::io::Errno::INTR) => continue,
-                    Err(error) => return Err(format!("poll failed: {error}")),
+                    Err(error) => return Err(anyhow::anyhow!("poll failed: {error}")),
                 }
                 let control_offset = 2 + usize::from(self.supervisor.active_socket().is_some());
                 let bridge_listener_offset = control_offset + self.control_streams.len();
@@ -534,12 +533,12 @@ impl EventLoop<'_> {
             if wayland_ready {
                 self.data_control
                     .prepare_and_read()
-                    .map_err(|e| format!("wayland read failed: {e}"))?;
+                    .map_err(|e| anyhow::anyhow!("wayland read failed: {e}"))?;
             }
             let wl_events = self
                 .data_control
                 .dispatch_pending()
-                .map_err(|e| format!("wayland dispatch failed: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("wayland dispatch failed: {e}"))?;
             for event in wl_events {
                 let mut context = WaylandEventContext {
                     data_control: self.data_control,
@@ -593,7 +592,7 @@ impl EventLoop<'_> {
                                 });
                             break;
                         }
-                        Err(error) => return Err(format!("control accept failed: {error}")),
+                        Err(error) => return Err(anyhow::anyhow!("control accept failed: {error}")),
                     }
                 }
             }
@@ -1128,7 +1127,7 @@ enum BridgeAttribution {
 fn install_bridge_listeners(
     root: &Path,
     bridge_peers: &[BridgePeerConfig],
-) -> Result<Vec<BridgeListener>, String> {
+) -> anyhow::Result<Vec<BridgeListener>> {
     let uid = rustix::process::getuid().as_raw();
     bridge_peers
         .iter()
@@ -1136,36 +1135,36 @@ fn install_bridge_listeners(
             let path = bridge_socket_path(root, uid, &peer.socket_component)?;
             let parent = path
                 .parent()
-                .ok_or_else(|| format!("bridge socket has no parent: {}", path.display()))?;
+                .ok_or_else(|| anyhow::anyhow!("bridge socket has no parent: {}", path.display()))?;
             std::fs::DirBuilder::new()
                 .recursive(true)
                 .mode(0o770)
                 .create(parent)
-                .map_err(|e| format!("create bridge socket dir {}: {e}", parent.display()))?;
+                .map_err(|e| anyhow::anyhow!("create bridge socket dir {}: {e}", parent.display()))?;
             if path.exists() {
                 let meta = std::fs::symlink_metadata(&path)
-                    .map_err(|e| format!("stat bridge socket {}: {e}", path.display()))?;
+                    .map_err(|e| anyhow::anyhow!("stat bridge socket {}: {e}", path.display()))?;
                 if !meta.file_type().is_socket() {
-                    return Err(format!("refusing to replace non-socket {}", path.display()));
+                    return Err(anyhow::anyhow!("refusing to replace non-socket {}", path.display()));
                 }
                 std::fs::remove_file(&path)
-                    .map_err(|e| format!("remove stale bridge socket {}: {e}", path.display()))?;
+                    .map_err(|e| anyhow::anyhow!("remove stale bridge socket {}: {e}", path.display()))?;
             }
             // umask is process-wide: keep bridge listener installation in the
             // single-threaded startup phase, before spawning background workers.
             let old_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o111));
             let listener = UnixListener::bind(&path)
-                .map_err(|e| format!("bind bridge socket {}: {e}", path.display()));
+                .map_err(|e| anyhow::anyhow!("bind bridge socket {}: {e}", path.display()));
             nix::sys::stat::umask(old_umask);
             let listener = listener?;
             let bound_meta = std::fs::symlink_metadata(&path)
-                .map_err(|e| format!("stat bound bridge socket {}: {e}", path.display()))?;
+                .map_err(|e| anyhow::anyhow!("stat bound bridge socket {}: {e}", path.display()))?;
             if !bound_meta.file_type().is_socket() {
-                return Err(format!("refusing bound non-socket {}", path.display()));
+                return Err(anyhow::anyhow!("refusing bound non-socket {}", path.display()));
             }
             listener
                 .set_nonblocking(true)
-                .map_err(|e| format!("set bridge socket nonblocking {}: {e}", path.display()))?;
+                .map_err(|e| anyhow::anyhow!("set bridge socket nonblocking {}: {e}", path.display()))?;
             Ok(BridgeListener {
                 identity: peer.identity.clone(),
                 expected_uid: peer.expected_uid,
@@ -1175,14 +1174,14 @@ fn install_bridge_listeners(
         .collect()
 }
 
-fn bridge_socket_path(root: &Path, uid: u32, component: &str) -> Result<PathBuf, String> {
+fn bridge_socket_path(root: &Path, uid: u32, component: &str) -> anyhow::Result<PathBuf> {
     if component.is_empty()
         || component == "."
         || component == ".."
         || component.contains('/')
         || component.contains('\0')
     {
-        return Err("invalid bridge endpoint component".to_owned());
+        return Err(anyhow::anyhow!("invalid bridge endpoint component"));
     }
     Ok(root
         .join(uid.to_string())
@@ -1406,13 +1405,13 @@ fn handle_bridge_stream(
     BridgeStreamStatus::Done
 }
 
-fn validate_bridge_peer(stream: &UnixStream, expected_uid: u32) -> Result<(), String> {
+fn validate_bridge_peer(stream: &UnixStream, expected_uid: u32) -> anyhow::Result<()> {
     let creds = nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     if creds.uid() == expected_uid {
         Ok(())
     } else {
-        Err(format!(
+        Err(anyhow::anyhow!(
             "uid mismatch: expected {}, got {}",
             expected_uid,
             creds.uid()
@@ -1573,7 +1572,7 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgeRequest, Bridge
             source_attribution,
         } => parse_bridge_transfer(
             stream,
-            legacy_vm_endpoint(&vm_name).map_err(BridgeReadError::Invalid)?,
+            legacy_vm_endpoint(&vm_name).map_err(|e| BridgeReadError::Invalid(e.to_string()))?,
             mime_type,
             source_id,
             source_attribution,
@@ -1586,7 +1585,7 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgeRequest, Bridge
             source_attribution,
         } => parse_bridge_transfer(
             stream,
-            legacy_vm_endpoint(&vm_name).map_err(BridgeReadError::Invalid)?,
+            legacy_vm_endpoint(&vm_name).map_err(|e| BridgeReadError::Invalid(e.to_string()))?,
             mime_type,
             source_id,
             source_attribution,
@@ -2462,7 +2461,7 @@ fn handle_control_stream(
             );
             let body = match response {
                 Ok(msg) => format!("{{\"ok\":true,\"message\":{}}}\n", json_string(&msg)),
-                Err(err) => format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&err)),
+                Err(err) => format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&err.to_string())),
             };
             if let Err(error) =
                 write_all_nonblocking_stream(&control.stream, body.as_bytes(), BOUNDED_READ_TIMEOUT)
@@ -2678,16 +2677,16 @@ fn handle_picker_message(message: PickerToDaemonMessage, context: &mut PickerMes
 fn replay_paste_after_focus(
     niri_socket: Option<&Path>,
     target: Option<&FocusedWindowSnapshot>,
-) -> Result<(), String> {
-    let socket = niri_socket.ok_or_else(|| "niri socket is unavailable".to_owned())?;
-    let target = target.ok_or_else(|| "paste target is unavailable".to_owned())?;
+) -> anyhow::Result<()> {
+    let socket = niri_socket.ok_or_else(|| anyhow::anyhow!("niri socket is unavailable"))?;
+    let target = target.ok_or_else(|| anyhow::anyhow!("paste target is unavailable"))?;
     wait_for_target_focus(
         target,
         PASTE_FOCUS_RESTORE_TIMEOUT,
         PASTE_FOCUS_POLL_INTERVAL,
         || query_focused_window_snapshot(socket),
     )?;
-    crate::clipd_host::virtual_keyboard::paste_ctrl_v().map_err(|error| error.to_string())
+    crate::clipd_host::virtual_keyboard::paste_ctrl_v().map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
@@ -2696,9 +2695,9 @@ fn wait_for_target_focus<F>(
     timeout: Duration,
     poll_interval: Duration,
     mut query: F,
-) -> Result<(), String>
+) -> anyhow::Result<()>
 where
-    F: FnMut() -> Result<Option<FocusedWindowSnapshot>, String>,
+    F: FnMut() -> anyhow::Result<Option<FocusedWindowSnapshot>>,
 {
     let deadline = Instant::now() + timeout;
     loop {
@@ -2709,19 +2708,19 @@ where
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err("focused destination was not restored before timeout".to_owned());
+            return Err(anyhow::anyhow!("focused destination was not restored before timeout"));
         }
         std::thread::sleep(poll_interval);
     }
 }
 
-fn query_focused_window_snapshot(socket: &Path) -> Result<Option<FocusedWindowSnapshot>, String> {
+fn query_focused_window_snapshot(socket: &Path) -> anyhow::Result<Option<FocusedWindowSnapshot>> {
     let mut client = NiriJsonClient::connect(
         socket,
         crate::clipd_host::niri::DEFAULT_NIRI_MAX_LINE_BYTES,
         Some(Duration::from_millis(250)),
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| anyhow::anyhow!("{error}"))?;
     client
         .query_focused_window()
         .map(|window| {
@@ -2733,7 +2732,7 @@ fn query_focused_window_snapshot(socket: &Path) -> Result<Option<FocusedWindowSn
                 output_label: window.output_label,
             })
         })
-        .map_err(|error| error.to_string())
+        .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 fn publish_selected_entry_to_host(
@@ -3001,7 +3000,7 @@ fn handle_arm(
     notifier: &mut impl Notifier,
     accept_diag: &mut AcceptDiagnostics,
     history: &ClipboardHistory,
-) -> Result<String, String> {
+) -> anyhow::Result<String> {
     let dest = host_clipboard
         .refresh_focused_window_snapshot()
         .unwrap_or_default();
@@ -3047,7 +3046,7 @@ fn handle_arm(
                         "clipboard",
                         dest.app_id.as_deref().unwrap_or("host"),
                     );
-                    Err(ReasonCode::PickerCrashed.as_str().to_owned())
+                    Err(anyhow::anyhow!("{}", ReasonCode::PickerCrashed.as_str()))
                 }
             }
         }
@@ -3062,7 +3061,7 @@ fn handle_arm(
                 "clipboard",
                 dest.app_id.as_deref().unwrap_or("host"),
             );
-            Err(ReasonCode::PickerNotConfigured.as_str().to_owned())
+            Err(anyhow::anyhow!("{}", ReasonCode::PickerNotConfigured.as_str()))
         }
     }
 }
@@ -3110,18 +3109,18 @@ fn picker_handshake(
     endpoint: Option<&ClipboardEndpointIdentity>,
     requested_mime_type: &str,
     candidates: Vec<Candidate>,
-) -> Result<String, String> {
+) -> anyhow::Result<String> {
     let hello_buf = read_bounded_line(
         socket,
         PICKER_TO_DAEMON_MAX_FRAME_BYTES,
         BOUNDED_READ_TIMEOUT,
     )
-    .map_err(|e| format!("read hello: {e}"))?;
+    .map_err(|e| anyhow::anyhow!("read hello: {e}"))?;
     let hello: PickerToDaemonMessage = decode_frame(&hello_buf, PICKER_TO_DAEMON_MAX_FRAME_BYTES)
-        .map_err(|e| format!("decode hello: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("decode hello: {e}"))?;
     let picker_version = match hello {
         PickerToDaemonMessage::ClientHello(ClientHello { picker_version, .. }) => picker_version,
-        _ => return Err("first frame was not client_hello".to_owned()),
+        _ => return Err(anyhow::anyhow!("first frame was not client_hello")),
     };
 
     let request = DaemonToPickerMessage::OpenRequest(Box::new(OpenRequest {
@@ -3160,12 +3159,12 @@ fn picker_handshake(
         );
     }
     let frame = encode_frame(&request, OpenRequestFrameCaps::default().max_frame_bytes())
-        .map_err(|e| format!("encode open_request: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("encode open_request: {e}"))?;
     let writer = socket
         .try_clone()
-        .map_err(|e| format!("clone for write: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("clone for write: {e}"))?;
     write_all_nonblocking_stream(&writer, &frame, BOUNDED_READ_TIMEOUT)
-        .map_err(|e| format!("write open_request: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("write open_request: {e}"))?;
 
     Ok(picker_version)
 }
@@ -3614,21 +3613,21 @@ impl crate::clipd_host::niri::FocusedWindowProvider for NiriQueryProvider {
 
 // ─── Control socket helpers ───────────────────────────────────────────────────
 
-fn control_socket_path() -> Result<PathBuf, String> {
+fn control_socket_path() -> anyhow::Result<PathBuf> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .ok_or_else(|| "XDG_RUNTIME_DIR is required for d2b-clipd control socket".to_owned())?;
+        .ok_or_else(|| anyhow::anyhow!("XDG_RUNTIME_DIR is required for d2b-clipd control socket"))?;
     Ok(PathBuf::from(runtime).join("d2b-clipd/clipd.sock"))
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn install_control_socket_parent(socket: &Path) -> Result<(), String> {
+fn install_control_socket_parent(socket: &Path) -> anyhow::Result<()> {
     let parent = socket
         .parent()
-        .ok_or_else(|| format!("control socket has no parent: {}", socket.display()))?;
+        .ok_or_else(|| anyhow::anyhow!("control socket has no parent: {}", socket.display()))?;
     std::fs::create_dir_all(parent)
-        .map_err(|e| format!("create control socket dir {}: {e}", parent.display()))?;
+        .map_err(|e| anyhow::anyhow!("create control socket dir {}: {e}", parent.display()))?;
     std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("chmod control socket dir {}: {e}", parent.display()))?;
+        .map_err(|e| anyhow::anyhow!("chmod control socket dir {}: {e}", parent.display()))?;
     let _ = std::fs::remove_file(socket);
     Ok(())
 }
@@ -3649,20 +3648,20 @@ fn read_bounded_line(
     stream: &UnixStream,
     max_frame_bytes: usize,
     timeout: Duration,
-) -> Result<Vec<u8>, String> {
+) -> anyhow::Result<Vec<u8>> {
     let deadline = Instant::now() + timeout;
     let mut stream = stream
         .try_clone()
-        .map_err(|e| format!("clone stream: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("clone stream: {e}"))?;
     let mut out = Vec::new();
     loop {
         let mut byte = [0_u8; 1];
         match stream.read(&mut byte) {
-            Ok(0) => return Err("peer closed before newline".to_owned()),
+            Ok(0) => return Err(anyhow::anyhow!("peer closed before newline")),
             Ok(_) => {
                 out.push(byte[0]);
                 if out.len() > max_frame_bytes {
-                    return Err(format!("frame exceeds {max_frame_bytes} bytes"));
+                    return Err(anyhow::anyhow!("frame exceeds {max_frame_bytes} bytes"));
                 }
                 if byte[0] == b'\n' {
                     return Ok(out);
@@ -3672,15 +3671,15 @@ fn read_bounded_line(
                 wait_readable(&stream, deadline)?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(anyhow::anyhow!("{error}")),
         }
     }
 }
 
-fn wait_readable<Fd: std::os::fd::AsFd>(fd: &Fd, deadline: Instant) -> Result<(), String> {
+fn wait_readable<Fd: std::os::fd::AsFd>(fd: &Fd, deadline: Instant) -> anyhow::Result<()> {
     let now = Instant::now();
     if now >= deadline {
-        return Err("timed out waiting for readability".to_owned());
+        return Err(anyhow::anyhow!("timed out waiting for readability"));
     }
     let timeout = deadline
         .saturating_duration_since(now)
@@ -3691,10 +3690,10 @@ fn wait_readable<Fd: std::os::fd::AsFd>(fd: &Fd, deadline: Instant) -> Result<()
         PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
     )];
     match poll(&mut fds, timeout) {
-        Ok(0) => Err("timed out waiting for readability".to_owned()),
+        Ok(0) => Err(anyhow::anyhow!("timed out waiting for readability")),
         Ok(_) => Ok(()),
         Err(rustix::io::Errno::INTR) => Ok(()),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(anyhow::anyhow!("{error}")),
     }
 }
 
@@ -3808,7 +3807,7 @@ fn should_suppress_bridge_selection_echo(
 
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
-fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
+fn parse_args(args: impl IntoIterator<Item = String>) -> anyhow::Result<Args> {
     let mut config = None;
     let mut picker = None;
     let mut bridge_root = None;
@@ -3821,41 +3820,40 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--config" => {
                 config = Some(PathBuf::from(
                     iter.next()
-                        .ok_or_else(|| "--config requires a path".to_owned())?,
+                        .ok_or_else(|| anyhow::anyhow!("--config requires a path"))?,
                 ));
             }
             "--picker" => {
                 picker = Some(PathBuf::from(
                     iter.next()
-                        .ok_or_else(|| "--picker requires a path".to_owned())?,
+                        .ok_or_else(|| anyhow::anyhow!("--picker requires a path"))?,
                 ));
             }
             "--bridge-root" => {
                 bridge_root = Some(PathBuf::from(
                     iter.next()
-                        .ok_or_else(|| "--bridge-root requires a path".to_owned())?,
+                        .ok_or_else(|| anyhow::anyhow!("--bridge-root requires a path"))?,
                 ));
             }
             "--niri-socket" => {
                 niri_socket = Some(PathBuf::from(
                     iter.next()
-                        .ok_or_else(|| "--niri-socket requires a path".to_owned())?,
+                        .ok_or_else(|| anyhow::anyhow!("--niri-socket requires a path"))?,
                 ));
             }
             "--check-config" => check_config = true,
             "--oneshot" => oneshot = true,
             "--help" | "-h" => {
-                return Err("usage: d2b-clipd --config <path> --bridge-root <path> \
-                     [--picker <path>] [--niri-socket <path>] [--check-config] [--oneshot]"
-                    .to_owned());
+                return Err(anyhow::anyhow!("usage: d2b-clipd --config <path> --bridge-root <path> \
+                     [--picker <path>] [--niri-socket <path>] [--check-config] [--oneshot]"));
             }
-            other => return Err(format!("unknown argument: {other}")),
+            other => return Err(anyhow::anyhow!("unknown argument: {other}")),
         }
     }
     Ok(Args {
-        config: config.ok_or_else(|| "--config is required".to_owned())?,
+        config: config.ok_or_else(|| anyhow::anyhow!("--config is required"))?,
         picker,
-        bridge_root: bridge_root.ok_or_else(|| "--bridge-root is required".to_owned())?,
+        bridge_root: bridge_root.ok_or_else(|| anyhow::anyhow!("--bridge-root is required"))?,
         niri_socket,
         check_config,
         oneshot,
@@ -4067,7 +4065,7 @@ mod tests {
         let error = wait_for_target_focus(&target, Duration::ZERO, Duration::ZERO, || Ok(None))
             .expect_err("missing focus must fail");
 
-        assert_eq!(error, "focused destination was not restored before timeout");
+        assert_eq!(error.to_string(), "focused destination was not restored before timeout");
     }
 
     #[test]
@@ -4093,7 +4091,7 @@ mod tests {
         )
         .expect_err("missing picker must fail");
 
-        assert_eq!(err, ReasonCode::PickerNotConfigured.as_str());
+        assert_eq!(err.to_string(), ReasonCode::PickerNotConfigured.as_str());
         assert!(matches!(fallback.state(), FallbackState::Idle));
         assert_eq!(notifier.notifications.len(), 1);
         assert!(notifier.notifications[0].body.contains("clipboard picker"));
@@ -4397,7 +4395,7 @@ mod tests {
         assert!(
             parse_bridge_peers(&config)
                 .expect_err("unsafe-local must not be VM-shaped")
-                .contains("must not carry legacyVmName")
+                .to_string().contains("must not carry legacyVmName")
         );
     }
 
@@ -4440,7 +4438,7 @@ mod tests {
     #[test]
     fn rejects_unknown_args() {
         let err = parse_args(["--wat".to_owned()]).expect_err("unknown");
-        assert!(err.contains("unknown argument"));
+        assert!(err.to_string().contains("unknown argument"));
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -4512,7 +4510,7 @@ mod tests {
         writer.write_all(&bytes).expect("write");
         let err = read_bounded_line(&reader, CONTROL_MAX_FRAME_BYTES, Duration::from_secs(1))
             .expect_err("overlong");
-        assert!(err.contains("frame exceeds"));
+        assert!(err.to_string().contains("frame exceeds"));
     }
 
     #[test]
@@ -4521,7 +4519,7 @@ mod tests {
         reader.set_nonblocking(true).expect("nonblocking");
         let err = read_bounded_line(&reader, CONTROL_MAX_FRAME_BYTES, Duration::from_millis(5))
             .expect_err("timeout");
-        assert!(err.contains("timed out"));
+        assert!(err.to_string().contains("timed out"));
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -4973,6 +4971,6 @@ mod tests {
             current + 1
         };
         let err = validate_bridge_peer(&left, wrong).expect_err("wrong uid rejected");
-        assert!(err.contains("uid mismatch"));
+        assert!(err.to_string().contains("uid mismatch"));
     }
 }

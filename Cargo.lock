@@ -1117,6 +1117,7 @@ dependencies = [
 name = "d2b-provider-clipboard-wayland"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "anyhow",
  "command-fds",
  "d2b-contracts",
  "d2b-contracts-resource",

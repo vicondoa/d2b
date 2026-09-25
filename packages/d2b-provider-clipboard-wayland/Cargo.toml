@@ -14,6 +14,7 @@ await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 
 [dependencies]
+anyhow = "1"
 command-fds = "0.3"
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
