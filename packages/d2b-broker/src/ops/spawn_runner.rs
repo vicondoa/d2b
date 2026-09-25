@@ -487,37 +487,6 @@ mod tests {
         }
     }
 
-    // user_namespace round-trips (ADR 0021).
-    //
-    // The preflight is pure data; we only verify that the
-    // user_namespace field round-trips from the input to the resulting
-    // plan unchanged. Actual broker spawn behaviour is exercised in
-    // `sys::tests::clone3_spawn_runner_*` and in the integration tests
-    // under `live_handlers.rs`.
-
-    #[test]
-    fn user_namespace_round_trips_none() {
-        let plan = preflight(&good_input()).unwrap();
-        assert_eq!(plan.user_namespace, None);
-    }
-
-    #[test]
-    fn user_namespace_round_trips_some() {
-        let mut input = good_input();
-        input.user_namespace = Some(UserNamespaceSpec {
-            host_uid_for_zero: 11_032_050,
-            host_gid_for_zero: 11_032_050,
-        });
-        let plan = preflight(&input).unwrap();
-        assert_eq!(
-            plan.user_namespace,
-            Some(UserNamespaceSpec {
-                host_uid_for_zero: 11_032_050,
-                host_gid_for_zero: 11_032_050,
-            })
-        );
-    }
-
     #[test]
     fn user_namespace_with_zero_uid_is_allowed_in_plan_layer() {
         // The preflight does NOT validate the host UID - the

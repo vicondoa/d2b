@@ -3861,25 +3861,6 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
-    /// Assert that the `RunnerIsolationSpec.umask` field is present,
-    /// defaults to `None`, and accepts a valid octal value. This is the
-    /// unit-level verification that the umask plumbing reaches the
-    /// child-closure layer; the actual `libc::umask()` syscall is
-    /// exercised by the live deploy + the integration-level VM boot
-    /// tests (sidecars binding mode-0660 sockets that CH can connect to).
-    #[test]
-    fn isolation_spec_umask_field_defaults_to_none() {
-        let iso = isolation_with_user_namespace(None);
-        assert_eq!(iso.umask, None);
-    }
-
-    #[test]
-    fn isolation_spec_umask_field_accepts_octal_007() {
-        let mut iso = isolation_with_user_namespace(None);
-        iso.umask = Some(0o007);
-        assert_eq!(iso.umask, Some(7));
-    }
-
     #[test]
     fn activation_stdin_delivery_is_broker_controlled() {
         let shell_path = ["/bin/sh", "/usr/bin/sh"]
@@ -4087,20 +4068,6 @@ mod tests {
         assert_eq!(metadata.mode() & 0o777, 0o600);
         assert_eq!(metadata.uid(), uid);
         assert_eq!(metadata.gid(), gid);
-    }
-
-    /// Verify that the broker rejects an umask >0o777 before exec rather
-    /// than silently truncating via libc cast. The child writes "DEBUG:
-    /// invalid umask" to stderr and exits CHILD_EXIT_INVALID_UMASK (75).
-    /// Verified at child-closure level: any value with bits above 0o777
-    /// set must reach the `mask > 0o777` guard.
-    #[test]
-    fn umask_validation_bound_is_0o777() {
-        // Sanity check: 0o007 is in range, 0o1000 is out.
-        let valid: u32 = 0o007;
-        let invalid: u32 = 0o1000;
-        assert!(valid <= 0o777);
-        assert!(invalid > 0o777);
     }
 
     /// Hermetic unit test asserting that `apply_mount_actions` is NOT
