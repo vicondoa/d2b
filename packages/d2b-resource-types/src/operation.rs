@@ -64,8 +64,8 @@ pub struct OperationCtx<'a> {
     pub operation: &'a ResourceRef,
     /// The invocation identifier the audit record carries.
     pub invocation_id: &'a str,
-    /// The descriptors the caller attached to this invocation,when any.
-    /// They belong to the transport's frame,not to the handler;the handler
+    /// The descriptors the caller attached to this invocation, when any.
+    /// They belong to the transport's frame, not to the handler; the handler
     /// borrows them for the duration of the invocation only.
     pub fds: &'a [RawFd],
     /// The evidence chain this invocation runs under (U10, KTD6): the
