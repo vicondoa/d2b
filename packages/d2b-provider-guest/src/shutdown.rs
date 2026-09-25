@@ -260,7 +260,7 @@ mod tests {
             "d2b-provider-guest-shutdown-{}-missing.sock",
             std::process::id()
         ));
-        let _ = std::fs::remove_file(&missing);
+        let _ = std::fs::remove_file(&missing); // async-gate-allow: test-only cleanup of a temp-dir socket path that does not exist
         let target = ProviderShutdownTarget {
             vm: "work".to_owned(),
             kind: ProviderKind::CloudHypervisor,

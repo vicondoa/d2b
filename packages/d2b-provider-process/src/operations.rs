@@ -3048,7 +3048,7 @@ mod tests {
         let zone = zone();
         let caller = caller();
         let operation = ResourceRef::parse("Operation/spawn-runner").expect("operation");
-        let socket = std::fs::File::open("/dev/null").expect("null device");
+        let socket = std::fs::File::open("/dev/null").expect("null device"); // async-gate-allow: test-only fd source for the inherited-fd contract
         let fds = [socket.as_raw_fd()];
 
         let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
