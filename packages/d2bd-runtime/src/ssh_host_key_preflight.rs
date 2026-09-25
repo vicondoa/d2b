@@ -295,10 +295,9 @@ pub fn check_sshd_host_keys(vm: &str, keys_dir: &Path) -> Result<(), SshdHostKey
         }
         tracing::debug!(
             vm = %vm,
-            // P2fu1 observability-r2 closure: bounded attrs only;
-            // path is high-cardinality + leaks host layout. The
-            // operator-recoverable form lives in the typed error
-            // envelope + audit log per the daemon tracing contract.
+            // Bounded attrs only: path is high-cardinality + leaks host
+            // layout.  The operator-recoverable form lives in the typed
+            // error envelope + audit log per the daemon tracing contract.
             outcome = "key-entry-ok",
             uid,
             gid,
@@ -309,7 +308,7 @@ pub fn check_sshd_host_keys(vm: &str, keys_dir: &Path) -> Result<(), SshdHostKey
     Ok(())
 }
 
-/// v1.1.2fu25: returns true when the file has a
+/// Returns true when the file has a
 /// `system.posix_acl_access` xattr (i.e. the activation script's
 /// `setfacl -m u:UID:r` grant for ADR 0021 broker-pre-NS
 /// virtiofsd has been applied). Used by the preflight to

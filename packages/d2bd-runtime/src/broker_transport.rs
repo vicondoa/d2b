@@ -57,6 +57,13 @@ pub fn dispatch_broker_request_to_socket(
     }
 }
 
+/// Extract the audit-join zone and operation identities a request
+/// authoritatively carries, if any.
+///
+/// # Errors
+///
+/// Returns `WireInvalidFrame` when the cited identities are not canonical
+/// audit digests, so a malformed broker claim cannot poison the log.
 pub fn default_audit_join_context(
     request: &BrokerRequest,
 ) -> Result<Option<AuditJoinContext>, TypedError> {
@@ -74,6 +81,12 @@ pub fn default_audit_join_context(
     }))
 }
 
+/// Seconds left before `deadline`, refusing ops that cannot plausibly fit.
+///
+/// # Errors
+///
+/// Returns `InternalBrokerTimeout` when the deadline has already passed, so
+/// each socket op is gated on a budget that cannot overrun into the next op.
 pub fn broker_remaining_before_op(
     deadline: Instant,
     socket_path: &Path,
@@ -121,6 +134,9 @@ fn broker_round_trip_within_deadline(
     })
 }
 
+/// The wire `kind` discriminator of a broker response, or `unknown` when
+/// the payload carries none or cannot be serialized.
+
 pub fn broker_response_kind(response: &BrokerResponse) -> String {
     serde_json::to_value(response)
         .ok()
@@ -133,6 +149,11 @@ pub fn broker_response_kind(response: &BrokerResponse) -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
+/// Render an operator-facing (summary, remediation) pair for the launcher
+/// role when a broker operation fails.
+///
+/// The pair carries operator remediation prose only, keeping environment
+/// redaction safe for launcher-facing surfaces.
 pub fn redact_broker_error_for_launcher(
     op_name: &str,
     target_wave: Option<&str>,
@@ -191,6 +212,10 @@ pub fn redact_broker_error_for_launcher(
     };
     (summary, remediation)
 }
+
+/// Render an operator-facing (summary, remediation) pair for the launcher
+/// role when the broker socket itself is unreachable (distinct from a broker
+/// error reply, which [`redact_broker_error_for_launcher`] shapes).
 
 pub fn redact_broker_dispatch_failure_for_launcher(op_name: &str) -> (String, String) {
     (
