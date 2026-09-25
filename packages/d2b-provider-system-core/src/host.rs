@@ -118,6 +118,12 @@ impl MinijailPlatformGate {
     }
 
     /// Validate the non-optional minijail placement requirements.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SystemCoreError::KernelTooOld`] when the kernel is below the
+    /// mandatory floor and [`SystemCoreError::CgroupKillUnavailable`] when
+    /// the delegated cgroup leaf has no writable `cgroup.kill`.
     pub fn validate(self) -> Result<(), SystemCoreError> {
         if !self.kernel_supported() {
             return Err(SystemCoreError::KernelTooOld);
@@ -158,6 +164,12 @@ pub struct HostProbeMetadata {
 
 impl HostProbeSnapshot {
     /// Construct a bounded probe result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SystemCoreError::HostProbeFailed`] when a string exceeds
+    /// its bound (64 bytes for the kernel release, 128 for the OS name) or
+    /// contains a control character.
     pub fn new(
         capabilities: impl IntoIterator<Item = HostCapabilityClass>,
         kernel_release: impl Into<String>,
@@ -225,12 +237,22 @@ impl HostProbeSnapshot {
 #[async_trait::async_trait]
 pub trait HostProbeEffectPort: Send + Sync {
     /// Probe one capability class.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SystemCoreError::HostProbeFailed`] when the capability
+    /// cannot be probed.
     async fn probe(
         &self,
         capability: HostCapabilityClass,
     ) -> Result<bool, SystemCoreError>;
 
     /// Return kernel/platform evidence without exposing paths or handles.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SystemCoreError::HostProbeFailed`] when platform evidence
+    /// cannot be collected.
     async fn platform(&self) -> Result<MinijailPlatformGate, SystemCoreError>;
 
     /// Return bounded metadata for the same probe pass.
@@ -337,6 +359,13 @@ impl HostReconciler {
         provider_ref: &ResourceRef,
         spec: &HostSpec,
     ) -> Result<HostStatusReport, SystemCoreError> {
+        // # Errors
+        //
+        // Returns [`SystemCoreError::ResourceTypeNotOwned`] when the
+        // reference is not a Host, [`SystemCoreError::ProviderRefMismatch`]
+        // when the resource names another Provider, and
+        // [`SystemCoreError::UserRefRequired`] when a user-domain Host
+        // declares no exact default user reference.
         ownership::require_resource_type(host_ref, HOST_RESOURCE_TYPE).inspect_err(|&error| {
             warn!(
                 provider = crate::PROVIDER_NAME,
@@ -389,6 +418,12 @@ impl HostReconciler {
     pub fn reject_operator_status_fields(
         submitted: &serde_json::Value,
     ) -> Result<(), SystemCoreError> {
+        // # Errors
+        //
+        // Returns [`SystemCoreError::StatusNotAnObject`] when the submitted
+        // value is not a JSON object and
+        // [`SystemCoreError::OperatorSuppliedStatusField`] when it carries a
+        // reconciler-owned field.
         let object = submitted
             .as_object()
             .ok_or(SystemCoreError::StatusNotAnObject)
@@ -425,13 +460,29 @@ impl HostReconciler {
         required_capabilities: &BTreeSet<HostCapabilityClass>,
         requires_minijail: bool,
     ) -> Result<HostObservationReport, SystemCoreError> {
+        // # Errors
+        //
+        // Returns the errors of [`Self::reconcile`], plus
+        // [`SystemCoreError::CapabilityMissing`] when the probe lacks a
+        // required capability and the minijail gate errors
+        // ([`SystemCoreError::KernelTooOld`],
+        // [`SystemCoreError::CgroupKillUnavailable`]) when a minijail Host
+        // fails the platform gate.
+        let HostProbeSnapshot {
+            capabilities,
+            kernel_release,
+            os_name,
+            user_manager_available,
+            minijail_gate,
+            active_process_count,
+        } = snapshot;
         let mut status = self.reconcile(host_ref, provider_ref, spec)?;
         let mut required = required_capabilities.clone();
         if requires_minijail {
             required.insert(HostCapabilityClass::Pidfd);
             required.insert(HostCapabilityClass::CgroupV2);
         }
-        if !required.is_subset(snapshot.capabilities()) {
+        if !required.is_subset(&capabilities) {
             warn!(
                 provider = crate::PROVIDER_NAME,
                 host = %host_ref.to_canonical_string(),
@@ -440,7 +491,7 @@ impl HostReconciler {
             return Err(SystemCoreError::CapabilityMissing);
         }
         if requires_minijail {
-            snapshot.minijail_gate().validate().inspect_err(|&error| {
+            minijail_gate.validate().inspect_err(|&error| {
                 warn!(
                     provider = crate::PROVIDER_NAME,
                     host = %host_ref.to_canonical_string(),
@@ -449,7 +500,7 @@ impl HostReconciler {
                 );
             })?;
         }
-        if spec.policy().admits_user_domain() && !snapshot.user_manager_available() {
+        if spec.policy().admits_user_domain() && !user_manager_available {
             // User-manager unavailability is a degraded observation, not a
             // reason to claim a user-capable Host is Ready. System-only Hosts
             // remain Ready when no user manager is required.
@@ -462,13 +513,13 @@ impl HostReconciler {
         }
         Ok(HostObservationReport {
             status,
-            capabilities: snapshot.capabilities().iter().copied().collect(),
-            kernel_release: snapshot.kernel_release().to_owned(),
-            os_name: snapshot.os_name().to_owned(),
-            user_manager_available: snapshot.user_manager_available(),
-            active_process_count: snapshot.active_process_count(),
-            minijail_ready: snapshot.minijail_gate().kernel_supported()
-                && snapshot.minijail_gate().cgroup_kill_available,
+            capabilities: capabilities.iter().copied().collect(),
+            kernel_release,
+            os_name,
+            user_manager_available,
+            active_process_count,
+            minijail_ready: minijail_gate.kernel_supported()
+                && minijail_gate.cgroup_kill_available,
         })
     }
 
@@ -487,6 +538,11 @@ impl HostReconciler {
         required_capabilities: &BTreeSet<HostCapabilityClass>,
         requires_minijail: bool,
     ) -> Result<HostObservationReport, SystemCoreError> {
+        // # Errors
+        //
+        // Returns the errors of [`Self::reconcile_observed`], plus
+        // [`SystemCoreError::HostProbeFailed`] when the injected probe port
+        // reports an invalid observation.
         let mut capabilities = BTreeSet::new();
         for capability in HostCapabilityClass::ALL {
             if port

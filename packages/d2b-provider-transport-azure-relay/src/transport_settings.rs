@@ -16,6 +16,11 @@ pub struct RelayTransportSettings {
 
 impl RelayTransportSettings {
     /// Construct validated settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayTransportSettingsError`] when the namespace or entity
+    /// fails validation.
     pub fn new(
         relay_namespace_id: impl Into<String>,
         relay_entity_id: impl Into<String>,

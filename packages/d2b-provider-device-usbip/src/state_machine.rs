@@ -58,7 +58,6 @@
 //! Failures from any step are normalised to
 //! [`UsbipPlanError`] so callers can map the failure into their public error
 //! envelope without importing daemon runtime types.
-#![allow(missing_docs)]
 
 use std::fmt;
 
@@ -112,6 +111,7 @@ pub enum UsbipClaimSource {
 }
 
 impl UsbipClaimSource {
+    /// Whether this claim originated from an explicit operator request.
     pub fn is_explicit(&self) -> bool {
         matches!(self, Self::Explicit)
     }
@@ -210,9 +210,13 @@ pub const CANONICAL_STEPS: [UsbipBusidStep; 7] = [
 /// explicit operator request (`UsbipExplicitBind` + `UsbipExplicitFirewallRule`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsbipBusidPlan {
+    /// Bus identifier this plan mutates.
     pub busid: String,
+    /// Environment the plan runs in.
     pub env: String,
+    /// VM the claim serves.
     pub vm: String,
+    /// Canonical ordered step list.
     pub steps: Vec<UsbipBusidStep>,
     /// Source of this plan: declared from bundle or explicit operator request.
     pub claim_source: UsbipClaimSource,
@@ -251,6 +255,11 @@ impl UsbipBusidPlan {
 /// tagged against the step whose preconditions failed
 /// (`firewall` or `bind`). This is fail-fast at *plan time* so
 /// no executor side-effects ever run for a malformed plan.
+/// # Errors
+///
+/// Returns [`UsbipPlanError`] tagged against the step whose preconditions
+/// failed when the bus id is empty or the resolver lacks the declared
+/// firewall or bind intents.
 pub fn build_usbip_plan(
     busid: &str,
     env: &str,
@@ -376,12 +385,19 @@ pub fn build_usbip_explicit_plan(
 /// Each method MUST be idempotent - replays of the same plan
 /// after a partial failure are expected.
 pub trait UsbipStepExecutor {
+    /// Ensure the usbip-host kernel module is loaded.
     fn modprobe(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    /// Acquire the broker-mediated claim lock.
     fn acquire_lock(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    /// Withhold non-owner VMs from the physical device.
     fn withhold_non_owners(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    /// Apply host firewalling for the claim.
     fn apply_firewall(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    /// Start the per-environment USBIP backend.
     fn start_backend(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    /// Bind the device to the host USBIP export.
     fn bind(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
+    /// Start the per-environment USBIP proxy.
     fn start_proxy(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;
 }
 
@@ -390,10 +406,15 @@ pub trait UsbipStepExecutor {
 /// execution halts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UsbipExecutionReport {
+    /// Bus identifier this report covers.
     pub busid: String,
+    /// Environment the plan ran in.
     pub env: String,
+    /// VM the claim served.
     pub vm: String,
+    /// Steps that completed successfully.
     pub completed: Vec<UsbipBusidStep>,
+    /// First failing step and its error, when execution halted.
     pub failed: Option<(UsbipBusidStep, String)>,
 }
 
@@ -426,6 +447,10 @@ impl UsbipExecutionReport {
 /// [`UsbipPlanError`] tagged with the exact step
 /// that blew up; the caller can lift it into the public error
 /// envelope unchanged.
+/// # Errors
+///
+/// Returns [`UsbipPlanError`] tagged with the exact step that failed;
+/// prior successful steps stay recorded in the report.
 pub fn execute_usbip_plan<E: UsbipStepExecutor>(
     plan: &UsbipBusidPlan,
     executor: &mut E,

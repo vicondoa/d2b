@@ -179,10 +179,10 @@ pub struct GuestProviderSpecSettings {
 impl Default for GuestProviderSpecSettings {
     fn default() -> Self {
         Self {
-            vcpu: 2,
-            memory_mib: 4096,
+            vcpu: default_vcpu(),
+            memory_mib: default_memory_mib(),
             boot_media_ref: None,
-            boot_media_view: "guest-attach".to_owned(),
+            boot_media_view: default_boot_media_view(),
             removable_volume_refs: Vec::new(),
             cpu_model: CpuModel::Host,
             machine_type: MachineType::Q35,

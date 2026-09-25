@@ -181,6 +181,14 @@ pub const DEFAULT_SAS_TTL_SECS: u64 = MAX_SAS_TTL_SECS;
 ///
 /// The returned string is secret (it is a bearer); callers must treat it as
 /// such (it is never logged by this crate).
+/// # Errors
+///
+/// Returns [`RelayError::InvalidTtl`] for a zero TTL,
+/// [`RelayError::TtlTooLong`] above the fixed bound,
+/// [`RelayError::InvalidEndpoint`] for a malformed endpoint,
+/// [`RelayError::InvalidCredential`] for a malformed key name or key,
+/// [`RelayError::Key`] when the key cannot seed the HMAC, and
+/// [`RelayError::Clock`] when the system clock predates the Unix epoch.
 pub fn mint_sas(
     endpoint: &RelayEndpoint,
     key_name: &str,
@@ -223,6 +231,10 @@ pub fn mint_sas(
 /// `ServiceBusAuthorization` header. A pre-minted SAS bearer is
 /// also accepted for the ACA path; it is already scoped/expiring, so this
 /// function only URL-encodes it into `sb-hc-token`.
+/// # Errors
+///
+/// Returns the same errors as [`mint_sas`] for SAS credentials and
+/// [`RelayError::InvalidEndpoint`] for a malformed endpoint.
 pub fn build_connect(
     endpoint: &RelayEndpoint,
     role: RelayRole,
@@ -245,12 +257,7 @@ pub fn build_connect(
     match credential {
         RelayCredential::EntraBearer(token) => Ok(RelayConnect {
             url: base,
-            auth_header: Some(format!(
-                "{} {token}",
-                ['B', 'e', 'a', 'r', 'e', 'r']
-                    .into_iter()
-                    .collect::<String>()
-            )),
+            auth_header: Some(format!("Bearer {token}")),
         }),
         RelayCredential::SasToken(token) => Ok(RelayConnect {
             url: format!("{base}&sb-hc-token={}", urlencoding::encode(token)),

@@ -79,6 +79,15 @@ pub struct DeviceAdmission;
 
 impl DeviceAdmission {
     /// Check owner, platform, process identity, and media contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeviceAdmissionError::WrongDevice`] when the observation
+    /// does not name the host KVM device, [`DeviceAdmissionError::NotReady`]
+    /// when the device is not ready, [`DeviceAdmissionError::WrongOwner`]
+    /// when the device is owned by another Guest, and the identity and
+    /// contract errors when the observed process or media contract does not
+    /// match the expectation.
     pub fn validate(
         guest_ref: &ResourceRef,
         observation: &DeviceObservation,

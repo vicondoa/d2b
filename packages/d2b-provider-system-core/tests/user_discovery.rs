@@ -11,7 +11,7 @@ use d2b_provider_system_core::testing::{
     SCRIPTED_IDENTITY, ScriptedDiscoveryPort, block_on, fixtures,
 };
 use d2b_provider_system_core::{
-    SystemCoreError, UserBinding, UserDiscoveryCondition, UserReconciler,
+    SystemCoreError, UserBinding, UserDiscoveryCondition, UserReconciler, required_bindings,
 };
 
 #[test]
@@ -42,7 +42,7 @@ fn an_unresolved_user_is_absent_rather_than_a_failure() {
 fn declared_groups_are_required_and_their_absence_is_drift_not_readiness() {
     let spec = fixtures::user_spec_with_groups();
     assert!(
-        UserReconciler::<ScriptedDiscoveryPort>::required_bindings(&spec)
+        required_bindings(&spec)
             .contains(&UserBinding::GroupMemberships)
     );
     let reconciler = UserReconciler::new(ScriptedDiscoveryPort::resolving([
@@ -70,7 +70,7 @@ fn declared_groups_are_required_and_their_absence_is_drift_not_readiness() {
 fn a_user_that_declares_no_group_is_not_held_to_a_membership_check() {
     let spec = fixtures::user_spec();
     assert!(
-        !UserReconciler::<ScriptedDiscoveryPort>::required_bindings(&spec)
+        !required_bindings(&spec)
             .contains(&UserBinding::GroupMemberships)
     );
 }

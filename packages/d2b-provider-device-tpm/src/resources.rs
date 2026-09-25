@@ -50,6 +50,10 @@ const STATE_VOLUME_OWNER: &str = "User/d2bd";
 /// exceeds the host's account-name bound. The Device's uid still keys the
 /// Volume name (`device-<32hex>-tpm-state`) and every runtime path
 /// derivation.
+/// # Errors
+///
+/// Returns [`TpmResourceEffectError::InvalidDevice`] when the reference does
+/// not name a Device or the Device name or Zone is empty.
 pub fn build_tpm_state_volume_spec(
     device_ref: &ResourceRef,
     zone: &str,
@@ -166,6 +170,11 @@ fn build_tpm_state_volume_spec_with_principals(
 }
 
 /// Build a complete controller-created TPM state Volume resource document.
+///
+/// # Errors
+///
+/// Returns the same errors as [`build_tpm_state_volume_spec`]:
+/// [`TpmResourceEffectError::InvalidDevice`].
 pub fn build_tpm_state_volume_resource(
     device_uid: &ResourceUid,
     device_ref: &ResourceRef,
@@ -188,6 +197,13 @@ pub fn build_tpm_state_volume_resource(
 }
 
 /// Build the long-lived swtpm Process base spec.
+///
+/// # Errors
+///
+/// Returns [`TpmResourceEffectError::InvalidExecutionRef`] when the
+/// execution reference is not a Host and
+/// [`TpmResourceEffectError::InvalidDevice`] when the mount or process spec
+/// cannot be constructed.
 pub fn build_swtpm_process_spec(
     device_uid: &ResourceUid,
     device_ref: &ResourceRef,
@@ -244,6 +260,13 @@ pub fn build_swtpm_process_spec(
 }
 
 /// Build the mandatory pre-start flush EphemeralProcess spec.
+///
+/// # Errors
+///
+/// Returns [`TpmResourceEffectError::InvalidExecutionRef`] when the
+/// execution reference is not a Host and
+/// [`TpmResourceEffectError::InvalidDevice`] when the process spec cannot be
+/// constructed.
 pub fn build_swtpm_flush_spec(
     device_ref: &ResourceRef,
     zone: &str,

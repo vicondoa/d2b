@@ -25,6 +25,11 @@ impl Default for SwtpmSettings {
 
 impl SwtpmSettings {
     /// Validate settings received from the signed Provider schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SwtpmArgvError::LogLevelOutOfRange`] when the log level is
+    /// outside the frozen bound.
     pub const fn validate(self) -> Result<Self, SwtpmArgvError> {
         if self.log_level < MIN_SWTPM_LOG_LEVEL || self.log_level > MAX_SWTPM_LOG_LEVEL {
             Err(SwtpmArgvError::LogLevelOutOfRange)

@@ -205,6 +205,12 @@ impl ZoneServiceLimits {
     /// over-ceiling bound would let configuration grow memory without limit;
     /// both fail closed with [`PrimitiveSpecError::TooManyEntries`] and
     /// [`PrimitiveSpecError::MissingRequiredField`] respectively.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrimitiveSpecError::MissingRequiredField`] for a zero bound
+    /// and [`PrimitiveSpecError::TooManyEntries`] for a bound above its
+    /// ceiling.
     pub const fn new(
         max_shortcuts: usize,
         audit_capacity: usize,
@@ -272,6 +278,7 @@ impl ZoneDispatchAdmission {
 /// Each sealed child row is keyed to its own admission. Missing evidence
 /// leaves that row unreachable; there is no shared caller-populated policy,
 /// connectivity, authentication, capability, or time flag.
+#[derive(Default)]
 pub struct ZoneTopologyRequest {
     admissions: std::collections::BTreeMap<ZonePath, ZoneRouteAdmission>,
 }
@@ -305,12 +312,6 @@ impl ZoneTopologyRequest {
     /// Borrow the admission bound to one child Zone, when present.
     pub fn admission_for(&self, child_zone: &ZonePath) -> Option<&ZoneRouteAdmission> {
         self.admissions.get(child_zone)
-    }
-}
-
-impl Default for ZoneTopologyRequest {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -423,6 +424,11 @@ impl ZoneBootstrapRequest {
     }
 
     /// Consume and verify one runtime-issued admission for this request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneEnrollmentRefusal`] when the admission evidence fails
+    /// verification against the expectation.
     pub fn with_runtime_admission(
         self,
         verifier: ZoneEnrollmentAdmissionVerifier,
@@ -465,6 +471,11 @@ impl ZoneEnrollRequest {
     }
 
     /// Consume and verify one runtime-issued admission for this request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneEnrollmentRefusal`] when the admission evidence fails
+    /// verification against the expectation.
     pub fn with_runtime_admission(
         self,
         verifier: ZoneEnrollmentAdmissionVerifier,

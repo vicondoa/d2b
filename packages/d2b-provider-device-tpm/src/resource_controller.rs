@@ -129,6 +129,14 @@ pub struct TpmResourceController {
 
 impl TpmResourceController {
     /// Construct a controller for one emulated Device.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TpmResourceControllerError::Effect`] with
+    /// [`TpmResourceEffectError::InvalidDevice`] when the device reference
+    /// does not name a Device, and with
+    /// [`TpmResourceEffectError::InvalidExecutionRef`] when the execution
+    /// reference is not a Host.
     pub fn new(
         device_uid: ResourceUid,
         device_ref: ResourceRef,
@@ -187,6 +195,13 @@ impl TpmResourceController {
     /// Reconciliation creates the Volume, completes the mandatory pre-start
     /// flush, starts and observes the long-lived Process, and then exposes
     /// the Endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TpmResourceControllerError::InvalidState`] when the
+    /// controller is already finalized and
+    /// [`TpmResourceControllerError::Effect`] when a child effect fails or
+    /// the retained state fails integrity checks.
     pub async fn reconcile<P: TpmResourceEffectPort>(
         &mut self,
         port: &P,
@@ -211,7 +226,7 @@ impl TpmResourceController {
             ));
         }
         self.phase = TpmResourcePhase::Reconciling;
-        let volume = if self.needs_state_verification || self.volume_ref.is_none() {
+        if self.needs_state_verification || self.volume_ref.is_none() {
             let volume = match port
                 .ensure_state_volume(&self.device_uid, &self.device_ref, &self.execution_ref)
                 .await
@@ -226,14 +241,13 @@ impl TpmResourceController {
             {
                 return self.effect_failed(TpmResourceEffectError::StateIntegrity);
             }
-            self.volume_ref = Some(volume.clone());
+            self.volume_ref = Some(volume);
             self.needs_state_verification = false;
-            volume
-        } else {
-            self.volume_ref
-                .clone()
-                .ok_or(TpmResourceControllerError::InvalidState)?
-        };
+        }
+        let volume = self
+            .volume_ref
+            .as_ref()
+            .ok_or(TpmResourceControllerError::InvalidState)?;
         if self.flush_ref.is_none() {
             let flush = match port
                 .request_flush_process(&self.device_uid, &self.execution_ref)
@@ -244,20 +258,21 @@ impl TpmResourceController {
             };
             self.flush_ref = Some(flush);
         }
-        let process = if let Some(process) = self.process_ref.clone() {
-            process
-        } else {
+        if self.process_ref.is_none() {
             let process = match port
-                .request_swtpm_process(&self.device_uid, &volume, &self.execution_ref)
+                .request_swtpm_process(&self.device_uid, volume, &self.execution_ref)
                 .await
             {
                 Ok(value) => value,
                 Err(error) => return self.effect_failed(error),
             };
-            self.process_ref = Some(process.clone());
-            process
-        };
-        let endpoint = match port.watch_tpm_endpoint(&process).await {
+            self.process_ref = Some(process);
+        }
+        let process = self
+            .process_ref
+            .as_ref()
+            .ok_or(TpmResourceControllerError::InvalidState)?;
+        let endpoint = match port.watch_tpm_endpoint(process).await {
             Ok(value) => value,
             Err(error) => return self.effect_failed(error),
         };
@@ -268,6 +283,12 @@ impl TpmResourceController {
     }
 
     /// Stop children and retain the Device-owned state Volume.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TpmResourceControllerError::InvalidState`] when finalization
+    /// is requested before reconcile with no children and
+    /// [`TpmResourceControllerError::Effect`] when a child effect fails.
     pub async fn finalize<P: TpmResourceEffectPort>(
         &mut self,
         port: &P,

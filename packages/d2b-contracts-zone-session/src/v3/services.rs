@@ -213,7 +213,7 @@ impl ServiceDescriptor {
         }
         if methods
             .iter()
-            .any(|method| BoundedText::parse(method.clone()).is_err())
+            .any(|method| BoundedText::parse(method.as_str()).is_err())
         {
             return Err(ServiceDescriptorError::InvalidMethod);
         }

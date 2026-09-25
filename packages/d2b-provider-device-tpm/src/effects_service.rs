@@ -277,7 +277,7 @@ impl DeclaredTpmRows<'_> {
                 .owner_key
                 .as_ref()
                 .ok_or(TpmResourceEffectError::StateIntegrity)?;
-            if owner != &self.key(&self.device_ref.clone()) {
+            if owner != &self.key(&self.device_ref) {
                 return Err(TpmResourceEffectError::StateIntegrity);
             }
         }
@@ -447,10 +447,9 @@ impl LiveTpmResourceEffectPort<'_> {
         // The Device row's own Zone - never a zone-authority lookup of the
         // Guest target VM, which the host daemon's coordinator does not
         // register (the guest's plane lives inside the nested VM).
-        let zone = self.zone.clone();
         let invocation = KernelInvocation {
             operation: "prepare-directory",
-            zone: zone.as_str(),
+            zone: self.zone.as_str(),
             payload: serde_json::json!({
                 "kind": "state",
                 "baseDir": base_dir.display().to_string(),
@@ -701,6 +700,12 @@ impl AdmittedTpmDevice {
 }
 
 /// Reconcile one Device's TPM controller through the provider-owned port.
+///
+/// # Errors
+///
+/// Returns the same errors as [`TpmResourceController::reconcile`]:
+/// [`TpmResourceControllerError::InvalidState`] and
+/// [`TpmResourceControllerError::Effect`].
 pub async fn reconcile_device_tpm_controller(
     facets: TpmEffectFacets,
     vm_id: VmId,
@@ -721,6 +726,12 @@ pub async fn reconcile_device_tpm_controller(
 }
 
 /// Finalize one Device's TPM controller through the provider-owned port.
+///
+/// # Errors
+///
+/// Returns the same errors as [`TpmResourceController::finalize`]:
+/// [`TpmResourceControllerError::InvalidState`] and
+/// [`TpmResourceControllerError::Effect`].
 pub async fn finalize_device_tpm_controller(
     facets: TpmEffectFacets,
     vm_id: VmId,

@@ -1892,7 +1892,7 @@ pub enum SequenceError {
     NonceExhausted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReceiveSequence {
     expected: u64,
     exhausted: bool,
@@ -1932,13 +1932,7 @@ impl ReceiveSequence {
     }
 }
 
-impl Default for ReceiveSequence {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SendSequence {
     next: u64,
     exhausted: bool,
@@ -1970,12 +1964,6 @@ impl SendSequence {
             self.next += 1;
         }
         Ok(sequence)
-    }
-}
-
-impl Default for SendSequence {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

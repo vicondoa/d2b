@@ -128,10 +128,7 @@ pub struct CredentialEnvelopeMeta {
 /// A loaded gateway credential envelope. `Debug` redacts all secret material.
 #[derive(Clone)]
 pub struct GatewayCredential {
-    listen_key_name: String,
-    listen_key: String,
-    send_key_name: String,
-    send_key: String,
+    material: GatewayCredentialMaterial,
     generation: u64,
     not_after: Option<u64>,
 }
@@ -139,22 +136,13 @@ pub struct GatewayCredential {
 impl core::fmt::Debug for GatewayCredential {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GatewayCredential")
-            .field("listen_key_name", &self.listen_key_name)
+            .field("listen_key_name", &self.material.listen_key_name)
             .field("listen_key", &"<redacted>")
-            .field("send_key_name", &self.send_key_name)
+            .field("send_key_name", &self.material.send_key_name)
             .field("send_key", &"<redacted>")
             .field("generation", &self.generation)
             .field("not_after", &self.not_after)
             .finish()
-    }
-}
-
-impl Drop for GatewayCredential {
-    fn drop(&mut self) {
-        self.listen_key_name.zeroize();
-        self.listen_key.zeroize();
-        self.send_key_name.zeroize();
-        self.send_key.zeroize();
     }
 }
 
@@ -269,10 +257,7 @@ impl GatewayCredential {
         meta: CredentialEnvelopeMeta,
     ) -> Result<Self, CredentialError> {
         Ok(Self {
-            listen_key_name: material.listen_key_name.clone(),
-            listen_key: material.listen_key.clone(),
-            send_key_name: material.send_key_name.clone(),
-            send_key: material.send_key.clone(),
+            material,
             generation: meta.generation,
             not_after: meta.not_after,
         })
@@ -341,7 +326,7 @@ impl GatewayGuestCredentialPort {
     /// sealed envelope has been opened; credential bytes never leave this
     /// port.
     pub fn safe_observation_digest(&self) -> [u8; 32] {
-        Sha256::digest(self.credential.send_key.as_bytes()).into()
+        Sha256::digest(self.credential.material.send_key.as_bytes()).into()
     }
 
     /// Return the number of currently revocable leases.
@@ -359,11 +344,11 @@ impl GatewayGuestCredentialPort {
     ) -> Result<RelayCredentialMaterial, RelayCredentialError> {
         let (key_name, key) = match role {
             RelayCredentialRole::Listen => (
-                &self.credential.listen_key_name,
-                &self.credential.listen_key,
+                &self.credential.material.listen_key_name,
+                &self.credential.material.listen_key,
             ),
             RelayCredentialRole::Send => {
-                (&self.credential.send_key_name, &self.credential.send_key)
+                (&self.credential.material.send_key_name, &self.credential.material.send_key)
             }
         };
         Ok(RelayCredentialMaterial::SasRule {

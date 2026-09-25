@@ -9,6 +9,11 @@ pub struct BusId(String);
 
 impl BusId {
     /// Parse the shared canonical USB bus-ID grammar.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BusIdError`] when the value does not match the canonical
+    /// bus-ID grammar.
     pub fn parse(value: impl Into<String>) -> Result<Self, BusIdError> {
         let value = value.into();
         validate_bus_id(&value)?;

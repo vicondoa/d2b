@@ -70,10 +70,13 @@ impl UserIdentityDigest {
 
     /// Render the digest as lowercase hex.
     pub fn to_hex(self) -> String {
+        const HEX: [char; 16] = [
+            '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+        ];
         let mut out = String::with_capacity(64);
         for byte in self.0 {
-            out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-            out.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
+            out.push(HEX[usize::from(byte >> 4)]);
+            out.push(HEX[usize::from(byte & 0x0f)]);
         }
         out
     }
@@ -141,6 +144,11 @@ pub trait UserDiscoveryEffectPort: Send + Sync {
     ///
     /// `Ok(None)` means the local machine resolves no such identity, which
     /// is an ordinary state rather than a failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SystemCoreError::DiscoveryUnavailable`] when local
+    /// discovery cannot resolve a usable identity.
     async fn discover(
         &self,
         user_ref: &ResourceRef,
@@ -211,6 +219,21 @@ pub struct UserReconciler<P: UserDiscoveryEffectPort> {
     port: P,
 }
 
+/// The properties a User must verify before it is reported discovered.
+///
+/// The record and its primary group are always required. Group
+/// memberships are required exactly when the spec declares any, so a
+/// User that declares none is not held to a check with nothing to
+/// check, and a User that declares some cannot be called discovered
+/// while they are unverified.
+pub fn required_bindings(spec: &UserSpec) -> BTreeSet<UserBinding> {
+    let mut required = BTreeSet::from([UserBinding::NssRecord, UserBinding::PrimaryGroup]);
+    if !spec.groups().is_empty() {
+        required.insert(UserBinding::GroupMemberships);
+    }
+    required
+}
+
 impl<P: UserDiscoveryEffectPort> UserReconciler<P> {
     /// Build the reconciler over an injected discovery port.
     pub const fn new(port: P) -> Self {
@@ -222,22 +245,13 @@ impl<P: UserDiscoveryEffectPort> UserReconciler<P> {
         &self.port
     }
 
-    /// The properties a User must verify before it is reported discovered.
-    ///
-    /// The record and its primary group are always required. Group
-    /// memberships are required exactly when the spec declares any, so a
-    /// User that declares none is not held to a check with nothing to
-    /// check, and a User that declares some cannot be called discovered
-    /// while they are unverified.
-    pub fn required_bindings(spec: &UserSpec) -> BTreeSet<UserBinding> {
-        let mut required = BTreeSet::from([UserBinding::NssRecord, UserBinding::PrimaryGroup]);
-        if !spec.groups().is_empty() {
-            required.insert(UserBinding::GroupMemberships);
-        }
-        required
-    }
-
     /// Discover one declared User and compute its public status.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SystemCoreError::ResourceTypeNotOwned`] when the reference
+    /// is not a User and [`SystemCoreError::DiscoveryUnavailable`] when the
+    /// injected discovery port fails.
     pub async fn reconcile(
         &self,
         user_ref: &ResourceRef,
@@ -264,7 +278,7 @@ impl<P: UserDiscoveryEffectPort> UserReconciler<P> {
                 None,
             ));
         };
-        let required = Self::required_bindings(spec);
+        let required = required_bindings(spec);
         if discovered.observed.covers(&required) {
             return Ok(self.report(
                 user_ref,

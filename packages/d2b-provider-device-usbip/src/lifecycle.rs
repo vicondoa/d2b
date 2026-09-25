@@ -40,6 +40,10 @@ const USBIP_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
 /// The returned children are UID-free intents. The generic Process Provider
 /// owns launch, adoption, signalling, and reap; this Provider only describes
 /// its required children and observes their status.
+/// # Errors
+///
+/// Returns [`BindingChildError`] when the authored references fail
+/// semantic admission or the child declaration cannot be built.
 pub fn binding_child_resources(
     binding_ref: &ResourceRef,
     service_ref: &ResourceRef,

@@ -50,6 +50,13 @@ impl std::fmt::Debug for GuestConfigReader {
 
 impl GuestConfigReader {
     /// Bind the reader to one admitted Guest ComponentSession generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the reference does not
+    /// name a Guest or the path is not an absolute, component-clean path, and
+    /// [`ConfigError::SessionMismatch`] when the boot identity or reconnect
+    /// generation fails the session evidence bounds.
     pub fn new(
         guest_ref: ResourceRef,
         boot_identity_digest: impl Into<String>,
@@ -108,7 +115,7 @@ impl ConfigServiceBackend for GuestConfigReader {
             ConfigCaller::Guest,
             &request,
             &self.evidence,
-            document.bytes().to_vec(),
+            document.into_bytes(),
         )?;
         serde_json::to_value(response).map_err(|error| {
             tracing::warn!(
@@ -376,19 +383,25 @@ fn invalid_status() -> ttrpc::Status {
     )
 }
 
-fn validate_reader_path(path: &Path) -> Result<(), ConfigError> {
+fn path_components(path: &Path) -> Result<Vec<&std::ffi::OsStr>, ConfigError> {
     if !path.is_absolute() {
         return Err(ConfigError::InvalidRequest);
     }
+    let mut components = Vec::new();
     for component in path.components() {
-        if matches!(
-            component,
-            Component::CurDir | Component::ParentDir | Component::Prefix(_)
-        ) {
-            return Err(ConfigError::InvalidRequest);
+        match component {
+            Component::RootDir => {}
+            Component::Normal(value) => components.push(value),
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
+                return Err(ConfigError::InvalidRequest);
+            }
         }
     }
-    Ok(())
+    Ok(components)
+}
+
+fn validate_reader_path(path: &Path) -> Result<(), ConfigError> {
+    path_components(path).map(|_| ())
 }
 
 fn read_bounded_file(path: &Path) -> Result<Vec<u8>, ConfigError> {
@@ -408,19 +421,7 @@ fn read_bounded_file(path: &Path) -> Result<Vec<u8>, ConfigError> {
         }
     }
 
-    if !path.is_absolute() {
-        return Err(ConfigError::InvalidRequest);
-    }
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(value) => components.push(value),
-            Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
-                return Err(ConfigError::InvalidRequest);
-            }
-        }
-    }
+    let components = path_components(path)?;
     let Some((leaf, parents)) = components.split_last() else {
         return Err(ConfigError::InvalidRequest);
     };
