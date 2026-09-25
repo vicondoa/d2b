@@ -4,7 +4,7 @@ use d2b_contracts_broker::broker_wire::ExportBrokerAuditResponse;
 use d2b_contracts_control::public_wire::{self, AuditResponse, AuthStatusResponse};
 use d2b_contracts_resource::v3::ResourceRef;
 use semver::{Version as SemverVersion, VersionReq};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
@@ -253,6 +253,59 @@ pub fn parse_hello(bytes: &[u8]) -> Result<Hello, TypedError> {
     serde_json::from_value(value).map_err(map_parse_error)
 }
 
+/// Internally-tagged parse shape for the plain request verbs.
+///
+/// The `type` field dispatches to the matching payload type; every payload
+/// type carries `deny_unknown_fields`, so an extra field is rejected at the
+/// boundary. The verbs with custom envelope handling (authStatus/usbipProbe
+/// empty-body checks, console `opId` removal, resourceRequest passthrough)
+/// stay explicit in [`parse_request`].
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum RequestParse {
+    List(public_wire::ListRequest),
+    Status(public_wire::StatusRequest),
+    Audit(public_wire::AuditRequest),
+    VmStart(public_wire::VmLifecycleRequest),
+    VmStop(public_wire::VmLifecycleRequest),
+    VmRestart(public_wire::VmLifecycleRequest),
+    Switch(public_wire::ActivationRequest),
+    Boot(public_wire::ActivationRequest),
+    Test(public_wire::ActivationRequest),
+    Rollback(public_wire::ActivationRequest),
+    UsbipBind(public_wire::UsbipBindCliRequest),
+    UsbipUnbind(public_wire::UsbipUnbindCliRequest),
+    HostPrepare(public_wire::HostPrepareRequest),
+    HostDestroy(public_wire::HostDestroyRequest),
+    HostReconcile(public_wire::HostReconcileRequest),
+    Workload(public_wire::WorkloadOp),
+    Audio(public_wire::AudioOp),
+}
+
+impl RequestParse {
+    fn into_request(self) -> Request {
+        match self {
+            Self::List(payload) => Request::List(payload),
+            Self::Status(payload) => Request::Status(payload),
+            Self::Audit(payload) => Request::Audit(payload),
+            Self::VmStart(payload) => Request::VmStart(payload),
+            Self::VmStop(payload) => Request::VmStop(payload),
+            Self::VmRestart(payload) => Request::VmRestart(payload),
+            Self::Switch(payload) => Request::Switch(payload),
+            Self::Boot(payload) => Request::Boot(payload),
+            Self::Test(payload) => Request::Test(payload),
+            Self::Rollback(payload) => Request::Rollback(payload),
+            Self::UsbipBind(payload) => Request::UsbipBind(payload),
+            Self::UsbipUnbind(payload) => Request::UsbipUnbind(payload),
+            Self::HostPrepare(payload) => Request::HostPrepare(payload),
+            Self::HostDestroy(payload) => Request::HostDestroy(payload),
+            Self::HostReconcile(payload) => Request::HostReconcile(payload),
+            Self::Workload(payload) => Request::Workload(payload),
+            Self::Audio(payload) => Request::Audio(payload),
+        }
+    }
+}
+
 pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
     let mut value: Value =
         serde_json::from_slice(bytes).map_err(|err| TypedError::WireInvalidFrame {
@@ -265,23 +318,14 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
             detail: "missing request type".to_owned(),
         })?
         .to_owned();
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| TypedError::WireInvalidFrame {
-            detail: "request frame must be a JSON object".to_owned(),
-        })?;
-    object.remove("type");
     match request_type.as_str() {
-        "list" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::List)
-            .map_err(map_parse_error),
-        "status" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Status)
-            .map_err(map_parse_error),
-        "audit" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Audit)
-            .map_err(map_parse_error),
         "authStatus" => {
+            let object = value
+                .as_object_mut()
+                .ok_or_else(|| TypedError::WireInvalidFrame {
+                    detail: "request frame must be a JSON object".to_owned(),
+                })?;
+            object.remove("type");
             if object.is_empty() {
                 Ok(Request::AuthStatus)
             } else {
@@ -290,34 +334,13 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
                 })
             }
         }
-        "vmStart" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::VmStart)
-            .map_err(map_parse_error),
-        "vmStop" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::VmStop)
-            .map_err(map_parse_error),
-        "vmRestart" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::VmRestart)
-            .map_err(map_parse_error),
-        "switch" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Switch)
-            .map_err(map_parse_error),
-        "boot" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Boot)
-            .map_err(map_parse_error),
-        "test" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Test)
-            .map_err(map_parse_error),
-        "rollback" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Rollback)
-            .map_err(map_parse_error),
-        "usbipBind" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::UsbipBind)
-            .map_err(map_parse_error),
-        "usbipUnbind" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::UsbipUnbind)
-            .map_err(map_parse_error),
         "usbipProbe" => {
+            let object = value
+                .as_object_mut()
+                .ok_or_else(|| TypedError::WireInvalidFrame {
+                    detail: "request frame must be a JSON object".to_owned(),
+                })?;
+            object.remove("type");
             if object.is_empty() {
                 Ok(Request::UsbipProbe)
             } else {
@@ -326,30 +349,35 @@ pub fn parse_request(bytes: &[u8]) -> Result<Request, TypedError> {
                 })
             }
         }
-        "hostPrepare" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::HostPrepare)
-            .map_err(map_parse_error),
-        "hostDestroy" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::HostDestroy)
-            .map_err(map_parse_error),
-        "hostReconcile" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::HostReconcile)
-            .map_err(map_parse_error),
         "console" => {
+            let object = value
+                .as_object_mut()
+                .ok_or_else(|| TypedError::WireInvalidFrame {
+                    detail: "request frame must be a JSON object".to_owned(),
+                })?;
+            object.remove("type");
             object.remove("opId");
             serde_json::from_value(Value::Object(object.clone()))
                 .map(Request::Console)
                 .map_err(map_parse_error)
         }
-        "workload" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Workload)
-            .map_err(map_parse_error),
-        "audio" => serde_json::from_value(Value::Object(object.clone()))
-            .map(Request::Audio)
-            .map_err(map_parse_error),
-        "resourceRequest" => Ok(Request::Resource(ResourceRequest {
-            fields: object.clone().into_iter().collect(),
-        })),
+        "resourceRequest" => {
+            let object = value
+                .as_object_mut()
+                .ok_or_else(|| TypedError::WireInvalidFrame {
+                    detail: "request frame must be a JSON object".to_owned(),
+                })?;
+            object.remove("type");
+            Ok(Request::Resource(ResourceRequest {
+                fields: object.clone().into_iter().collect(),
+            }))
+        }
+        "list" | "status" | "audit" | "vmStart" | "vmStop" | "vmRestart" | "switch"
+        | "boot" | "test" | "rollback" | "usbipBind" | "usbipUnbind" | "hostPrepare"
+        | "hostDestroy" | "hostReconcile" | "workload" | "audio" => {
+            let parsed: RequestParse = serde_json::from_value(value).map_err(map_parse_error)?;
+            Ok(parsed.into_request())
+        }
         _ => Err(TypedError::WireUnsupportedRequest { request_type }),
     }
 }
