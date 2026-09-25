@@ -60,6 +60,11 @@ pub struct ZoneLinkOwnerProof {
 
 impl ZoneLinkOwnerProof {
     /// Bind a cursor owner to one authority generation and digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkAdoptionError::CursorInvalid`] when the authority
+    /// generation is zero.
     pub fn new(
         authority_generation: u64,
         owner_digest: SchemaFingerprint,
@@ -74,6 +79,11 @@ impl ZoneLinkOwnerProof {
     }
 
     /// Build an owner proof from a canonical digest string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkAdoptionError::CursorInvalid`] when the digest is
+    /// not a canonical fingerprint or the authority generation is zero.
     pub fn from_digest(
         authority_generation: u64,
         digest: impl Into<String>,
@@ -194,6 +204,15 @@ impl ZoneLinkCursorAuthority {
     /// More than one durable observation is ambiguous, even when observations
     /// happen to carry the same proof and cursor. The method never chooses a
     /// cursor by recency or map iteration order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ZoneLinkAdoption`] quarantine carrying
+    /// [`ZoneLinkAdoptionError::OwnerProofMissing`] when no observation
+    /// exists, [`ZoneLinkAdoptionError::OwnerProofMismatch`] when the
+    /// observation's proof differs, and
+    /// [`ZoneLinkAdoptionError::AmbiguousOwner`] when more than one
+    /// observation exists.
     pub fn adopt(
         &mut self,
         observations: impl IntoIterator<Item = ZoneLinkCursorRecord>,
@@ -232,6 +251,11 @@ impl ZoneLinkCursorAuthority {
     }
 
     /// Borrow the adopted cursor or fail closed while quarantined.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ZoneLinkAdoptionError`] recorded by the quarantine
+    /// when no cursor was adopted.
     pub fn cursor(&self) -> Result<ZoneLinkCursor, ZoneLinkAdoptionError> {
         self.adoption
             .record()
