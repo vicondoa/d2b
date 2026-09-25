@@ -61,6 +61,11 @@ pub struct NotificationRuntime<E> {
 
 impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
     /// Construct a runtime for one fixed notification Provider instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotificationRuntimeError::ReconciliationFailed`] when the
+    /// placement controller cannot be constructed for the Provider.
     pub fn new(
         config: NotificationProviderConfig,
         effects: E,

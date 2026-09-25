@@ -81,6 +81,12 @@ impl ActionNonceStore {
     }
 
     /// Register one action capability.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ActionNonceError::Capacity`] when the store is full,
+    /// [`ActionNonceError::Invalid`] when the action key exceeds the bound,
+    /// and [`ActionNonceError::Entropy`] when random nonce generation fails.
     pub fn register(
         &mut self,
         session: impl AsRef<str>,
