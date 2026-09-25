@@ -865,15 +865,14 @@ impl GuestDriver {
 
     /// The runtime-only operation id of one pass (never persisted).
     fn operation_id(&self, ctx: &ResourceContext, kind: GuestKind) -> String {
-        format!(
-            "{}-{}-g{}",
-            kind.effect_id(),
-            ctx.uid()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>(),
-            ctx.generation(),
-        )
+        use std::fmt::Write as _;
+        let mut id = String::with_capacity(kind.effect_id().len() + ctx.uid().len() * 2 + 8);
+        let _ = write!(id, "{}-", kind.effect_id());
+        for byte in ctx.uid() {
+            let _ = write!(id, "{byte:02x}");
+        }
+        let _ = write!(id, "-g{}", ctx.generation());
+        id
     }
 
     fn child_key(&self, target: &ResourceRef) -> ResourceKey {

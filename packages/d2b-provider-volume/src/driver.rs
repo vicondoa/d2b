@@ -48,7 +48,7 @@ use d2b_resource_runtime::error::{
     DriverFailure, DriverOp, FailureClass, FailureComparison, FailureDetail, FailureKind,
     FailureKinds,
 };
-use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
 use d2b_resource_types::{
     AllowedSources, CONVERTED_TYPE_VERBS, ChildCreation, ChildCustody, DriverDescriptor,
     WellKnownType,
@@ -422,7 +422,7 @@ impl VolumeDriver {
         ctx: &mut ResourceContext,
         desired: &[DesiredBindingChild],
         op: DriverOp,
-    ) -> Result<(), VolumeDriverError> {
+    ) -> Result<Vec<StoredDesiredResource>, VolumeDriverError> {
         for child in desired {
             let ensure = ChildEnsure {
                 type_name: ResourceTypeName::new(VOLUME_BINDING_TYPE),
@@ -438,19 +438,22 @@ impl VolumeDriver {
             .children()
             .await
             .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
-        for row in owned {
-            if row.key.type_name != VOLUME_BINDING_TYPE
-                || desired.iter().any(|child| child.name == row.key.name)
-            {
-                continue;
-            }
+        let obsolete = owned
+            .iter()
+            .filter(|row| {
+                row.key.type_name == VOLUME_BINDING_TYPE
+                    && !desired.iter().any(|child| child.name == row.key.name)
+            })
+            .map(|row| row.key.clone())
+            .collect::<Vec<_>>();
+        for key in obsolete {
             // Obsolete child: the manager retires it and owns its own
             // teardown (endpoint -> process last), R9/F3.
-            ctx.delete(&row.key)
+            ctx.delete(&key)
                 .await
                 .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, op))?;
         }
-        Ok(())
+        Ok(owned)
     }
 
     /// Spawn the preserved layout effect as a long effect (R5, KTD12): the
@@ -611,11 +614,9 @@ impl ResourceDriver for VolumeDriver {
         }
 
         let desired = self.desired_children(&volume_ref, &spec, DriverOp::Reconcile)?;
-        self.reconcile_children(ctx, &desired, DriverOp::Reconcile).await?;
-        let owned = ctx
-            .children()
-            .await
-            .map_err(|_| self.error(VolumeDriverErrorKind::ChildMutation, DriverOp::Reconcile))?;
+        let owned = self
+            .reconcile_children(ctx, &desired, DriverOp::Reconcile)
+            .await?;
         let converged = desired.iter().all(|child| {
             owned
                 .iter()

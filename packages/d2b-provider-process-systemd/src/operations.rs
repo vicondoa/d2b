@@ -414,11 +414,14 @@ fn unit_name(request: &d2b_contracts_broker::broker_wire::UnitRequest) -> String
     digest.update(request.template_identity);
     digest.update(request.generation.to_le_bytes());
     let digest: [u8; 32] = digest.finalize().into();
-    let mut suffix = String::with_capacity(32);
+    let mut name = String::with_capacity(52);
+    name.push_str("d2b-process-");
     for byte in digest.iter().take(16) {
-        suffix.push_str(&format!("{byte:02x}"));
+        use std::fmt::Write as _;
+        let _ = write!(name, "{byte:02x}");
     }
-    format!("d2b-process-{suffix}.service")
+    name.push_str(".service");
+    name
 }
 
 async fn system_connection() -> Result<Connection, &'static str> {
