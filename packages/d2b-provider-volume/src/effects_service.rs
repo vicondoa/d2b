@@ -60,22 +60,12 @@ pub const VOLUME_EFFECTS_SERVICE: ServiceDecl = ServiceDecl {
 };
 
 /// The one `has-layout` response payload: whether the zone retains an
-/// initialized layout for the requested volume. The two literals are
-/// canonical by construction; the parse refusal is unreachable and names
-/// its own code.
-fn has_layout_response(has_layout: bool) -> Result<EffectResponse, EffectServiceError> {
-    let bytes: &[u8] = if has_layout {
-        b"{\"hasLayout\":true}"
-    } else {
-        b"{\"hasLayout\":false}"
-    };
-    let payload = CanonicalJsonObject::parse(bytes).map_err(|_| {
-        EffectServiceError::Declined {
-            service: VOLUME_EFFECTS_SERVICE.id.to_owned(),
-            reason: "has-layout-response-invalid".to_owned(),
-        }
-    })?;
-    Ok(EffectResponse::new(payload))
+/// initialized layout for the requested volume. Built from the value
+/// itself, so the two literals cannot fail to parse.
+fn has_layout_response(has_layout: bool) -> EffectResponse {
+    let payload = serde_json::from_value(serde_json::json!({ "hasLayout": has_layout }))
+        .expect("the static has-layout payload is canonical");
+    EffectResponse::new(payload)
 }
 
 /// The declared `has-layout` payload contract: `volumeUid` names the volume
@@ -107,7 +97,7 @@ async fn serve_has_layout(
         .map_err(declined)?;
     let volume_uid =
         ResourceUid::parse(volume_uid).map_err(|_| declined("has-layout-volume-uid-invalid"))?;
-    has_layout_response(runtime.has_layout(&volume_uid))
+    Ok(has_layout_response(runtime.has_layout(&volume_uid)))
 }
 
 /// The provider-owned Volume effects (U7), built from the daemon-supplied
