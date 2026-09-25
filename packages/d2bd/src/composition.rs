@@ -395,8 +395,11 @@ mod audio_dispatch;
 mod audio_host_controller;
 mod credential_resource_runtime;
 pub mod interaction_composition;
-pub mod process_provider_runtime;
+pub(crate) mod process_provider_runtime;
 mod process_resource_runtime;
+#[cfg(not(feature = "test-support"))]
+pub(crate) mod provider_effects;
+#[cfg(feature = "test-support")]
 pub mod provider_effects;
 pub mod provider_registry;
 pub mod provider_shutdown;
@@ -11184,7 +11187,7 @@ pub(crate) async fn ensure_guest_target_session(
     plane
         .bind_guest_target(&guest, generation, control)
         .map_err(|error| format!("guest-session:target-bind-refused:{error}"))?;
-    adopt_guest_target_assignments(plane.targets(), &guest, generation).await;
+    adopt_guest_target_assignments(&plane.targets(), &guest, generation).await;
     Ok(())
 }
 
@@ -11276,7 +11279,7 @@ pub(crate) async fn binding_guest_mount_ready(
         .lock()
         .await
         .get(zone.as_str())
-        .map(|plane| std::sync::Arc::clone(plane.targets()));
+        .map(|plane| plane.targets());
     let Some(directory) = directory else {
         return false;
     };

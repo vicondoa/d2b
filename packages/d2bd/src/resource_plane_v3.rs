@@ -3206,8 +3206,8 @@ impl ResourcePlaneV3 {
     }
 
     /// The per-Zone target directory (U13).
-    pub fn targets(&self) -> &Arc<TargetDirectory> {
-        &self.targets
+    pub fn targets(&self) -> Arc<TargetDirectory> {
+        Arc::clone(&self.targets)
     }
 
     /// Register one authenticated guest session generation and tell the
@@ -3274,20 +3274,20 @@ impl ResourcePlaneV3 {
     /// The in-memory watch hub (U8 pairs it with the client in
     /// `ManagerBackend`; ManagerWatch/ManagerWatchStreams hand off the
     /// external WATCH streams, KTD8).
-    pub fn hub(&self) -> &Arc<WatchHub> {
-        &self.hub
+    pub fn hub(&self) -> Arc<WatchHub> {
+        Arc::clone(&self.hub)
     }
 
     /// See [`Self::readiness`]: read by this module's tests.
     #[cfg(test)]
-    pub fn store(&self) -> &Arc<SpecStore> {
+    pub fn store(&self) -> &SpecStore {
         &self.store
     }
 
 
     /// The per-zone registry the production effects resolve per-resource
     /// anchors from.
-    pub fn registry(&self) -> &Arc<PlaneResourceRegistry> {
+    pub fn registry(&self) -> &PlaneResourceRegistry {
         &self.registry
     }
 

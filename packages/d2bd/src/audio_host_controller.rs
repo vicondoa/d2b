@@ -56,7 +56,7 @@ pub use crate::audio_dispatch::HostEnforcementResult;
 ///
 /// The trait is `dyn`-safe so dispatch functions can accept `&dyn
 /// HostAudioController` and tests can inject a fake.
-pub trait HostAudioController {
+pub(crate) trait HostAudioController {
     /// Enforce a mute/unmute grant on a running VM's audio node.
     ///
     /// Returns [`HostEnforcementResult::Applied`] only when enforcement was
@@ -65,7 +65,6 @@ pub trait HostAudioController {
     /// providers where no live enforcement path exists.
     fn enforce_grant(
         &self,
-        vm_name: &str,
         grant: AudioGrant,
         channel: AudioChannel,
     ) -> HostEnforcementResult;
@@ -75,7 +74,6 @@ pub trait HostAudioController {
     /// Same success/failure contract as [`Self::enforce_grant`].
     fn enforce_level(
         &self,
-        vm_name: &str,
         level: LevelPercent,
         channel: AudioChannel,
     ) -> HostEnforcementResult;
@@ -89,7 +87,7 @@ pub trait HostAudioController {
 /// broker transport. Tool paths, runtime paths, and node identifiers remain
 /// broker-local.
 #[derive(Debug, Clone)]
-pub struct PipeWireHostController {
+pub(crate) struct PipeWireHostController {
     broker_socket: PathBuf,
     caller_role: BrokerCallerRole,
     vm_id: VmId,
@@ -103,7 +101,7 @@ impl PipeWireHostController {
     ///
     /// Tool paths, runtime paths, and node identifiers are resolved only by
     /// the broker from the trusted runner intent.
-    pub fn from_audio_node(
+    pub(crate) fn from_audio_node(
         node: &ProcessNode,
         vm_name: &str,
         broker_socket: PathBuf,
@@ -121,7 +119,7 @@ impl PipeWireHostController {
     /// Find the audio runner node for a VM in a loaded [`ProcessesJson`].
     ///
     /// Returns `None` when no audio node exists (VM has no audio sidecar).
-    pub fn find_audio_node<'a>(
+    pub(crate) fn find_audio_node<'a>(
         processes: &'a ProcessesJson,
         vm_name: &str,
     ) -> Option<&'a ProcessNode> {
@@ -170,7 +168,6 @@ impl PipeWireHostController {
 impl HostAudioController for PipeWireHostController {
     fn enforce_grant(
         &self,
-        _vm_name: &str,
         grant: AudioGrant,
         channel: AudioChannel,
     ) -> HostEnforcementResult {
@@ -179,7 +176,6 @@ impl HostAudioController for PipeWireHostController {
 
     fn enforce_level(
         &self,
-        _vm_name: &str,
         level: LevelPercent,
         channel: AudioChannel,
     ) -> HostEnforcementResult {
@@ -211,12 +207,11 @@ impl HostAudioController for PipeWireHostController {
 /// `guest_enforcement = Unsupported`, and that invariant is enforced at the
 /// dispatch layer, not here.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct QemuAudioController;
+pub(crate) struct QemuAudioController;
 
 impl HostAudioController for QemuAudioController {
     fn enforce_grant(
         &self,
-        _vm_name: &str,
         _grant: AudioGrant,
         _channel: AudioChannel,
     ) -> HostEnforcementResult {
@@ -227,7 +222,6 @@ impl HostAudioController for QemuAudioController {
 
     fn enforce_level(
         &self,
-        _vm_name: &str,
         _level: LevelPercent,
         _channel: AudioChannel,
     ) -> HostEnforcementResult {
@@ -284,7 +278,6 @@ impl FakeHostController {
 impl HostAudioController for FakeHostController {
     fn enforce_grant(
         &self,
-        _vm_name: &str,
         _grant: AudioGrant,
         _channel: AudioChannel,
     ) -> HostEnforcementResult {
@@ -293,7 +286,6 @@ impl HostAudioController for FakeHostController {
 
     fn enforce_level(
         &self,
-        _vm_name: &str,
         _level: LevelPercent,
         _channel: AudioChannel,
     ) -> HostEnforcementResult {
@@ -350,7 +342,7 @@ mod tests {
     fn fake_success_returns_applied_for_grant() {
         let ctrl = FakeHostController::success();
         assert_eq!(
-            ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker),
+            ctrl.enforce_grant(AudioGrant::Off, AudioChannel::Speaker),
             HostEnforcementResult::Applied,
         );
     }
@@ -360,7 +352,7 @@ mod tests {
         let ctrl = FakeHostController::success();
         let level = LevelPercent::new(75).unwrap();
         assert_eq!(
-            ctrl.enforce_level("corp-vm", level, AudioChannel::Speaker),
+            ctrl.enforce_level(level, AudioChannel::Speaker),
             HostEnforcementResult::Applied,
         );
     }
@@ -369,7 +361,7 @@ mod tests {
     fn fake_failed_returns_failed_for_grant() {
         let ctrl = FakeHostController::failed();
         assert_eq!(
-            ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker),
+            ctrl.enforce_grant(AudioGrant::Off, AudioChannel::Speaker),
             HostEnforcementResult::Failed,
         );
     }
@@ -379,7 +371,7 @@ mod tests {
         let ctrl = FakeHostController::failed();
         let level = LevelPercent::new(50).unwrap();
         assert_eq!(
-            ctrl.enforce_level("corp-vm", level, AudioChannel::Microphone),
+            ctrl.enforce_level(level, AudioChannel::Microphone),
             HostEnforcementResult::Failed,
         );
     }
@@ -388,12 +380,12 @@ mod tests {
     fn fake_unsupported_returns_unsupported() {
         let ctrl = FakeHostController::unsupported();
         assert_eq!(
-            ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Microphone),
+            ctrl.enforce_grant(AudioGrant::Off, AudioChannel::Microphone),
             HostEnforcementResult::Unsupported,
         );
         let level = LevelPercent::new(20).unwrap();
         assert_eq!(
-            ctrl.enforce_level("corp-vm", level, AudioChannel::Speaker),
+            ctrl.enforce_level(level, AudioChannel::Speaker),
             HostEnforcementResult::Unsupported,
         );
     }
@@ -404,7 +396,7 @@ mod tests {
     fn qemu_controller_grant_is_applied() {
         let ctrl = QemuAudioController;
         assert_eq!(
-            ctrl.enforce_grant("qemu-vm", AudioGrant::Off, AudioChannel::Speaker),
+            ctrl.enforce_grant(AudioGrant::Off, AudioChannel::Speaker),
             HostEnforcementResult::Applied,
         );
     }
@@ -414,7 +406,7 @@ mod tests {
         let ctrl = QemuAudioController;
         let level = LevelPercent::new(80).unwrap();
         assert_eq!(
-            ctrl.enforce_level("qemu-vm", level, AudioChannel::Microphone),
+            ctrl.enforce_level(level, AudioChannel::Microphone),
             HostEnforcementResult::Applied,
         );
     }
@@ -424,7 +416,7 @@ mod tests {
         let ctrl = QemuAudioController;
         // Unmute (grant=On) should also return Applied for qemu-media.
         assert_eq!(
-            ctrl.enforce_grant("qemu-vm", AudioGrant::On, AudioChannel::Speaker),
+            ctrl.enforce_grant(AudioGrant::On, AudioChannel::Speaker),
             HostEnforcementResult::Applied,
         );
     }
@@ -457,7 +449,7 @@ mod tests {
             PathBuf::from("/nonexistent/d2b-priv.sock"),
             BrokerCallerRole::AdminUid { uid: 0 },
         );
-        let result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
+        let result = ctrl.enforce_grant(AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(
             result,
             HostEnforcementResult::Failed,

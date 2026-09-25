@@ -4419,7 +4419,7 @@ impl ZoneResourceRuntime {
             .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?;
         let backend = d2b_resource_api::manager_backend::ManagerBackend::new(
             plane.client().clone(),
-            Arc::clone(plane.hub()),
+            plane.hub(),
             acceptor,
         );
         let service = Arc::new(

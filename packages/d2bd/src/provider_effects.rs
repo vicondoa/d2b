@@ -7,7 +7,7 @@
 //! with the existing typed broker dispatch functions.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
@@ -16,6 +16,9 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(any(test, feature = "test-support"))]
+use std::collections::BTreeSet;
 
 use d2b_contracts_broker::broker_wire::BrokerCallerRole;
 use d2b_contracts_broker::broker_wire::{BrokerRequest, BrokerResponse};
@@ -719,6 +722,7 @@ impl ProviderLifecycleDispatch {
     }
 
     /// Construct a dispatcher backed by a daemon-owned durable state file.
+    #[cfg(any(test, feature = "test-support"))]
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn new_persistent(
         zone: ZoneId,
@@ -821,6 +825,7 @@ impl ProviderLifecycleDispatch {
     /// [`ProviderEffectError::StopOnlyLease`], or
     /// [`ProviderEffectError::StateUnavailable`].
     ///
+    #[cfg(any(test, feature = "test-support"))]
     pub fn admit(
         &self,
         caller: &BrokerCallerRole,
@@ -1325,6 +1330,7 @@ fn validate_authorization(request: &GuestLifecycleRequest) -> Result<(), Provide
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn persisted_authorization(entry: &PersistedLifecycleMutation) -> Option<LifecycleAuthorization> {
     let zone_uid = ResourceUid::parse(entry.zone_uid.as_ref()?).ok()?;
     let guest_ref = ResourceRef::parse(&entry.guest).ok()?;
@@ -1365,6 +1371,7 @@ fn persisted_authorization(entry: &PersistedLifecycleMutation) -> Option<Lifecyc
     })
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn migrate_legacy_generations(
     persisted: &mut [PersistedLifecycleMutation],
 ) -> Result<u64, ProviderEffectError> {
