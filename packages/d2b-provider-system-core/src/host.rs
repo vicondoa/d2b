@@ -538,3 +538,28 @@ impl HostReconciler {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn minijail_gate_rejects_kernels_below_the_floor() {
+        // The kernel floor is Linux 5.14 (kernel_supported). Any older
+        // kernel must fail the gate with KernelTooOld even when every other
+        // placement requirement is satisfied; a floor regression would
+        // otherwise let minijail placement run on an unsupported kernel.
+        assert_eq!(
+            MinijailPlatformGate::new(5, 13, true).validate(),
+            Err(SystemCoreError::KernelTooOld)
+        );
+        assert_eq!(
+            MinijailPlatformGate::new(4, 20, true).validate(),
+            Err(SystemCoreError::KernelTooOld)
+        );
+        assert_eq!(
+            MinijailPlatformGate::new(5, 14, true).validate(),
+            Ok(())
+        );
+    }
+}
