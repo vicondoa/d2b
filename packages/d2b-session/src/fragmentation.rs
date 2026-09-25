@@ -8,11 +8,16 @@ use d2b_contracts_zone_session::v3::component_session::{
 use crate::{Result, SessionError};
 
 pub struct Fragment {
-    pub header: FragmentHeader,
+    header: FragmentHeader,
     bytes: Vec<u8>,
 }
 
 impl Fragment {
+    /// Borrow the fragment header.
+    pub fn header(&self) -> &FragmentHeader {
+        &self.header
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
