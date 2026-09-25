@@ -923,7 +923,21 @@ fn is_digest(value: &str) -> bool {
 fn reject_runtime_or_private_fields(
     object: &CanonicalJsonObject,
 ) -> Result<(), ResourceBundleError> {
-    fn walk(value: &CanonicalJsonValue) -> bool {
+    fn walk_object(object: &CanonicalJsonObject) -> bool {
+        object.keys().any(|key| {
+            matches!(
+                key,
+                "status"
+                    | "storePath"
+                    | "nixSystem"
+                    | "schemaFingerprint"
+                    | "providerSchemaFingerprint"
+                    | "managedBy"
+                    | "configurationGeneration"
+            ) || object.get(key).is_some_and(walk_value)
+        })
+    }
+    fn walk_value(value: &CanonicalJsonValue) -> bool {
         match value {
             CanonicalJsonValue::Object(map) => map.iter().any(|(key, value)| {
                 matches!(
@@ -935,13 +949,13 @@ fn reject_runtime_or_private_fields(
                         | "providerSchemaFingerprint"
                         | "managedBy"
                         | "configurationGeneration"
-                ) || walk(value)
+                ) || walk_value(value)
             }),
-            CanonicalJsonValue::Array(values) => values.iter().any(walk),
+            CanonicalJsonValue::Array(values) => values.iter().any(walk_value),
             _ => false,
         }
     }
-    if walk(&CanonicalJsonValue::Object(object.clone().into_inner())) {
+    if walk_object(object) {
         Err(ResourceBundleError::ForbiddenField)
     } else {
         Ok(())
