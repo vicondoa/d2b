@@ -2,7 +2,9 @@
 
 Baseline: branch `refactor-rust-skills-remediation`, base commit `147a536a0` (the audit baseline `v3` @ `6ebdd4cec` plus the audit corpus commit). Authority: `docs/plans/2026-09-24-002-refactor-rust-skills-remediation-plan.md` (R1-R14, KTD1-KTD11). Corpus: `README.md` and `lane/`.
 
-One row per finding id. `outcome` is filled by the owning wave when it disposes of the row: `applied`, `applied-variant` (the stated fix held but needed a minimal correction), `already-fixed` (claim re-verified stale at HEAD), `escalated` (moved to the owning wave named in `escalation`), `policy-confirmed` (recorded no-op citing its policy), `needs-contract` (deferred to the contract-adjacent wave), `reclassified` (severity/verdict changed on re-verification, reason recorded). `anchor` is the apply-time anchor when the wave re-located it; the seed anchor comes from the corpus row. Empty cells mean the row is not yet disposed.
+One row per finding id. `outcome` is filled by the owning wave when it disposes of the row: `applied`, `applied-variant` (the claim or the stated fix needed a minimal correction or a recorded deviation), `skipped-stale` (the claim does not hold at HEAD; no change made), `already-fixed` (the stated fix is already present in the tree), `escalated` (moved to the owning wave named in `escalation`), `policy-confirmed` (recorded no-op citing its policy), `needs-contract` (deferred to the contract-adjacent wave), `reclassified` (severity or verdict changed on re-verification, reason recorded).
+
+Corpus caveat: the audit read its sources through a tool path that rewrites long digit runs, so at least one row (RS-0916) quotes a literal that exists nowhere in the tree or in git history. Every row's true state is re-verified at apply time (R3) and the ledger records the corrected finding; the corpus row text is left as the audit wrote it. `anchor` is the apply-time anchor when the wave re-located it; the seed anchor comes from the corpus row. Empty cells mean the row is not yet disposed.
 
 Every id must appear exactly once and end `applied`, `already-fixed`, `policy-confirmed`, or `needs-contract` at close-out; `escalated` rows carry the escalation history and their final outcome (R1, KTD1).
 
@@ -264,7 +266,7 @@ Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit messag
 | `RS-0955` | `type` | `X2-generated-boundary` | medium | actionable | leaf |  |  |  | `packages/xtask/src/gen_broker_operations.rs:949, packages/d2b-broker/src/generated/broker_` |  |  |
 | `RS-0956` | `type` | `X2-generated-boundary` | low | actionable | family |  |  |  | `packages/xtask/src/gen_broker_operations.rs:853-858, packages/xtask/src/gen_broker_operati` |  |  |
 | `RS-0957` | `type` | `X2-generated-boundary` | low | actionable | leaf |  |  |  | `packages/xtask/src/gen_broker_operations.rs:891, packages/d2b-core/src/generated/broker_op` |  |  |
-| `RS-0962` | `type` | `X3-cross-crate-duplication` | high | actionable | family |  |  |  | `packages/d2b-provider-wayland-policy/src/interaction.rs:428, packages/d2b-provider-volume-` |  |  |
+| `RS-0962` | `type` | `X3-cross-crate-duplication` | high | actionable | family | escalated | U1 |  | `packages/d2b-provider-wayland-policy/src/interaction.rs:428, packages/d2b-provider-volume-` | wave 0 applied the panicking constructor member (RS-0516); the five remaining provider-crate zone/key_ref member sites are the family wave's | U5 |
 | `RS-0263` | `type` | `d2b` | low | actionable | leaf |  |  |  | `context.rs:713, context.rs:2751, context.rs:801` |  |  |
 | `RS-0264` | `type` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/exec.rs:90, packages/d2b/src/exec.rs:345, packages/d2b/src/endpoint.rs:34` |  |  |
 | `RS-0239` | `type` | `d2b-audit` | medium | actionable | wide |  |  |  | `packages/d2b-audit/src/evidence_chain.rs:50, packages/d2b-audit/src/evidence_chain.rs:115,` |  |  |
@@ -485,7 +487,7 @@ Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit messag
 | `RS-0478` | `err` | `d2b` | medium | needs-contract | leaf |  |  |  | `packages/d2b/src/host.rs:274, packages/d2b/src/host.rs:303, packages/d2b/src/host.rs:332, ` |  |  |
 | `RS-0451` | `err` | `d2b-audit` | medium | actionable | leaf |  |  |  | `packages/d2b-audit/src/export.rs:230` |  |  |
 | `RS-0452` | `err` | `d2b-audit` | medium | actionable | leaf |  |  |  | `packages/d2b-audit/src/segment.rs:694, packages/d2b-audit/src/segment.rs:628, packages/d2b` |  |  |
-| `RS-0455` | `err` | `d2b-broker` | high | actionable | wide |  |  |  | `packages/d2b-broker/src/runtime.rs:2419, packages/d2b-broker/src/runtime.rs:2422` |  |  |
+| `RS-0455` | `err` | `d2b-broker` | high | actionable | wide | applied-variant | U1 | 092b0f3d3 | packages/d2b-broker/src/runtime.rs (from_request) | claim re-verified unreachable at HEAD (join digests are computed before parse); applied anyway so the broker yields the typed protocol refusal like the daemon and the sibling from_request_with_join - mutation-verified with the join returning raw strings, no wire change |  |
 | `RS-0454` | `err` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/usbip_lock.rs:47, packages/d2b-broker/src/ops/usbip_lock.rs:84` |  |  |
 | `RS-0457` | `err` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/hosts.rs:122, packages/d2b-broker/src/ops/hosts.rs:149, packag` |  |  |
 | `RS-0456` | `err` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/state_cells.rs:348, packages/d2b-broker/src/state_cells.rs:360` |  |  |
@@ -546,7 +548,7 @@ Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit messag
 | `RS-0513` | `err` | `d2b-provider-transport-azure-relay` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-transport-azure-relay/src/guest_zone_link.rs:26-30, packages/d2b-pro` |  |  |
 | `RS-0514` | `err` | `d2b-provider-user` | low | actionable | leaf |  |  |  | `packages/d2b-provider-user/src/driver.rs:118-124, packages/d2b-contracts/src/failure_kinds` |  |  |
 | `RS-0515` | `err` | `d2b-provider-volume-binding` | medium | actionable | family |  |  |  | `packages/d2b-provider-volume-binding/src/driver.rs:344, packages/d2b-provider-volume-bindi` |  |  |
-| `RS-0516` | `err` | `d2b-provider-wayland-policy` | high | actionable | family |  |  |  | `packages/d2b-provider-wayland-policy/src/interaction.rs:428, packages/d2b-provider-wayland` |  |  |
+| `RS-0516` | `err` | `d2b-provider-wayland-policy` | high | actionable | family | applied | U1 | 5776b3cc5 | packages/d2b-provider-wayland-policy/src/interaction.rs, tests/engine.rs | driver constructor returns a typed SpecInvalid refusal; the class's remaining member sites stay with the family wave | U5 (driver-args class member key_ref; RS-0962) |
 | `RS-0517` | `err` | `d2b-provider-wayland-session` | low | actionable | leaf |  |  |  | `packages/d2b-provider-wayland-session/src/wayland_session.rs:73` |  |  |
 | `RS-0518` | `err` | `d2b-resource-api` | low | actionable | leaf |  |  |  | `service.rs:867-868` |  |  |
 | `RS-0519` | `err` | `d2b-resource-client` | low | actionable | leaf |  |  |  | `packages/d2b-resource-client/src/call.rs:281, packages/d2b-resource-client/src/call.rs:309` |  |  |
@@ -568,7 +570,7 @@ Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit messag
 | `RS-0534` | `err` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/resource_plane_v3.rs:1956` |  |  |
 | `RS-0536` | `err` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/process_provider_runtime.rs:3436` |  |  |
 | `RS-0528` | `err` | `d2bd` | low | actionable | family |  |  |  | `packages/d2bd/src/composition.rs:13894, packages/d2bd/src/composition.rs:14127, packages/d` |  |  |
-| `RS-0538` | `err` | `d2bd-runtime` | high | actionable | leaf |  |  |  | `broker_transport.rs:63, broker_transport.rs:65` |  |  |
+| `RS-0538` | `err` | `d2bd-runtime` | high | actionable | leaf | applied-variant | U1 | ebb3831b1 | packages/d2bd-runtime/src/broker_transport.rs, packages/d2bd/src/composition.rs | claim re-verified unreachable at HEAD (digests canonicalized before parse); applied anyway to remove the latent expect and mirror the sibling typed refusal - callers updated |  |
 | `RS-0539` | `err` | `d2bd-runtime` | medium | actionable | leaf |  |  |  | `wire.rs:529-536` |  |  |
 | `RS-0540` | `err` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/exec_session.rs:939` |  |  |
 | `RS-0541` | `err` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/console_session.rs:132` |  |  |
@@ -869,10 +871,10 @@ Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit messag
 | `RS-0835` | `conc` | `d2bd-runtime` | medium | policy-confirmed | leaf |  |  |  | `packages/d2bd-runtime/src/unsafe_local_helper.rs:17, packages/d2bd-runtime/Cargo.toml:34` |  |  |
 | `RS-0836` | `conc` | `d2bd-runtime` | medium | policy-confirmed | leaf |  |  |  | `packages/d2bd-runtime/src/concurrency.rs:163, packages/d2bd-runtime/src/concurrency.rs:189` |  |  |
 | `RS-0834` | `conc` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `resource_runtime_support.rs:158, resource_runtime_support.rs:162, resource_runtime_support` |  |  |
-| `RS-0837` | `async` | `d2b-broker` | high | actionable | wide |  |  |  | `packages/d2b-broker/src/runtime.rs:11815, packages/d2b-broker/src/kernel_ops.rs:919, packa` |  |  |
-| `RS-0841` | `async` | `d2b-broker` | high | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/swtpm_dir.rs:770, packages/d2b-broker/src/sys.rs:1866-1893, pa` |  |  |
-| `RS-0842` | `async` | `d2b-broker` | high | actionable | wide |  |  |  | `packages/d2b-broker/src/ops/media.rs:2100, packages/d2b-broker/src/ops/media.rs:2126` |  |  |
-| `RS-0840` | `async` | `d2b-broker` | high | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/host_generation_handoff.rs:246, packages/d2b-broker/src/ops/ho` |  |  |
+| `RS-0837` | `async` | `d2b-broker` | high | actionable | wide | applied | U1 | 9b64eaa27 | packages/d2b-broker/src/runtime.rs (reap fn; kernel_ops.rs callers) | bounded WNOHANG reap poll replaces the blocking waitid; orphaned helpers deleted |  |
+| `RS-0841` | `async` | `d2b-broker` | high | actionable | leaf | applied | U1 | 25dfa3aee | packages/d2b-broker/src/sys.rs, packages/d2b-broker/src/ops/swtpm_dir.rs | setfacl shellout moved behind an async wrapper on a bounded worker |  |
+| `RS-0842` | `async` | `d2b-broker` | high | actionable | wide | applied | U1 | a6d8fb022 | packages/d2b-broker/src/ops/media.rs | nss group lookup hoisted to a LazyLock, off the per-write path |  |
+| `RS-0840` | `async` | `d2b-broker` | high | actionable | leaf | applied | U1 | f4f09c74c | packages/d2b-broker/src/ops/host_generation_handoff.rs | flock wait moved to a bounded worker (sanctioned allow reason) |  |
 | `RS-0839` | `async` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/live_handlers.rs:1614, packages/d2b-broker/src/live_handlers.rs:18` |  |  |
 | `RS-0838` | `async` | `d2b-broker` | medium | policy-confirmed | wide |  |  |  | `packages/d2b-broker/src/runtime.rs:7729, packages/d2b-broker/src/runtime.rs:7654, packages` |  |  |
 | `RS-0843` | `async` | `d2b-process-conformance` | low | actionable | family |  |  |  | `packages/d2b-process-conformance/src/port.rs:99, packages/d2b-process-conformance/src/port` |  |  |
@@ -883,7 +885,7 @@ Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit messag
 | `RS-0848` | `async` | `d2b-provider-network-local` | low | actionable | leaf |  |  |  | `src/observe.rs:255-260` |  |  |
 | `RS-0849` | `async` | `d2b-provider-system-core` | low | actionable | leaf |  |  |  | `src/testing.rs:30, src/testing.rs:19` |  |  |
 | `RS-0850` | `async` | `d2b-provider-transport-azure-relay` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-transport-azure-relay/src/relay_transport.rs:823-833` |  |  |
-| `RS-0851` | `async` | `d2b-provider-user` | high | policy-confirmed | leaf |  |  |  | `packages/d2b-provider-user/src/probe.rs:48, packages/d2b-provider-user/src/probe.rs:63, pa` |  |  |
+| `RS-0851` | `async` | `d2b-provider-user` | high | policy-confirmed | leaf | policy-confirmed | U1 |  | `packages/d2b-provider-user/src/probe.rs:48, packages/d2b-provider-user/src/probe.rs:63, pa` | recorded no-op (KTD8/R14): the deliberate bounded NSS probe is the crate's documented contract - packages/d2b-provider-user/README.md:50-55, src/probe.rs:1-5; audit cluster README.md:2806 |  |
 | `RS-0852` | `async` | `d2b-zone-routing` | medium | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/serving.rs:195, packages/d2b-zone-routing/src/serving.rs:207` |  |  |
 | `RS-0853` | `async` | `d2bd` | medium | actionable | leaf |  |  |  | `packages/d2bd/src/interaction_composition.rs:5518-5530` |  |  |
 | `RS-0854` | `async` | `d2bd` | medium | actionable | leaf |  |  |  | `packages/d2bd/src/shared_provider_effects.rs:316-324, packages/d2bd/src/shared_provider_ef` |  |  |
@@ -903,7 +905,7 @@ Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit messag
 | `RS-0866` | `test` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/tests/pidfd_handoff_scm_rights.rs:90` |  |  |
 | `RS-0864` | `test` | `d2b-broker-composition` | low | actionable | leaf |  |  |  | `packages/d2b-broker-composition/src/seam.rs:523` |  |  |
 | `RS-0865` | `test` | `d2b-broker-composition` | low | actionable | leaf |  |  |  | `packages/d2b-broker-composition/src/seam.rs:731, packages/d2b-broker-composition/src/seam.` |  |  |
-| `RS-0867` | `test` | `d2b-bus` | high | actionable | leaf |  |  |  | `packages/d2b-bus/src/metrics.rs:612-633, packages/d2b-bus/src/metrics.rs:451-534` |  |  |
+| `RS-0867` | `test` | `d2b-bus` | high | actionable | leaf | applied | U1 | 01e8edab3 | packages/d2b-bus/src/metrics.rs | test now drives BusMetrics::emit over every closed label domain; mutation-verified |  |
 | `RS-0868` | `test` | `d2b-bus` | medium | actionable | leaf |  |  |  | `packages/d2b-bus/src/session_seam_tests.rs:1623-1625, packages/d2b-bus/src/session_seam_te` |  |  |
 | `RS-0869` | `test` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/operations.rs:1057-1060` |  |  |
 | `RS-0870` | `test` | `d2b-contracts-control` | medium | actionable | leaf |  |  |  | `public_wire.rs:167, public_wire.rs:175` |  |  |
@@ -932,7 +934,7 @@ Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit messag
 | `RS-0896` | `test` | `d2b-provider-device-usbip` | medium | actionable | leaf |  |  |  | `tests/arbitration_conflict.rs:8-19, src/arbitration.rs:81-84, src/arbitration.rs:113-115, ` |  |  |
 | `RS-0897` | `test` | `d2b-provider-device-usbip` | medium | actionable | leaf |  |  |  | `src/reconcile_state.rs:51-308, src/state_machine.rs:98-100` |  |  |
 | `RS-0895` | `test` | `d2b-provider-device-usbip` | low | actionable | leaf |  |  |  | `tests/conformance.rs:63-66` |  |  |
-| `RS-0898` | `test` | `d2b-provider-display-wayland` | high | actionable | leaf |  |  |  | `packages/d2b-provider-display-wayland/src/wayland_proxy/filter.rs:3213, packages/d2b-provi` |  |  |
+| `RS-0898` | `test` | `d2b-provider-display-wayland` | high | actionable | leaf | applied | U1 | 3b964169f | packages/d2b-provider-display-wayland/src/wayland_proxy/filter.rs | registry-handler tests assert advertised-global outcomes; mutation-verified |  |
 | `RS-0900` | `test` | `d2b-provider-guest-azure-container-apps` | medium | actionable | leaf |  |  |  | `src/controller.rs:264-266, tests/provider_lifecycle.rs:210-225` |  |  |
 | `RS-0899` | `test` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf |  |  |  | `tests/provider_lifecycle.rs:536` |  |  |
 | `RS-0901` | `test` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf |  |  |  | `tests/error_redaction.rs:17` |  |  |
@@ -950,7 +952,7 @@ Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit messag
 | `RS-0914` | `test` | `d2b-resource-api` | medium | actionable | leaf |  |  |  | `packages/d2b-resource-api/src/manager_backend/tests.rs:1459, packages/d2b-resource-api/src` |  |  |
 | `RS-0913` | `test` | `d2b-resource-api` | low | actionable | leaf |  |  |  | `service.rs:3377` |  |  |
 | `RS-0915` | `test` | `d2b-resource-client` | low | actionable | leaf |  |  |  | `packages/d2b-resource-client/src/process_attach.rs:515, packages/d2b-resource-client/src/p` |  |  |
-| `RS-0916` | `test` | `d2b-resource-runtime` | high | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/revision.rs:157, packages/d2b-resource-runtime/src/revis` |  |  |
+| `RS-0916` | `test` | `d2b-resource-runtime` | high | actionable | leaf | applied-variant | U1 | 8b191fe39 | packages/d2b-resource-runtime/src/revision.rs (display test) | claim corrected: the committed line was a tautological bare-epoch assertion (not an assertion that cannot pass); the audit's quoted literal is a tool-output redaction artifact, absent from the file and from git history; the row's own fix text applied by deleting the redundant assertion |  |
 | `RS-0917` | `test` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/revision.rs:182` |  |  |
 | `RS-0918` | `test` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/lib.rs:66` |  |  |
 | `RS-0919` | `test` | `d2b-session` | low | actionable | leaf |  |  |  | `tests/admission.rs:78, tests/admission.rs:96, tests/admission.rs:139` |  |  |
@@ -959,7 +961,7 @@ Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit messag
 | `RS-0922` | `test` | `d2b-unsafe-local-helper` | low | actionable | leaf |  |  |  | `packages/d2b-unsafe-local-helper/src/runtime.rs:1566-1576, packages/d2b-unsafe-local-helpe` |  |  |
 | `RS-0923` | `test` | `d2b-zone-routing` | low | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/engine.rs:3333` |  |  |
 | `RS-0924` | `test` | `d2b-zone-routing` | low | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/router.rs:517` |  |  |
-| `RS-0925` | `test` | `d2bd-runtime` | high | actionable | leaf |  |  |  | `runtime_process.rs:543-546, runtime_process.rs:589-594` |  |  |
+| `RS-0925` | `test` | `d2bd-runtime` | high | actionable | leaf | applied | U1 | bea8fa96d | packages/d2bd-runtime/src/runtime_process.rs | sd_notify tests assert observable tracing outcomes; two mutations verified |  |
 | `RS-0926` | `test` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/daemon_audit.rs:2367` |  |  |
 | `RS-0928` | `test` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/delivery/command.rs:1059, packages/xtask/src/delivery/command.rs:1079` |  |  |
 | `RS-0927` | `test` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/gen_layer_catalogs.rs:705` |  |  |
