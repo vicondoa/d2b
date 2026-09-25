@@ -138,7 +138,7 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
         if ticket.operation().cancellation() == CancellationBinding::Cancelled {
             debug!(
                 provider = PROVIDER_NAME,
-                resource = %ticket.process_ref().to_canonical_string(),
+                resource = %ticket.process_ref(),
                 "assignment rejected: operation cancelled"
             );
             return Err(ProcessConformanceError::Cancelled);
