@@ -397,10 +397,10 @@ fn dispatch_audio_status(
     args: AudioStatusArgs,
 ) -> Result<Value, TypedError> {
     let manifest: ManifestV04 = crate::load_json(&state.config.artifacts.public_manifest_path)?;
-    let mut entries: Vec<AudioVmState> = Vec::new();
-    let mut errors: Vec<AudioVmError> = Vec::new();
 
-    // Collect the set of VMs to query.
+    // Collect the set of VMs to query before sizing the result buffers: the
+    // only lower bound on admission of that set, so both grow-by-push lists
+    // below are pre-sized to it instead of starting empty (RS-0803).
     let vm_names: Vec<String> = if args.vms.is_empty() {
         manifest
             .vms
@@ -411,6 +411,9 @@ fn dispatch_audio_status(
     } else {
         args.vms.clone()
     };
+
+    let mut entries: Vec<AudioVmState> = Vec::with_capacity(vm_names.len());
+    let mut errors: Vec<AudioVmError> = Vec::with_capacity(vm_names.len());
 
     for vm_name in &vm_names {
         match resolve_vm_audio_status(state, vm_name, &manifest, caller_role.clone()) {

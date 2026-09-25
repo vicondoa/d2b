@@ -330,7 +330,7 @@ fn resource_identity_fields(
             requested,
         });
     }
-    let mut fields = Vec::new();
+    let mut fields = Vec::with_capacity(12);
     required(
         &mut fields,
         "zone",
