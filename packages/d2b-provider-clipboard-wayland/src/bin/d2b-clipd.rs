@@ -112,7 +112,13 @@ struct Args {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     if let Err(error) = run(std::env::args().skip(1)) {
         eprintln!("d2b-clipd: {error}");
         std::process::exit(2);
@@ -124,13 +130,13 @@ fn main() {
 // binary, so these blocking calls are sync-by-construction.
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
+fn run(args_iter: impl IntoIterator<Item = String>) -> anyhow::Result<()> {
     let args = parse_args(args_iter)?;
 
     let config_text = std::fs::read_to_string(&args.config)
-        .map_err(|e| format!("failed to read config {}: {e}", args.config.display()))?;
+        .map_err(|e| anyhow::anyhow!("failed to read config {}: {e}", args.config.display()))?;
     let config_json: serde_json::Value = serde_json::from_str(&config_text)
-        .map_err(|e| format!("invalid config JSON {}: {e}", args.config.display()))?;
+        .map_err(|e| anyhow::anyhow!("invalid config JSON {}: {e}", args.config.display()))?;
 
     // Picker: CLI arg takes precedence, then config file key.
     let picker_from_config = config_json
@@ -139,13 +145,13 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         .map(PathBuf::from);
     let picker = args.picker.clone().or(picker_from_config);
     let bridge_peers = parse_bridge_peers(&config_json)?;
-    if let Some(p) = &args.picker
+    if let Some(p) = &picker
         && !p.is_absolute()
     {
-        return Err(format!("--picker path must be absolute: {}", p.display()));
+        return Err(anyhow::anyhow!("picker path must be absolute: {}", p.display()));
     }
     if !args.bridge_root.is_absolute() {
-        return Err(format!(
+        return Err(anyhow::anyhow!(
             "--bridge-root path must be absolute: {}",
             args.bridge_root.display()
         ));
@@ -156,7 +162,7 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     }
 
     // ── Wayland data-control ─────────────────────────────────────────────────
-    let mut data_control = DataControlClient::connect().map_err(|e| e.to_string())?;
+    let mut data_control = DataControlClient::connect().map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let niri_socket: Option<PathBuf> = args
         .niri_socket
@@ -190,24 +196,26 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     let control_socket = control_socket_path()?;
     install_control_socket_parent(&control_socket)?;
     let listener =
-        UnixListener::bind(&control_socket).map_err(|e| format!("bind control socket: {e}"))?;
+        UnixListener::bind(&control_socket).map_err(|e| anyhow::anyhow!("bind control socket: {e}"))?;
     listener
         .set_nonblocking(true)
-        .map_err(|e| format!("set_nonblocking: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("set_nonblocking: {e}"))?;
     let bridge_listeners = install_bridge_listeners(&args.bridge_root, &bridge_peers)?;
 
     // ── Niri IPC event stream thread ─────────────────────────────────────────
     if let Some(ref socket) = niri_socket {
-        spawn_niri_event_thread(socket.clone(), niri_tx);
+        if let Err(error) = spawn_niri_event_thread(socket.clone(), niri_tx) {
+            tracing::error!(error = %error, "d2b-clipd failed to spawn niri event thread");
+        }
     } else {
-        log::warn!("d2b-clipd: NIRI_SOCKET not set; focused-window attribution unavailable");
+        tracing::warn!("d2b-clipd NIRI_SOCKET not set; focused-window attribution unavailable");
     }
 
-    log::info!(
-        "d2b-clipd: ready (config={}, bridge_root={}, control={})",
-        args.config.display(),
-        args.bridge_root.display(),
-        control_socket.display()
+    tracing::info!(
+        config = %args.config.display(),
+        bridge_root = %args.bridge_root.display(),
+        control = %control_socket.display(),
+        "d2b-clipd ready"
     );
 
     if args.oneshot {
@@ -244,10 +252,10 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
     event_loop.run()
 }
 
-fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerConfig>, String> {
+fn parse_bridge_peers(config_json: &serde_json::Value) -> anyhow::Result<Vec<BridgePeerConfig>> {
     if let Some(value) = config_json.pointer("/runtime/bridgeEndpoints") {
         let Some(items) = value.as_array() else {
-            return Err("runtime.bridgeEndpoints must be an array".to_owned());
+            return Err(anyhow::anyhow!("runtime.bridgeEndpoints must be an array"));
         };
         return items
             .iter()
@@ -256,20 +264,20 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
                     .get("canonicalTarget")
                     .and_then(|value| value.as_str())
                     .ok_or_else(|| {
-                        "runtime.bridgeEndpoints[].canonicalTarget must be a string".to_owned()
+                        anyhow::anyhow!("runtime.bridgeEndpoints[].canonicalTarget must be a string")
                     })
                     .and_then(|value| {
                         WorkloadTarget::parse(value).map_err(|_| {
-                            "runtime.bridgeEndpoints[].canonicalTarget must be canonical".to_owned()
+                            anyhow::anyhow!("runtime.bridgeEndpoints[].canonicalTarget must be canonical")
                         })
                     })?;
                 let provider_kind = item
                     .get("providerKind")
                     .cloned()
-                    .ok_or_else(|| "runtime.bridgeEndpoints[].providerKind is required".to_owned())
+                    .ok_or_else(|| anyhow::anyhow!("runtime.bridgeEndpoints[].providerKind is required"))
                     .and_then(|value| {
                         serde_json::from_value::<WorkloadProviderKind>(value).map_err(|_| {
-                            "runtime.bridgeEndpoints[].providerKind is invalid".to_owned()
+                            anyhow::anyhow!("runtime.bridgeEndpoints[].providerKind is invalid")
                         })
                     })?;
                 let legacy_vm_name = item
@@ -278,7 +286,7 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
                     .map(str::to_owned);
                 if provider_kind == WorkloadProviderKind::UnsafeLocal && legacy_vm_name.is_some() {
                     return Err(
-                        "unsafe-local bridge endpoint must not carry legacyVmName".to_owned()
+                        anyhow::anyhow!("unsafe-local bridge endpoint must not carry legacyVmName")
                     );
                 }
                 let identity = ClipboardEndpointIdentity {
@@ -296,21 +304,20 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
                     .is_some_and(|declared| declared != socket_component)
                 {
                     return Err(
-                        "runtime.bridgeEndpoints[].socketComponent does not match canonical identity"
-                            .to_owned(),
+                        anyhow::anyhow!("runtime.bridgeEndpoints[].socketComponent does not match canonical identity"),
                     );
                 }
                 let expected_uid = item
                     .get("expectedUid")
                     .and_then(|value| value.as_u64())
                     .ok_or_else(|| {
-                        "runtime.bridgeEndpoints[].expectedUid must be an integer".to_owned()
+                        anyhow::anyhow!("runtime.bridgeEndpoints[].expectedUid must be an integer")
                     })?;
                 Ok(BridgePeerConfig {
                     identity,
                     socket_component,
                     expected_uid: expected_uid.try_into().map_err(|_| {
-                        "runtime.bridgeEndpoints[].expectedUid too large".to_owned()
+                        anyhow::anyhow!("runtime.bridgeEndpoints[].expectedUid too large")
                     })?,
                 })
             })
@@ -318,7 +325,7 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
     }
     if let Some(value) = config_json.pointer("/runtime/bridgePeers") {
         let Some(items) = value.as_array() else {
-            return Err("runtime.bridgePeers must be an array".to_owned());
+            return Err(anyhow::anyhow!("runtime.bridgePeers must be an array"));
         };
         return items
             .iter()
@@ -326,20 +333,20 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
                 let vm_name = item
                     .get("vmName")
                     .and_then(|value| value.as_str())
-                    .ok_or_else(|| "runtime.bridgePeers[].vmName must be a string".to_owned())?
+                    .ok_or_else(|| anyhow::anyhow!("runtime.bridgePeers[].vmName must be a string"))?
                     .to_owned();
                 let expected_uid = item
                     .get("expectedUid")
                     .and_then(|value| value.as_u64())
                     .ok_or_else(|| {
-                        "runtime.bridgePeers[].expectedUid must be an integer".to_owned()
+                        anyhow::anyhow!("runtime.bridgePeers[].expectedUid must be an integer")
                     })?;
                 Ok(BridgePeerConfig {
                     identity: legacy_vm_endpoint(&vm_name)?,
                     socket_component: vm_name,
                     expected_uid: expected_uid
                         .try_into()
-                        .map_err(|_| "runtime.bridgePeers[].expectedUid too large".to_owned())?,
+                        .map_err(|_| anyhow::anyhow!("runtime.bridgePeers[].expectedUid too large"))?,
                 })
             })
             .collect();
@@ -348,7 +355,7 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
         return Ok(Vec::new());
     };
     let Some(items) = value.as_array() else {
-        return Err("runtime.bridgeVms must be an array".to_owned());
+        return Err(anyhow::anyhow!("runtime.bridgeVms must be an array"));
     };
     items
         .iter()
@@ -356,7 +363,7 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
             let vm_name = item
                 .as_str()
                 .map(str::to_owned)
-                .ok_or_else(|| "runtime.bridgeVms entries must be strings".to_owned())?;
+                .ok_or_else(|| anyhow::anyhow!("runtime.bridgeVms entries must be strings"))?;
             Ok(BridgePeerConfig {
                 identity: legacy_vm_endpoint(&vm_name)?,
                 socket_component: vm_name,
@@ -366,9 +373,9 @@ fn parse_bridge_peers(config_json: &serde_json::Value) -> Result<Vec<BridgePeerC
         .collect()
 }
 
-fn legacy_vm_endpoint(vm_name: &str) -> Result<ClipboardEndpointIdentity, String> {
+fn legacy_vm_endpoint(vm_name: &str) -> anyhow::Result<ClipboardEndpointIdentity> {
     let canonical_target = WorkloadTarget::parse(&format!("{vm_name}.local.d2b"))
-        .map_err(|_| "bridge VM name cannot form a canonical target".to_owned())?;
+        .map_err(|_| anyhow::anyhow!("bridge VM name cannot form a canonical target"))?;
     Ok(ClipboardEndpointIdentity {
         canonical_target,
         provider_kind: WorkloadProviderKind::LocalVm,
@@ -408,7 +415,7 @@ struct EventLoop<'a> {
 
 impl EventLoop<'_> {
     #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-    fn run(&mut self) -> Result<(), String> {
+    fn run(&mut self) -> anyhow::Result<()> {
         loop {
             self.drain_async_materialization();
             // Flush pending Wayland requests before polling.
@@ -471,7 +478,7 @@ impl EventLoop<'_> {
                 match poll(&mut poll_fds, self.poll_timeout_ms()) {
                     Ok(_) => {}
                     Err(rustix::io::Errno::INTR) => continue,
-                    Err(error) => return Err(format!("poll failed: {error}")),
+                    Err(error) => return Err(anyhow::anyhow!("poll failed: {error}")),
                 }
                 let control_offset = 2 + usize::from(self.supervisor.active_socket().is_some());
                 let bridge_listener_offset = control_offset + self.control_streams.len();
@@ -532,12 +539,12 @@ impl EventLoop<'_> {
             if wayland_ready {
                 self.data_control
                     .prepare_and_read()
-                    .map_err(|e| format!("wayland read failed: {e}"))?;
+                    .map_err(|e| anyhow::anyhow!("wayland read failed: {e}"))?;
             }
             let wl_events = self
                 .data_control
                 .dispatch_pending()
-                .map_err(|e| format!("wayland dispatch failed: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("wayland dispatch failed: {e}"))?;
             for event in wl_events {
                 let mut context = WaylandEventContext {
                     data_control: self.data_control,
@@ -591,7 +598,7 @@ impl EventLoop<'_> {
                                 });
                             break;
                         }
-                        Err(error) => return Err(format!("control accept failed: {error}")),
+                        Err(error) => return Err(anyhow::anyhow!("control accept failed: {error}")),
                     }
                 }
             }
@@ -708,7 +715,7 @@ impl EventLoop<'_> {
             }
             self.supervisor.reap_terminated(now);
             if let FallbackTransition::Cleared(r) = self.fallback.on_timeout(now) {
-                log::debug!("d2b-clipd: paste action state cleared: {r:?}");
+                tracing::debug!(?r, "d2b-clipd paste action state cleared");
             }
             self.reap_idle_streams(now);
             self.accept_diag.flush_suppressed();
@@ -758,9 +765,9 @@ impl EventLoop<'_> {
                 current.entry_id = CURRENT_HOST_ENTRY_ID.to_owned();
                 self.current_host_entry = Some(current);
                 notify_bridge_selection_refresh(&mut self.bridge_streams);
-                log::info!(
-                    "d2b-clipd: recorded host selection mimes={}",
-                    entry.data_by_mime.len()
+                tracing::info!(
+                    mimes = %entry.data_by_mime.len(),
+                    "d2b-clipd recorded host selection"
                 );
             }
             self.history.push(entry);
@@ -782,12 +789,12 @@ impl EventLoop<'_> {
     fn reap_idle_streams(&mut self, now: Instant) {
         let control_dropped = reap_idle_control_streams(&mut self.control_streams, now);
         if control_dropped > 0 {
-            log::debug!("d2b-clipd: reaped {control_dropped} idle control stream(s)");
+            tracing::debug!(count = %control_dropped, "d2b-clipd reaped idle control streams");
         }
 
         let bridge_dropped = reap_idle_bridge_streams(&mut self.bridge_streams, now);
         if bridge_dropped > 0 {
-            log::debug!("d2b-clipd: reaped {bridge_dropped} idle bridge stream(s)");
+            tracing::debug!(count = %bridge_dropped, "d2b-clipd reaped idle bridge streams");
         }
     }
 }
@@ -845,9 +852,9 @@ impl AcceptDiagnostics {
             if let Some(count) = self.suppressed.remove(&key)
                 && count > 0
             {
-                log::warn!("d2b-clipd: accept diagnostic suppressed={count} key={key}");
+                tracing::warn!(count = %count, key = %key, "d2b-clipd accept diagnostic suppressed");
             }
-            log::warn!("{}", message());
+            tracing::warn!("{}", message());
             self.last_warn.insert(key, now);
         } else {
             *self.suppressed.entry(key).or_insert(0) += 1;
@@ -869,7 +876,7 @@ impl AcceptDiagnostics {
             if let Some(count) = self.suppressed.remove(&key)
                 && count > 0
             {
-                log::warn!("d2b-clipd: accept diagnostic suppressed={count} key={key}");
+                tracing::warn!(count = %count, key = %key, "d2b-clipd accept diagnostic suppressed");
             }
             self.last_warn.insert(key, now);
         }
@@ -1126,7 +1133,7 @@ enum BridgeAttribution {
 fn install_bridge_listeners(
     root: &Path,
     bridge_peers: &[BridgePeerConfig],
-) -> Result<Vec<BridgeListener>, String> {
+) -> anyhow::Result<Vec<BridgeListener>> {
     let uid = rustix::process::getuid().as_raw();
     bridge_peers
         .iter()
@@ -1134,36 +1141,36 @@ fn install_bridge_listeners(
             let path = bridge_socket_path(root, uid, &peer.socket_component)?;
             let parent = path
                 .parent()
-                .ok_or_else(|| format!("bridge socket has no parent: {}", path.display()))?;
+                .ok_or_else(|| anyhow::anyhow!("bridge socket has no parent: {}", path.display()))?;
             std::fs::DirBuilder::new()
                 .recursive(true)
                 .mode(0o770)
                 .create(parent)
-                .map_err(|e| format!("create bridge socket dir {}: {e}", parent.display()))?;
+                .map_err(|e| anyhow::anyhow!("create bridge socket dir {}: {e}", parent.display()))?;
             if path.exists() {
                 let meta = std::fs::symlink_metadata(&path)
-                    .map_err(|e| format!("stat bridge socket {}: {e}", path.display()))?;
+                    .map_err(|e| anyhow::anyhow!("stat bridge socket {}: {e}", path.display()))?;
                 if !meta.file_type().is_socket() {
-                    return Err(format!("refusing to replace non-socket {}", path.display()));
+                    return Err(anyhow::anyhow!("refusing to replace non-socket {}", path.display()));
                 }
                 std::fs::remove_file(&path)
-                    .map_err(|e| format!("remove stale bridge socket {}: {e}", path.display()))?;
+                    .map_err(|e| anyhow::anyhow!("remove stale bridge socket {}: {e}", path.display()))?;
             }
             // umask is process-wide: keep bridge listener installation in the
             // single-threaded startup phase, before spawning background workers.
             let old_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o111));
             let listener = UnixListener::bind(&path)
-                .map_err(|e| format!("bind bridge socket {}: {e}", path.display()));
+                .map_err(|e| anyhow::anyhow!("bind bridge socket {}: {e}", path.display()));
             nix::sys::stat::umask(old_umask);
             let listener = listener?;
             let bound_meta = std::fs::symlink_metadata(&path)
-                .map_err(|e| format!("stat bound bridge socket {}: {e}", path.display()))?;
+                .map_err(|e| anyhow::anyhow!("stat bound bridge socket {}: {e}", path.display()))?;
             if !bound_meta.file_type().is_socket() {
-                return Err(format!("refusing bound non-socket {}", path.display()));
+                return Err(anyhow::anyhow!("refusing bound non-socket {}", path.display()));
             }
             listener
                 .set_nonblocking(true)
-                .map_err(|e| format!("set bridge socket nonblocking {}: {e}", path.display()))?;
+                .map_err(|e| anyhow::anyhow!("set bridge socket nonblocking {}: {e}", path.display()))?;
             Ok(BridgeListener {
                 identity: peer.identity.clone(),
                 expected_uid: peer.expected_uid,
@@ -1173,14 +1180,14 @@ fn install_bridge_listeners(
         .collect()
 }
 
-fn bridge_socket_path(root: &Path, uid: u32, component: &str) -> Result<PathBuf, String> {
+fn bridge_socket_path(root: &Path, uid: u32, component: &str) -> anyhow::Result<PathBuf> {
     if component.is_empty()
         || component == "."
         || component == ".."
         || component.contains('/')
         || component.contains('\0')
     {
-        return Err("invalid bridge endpoint component".to_owned());
+        return Err(anyhow::anyhow!("invalid bridge endpoint component"));
     }
     Ok(root
         .join(uid.to_string())
@@ -1404,13 +1411,13 @@ fn handle_bridge_stream(
     BridgeStreamStatus::Done
 }
 
-fn validate_bridge_peer(stream: &UnixStream, expected_uid: u32) -> Result<(), String> {
+fn validate_bridge_peer(stream: &UnixStream, expected_uid: u32) -> anyhow::Result<()> {
     let creds = nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     if creds.uid() == expected_uid {
         Ok(())
     } else {
-        Err(format!(
+        Err(anyhow::anyhow!(
             "uid mismatch: expected {}, got {}",
             expected_uid,
             creds.uid()
@@ -1571,7 +1578,7 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgeRequest, Bridge
             source_attribution,
         } => parse_bridge_transfer(
             stream,
-            legacy_vm_endpoint(&vm_name).map_err(BridgeReadError::Invalid)?,
+            legacy_vm_endpoint(&vm_name).map_err(|e| BridgeReadError::Invalid(e.to_string()))?,
             mime_type,
             source_id,
             source_attribution,
@@ -1584,7 +1591,7 @@ fn parse_bridge_frame(stream: &mut BridgeStream) -> Result<BridgeRequest, Bridge
             source_attribution,
         } => parse_bridge_transfer(
             stream,
-            legacy_vm_endpoint(&vm_name).map_err(BridgeReadError::Invalid)?,
+            legacy_vm_endpoint(&vm_name).map_err(|e| BridgeReadError::Invalid(e.to_string()))?,
             mime_type,
             source_id,
             source_attribution,
@@ -1625,12 +1632,12 @@ fn parse_bridge_transfer(
             "bridge transfer fd rejected: {error}"
         )));
     }
-    log::debug!(
-        "d2b-clipd: received workload bridge request target={} provider={} source_id:{} mime={}",
-        bounded_label(&stream.identity.target_label()),
-        stream.identity.provider_label(),
-        source_id,
-        bounded_mime(&mime_type)
+    tracing::debug!(
+        target = %bounded_label(&stream.identity.target_label()),
+        provider = %stream.identity.provider_label(),
+        source_id = %source_id,
+        mime = %bounded_mime(&mime_type),
+        "d2b-clipd received workload bridge request"
     );
     stream.frame_deadline = Instant::now() + STREAM_FRAME_IDLE_TIMEOUT;
     if copy_selection {
@@ -1696,28 +1703,28 @@ fn notify_bridge_stream_selection_refresh(stream: &mut BridgeStream) -> bool {
     match &result {
         Ok(n) if *n == bytes.len() => {}
         Ok(_) => {
-            log::debug!(
-                "d2b-clipd: bridge refresh notify partial write for target={}; closing stream",
-                bounded_label(&stream.identity.target_label())
+            tracing::debug!(
+                target = %bounded_label(&stream.identity.target_label()),
+                "d2b-clipd bridge refresh notify partial write; closing stream"
             );
         }
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-            log::debug!(
-                "d2b-clipd: bridge refresh notify backpressured for target={}; closing stream",
-                bounded_label(&stream.identity.target_label())
+            tracing::debug!(
+                target = %bounded_label(&stream.identity.target_label()),
+                "d2b-clipd bridge refresh notify backpressured; closing stream"
             );
         }
         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
-            log::debug!(
-                "d2b-clipd: bridge refresh notify interrupted for target={}; closing stream",
-                bounded_label(&stream.identity.target_label())
+            tracing::debug!(
+                target = %bounded_label(&stream.identity.target_label()),
+                "d2b-clipd bridge refresh notify interrupted; closing stream"
             );
         }
         Err(error) => {
-            log::debug!(
-                "d2b-clipd: bridge refresh notify failed for target={}: {}",
-                bounded_label(&stream.identity.target_label()),
-                error
+            tracing::debug!(
+                target = %bounded_label(&stream.identity.target_label()),
+                error = %error,
+                "d2b-clipd bridge refresh notify failed"
             );
         }
     }
@@ -1766,7 +1773,7 @@ fn handle_bridge_copy_selection(
             });
         })
     {
-        log::error!("d2b-clipd: failed to spawn bridge copy reader: {error}");
+        tracing::error!(error = %error, "d2b-clipd failed to spawn bridge copy reader");
     }
 }
 
@@ -1792,12 +1799,12 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
             return;
         }
     };
-    log::debug!(
-        "d2b-clipd: bridge copy received target={} provider={} source_id:{} mime={}",
-        bounded_label(&identity.target_label()),
-        identity.provider_label(),
-        source_id,
-        bounded_mime(&mime_type)
+    tracing::debug!(
+        target = %bounded_label(&identity.target_label()),
+        provider = %identity.provider_label(),
+        source_id = %source_id,
+        mime = %bounded_mime(&mime_type),
+        "d2b-clipd bridge copy received"
     );
     *context.current_host_entry = None;
 
@@ -1867,11 +1874,11 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
             return;
         }
     }
-    log::debug!(
-        "d2b-clipd: bridge copy discovery source recorded target={} provider={} mimes={}",
-        bounded_label(&selection.identity.target_label()),
-        selection.identity.provider_label(),
-        selection.data_by_mime.len()
+    tracing::debug!(
+        target = %bounded_label(&selection.identity.target_label()),
+        provider = %selection.identity.provider_label(),
+        mimes = %selection.data_by_mime.len(),
+        "d2b-clipd bridge copy discovery source recorded"
     );
 }
 
@@ -1971,10 +1978,10 @@ fn handle_bridge_paste_request(
         && let Some(selection) = context.published_selection.take()
         && let Some(bytes) = compatible_mime_payload(&selection.data_by_mime, &mime_type)
     {
-        log::debug!(
-            "d2b-clipd: bridge paste served from selected source target={} mime={}",
-            bounded_label(&identity.target_label()),
-            bounded_mime(&mime_type)
+        tracing::debug!(
+            target = %bounded_label(&identity.target_label()),
+            mime = %bounded_mime(&mime_type),
+            "d2b-clipd bridge paste served from selected source"
         );
         spawn_write_bytes_to_fd(fd, mime_type, bytes);
         return;
@@ -1986,15 +1993,15 @@ fn handle_bridge_paste_request(
         context.history,
         &mime_type,
     );
-    log::debug!(
-        "d2b-clipd: bridge paste request target={} provider={} source_id:{} mime={} dest_app={} dest_output={} candidates={} action=open-picker-and-replay",
-        bounded_label(&identity.target_label()),
-        identity.provider_label(),
-        source_id,
-        bounded_mime(&mime_type),
-        bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
-        bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
-        summarize_candidates(&candidates)
+    tracing::debug!(
+        target = %bounded_label(&identity.target_label()),
+        provider = %identity.provider_label(),
+        source_id = %source_id,
+        mime = %bounded_mime(&mime_type),
+        dest_app = %bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
+        dest_output = %bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
+        candidates = %summarize_candidates(&candidates),
+        "d2b-clipd bridge paste request"
     );
     let mut picker_context = PickerOpenContext {
         fallback: &mut *context.fallback,
@@ -2030,8 +2037,8 @@ fn notify_bridge_paste_failure<N: Notifier>(
 fn flush_audit_events(audit_queue: &mut AuditQueue) {
     for event in audit_queue.drain_all() {
         match serde_json::to_string(&event) {
-            Ok(json) => log::info!("d2b-clipd: audit_event {json}"),
-            Err(error) => log::warn!("d2b-clipd: audit event encode failed: {error}"),
+            Ok(json) => tracing::info!(json = %json, "d2b-clipd audit event"),
+            Err(error) => tracing::warn!(error = %error, "d2b-clipd audit event encode failed"),
         }
     }
 }
@@ -2044,14 +2051,14 @@ fn flush_metric_events(metrics_queue: &mut MetricsQueue) {
             reason: None,
         };
         match serde_json::to_string(&event) {
-            Ok(json) => log::warn!("d2b-clipd: metric_event {json} dropped_count:{dropped}"),
-            Err(error) => log::warn!("d2b-clipd: metric event encode failed: {error}"),
+            Ok(json) => tracing::warn!(json = %json, dropped = %dropped, "d2b-clipd metric event dropped"),
+            Err(error) => tracing::warn!(error = %error, "d2b-clipd metric event encode failed"),
         }
     }
     for event in metrics_queue.drain_all() {
         match serde_json::to_string(&event) {
-            Ok(json) => log::debug!("d2b-clipd: metric_event {json}"),
-            Err(error) => log::warn!("d2b-clipd: metric event encode failed: {error}"),
+            Ok(json) => tracing::debug!(json = %json, "d2b-clipd metric event"),
+            Err(error) => tracing::warn!(error = %error, "d2b-clipd metric event encode failed"),
         }
     }
 }
@@ -2083,7 +2090,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             let focused_window = context.host_clipboard.refresh_focused_window_snapshot();
             if focused_window.is_none() {
                 context.host_clipboard.on_host_selection_cleared();
-                log::debug!("d2b-clipd: ignored unattributed host selection");
+                tracing::debug!("d2b-clipd ignored unattributed host selection");
                 return;
             }
             if focused_window
@@ -2092,7 +2099,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 .is_some_and(is_forwarded_vm_app_id)
             {
                 context.host_clipboard.on_host_selection_cleared();
-                log::debug!("d2b-clipd: ignored forwarded VM host-selection echo");
+                tracing::debug!("d2b-clipd ignored forwarded VM host-selection echo");
                 return;
             }
             if should_suppress_bridge_selection_echo(
@@ -2100,7 +2107,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 context.bridge_selection.as_ref(),
             ) {
                 context.host_clipboard.on_host_selection_cleared();
-                log::debug!("d2b-clipd: suppressed source-VM selection echo");
+                tracing::debug!("d2b-clipd suppressed source-VM selection echo");
                 return;
             }
             if focused_window_matches_bridge_source(
@@ -2108,7 +2115,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 context.bridge_selection.as_ref(),
             ) {
                 context.host_clipboard.on_host_selection_cleared();
-                log::debug!("d2b-clipd: ignored source-VM selection echo");
+                tracing::debug!("d2b-clipd ignored source-VM selection echo");
                 return;
             }
             if should_suppress_published_selection_echo(
@@ -2155,21 +2162,21 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     entry,
                 );
             }
-            log::info!(
-                "d2b-clipd: host selection changed mimes={} attribution_app={} attribution_output={}",
-                allowed_mimes.len(),
-                bounded_label(
+            tracing::info!(
+                mimes = %allowed_mimes.len(),
+                attribution_app = %bounded_label(
                     focused_window
                         .as_ref()
                         .and_then(|window| window.app_id.as_deref())
                         .unwrap_or("unknown")
                 ),
-                bounded_label(
+                attribution_output = %bounded_label(
                     focused_window
                         .as_ref()
                         .and_then(|window| window.output_label.as_deref())
                         .unwrap_or("unknown")
-                )
+                ),
+                "d2b-clipd host selection changed"
             );
             // A new native selection supersedes any armed fallback.
             let _ = context.fallback.on_native_selection_changed();
@@ -2195,9 +2202,9 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                         {
                             spawn_write_bytes_to_fd(fd, mime_type, bytes);
                         } else {
-                            log::info!(
-                                "d2b-clipd: published selection missing requested mime={}",
-                                bounded_mime(&mime_type)
+                            tracing::info!(
+                                mime = %bounded_mime(&mime_type),
+                                "d2b-clipd published selection missing requested mime"
                             );
                             drop(fd);
                         }
@@ -2212,9 +2219,9 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                             Some(&dest),
                             context.bridge_selection.as_ref(),
                         ) {
-                            log::debug!(
-                                "d2b-clipd: ignored discovery source probe mime={}",
-                                bounded_mime(&mime_type)
+                            tracing::debug!(
+                                mime = %bounded_mime(&mime_type),
+                                "d2b-clipd ignored discovery source probe"
                             );
                             return;
                         }
@@ -2283,12 +2290,12 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                                 },
                             );
                         }
-                        log::info!(
-                            "d2b-clipd: discovery source paste request mime={} dest_app={} dest_output={} candidates={} action=open-picker-and-replay",
-                            bounded_mime(&mime_type),
-                            bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
-                            bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
-                            summarize_candidates(&candidates)
+                        tracing::info!(
+                            mime = %bounded_mime(&mime_type),
+                            dest_app = %bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
+                            dest_output = %bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
+                            candidates = %summarize_candidates(&candidates),
+                            "d2b-clipd discovery source paste request"
                         );
                         let mut picker_context = PickerOpenContext {
                             fallback: &mut *context.fallback,
@@ -2330,10 +2337,10 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                     .unwrap_or_default();
                 drop(fd);
                 if focused_app_matches_endpoint(dest.app_id.as_deref(), &selection.identity) {
-                    log::debug!(
-                        "d2b-clipd: ignored bridge source probe from source target={} mime={}",
-                        bounded_label(&selection.identity.target_label()),
-                        bounded_mime(&mime_type)
+                    tracing::debug!(
+                        target = %bounded_label(&selection.identity.target_label()),
+                        mime = %bounded_mime(&mime_type),
+                        "d2b-clipd ignored bridge source probe"
                     );
                     return;
                 }
@@ -2348,15 +2355,15 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                                 != Some(selection.identity.target_label().as_str())
                         }),
                 );
-                log::debug!(
-                    "d2b-clipd: bridge selection paste request target={} provider={} source_id:{} mime={} dest_app={} dest_output={} candidates={}",
-                    bounded_label(&selection.identity.target_label()),
-                    selection.identity.provider_label(),
-                    selection.source_id,
-                    bounded_mime(&mime_type),
-                    bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
-                    bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
-                    summarize_candidates(&candidates)
+                tracing::debug!(
+                    target = %bounded_label(&selection.identity.target_label()),
+                    provider = %selection.identity.provider_label(),
+                    source_id = %selection.source_id,
+                    mime = %bounded_mime(&mime_type),
+                    dest_app = %bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
+                    dest_output = %bounded_label(dest.output_label.as_deref().unwrap_or("unknown")),
+                    candidates = %summarize_candidates(&candidates),
+                    "d2b-clipd bridge selection paste request"
                 );
                 let mut picker_context = PickerOpenContext {
                     fallback: &mut *context.fallback,
@@ -2375,28 +2382,28 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                 .refresh_focused_window_snapshot()
                 .unwrap_or_default();
             if dest.app_id.as_deref().is_some_and(is_forwarded_vm_app_id) {
-                log::debug!(
-                    "d2b-clipd: ignored unknown d2b source probe from forwarded VM app mime={}",
-                    bounded_mime(&mime_type)
+                tracing::debug!(
+                    mime = %bounded_mime(&mime_type),
+                    "d2b-clipd ignored unknown d2b source probe from forwarded VM app"
                 );
                 return;
             }
             if focused_window_matches_bridge_source(Some(&dest), context.bridge_selection.as_ref())
             {
-                log::debug!(
-                    "d2b-clipd: ignored unknown d2b source probe from source VM mime={}",
-                    bounded_mime(&mime_type)
+                tracing::debug!(
+                    mime = %bounded_mime(&mime_type),
+                    "d2b-clipd ignored unknown d2b source probe from source VM"
                 );
                 return;
             }
-            log::debug!(
-                "d2b-clipd: ignored unknown d2b source_id:{} mime={}",
-                source_id,
-                bounded_mime(&mime_type)
+            tracing::debug!(
+                source_id = %source_id,
+                mime = %bounded_mime(&mime_type),
+                "d2b-clipd ignored unknown d2b source"
             );
         }
         HostClipboardEvent::SourceCancelled { source_id } => {
-            log::debug!("d2b-clipd: source {source_id} cancelled");
+            tracing::debug!(source_id = %source_id, "d2b-clipd source cancelled");
             if context
                 .published_selection
                 .as_ref()
@@ -2415,7 +2422,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
             }
         }
         HostClipboardEvent::DeviceFinished => {
-            log::warn!("d2b-clipd: data-control device finished (compositor seat removed)");
+            tracing::warn!("d2b-clipd data-control device finished (compositor seat removed)");
         }
     }
 }
@@ -2460,12 +2467,12 @@ fn handle_control_stream(
             );
             let body = match response {
                 Ok(msg) => format!("{{\"ok\":true,\"message\":{}}}\n", json_string(&msg)),
-                Err(err) => format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&err)),
+                Err(err) => format!("{{\"ok\":false,\"error\":{}}}\n", json_string(&err.to_string())),
             };
             if let Err(error) =
                 write_all_nonblocking_stream(&control.stream, body.as_bytes(), BOUNDED_READ_TIMEOUT)
             {
-                log::warn!("d2b-clipd: write control response failed: {error}");
+                tracing::warn!(error = %error, "d2b-clipd write control response failed");
             }
             ControlStreamStatus::Done
         }
@@ -2476,7 +2483,7 @@ fn handle_control_stream(
             if let Err(error) =
                 write_all_nonblocking_stream(&control.stream, body.as_bytes(), BOUNDED_READ_TIMEOUT)
             {
-                log::warn!("d2b-clipd: write control error response failed: {error}");
+                tracing::warn!(error = %error, "d2b-clipd write control error response failed");
             }
             ControlStreamStatus::Done
         }
@@ -2606,10 +2613,10 @@ struct PickerMessageContext<'a> {
 fn handle_picker_message(message: PickerToDaemonMessage, context: &mut PickerMessageContext<'_>) {
     match message {
         PickerToDaemonMessage::Select(select) => {
-            log::info!(
-                "d2b-clipd: picker selected entry for request {} entry={}",
-                select.request_id,
-                bounded_label(&select.entry_id)
+            tracing::info!(
+                request_id = %select.request_id,
+                entry = %bounded_label(&select.entry_id),
+                "d2b-clipd picker selected entry"
             );
             match publish_selected_entry_to_host(
                 context.data_control,
@@ -2636,7 +2643,7 @@ fn handle_picker_message(message: PickerToDaemonMessage, context: &mut PickerMes
                                 niri_socket.as_deref(),
                                 replay_target.as_ref(),
                             ) {
-                                log::warn!("d2b-clipd: host instant paste failed: {error}");
+                                tracing::warn!(error = %error, "d2b-clipd host instant paste failed");
                                 let mut notifier = DesktopNotifier;
                                 crate::clipd_host::notifications::emit_user_visible_failure(
                                     &mut notifier,
@@ -2647,7 +2654,7 @@ fn handle_picker_message(message: PickerToDaemonMessage, context: &mut PickerMes
                             }
                         })
                     {
-                        log::error!("d2b-clipd: failed to spawn paste replay worker: {error}");
+                        tracing::error!(error = %error, "d2b-clipd failed to spawn paste replay worker");
                     }
                 }
                 Err(reason) => {
@@ -2663,12 +2670,12 @@ fn handle_picker_message(message: PickerToDaemonMessage, context: &mut PickerMes
             }
         }
         PickerToDaemonMessage::Cancel(cancel) => {
-            log::debug!("d2b-clipd: picker cancelled request {}", cancel.request_id);
+            tracing::debug!(request_id = %cancel.request_id, "d2b-clipd picker cancelled request");
             let _ = context.fallback.cancel_picker();
             let _ = context.supervisor.cancel_active(ReasonCode::PickerTimeout);
         }
         PickerToDaemonMessage::ClientHello(_) => {
-            log::debug!("d2b-clipd: ignored duplicate picker client_hello");
+            tracing::debug!("d2b-clipd ignored duplicate picker client_hello");
         }
     }
 }
@@ -2676,16 +2683,16 @@ fn handle_picker_message(message: PickerToDaemonMessage, context: &mut PickerMes
 fn replay_paste_after_focus(
     niri_socket: Option<&Path>,
     target: Option<&FocusedWindowSnapshot>,
-) -> Result<(), String> {
-    let socket = niri_socket.ok_or_else(|| "niri socket is unavailable".to_owned())?;
-    let target = target.ok_or_else(|| "paste target is unavailable".to_owned())?;
+) -> anyhow::Result<()> {
+    let socket = niri_socket.ok_or_else(|| anyhow::anyhow!("niri socket is unavailable"))?;
+    let target = target.ok_or_else(|| anyhow::anyhow!("paste target is unavailable"))?;
     wait_for_target_focus(
         target,
         PASTE_FOCUS_RESTORE_TIMEOUT,
         PASTE_FOCUS_POLL_INTERVAL,
         || query_focused_window_snapshot(socket),
     )?;
-    crate::clipd_host::virtual_keyboard::paste_ctrl_v().map_err(|error| error.to_string())
+    crate::clipd_host::virtual_keyboard::paste_ctrl_v().map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
@@ -2694,9 +2701,9 @@ fn wait_for_target_focus<F>(
     timeout: Duration,
     poll_interval: Duration,
     mut query: F,
-) -> Result<(), String>
+) -> anyhow::Result<()>
 where
-    F: FnMut() -> Result<Option<FocusedWindowSnapshot>, String>,
+    F: FnMut() -> anyhow::Result<Option<FocusedWindowSnapshot>>,
 {
     let deadline = Instant::now() + timeout;
     loop {
@@ -2707,19 +2714,19 @@ where
             return Ok(());
         }
         if Instant::now() >= deadline {
-            return Err("focused destination was not restored before timeout".to_owned());
+            return Err(anyhow::anyhow!("focused destination was not restored before timeout"));
         }
         std::thread::sleep(poll_interval);
     }
 }
 
-fn query_focused_window_snapshot(socket: &Path) -> Result<Option<FocusedWindowSnapshot>, String> {
+fn query_focused_window_snapshot(socket: &Path) -> anyhow::Result<Option<FocusedWindowSnapshot>> {
     let mut client = NiriJsonClient::connect(
         socket,
         crate::clipd_host::niri::DEFAULT_NIRI_MAX_LINE_BYTES,
         Some(Duration::from_millis(250)),
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(|error| anyhow::anyhow!("{error}"))?;
     client
         .query_focused_window()
         .map(|window| {
@@ -2731,7 +2738,7 @@ fn query_focused_window_snapshot(socket: &Path) -> Result<Option<FocusedWindowSn
                 output_label: window.output_label,
             })
         })
-        .map_err(|error| error.to_string())
+        .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 fn publish_selected_entry_to_host(
@@ -2755,10 +2762,10 @@ fn publish_selected_entry_to_host(
         *published_selection = None;
         return Err(ReasonCode::BridgeUnavailable);
     }
-    log::info!(
-        "d2b-clipd: published selected entry id={} mimes={} for instant paste",
-        bounded_label(entry_id),
-        mimes_len
+    tracing::info!(
+        id = %bounded_label(entry_id),
+        mimes = %mimes_len,
+        "d2b-clipd published selected entry for instant paste"
     );
     Ok(())
 }
@@ -2852,7 +2859,7 @@ fn materialize_offer_mimes_async(
     let permit = match try_acquire_helper_thread() {
         Ok(permit) => permit,
         Err(reason) => {
-            log::warn!("d2b-clipd: host copy reader denied: {}", reason.as_str());
+            tracing::warn!(reason = %reason.as_str(), "d2b-clipd host copy reader denied");
             return;
         }
     };
@@ -2872,7 +2879,7 @@ fn materialize_offer_mimes_async(
             }
         })
     {
-        log::error!("d2b-clipd: failed to spawn host copy reader: {error}");
+        tracing::error!(error = %error, "d2b-clipd failed to spawn host copy reader");
     }
 }
 
@@ -2880,10 +2887,10 @@ fn spawn_write_bytes_to_fd(fd: std::os::fd::OwnedFd, mime: String, bytes: Vec<u8
     let permit = match try_acquire_helper_thread() {
         Ok(permit) => permit,
         Err(reason) => {
-            log::info!(
-                "d2b-clipd: published paste write denied mime={}: {}",
-                bounded_mime(&mime),
-                reason.as_str()
+            tracing::info!(
+                mime = %bounded_mime(&mime),
+                reason = %reason.as_str(),
+                "d2b-clipd published paste write denied"
             );
             drop(fd);
             return;
@@ -2894,20 +2901,20 @@ fn spawn_write_bytes_to_fd(fd: std::os::fd::OwnedFd, mime: String, bytes: Vec<u8
         .spawn(move || {
             let _permit = permit;
             match write_all_nonblocking_fd(&fd, &bytes, Instant::now() + BOUNDED_READ_TIMEOUT) {
-                Ok(()) => log::debug!(
-                    "d2b-clipd: published paste write complete mime={}",
-                    bounded_mime(&mime)
+                Ok(()) => tracing::debug!(
+                    mime = %bounded_mime(&mime),
+                    "d2b-clipd published paste write complete"
                 ),
-                Err(reason) => log::info!(
-                    "d2b-clipd: published paste write failed mime={}: {}",
-                    bounded_mime(&mime),
-                    reason.as_str()
+                Err(reason) => tracing::info!(
+                    mime = %bounded_mime(&mime),
+                    reason = %reason.as_str(),
+                    "d2b-clipd published paste write failed"
                 ),
             }
             drop(fd);
         })
     {
-        log::error!("d2b-clipd: failed to spawn published paste writer: {error}");
+        tracing::error!(error = %error, "d2b-clipd failed to spawn published paste writer");
     }
 }
 
@@ -2999,7 +3006,7 @@ fn handle_arm(
     notifier: &mut impl Notifier,
     accept_diag: &mut AcceptDiagnostics,
     history: &ClipboardHistory,
-) -> Result<String, String> {
+) -> anyhow::Result<String> {
     let dest = host_clipboard
         .refresh_focused_window_snapshot()
         .unwrap_or_default();
@@ -3030,7 +3037,7 @@ fn handle_arm(
                 candidates,
             ) {
                 Ok(picker_version) => {
-                    log::debug!("d2b-clipd: picker opened (version={picker_version})");
+                    tracing::debug!(version = %picker_version, "d2b-clipd picker opened");
                     Ok("picker opened".to_owned())
                 }
                 Err(error) => {
@@ -3045,7 +3052,7 @@ fn handle_arm(
                         "clipboard",
                         dest.app_id.as_deref().unwrap_or("host"),
                     );
-                    Err(ReasonCode::PickerCrashed.as_str().to_owned())
+                    Err(anyhow::anyhow!("{}", ReasonCode::PickerCrashed.as_str()))
                 }
             }
         }
@@ -3060,7 +3067,7 @@ fn handle_arm(
                 "clipboard",
                 dest.app_id.as_deref().unwrap_or("host"),
             );
-            Err(ReasonCode::PickerNotConfigured.as_str().to_owned())
+            Err(anyhow::anyhow!("{}", ReasonCode::PickerNotConfigured.as_str()))
         }
     }
 }
@@ -3108,18 +3115,18 @@ fn picker_handshake(
     endpoint: Option<&ClipboardEndpointIdentity>,
     requested_mime_type: &str,
     candidates: Vec<Candidate>,
-) -> Result<String, String> {
+) -> anyhow::Result<String> {
     let hello_buf = read_bounded_line(
         socket,
         PICKER_TO_DAEMON_MAX_FRAME_BYTES,
         BOUNDED_READ_TIMEOUT,
     )
-    .map_err(|e| format!("read hello: {e}"))?;
+    .map_err(|e| anyhow::anyhow!("read hello: {e}"))?;
     let hello: PickerToDaemonMessage = decode_frame(&hello_buf, PICKER_TO_DAEMON_MAX_FRAME_BYTES)
-        .map_err(|e| format!("decode hello: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("decode hello: {e}"))?;
     let picker_version = match hello {
         PickerToDaemonMessage::ClientHello(ClientHello { picker_version, .. }) => picker_version,
-        _ => return Err("first frame was not client_hello".to_owned()),
+        _ => return Err(anyhow::anyhow!("first frame was not client_hello")),
     };
 
     let request = DaemonToPickerMessage::OpenRequest(Box::new(OpenRequest {
@@ -3142,28 +3149,28 @@ fn picker_handshake(
         candidates,
     }));
     if let DaemonToPickerMessage::OpenRequest(request) = &request {
-        log::info!(
-            "d2b-clipd: picker open request id={} requested_mime={} dest_app={} dest_output={} candidates={}",
-            bounded_label(&request.request_id),
-            bounded_mime(&request.requested_mime_type),
-            bounded_label(request.destination.app_id.as_deref().unwrap_or("unknown")),
-            bounded_label(
+        tracing::info!(
+            request_id = %bounded_label(&request.request_id),
+            requested_mime = %bounded_mime(&request.requested_mime_type),
+            dest_app = %bounded_label(request.destination.app_id.as_deref().unwrap_or("unknown")),
+            dest_output = %bounded_label(
                 request
                     .placement_hints
                     .as_ref()
                     .and_then(|hints| hints.output.as_deref())
                     .unwrap_or("unknown")
             ),
-            summarize_candidates(&request.candidates)
+            candidates = %summarize_candidates(&request.candidates),
+            "d2b-clipd picker open request"
         );
     }
     let frame = encode_frame(&request, OpenRequestFrameCaps::default().max_frame_bytes())
-        .map_err(|e| format!("encode open_request: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("encode open_request: {e}"))?;
     let writer = socket
         .try_clone()
-        .map_err(|e| format!("clone for write: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("clone for write: {e}"))?;
     write_all_nonblocking_stream(&writer, &frame, BOUNDED_READ_TIMEOUT)
-        .map_err(|e| format!("write open_request: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("write open_request: {e}"))?;
 
     Ok(picker_version)
 }
@@ -3441,9 +3448,9 @@ fn open_picker_for_candidates(
                         context.notifier,
                     );
                 } else {
-                    log::debug!(
-                        "d2b-clipd: picker opened for paste to {}",
-                        bounded_label(dest.app_id.as_deref().unwrap_or("unknown"))
+                    tracing::debug!(
+                        dest_app = %bounded_label(dest.app_id.as_deref().unwrap_or("unknown")),
+                        "d2b-clipd picker opened for paste"
                     );
                 }
             }
@@ -3487,7 +3494,7 @@ fn arm_native_fallback(
     if matches!(transition, FallbackTransition::Armed) {
         let label = dest.app_id.as_deref().unwrap_or("host application");
         emit_fallback_ready(notifier, label);
-        log::debug!("d2b-clipd: paste action armed for {}", bounded_label(label));
+        tracing::debug!(label = %bounded_label(label), "d2b-clipd paste action armed");
     }
 }
 
@@ -3500,7 +3507,7 @@ enum NiriMessage {
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn spawn_niri_event_thread(socket: PathBuf, tx: mpsc::Sender<NiriMessage>) {
+fn spawn_niri_event_thread(socket: PathBuf, tx: mpsc::Sender<NiriMessage>) -> Result<(), std::io::Error> {
     std::thread::Builder::new()
         .name("d2b-clipd-niri".to_owned())
         .spawn(move || {
@@ -3511,7 +3518,7 @@ fn spawn_niri_event_thread(socket: PathBuf, tx: mpsc::Sender<NiriMessage>) {
             ) {
                 Ok(c) => c,
                 Err(e) => {
-                    log::warn!("d2b-clipd: niri connect: {e}");
+                    tracing::warn!(error = %e, "d2b-clipd niri connect");
                     let _ = tx.send(NiriMessage::Disconnected);
                     return;
                 }
@@ -3521,7 +3528,7 @@ fn spawn_niri_event_thread(socket: PathBuf, tx: mpsc::Sender<NiriMessage>) {
             let _: serde_json::Value = match client.request(&NiriRequest::EventStream) {
                 Ok(v) => v,
                 Err(e) => {
-                    log::warn!("d2b-clipd: niri EventStream: {e}");
+                    tracing::warn!(error = %e, "d2b-clipd niri EventStream");
                     let _ = tx.send(NiriMessage::Disconnected);
                     return;
                 }
@@ -3536,14 +3543,14 @@ fn spawn_niri_event_thread(socket: PathBuf, tx: mpsc::Sender<NiriMessage>) {
                         }
                     }
                     Err(e) => {
-                        log::warn!("d2b-clipd: niri event: {e}");
+                        tracing::warn!(error = %e, "d2b-clipd niri event");
                         let _ = tx.send(NiriMessage::Disconnected);
                         break;
                     }
                 }
             }
-        })
-        .expect("niri thread spawn");
+        })?;
+    Ok(())
 }
 
 fn drain_niri_channel(
@@ -3560,7 +3567,7 @@ fn drain_niri_channel(
                 }
             }
             Ok(NiriMessage::Disconnected) => {
-                log::warn!("d2b-clipd: niri stream disconnected");
+                tracing::warn!("d2b-clipd niri stream disconnected");
                 break;
             }
             Err(mpsc::TryRecvError::Empty) | Err(mpsc::TryRecvError::Disconnected) => break,
@@ -3612,21 +3619,21 @@ impl crate::clipd_host::niri::FocusedWindowProvider for NiriQueryProvider {
 
 // ─── Control socket helpers ───────────────────────────────────────────────────
 
-fn control_socket_path() -> Result<PathBuf, String> {
+fn control_socket_path() -> anyhow::Result<PathBuf> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-        .ok_or_else(|| "XDG_RUNTIME_DIR is required for d2b-clipd control socket".to_owned())?;
+        .ok_or_else(|| anyhow::anyhow!("XDG_RUNTIME_DIR is required for d2b-clipd control socket"))?;
     Ok(PathBuf::from(runtime).join("d2b-clipd/clipd.sock"))
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn install_control_socket_parent(socket: &Path) -> Result<(), String> {
+fn install_control_socket_parent(socket: &Path) -> anyhow::Result<()> {
     let parent = socket
         .parent()
-        .ok_or_else(|| format!("control socket has no parent: {}", socket.display()))?;
+        .ok_or_else(|| anyhow::anyhow!("control socket has no parent: {}", socket.display()))?;
     std::fs::create_dir_all(parent)
-        .map_err(|e| format!("create control socket dir {}: {e}", parent.display()))?;
+        .map_err(|e| anyhow::anyhow!("create control socket dir {}: {e}", parent.display()))?;
     std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("chmod control socket dir {}: {e}", parent.display()))?;
+        .map_err(|e| anyhow::anyhow!("chmod control socket dir {}: {e}", parent.display()))?;
     let _ = std::fs::remove_file(socket);
     Ok(())
 }
@@ -3647,20 +3654,20 @@ fn read_bounded_line(
     stream: &UnixStream,
     max_frame_bytes: usize,
     timeout: Duration,
-) -> Result<Vec<u8>, String> {
+) -> anyhow::Result<Vec<u8>> {
     let deadline = Instant::now() + timeout;
     let mut stream = stream
         .try_clone()
-        .map_err(|e| format!("clone stream: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("clone stream: {e}"))?;
     let mut out = Vec::new();
     loop {
         let mut byte = [0_u8; 1];
         match stream.read(&mut byte) {
-            Ok(0) => return Err("peer closed before newline".to_owned()),
+            Ok(0) => return Err(anyhow::anyhow!("peer closed before newline")),
             Ok(_) => {
                 out.push(byte[0]);
                 if out.len() > max_frame_bytes {
-                    return Err(format!("frame exceeds {max_frame_bytes} bytes"));
+                    return Err(anyhow::anyhow!("frame exceeds {max_frame_bytes} bytes"));
                 }
                 if byte[0] == b'\n' {
                     return Ok(out);
@@ -3670,15 +3677,15 @@ fn read_bounded_line(
                 wait_readable(&stream, deadline)?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(anyhow::anyhow!("{error}")),
         }
     }
 }
 
-fn wait_readable<Fd: std::os::fd::AsFd>(fd: &Fd, deadline: Instant) -> Result<(), String> {
+fn wait_readable<Fd: std::os::fd::AsFd>(fd: &Fd, deadline: Instant) -> anyhow::Result<()> {
     let now = Instant::now();
     if now >= deadline {
-        return Err("timed out waiting for readability".to_owned());
+        return Err(anyhow::anyhow!("timed out waiting for readability"));
     }
     let timeout = deadline
         .saturating_duration_since(now)
@@ -3689,10 +3696,10 @@ fn wait_readable<Fd: std::os::fd::AsFd>(fd: &Fd, deadline: Instant) -> Result<()
         PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
     )];
     match poll(&mut fds, timeout) {
-        Ok(0) => Err("timed out waiting for readability".to_owned()),
+        Ok(0) => Err(anyhow::anyhow!("timed out waiting for readability")),
         Ok(_) => Ok(()),
         Err(rustix::io::Errno::INTR) => Ok(()),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(anyhow::anyhow!("{error}")),
     }
 }
 
@@ -3806,7 +3813,7 @@ fn should_suppress_bridge_selection_echo(
 
 // ─── Arg parsing ─────────────────────────────────────────────────────────────
 
-fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
+fn parse_args(args: impl IntoIterator<Item = String>) -> anyhow::Result<Args> {
     let mut config = None;
     let mut picker = None;
     let mut bridge_root = None;
@@ -3819,41 +3826,40 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--config" => {
                 config = Some(PathBuf::from(
                     iter.next()
-                        .ok_or_else(|| "--config requires a path".to_owned())?,
+                        .ok_or_else(|| anyhow::anyhow!("--config requires a path"))?,
                 ));
             }
             "--picker" => {
                 picker = Some(PathBuf::from(
                     iter.next()
-                        .ok_or_else(|| "--picker requires a path".to_owned())?,
+                        .ok_or_else(|| anyhow::anyhow!("--picker requires a path"))?,
                 ));
             }
             "--bridge-root" => {
                 bridge_root = Some(PathBuf::from(
                     iter.next()
-                        .ok_or_else(|| "--bridge-root requires a path".to_owned())?,
+                        .ok_or_else(|| anyhow::anyhow!("--bridge-root requires a path"))?,
                 ));
             }
             "--niri-socket" => {
                 niri_socket = Some(PathBuf::from(
                     iter.next()
-                        .ok_or_else(|| "--niri-socket requires a path".to_owned())?,
+                        .ok_or_else(|| anyhow::anyhow!("--niri-socket requires a path"))?,
                 ));
             }
             "--check-config" => check_config = true,
             "--oneshot" => oneshot = true,
             "--help" | "-h" => {
-                return Err("usage: d2b-clipd --config <path> --bridge-root <path> \
-                     [--picker <path>] [--niri-socket <path>] [--check-config] [--oneshot]"
-                    .to_owned());
+                return Err(anyhow::anyhow!("usage: d2b-clipd --config <path> --bridge-root <path> \
+                     [--picker <path>] [--niri-socket <path>] [--check-config] [--oneshot]"));
             }
-            other => return Err(format!("unknown argument: {other}")),
+            other => return Err(anyhow::anyhow!("unknown argument: {other}")),
         }
     }
     Ok(Args {
-        config: config.ok_or_else(|| "--config is required".to_owned())?,
+        config: config.ok_or_else(|| anyhow::anyhow!("--config is required"))?,
         picker,
-        bridge_root: bridge_root.ok_or_else(|| "--bridge-root is required".to_owned())?,
+        bridge_root: bridge_root.ok_or_else(|| anyhow::anyhow!("--bridge-root is required"))?,
         niri_socket,
         check_config,
         oneshot,
@@ -4065,7 +4071,7 @@ mod tests {
         let error = wait_for_target_focus(&target, Duration::ZERO, Duration::ZERO, || Ok(None))
             .expect_err("missing focus must fail");
 
-        assert_eq!(error, "focused destination was not restored before timeout");
+        assert_eq!(error.to_string(), "focused destination was not restored before timeout");
     }
 
     #[test]
@@ -4091,7 +4097,7 @@ mod tests {
         )
         .expect_err("missing picker must fail");
 
-        assert_eq!(err, ReasonCode::PickerNotConfigured.as_str());
+        assert_eq!(err.to_string(), ReasonCode::PickerNotConfigured.as_str());
         assert!(matches!(fallback.state(), FallbackState::Idle));
         assert_eq!(notifier.notifications.len(), 1);
         assert!(notifier.notifications[0].body.contains("clipboard picker"));
@@ -4395,7 +4401,7 @@ mod tests {
         assert!(
             parse_bridge_peers(&config)
                 .expect_err("unsafe-local must not be VM-shaped")
-                .contains("must not carry legacyVmName")
+                .to_string().contains("must not carry legacyVmName")
         );
     }
 
@@ -4438,7 +4444,7 @@ mod tests {
     #[test]
     fn rejects_unknown_args() {
         let err = parse_args(["--wat".to_owned()]).expect_err("unknown");
-        assert!(err.contains("unknown argument"));
+        assert!(err.to_string().contains("unknown argument"));
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -4510,7 +4516,7 @@ mod tests {
         writer.write_all(&bytes).expect("write");
         let err = read_bounded_line(&reader, CONTROL_MAX_FRAME_BYTES, Duration::from_secs(1))
             .expect_err("overlong");
-        assert!(err.contains("frame exceeds"));
+        assert!(err.to_string().contains("frame exceeds"));
     }
 
     #[test]
@@ -4519,7 +4525,7 @@ mod tests {
         reader.set_nonblocking(true).expect("nonblocking");
         let err = read_bounded_line(&reader, CONTROL_MAX_FRAME_BYTES, Duration::from_millis(5))
             .expect_err("timeout");
-        assert!(err.contains("timed out"));
+        assert!(err.to_string().contains("timed out"));
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -4971,6 +4977,6 @@ mod tests {
             current + 1
         };
         let err = validate_bridge_peer(&left, wrong).expect_err("wrong uid rejected");
-        assert!(err.contains("uid mismatch"));
+        assert!(err.to_string().contains("uid mismatch"));
     }
 }

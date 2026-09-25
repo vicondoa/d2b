@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::wayland_proxy::identity::ProxyIdentity;
+use wayland_proxy::identity::ProxyIdentity;
 
 const MAX_REWRITTEN_LABEL_CHARS: usize = 256;
 
@@ -150,9 +150,9 @@ pub struct PolicyInput {
     /// Per-global version caps.
     pub max_versions: Vec<(String, u32)>,
     /// dmabuf format/modifier allow filters.
-    pub dmabuf_allow: Vec<crate::wayland_proxy::dmabuf::DmabufFilter>,
+    pub dmabuf_allow: Vec<wayland_proxy::dmabuf::DmabufFilter>,
     /// dmabuf format/modifier deny filters.
-    pub dmabuf_deny: Vec<crate::wayland_proxy::dmabuf::DmabufFilter>,
+    pub dmabuf_deny: Vec<wayland_proxy::dmabuf::DmabufFilter>,
     /// Emit a log line for every filtered global advertisement.
     pub log_filtered_globals: bool,
 }
@@ -183,7 +183,7 @@ pub struct FilterPolicy {
     pub identity: ProxyIdentity,
     /// Bounded display label derived from the authenticated identity.
     pub identity_label: String,
-    pub dmabuf_filters: std::rc::Rc<crate::wayland_proxy::dmabuf::DmabufFilterList>,
+    pub dmabuf_filters: std::rc::Rc<wayland_proxy::dmabuf::DmabufFilterList>,
     pub log_filtered_globals: bool,
     /// Runtime advisories emitted by the filter process at startup.
     pub warnings: Vec<PolicyWarning>,
@@ -314,7 +314,7 @@ impl FilterPolicy {
             identity,
             identity_label: target_label,
             dmabuf_filters: std::rc::Rc::new(
-                crate::wayland_proxy::dmabuf::DmabufFilterList::new(
+                wayland_proxy::dmabuf::DmabufFilterList::new(
                     &input.dmabuf_allow,
                     &input.dmabuf_deny,
                 ),

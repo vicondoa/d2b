@@ -26,8 +26,6 @@ pub enum WaylandSpecError {
     BorderTooWide,
     /// A policy named an interface outside the compiled catalog.
     UnknownInterface,
-    /// The pre-provisioned principal pool has no free account.
-    NoPrincipalAvailable,
 }
 
 impl core::fmt::Display for WaylandSpecError {
@@ -40,7 +38,6 @@ impl core::fmt::Display for WaylandSpecError {
             Self::CrossDomainUntrusted => "cross-domain-not-trusted",
             Self::BorderTooWide => "wayland-border-too-wide",
             Self::UnknownInterface => "unknown-interface-rejected",
-            Self::NoPrincipalAvailable => "no-principal-available",
         })
     }
 }
@@ -234,11 +231,7 @@ impl core::fmt::Debug for DisplayIdentity {
 
 /// Authenticated desired state for one Wayland display session.
 #[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(
-    rename_all = "camelCase",
-    deny_unknown_fields,
-    try_from = "WaylandSessionSpecWire"
-)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WaylandSessionSpec {
     guest_ref: ResourceRef,
     host_ref: ResourceRef,

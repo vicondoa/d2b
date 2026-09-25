@@ -1067,7 +1067,7 @@ mod tests {
         // The production entrypoint accepts an AuthenticatedComponentSession,
         // so this test exercises the same effect port and finalizer ordering
         // through a directly seeded runtime observation.
-        let mut runtime = DisplayRuntime::new(DisplayController::new(2), Effects::default());
+        let mut runtime = DisplayRuntime::new(DisplayController::new(2).unwrap(), Effects::default());
         runtime.observation = ProcessObservation::from_supervisor(
             WorkerState::Terminal { deleted: false },
             WorkerState::Terminal { deleted: false },
@@ -1132,7 +1132,7 @@ mod tests {
             launch_state: Some(WorkerState::Starting),
             ..Effects::default()
         };
-        let mut runtime = DisplayRuntime::new(DisplayController::new(2), effects);
+        let mut runtime = DisplayRuntime::new(DisplayController::new(2).unwrap(), effects);
         let supervision = WorkerRestartEvidence::from_supervisor(1, None, None, 1);
 
         let first = runtime
