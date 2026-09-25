@@ -25,7 +25,11 @@ impl Default for OpenRequestFrameCaps {
 
 impl OpenRequestFrameCaps {
     pub fn max_frame_bytes(self) -> usize {
+        // Fixed JSON envelope overhead per frame: syntax, field names, and
+        // separators around the candidate records.
         const ENVELOPE_BYTES: usize = 4096;
+        // Worst-case JSON string escape expansion: one input character can
+        // render as \uXXXX, six bytes.
         const JSON_STRING_ESCAPE_EXPANSION: usize = 6;
         let per_candidate = self
             .max_preview_bytes
