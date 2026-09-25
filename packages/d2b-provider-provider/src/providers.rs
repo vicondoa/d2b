@@ -69,13 +69,21 @@ impl ProviderPlan {
 /// Trusted observations needed to plan one Provider pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderObservation {
+    /// The Provider package is committed for this row.
     pub package_present: bool,
+    /// The declared config passes the Provider's own validation.
     pub config_valid: bool,
+    /// The declared dependency graph is well-formed.
     pub graph_valid: bool,
+    /// The row satisfies the process-conformance contract.
     pub conformance_valid: bool,
+    /// Every required dependency is ready.
     pub required_dependencies_ready: bool,
+    /// Every required component is ready.
     pub required_components_ready: bool,
+    /// An optional component is degraded.
     pub optional_components_degraded: bool,
+    /// The row's components have drained.
     pub components_drained: bool,
 }
 
