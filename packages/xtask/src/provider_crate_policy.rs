@@ -5272,7 +5272,7 @@ const STRUCTURAL_ROLE_VOCABULARIES: &[&str] = &[
 
 /// The runner-role id strings the shared wire vocabulary spells. A string
 /// literal equal to one of these in a shared Nix module is a role literal:
-/// the role vocabulary is knowledge the owning providers must declare,and
+/// the role vocabulary is knowledge the owning providers must declare, and
 /// a hand-spelled id cannot hide behind a family's renamed spelling.
 const ROLE_ID_LITERALS: &[&str] = &[
     "provider-controller",
@@ -5343,7 +5343,7 @@ impl StructuralSignalClass {
 }
 
 /// One structural knowledge exemption row. A signal without a row beside it
-/// fails,arow whose signal the tree no longer carries fails the same way,and
+/// fails, arow whose signal the tree no longer carries fails the same way, and
 /// no row may be added because that is what a reintroduction looks like./
 ///
 /// Where a Rust structural signal's symbol contains a family token the module's
@@ -8632,7 +8632,7 @@ fn render_provider_family_violation(signal: &ProviderFamilySignal) -> String {
 
 /// One committed exemption row: a provider crate module that legitimately
 /// carries another family's identity token. The list only shrinks: a signal
-/// without a row is a policy failure (a reintroduction),and a row whose
+/// without a row is a policy failure (a reintroduction), and a row whose
 /// signal the tree no longer carries is stale. No row may be added unless the
 /// change that introduces a legitimate cross-family reference also records
 /// its reason here.
@@ -8824,12 +8824,12 @@ enum CommittedScopeClass {
 }
 
 /// One row in the committed program scope: a workspace crate the plan's
-/// program may edit,classified into the class the plan names. The list is
+/// program may edit, classified into the class the plan names. The list is
 /// closed: a workspace crate without a row is an edit outside the declared
-/// scope (a crate no unit names),and a row whose crate no longer exists is
+/// scope (a crate no unit names), and a row whose crate no longer exists is
 /// stale. A committed-scope check cannot police every file outside these
-/// classes without encoding the whole plan's touch surface,so it polices
-/// the crate set and the declared artifact roots,the two surfaces the plan
+/// classes without encoding the whole plan's touch surface, so it polices
+/// the crate set and the declared artifact roots, the two surfaces the plan
 /// names; every other surface (docs/plans, changelog.d, tests/, Nix
 /// modules, Bazel files, ...) is out of its scope by construction.
 struct CommittedScopeEntry {
@@ -9036,7 +9036,7 @@ const COMMITTED_SCOPE: &[CommittedScopeEntry] = &[
 const COMMITTED_SCOPE_ARTIFACT_ROOTS: &[&str] = &["docs/reference", "packages/policy-inputs"];
 
 /// Fail when a workspace crate has no committed scope row (an edit to a
-/// crate no unit names),when a row names a crate the workspace no longer has,
+/// crate no unit names), when a row names a crate the workspace no longer has,
 /// or when a declared artifact root has vanished. The committed scope is
 /// compared against the workspace rather than a diff: any crate present without
 /// a row is an edit outside the scope that happened, which is what a

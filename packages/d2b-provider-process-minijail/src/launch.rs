@@ -52,7 +52,7 @@ impl PlatformGate {
 /// # Errors
 ///
 /// Returns `ProviderMismatch` when the ticket selects a different
-/// Process Provider,and `PlatformGateRejected` when the platform gate
+/// Process Provider, and `PlatformGateRejected` when the platform gate
 /// fails.
 pub fn validate_launch_ticket(
     ticket: &LaunchTicket,

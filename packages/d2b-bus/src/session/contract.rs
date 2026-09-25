@@ -957,8 +957,6 @@ impl RouteAdmissionVerifier {
 
     /// Re-check the runtime-owned authority state against one borrowed
     /// admission body, without constructing owned evidence.
-
-
     fn verify_body(
         &self,
         body: &RouteAdmissionBody,

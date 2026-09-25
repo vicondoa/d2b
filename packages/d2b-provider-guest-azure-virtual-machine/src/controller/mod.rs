@@ -681,22 +681,22 @@ where
         let operation = match &update {
             AzureVmUpdate::Resize { size } => {
                 self.effect
-                    .start_vm_resize(&handle, size, &operation_id, &token)
+                    .start_vm_resize(handle, size, &operation_id, &token)
                     .await?
             }
             AzureVmUpdate::AttachDisk { disk } => {
                 self.effect
-                    .start_disk_attach(&handle, disk, &operation_id, &token)
+                    .start_disk_attach(handle, disk, &operation_id, &token)
                     .await?
             }
             AzureVmUpdate::DetachDisk { lun } => {
                 self.effect
-                    .start_disk_detach(&handle, *lun, &operation_id, &token)
+                    .start_disk_detach(handle, *lun, &operation_id, &token)
                     .await?
             }
             AzureVmUpdate::ReplaceTags { tags } => {
                 self.effect
-                    .update_vm_tags(&handle, tags, &operation_id, &token)
+                    .update_vm_tags(handle, tags, &operation_id, &token)
                     .await?
             }
         };
@@ -843,7 +843,7 @@ where
         let token = self.arm_token().await?;
         let operation = self
             .effect
-            .put_vm_extension(&handle, payload, &token)
+            .put_vm_extension(handle, payload, &token)
             .await?;
         self.psk_delivery_attempts = self.psk_delivery_attempts.saturating_add(1);
         self.bootstrap_extension_present = true;
@@ -905,7 +905,7 @@ where
                 let token = self.arm_token().await?;
                 let operation = self
                     .effect
-                    .start_vm_delete(&handle, &operation_id, &token)
+                    .start_vm_delete(&handle, operation_id, &token)
                     .await?;
                 self.set_operation(operation);
                 self.phase = AzureVmPhase::Deleting;

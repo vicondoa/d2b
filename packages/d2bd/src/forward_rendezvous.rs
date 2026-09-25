@@ -1057,7 +1057,7 @@ impl Drop for ScmFds {
 
 /// Whether one request's declared fd leg is admitted by the descriptors the
 /// frame actually attached: count equal (never truncated), indexes in frame
-/// order, kinds against the kernel stat of each received descriptor,andthe
+/// order, kinds against the kernel stat of each received descriptor, andthe
 /// whole leg within the carrier's frame ceiling.
 fn request_fds_admitted(request: &ForwardOperationRequest, fds: &[RawFd]) -> bool {
     if request.fd_indexes.len() != request.fd_kinds.len() {
@@ -1381,10 +1381,10 @@ impl AsyncSeqpacket {
     /// Read one frame and the descriptors its SCM_RIGHTS attachments carried,
     /// waiting at most `deadline` for it to arrive.
     ///
-    /// A frame and its attachments arrive together or not at all,so the
+    /// A frame and its attachments arrive together or not at all, so the
     /// received descriptor count is exactly what the sender put on the
     /// carrier;an oversized cmsg set is capped by the kernel at the receive
-    /// buffer's ceiling,which is why the caller-side declaration check
+    /// buffer's ceiling, which is why the caller-side declaration check
     /// refuses a count over that ceiling rather than let a truncation pass..
     async fn read_frame_with_fds(&self, deadline: Duration) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
         // The blocking transport read the prefixed frame and stripped the
@@ -1397,7 +1397,7 @@ impl AsyncSeqpacket {
         }
     }
 
-    /// Write one frame,attaching `fds` to it,waiting at most `deadline`
+    /// Write one frame, attaching `fds` to it, waiting at most `deadline`
     /// for the peer to take it.
     async fn write_frame_with_fds(
         &self,
@@ -1414,9 +1414,9 @@ impl AsyncSeqpacket {
         }
     }
 
-    /// One datagram read with its attachments,awaited for readiness. The
+    /// One datagram read with its attachments, awaited for readiness. The
     /// blocking transport's `recvmsg` owns the control-message buffer for
-    /// this read,and MSG_CMSG_CLOEXEC is set there,so the received descriptors
+    /// this read, and MSG_CMSG_CLOEXEC is set there, so the received descriptors
     /// arrive close-on-exec exactly as they do on the broker leg.
     async fn recv_frame_with_fds(&self) -> io::Result<(Vec<u8>, Vec<RawFd>)> {
         self.io
@@ -1891,7 +1891,7 @@ mod tests {
     /// A handler that reads the descriptor the carrier attached to its
     /// call. The forwarded request leg carries the caller's descriptor over
     /// SCM_RIGHTS;the rendezvous validates it against the wire declarations
-    /// and hands it to the declared handler,so this handler reading it back
+    /// and hands it to the declared handler, so this handler reading it back
     /// proves the round trip through the real socket and the provider envelope.to
     struct FdEchoHandler;
 

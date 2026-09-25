@@ -986,8 +986,8 @@ mod tests {
     }
 
     /// 7-row coexistence matrix - these are the L1c canaries
-    /// `nft-coexistence-{firewalld,ufw,docker,libvirt,iptables-nft,
-    /// unknown-manager,no-manager}`.
+    /// `nft-coexistence-{firewalld, ufw, docker, libvirt, iptables-nft,
+    /// unknown-manager, no-manager}`.
     #[test]
     fn coexistence_matrix_all_7_rows() {
         use CoexistencePolicy::*;

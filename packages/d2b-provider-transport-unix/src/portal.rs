@@ -275,7 +275,7 @@ impl TransportPortal {
     /// # Errors
     ///
     /// Returns `UnknownHandle` when the handle is not owned by this
-    /// portal instance,and `MonitorUnavailable` when the portal monitor
+    /// portal instance, and `MonitorUnavailable` when the portal monitor
     /// lock is poisoned. A finalized handle closes idempotently.
     pub fn close(&self, handle: TransportHandle) -> Result<(), PortalError> {
         let mut state = self
@@ -301,7 +301,7 @@ impl TransportPortal {
     /// # Errors
     ///
     /// Returns `UnknownHandle` when the handle is not owned by this
-    /// portal instance,and `MonitorUnavailable` when the portal monitor
+    /// portal instance, and `MonitorUnavailable` when the portal monitor
     /// lock is poisoned.
     pub fn observe(&self, handle: TransportHandle) -> Result<TransportObservation, PortalError> {
         let state = self

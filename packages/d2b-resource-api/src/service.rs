@@ -936,7 +936,7 @@ where
             Ok(parsed) => parsed,
             Err(error) => return batch_error(error),
         };
-        if let Some(scoped_mutations) = scoped_mutations.as_deref()
+        if let Some(scoped_mutations) = scoped_mutations
             && let Err(error) = attach_scoped_fences(&mut parsed, scoped_mutations, &routes)
         {
             return batch_error(error);

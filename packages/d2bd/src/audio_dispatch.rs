@@ -374,7 +374,7 @@ pub(crate) fn combined_audio_applied(
     ///
     /// Status collects a per-VM result (entries and per-VM errors) from
     /// the provider's state; SetVolume and Mute apply a state transition under
-    /// the audio serialization lock,and return [`TypedError::InternalIo`]
+    /// the audio serialization lock, and return [`TypedError::InternalIo`]
     /// for manifest, capability, lock, read, write, or enforcement
     /// failures.
 

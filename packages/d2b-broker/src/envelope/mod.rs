@@ -905,7 +905,7 @@ pub struct InvocationCtx<'a> {
 pub struct DispatchOutcome {
     /// The canonical result payload.
     pub result: CanonicalJsonObject,
-    /// The descriptors the answering peer minted this invocation,when the
+    /// The descriptors the answering peer minted this invocation, when the
     /// operation's result carries any.where
     ///
     /// Formal fd provenance tracking is the answering peer's job (KTD7):the
@@ -979,11 +979,11 @@ pub struct DirectInvocation<'a> {
     /// invocation, when the broker holds a context store. A local handler
     /// sees the same block the forward carrier would carry.
     pub context: Option<&'a ForwardContext>,
-    /// The descriptors the caller attached to this invocation,when any.
+    /// The descriptors the caller attached to this invocation, when any.
     /// The caller owns them;the invocation borrows them for its duration.
     pub fds: &'a [OwnedFd],
 
-    /// The kernel kind the row's fd facet declares,when it declares one.
+    /// The kernel kind the row's fd facet declares, when it declares one.
     pub fd_kind: Option<FdKind>,
 }
 
@@ -1142,8 +1142,8 @@ impl BrokerEnvelope {
     /// Invoke one operation through the envelope with descriptors attached to it.
     ///
     /// The fd leg rides the forward carrier:zero-or-more of the request
-    /// frame's SCM_RIGHTS attachments are the operation's descriptors,validated
-    /// here against the row's declared fd facet before dispatch,so an
+    /// frame's SCM_RIGHTS attachments are the operation's descriptors, validated
+    /// here against the row's declared fd facet before dispatch, so an
     /// oversized-but-transport-legal set is refused with the fd-leg code
     /// rather than truncated by the transport.where
     ///
@@ -1556,7 +1556,7 @@ impl BrokerEnvelope {
         true
     }
 
-    /// The kernel kind one descriptor presents,or None when its fstat
+    /// The kernel kind one descriptor presents, or None when its fstat
     /// reports a kind the carrier vocabulary does not carry..
     fn fd_kind_of(fd: &OwnedFd) -> Option<FdKind> {
         use nix::libc;

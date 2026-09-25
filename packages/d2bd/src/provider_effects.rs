@@ -118,7 +118,7 @@ impl FixedEffectAdapter {
     /// # Errors
     ///
     /// Returns [`FixedEffectError::EffectClassDenied`] when the daemon
-    /// mode does not admit the class,and [`FixedEffectError::Broker`] when
+    /// mode does not admit the class, and [`FixedEffectError::Broker`] when
     /// the broker dispatch fails.
         pub fn dispatch(
         &self,

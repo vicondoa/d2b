@@ -479,7 +479,7 @@ impl ResourceCall {
                 assignment,
                 mutations,
             } => {
-                if ScopedCommitTransport::validate(&assignment, &mutations).is_err() {
+                if ScopedCommitTransport::validate(assignment, mutations).is_err() {
                     return Err(BusError::InvalidResourceCall);
                 }
                 (

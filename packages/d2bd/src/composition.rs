@@ -443,7 +443,7 @@ impl StaticProviderComposition {
     /// # Errors
     ///
     /// Returns `AdmissionError` when the provider deployment admission
-    /// (budget, limits,or mode constraints) validation fails.
+    /// (budget, limits, or mode constraints) validation fails.
     pub fn new(
         mode: d2bd_runtime::target_runtime::DaemonMode,
         broker_socket: PathBuf,
@@ -3466,7 +3466,7 @@ fn admission_config(state: &ServerState) -> AdmissionConfig {
 /// startup contracts (pidfs support, state-lock parent, operator socket
 /// posture) are enforced before any socket is served. Operator tooling
 /// uses `lock_only` to hold the state lock without starting the daemon.
-
+///
 /// # Errors
 ///
 /// Returns [`TypedError`] for config-load and override failures, invalid
@@ -4853,7 +4853,7 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
 ///
 /// # Errors
 ///
-/// Returns [`TypedError`] for config-load, state-lock-parent validation,and
+/// Returns [`TypedError`] for config-load, state-lock-parent validation, and
 /// lock-acquisition failures.
 pub async fn lock_only(options: LockOnlyOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;

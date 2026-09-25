@@ -18,7 +18,7 @@ pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 /// connected CLOEXEC fd.
 ///
 /// # Errors
-
+///
 /// Returns the socket error when the socket cannot be created or connected.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn connect_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
@@ -38,7 +38,7 @@ pub fn connect_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
 /// the listening CLOEXEC fd with a backlog of 64.
 ///
 /// # Errors
-
+///
 /// Returns the socket error when create, bind, or listen fails.
 pub fn bind_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     let fd = socket(
@@ -55,14 +55,14 @@ pub fn bind_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
 }
 
 /// Serialise `value` as JSON and send it as one frame on `fd`:a 4-byte
-/// little-endian length prefix followed by the body,refusing bodies over
+/// little-endian length prefix followed by the body, refusing bodies over
 /// [`MAX_FRAME_SIZE`]. Byte-equivalent to
 /// [`send_json_frame_with_fds`] when no descriptors are attached.
 ///
 /// # Errors
-
+///
 /// Returns [`io::ErrorKind::InvalidData`] for serialisation or cap
-/// violations,and socket / short-write errors for the send itself.
+/// violations, and socket / short-write errors for the send itself.
 pub fn send_json_frame<T: Serialize>(fd: RawFd, value: &T) -> io::Result<()> {
     send_json_frame_with_fds(fd, value, &[])
 }
@@ -105,11 +105,11 @@ pub fn send_json_frame_with_fds<T: Serialize>(
 }
 
 /// Receive one JSON frame from `fd`:a 4-byte little-endian length
-/// prefix followed by the body,capped at [`MAX_FRAME_SIZE`]; returns
+/// prefix followed by the body, capped at [`MAX_FRAME_SIZE`]; returns
 /// `None` when the peer closed the socket empty.
 ///
 /// # Errors
-
+///
 /// Returns [`io::ErrorKind::UnexpectedEof`] for short frames and
 /// [`io::ErrorKind::InvalidData`] for length-prefix mismatches and decode
 /// failures.

@@ -68,7 +68,7 @@ const PROVIDER_PREFIX: &str = "d2b-provider-";
 const DECLARATION_FILE: &str = "resource-types.json";
 
 /// The repository-relative generated artifact path (relative to the source
-/// file that `include!`s it,so `include!("generated/...")` resolves it).
+/// file that `include!`s it, so `include!("generated/...")` resolves it).
 pub(crate) const GENERATED_ARTIFACT: &str =
     "packages/d2b-contracts/src/generated/v3_converted_resource_types.rs";
 
@@ -1003,7 +1003,7 @@ mod tests {
 
         /// Create the committed schema files the Nix inventory render requires
         /// for a fixture declaring the given standard types: one Core schema per
-        /// standard type, the four semantic projection schemas,and the two provider
+        /// standard type, the four semantic projection schemas, and the two provider
         /// farm schemas. The render only verifies existence, so empty files
         /// suffice.
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

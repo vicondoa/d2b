@@ -114,7 +114,7 @@ impl Config {
         Ok(Self {
             vm_id,
             link: VsockAllocatorLink::new(vsock_cid, vsock_port),
-            uhid_path: PathBuf::from(uhid_path),
+            uhid_path,
             placement: PlacementConfig {
                 identity,
                 psk_issuance: number("D2B_SK_PSK_ISSUANCE")?,

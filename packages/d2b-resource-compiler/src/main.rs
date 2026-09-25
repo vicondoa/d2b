@@ -249,18 +249,18 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Option<bool>), CliError> {
     while let Some(argument) = args.next() {
         match argument.to_str() {
             Some("--input") => {
-                input = Some(args.next().ok_or_else(|| usage())?);
+                input = Some(args.next().ok_or_else(usage)?);
             }
             Some("--output") => {
-                output = Some(args.next().ok_or_else(|| usage())?);
+                output = Some(args.next().ok_or_else(usage)?);
             }
             Some("--strict-secrets") => strict_override = Some(true),
             Some("--allow-inline-secrets") => strict_override = Some(false),
             _ => return Err(usage()),
         }
     }
-    let input = input.ok_or_else(|| usage())?;
-    let output = output.ok_or_else(|| usage())?;
+    let input = input.ok_or_else(usage)?;
+    let output = output.ok_or_else(usage)?;
     Ok((PathBuf::from(input), PathBuf::from(output), strict_override))
 }
 

@@ -230,7 +230,7 @@ pub const FORWARD_SOCKET_ENV: &str = "D2B_BROKER_FORWARD_SOCKET";
 /// attachments disagree with their declarations, or whose declared set
 /// exceeds the bounded ceiling.
 ///
-/// The code is shared by both legs of the forward carrier,so the broker
+/// The code is shared by both legs of the forward carrier, so the broker
 /// and the rendezvous cannot drift apart on how an fd-leg failure is named.
 pub const FD_LEG: &str = "fd-leg";
 
@@ -239,7 +239,7 @@ pub const FD_LEG: &str = "fd-leg";
 /// The receive-side ancillary buffers on both legs are sized
 /// `cmsg_space!([RawFd; MAX_FRAME_FDS])`, so a frame with more attachments
 /// would be truncated by the transport. A declared set is therefore
-/// capped at this constant before dispatch,and a larger declaration is
+/// capped at this constant before dispatch, and a larger declaration is
 /// refused with [`FD_LEG`], never delivered as a transport truncation.
 pub const MAX_FRAME_FDS: usize = 8;
 
@@ -444,13 +444,13 @@ pub enum ForwardOperationOutcome {
     Result {
         /// The canonical result payload the handler returned.
         result: serde_json::Value,
-        /// The positions,in the frame's SCM_RIGHTS attachment list,of the
+        /// The positions, in the frame's SCM_RIGHTS attachment list, of the
         /// descriptors the answering peer returned. Empty when the response
         /// carries none.
 
         #[serde(default)]
         fd_indexes: Vec<u32>,
-        /// The kernel kind each declared descriptor must present,index-aligned
+        /// The kernel kind each declared descriptor must present, index-aligned
         /// with the fd-index declarations.
 
         #[serde(default)]

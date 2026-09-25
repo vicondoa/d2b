@@ -205,7 +205,7 @@ impl EffectServiceBinding {
     /// published, [`EffectServiceError::WrongZone`] when the row belongs to
     /// a different zone, [`EffectServiceError::ServiceUnavailable`] when
     /// the actor refuses the call, [`EffectServiceError::InFlightStale`]
-    /// when the actor died mid-flight,and [`EffectServiceError::Declined`]
+    /// when the actor died mid-flight, and [`EffectServiceError::Declined`]
     /// when the service declines the operation.
         pub async fn call(&self, call: ServiceCallData) -> Result<EffectResponse, EffectServiceError> {
         self.send(call).await
@@ -220,7 +220,7 @@ impl EffectServiceBinding {
     /// Returns [`EffectServiceError::StaleRevision`] when the binding's
     /// revision moved sincethe caller captured `expected`, and the same
     /// refusals as [`EffectServiceBinding::call`]: UnboundService,
-    /// WrongZone, ServiceUnavailable, InFlightStale,and Declined.
+    /// WrongZone, ServiceUnavailable, InFlightStale, and Declined.
         pub async fn call_expected(
         &self,
         expected: u64,

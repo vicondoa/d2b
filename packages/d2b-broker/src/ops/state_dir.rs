@@ -52,7 +52,7 @@ pub enum DirKind {
 }
 
 /// One state/runtime directory preparation request:which root to
-/// prepare, the mode/owner posture to apply,and the relative
+/// prepare, the mode/owner posture to apply, and the relative
 /// subdirectories to create under it.
 #[derive(Debug, Clone)]
 pub struct PrepareDirRequest {
@@ -103,14 +103,14 @@ pub enum ReplaceOrCreateResult {
 }
 
 /// Prepare one state/runtime directory tree:optionally refuse non-root
-/// parents for production roots,reuse the base dir without re-stamping its
-/// posture,and create the requested relative subdirectories with the
-/// requested mode/owner,returning the audit record.
+/// parents for production roots, reuse the base dir without re-stamping its
+/// posture, and create the requested relative subdirectories with the
+/// requested mode/owner, returning the audit record.
 ///
 /// # Errors
-
+///
 /// Returns [`io::ErrorKind::InvalidInput`] for absolute or `..`-bearing
-/// created paths, the parent-ownership guard,or the underlying
+/// created paths, the parent-ownership guard, or the underlying
 /// mkdir/fchmod/fchown failures as `io::Error`s.
 pub fn prepare_dir(req: &PrepareDirRequest) -> io::Result<PrepareDirAudit> {
     // Refuse non-root parent for production paths. Tests pass a scratch
@@ -185,13 +185,13 @@ fn production_path(p: &Path) -> bool {
 }
 
 /// Prepare one VM's runtime root directory:requires the wire
-/// `pathClass=runtime`, resolves the bundle intent,and reuses the existing
+/// `pathClass=runtime`, resolves the bundle intent, and reuses the existing
 /// base dir without re-stamping its posture.
 ///
 /// # Errors
-
+///
 /// Returns [`super::OpError::InvalidInput`] for a non-runtime path class,
-/// [`super::OpError::UnknownSubject`] for unmanaged VMs,and
+/// [`super::OpError::UnknownSubject`] for unmanaged VMs, and
 /// [`super::OpError::Io`] for the directory preparation failures.
 pub fn live_prepare_runtime_dir(
     _exec: &SystemLiveExec,
@@ -250,7 +250,7 @@ pub struct PreparedStateDir {
 /// without creating anything.
 ///
 /// # Errors
-
+///
 /// Returns [`super::OpError::InvalidInput`] for a non-VM path class,
 /// [`super::OpError::UnknownSubject`] / [`super::OpError::Refused`]
 /// for unresolvable subjects, and the swtpm-hardening refusal as

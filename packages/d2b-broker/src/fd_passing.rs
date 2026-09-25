@@ -53,7 +53,6 @@ impl FdRegistry {
     }
 
     /// Close every registered fd, releasing this registry's ownership.
-
     pub fn clear(&mut self) {
         for fd in self.owned.drain(..) {
             let _ = close(fd);
@@ -76,15 +75,11 @@ pub struct FdLease {
 
 impl FdLease {
     /// Take ownership of `fd`, to be closed on drop unless released.
-
     pub fn new(fd: RawFd) -> Self {
         Self { fd: Some(fd) }
     }
 
     /// The still-owned fd, if not yet released.
-
-
-
     pub fn raw(&self) -> Option<RawFd> {
         self.fd
     }

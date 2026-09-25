@@ -184,7 +184,7 @@ impl BoundedEmitter {
     /// # Errors
     ///
     /// Returns `EmitterError::SocketPathInvalid` for a non-absolute
-    /// path,and `StatePoisoned` for a zero byte capacity.
+    /// path, and `StatePoisoned` for a zero byte capacity.
     pub fn new(path: impl Into<PathBuf>, capacity_bytes: usize) -> Result<Self, EmitterError> {
         Self::new_with_limits(
             path,
@@ -200,7 +200,7 @@ impl BoundedEmitter {
     /// # Errors
     ///
     /// Returns `EmitterError::SocketPathInvalid` for a non-absolute
-    /// path,and `StatePoisoned` when any bound is zero.
+    /// path, and `StatePoisoned` when any bound is zero.
     pub fn new_with_limits(
         path: impl Into<PathBuf>,
         capacity_bytes: usize,

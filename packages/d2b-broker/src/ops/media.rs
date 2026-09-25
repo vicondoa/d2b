@@ -220,16 +220,12 @@ pub struct HotplugOutcome {
 /// reloaded.
 pub struct BootOutcome {
     /// The wire response echoed to the daemon.
-
     pub response: QemuMediaHotplugResponse,
     /// Whether the boot wrote a fresh registry record for the media.
-
     pub registry_record_written: bool,
     /// Whether the boot rewrote the redacted registry index.
-
     pub redacted_index_written: bool,
     /// Whether the boot rewrote the runtime udev rule file.
-
     pub udev_rule_written: bool,
     /// Whether udev was reloaded after the rule write.
     pub udev_reloaded: bool,
@@ -242,9 +238,9 @@ pub struct RefreshOutcome {
 }
 
 /// Enroll one physical USB media for a VM: validates the ref and bus id,
-/// resolves the bundle source,reads the live sysfs identity,preflights
-/// busy-ness,opens the block device,then writes the registry record,
-/// redacted index,and runtime udev rules and reloads udev.
+/// resolves the bundle source, reads the live sysfs identity, preflights
+/// busy-ness, opens the block device, then writes the registry record,
+/// redacted index, and runtime udev rules and reloads udev.
 ///
 /// # Errors
 ///
@@ -305,7 +301,7 @@ pub async fn enroll(
 }
 
 /// Re-read the enrolled registry and rewrite the redacted index and runtime
-/// udev rule file,and reload udev.
+/// udev rule file, and reload udev.
 ///
 /// # Errors
 ///
@@ -327,13 +323,13 @@ pub async fn refresh_registry(resolver: &BundleResolver) -> Result<RefreshOutcom
     })
 }
 
-/// Boot a VM's declared media: resolves the bundle source,opens the
-/// declared image,and runs the attach transaction,gathering which
+/// Boot a VM's declared media: resolves the bundle source, opens the
+/// declared image, and runs the attach transaction, gathering which
 /// registry/udev artifacts were refreshed.as side effects.
 ///
 /// # Errors
 ///
-/// Returns the bundle-policy,image-open,selector,and QMP
+/// Returns the bundle-policy, image-open, selector, and QMP
 /// transaction refusals as [`MediaOpError`] variants.
 pub async fn boot(
     resolver: &BundleResolver,
@@ -354,7 +350,7 @@ pub async fn boot(
 /// Send `system_powerdown` to a VM's QMP socket.
 ///
 /// # Errors
-
+///
 /// Returns [`MediaOpError::Qmp`] when the socket cannot be reached or the
 /// command fails.
 pub async fn system_powerdown(
@@ -368,15 +364,14 @@ pub async fn system_powerdown(
     })
 }
 
-/// Query a VM's QMP status,folding an expected shutdown disconnect into
+/// Query a VM's QMP status, folding an expected shutdown disconnect into
 /// [`QemuMediaVmStatus::ConnectionLostDuringShutdown`] when
 /// `shutdown_context` is set.
 ///
 /// # Errors
-
+///
 /// Returns [`MediaOpError::Qmp`] when the socket cannot be reached or the
 /// query fails outside the expected shutdown-disconnect case.
-
 pub async fn query_status(
     req: &QemuMediaQueryStatusRequest,
 ) -> Result<QemuMediaQueryStatusResponse, MediaOpError> {
@@ -418,15 +413,12 @@ async fn qmp_query_status_from_path(
     }
 }
 
-/// Send `quit` to a VM's QMP socket,ending its QMP session.
+/// Send `quit` to a VM's QMP socket, ending its QMP session.
 ///
 /// # Errors
-
+///
 /// Returns [`MediaOpError::Qmp`] when the socket cannot be reached or the
 /// command fails.
-
-
-
 pub async fn quit(req: &QemuMediaLifecycleRequest) -> Result<QemuMediaLifecycleResponse, MediaOpError> {
     let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str())).await?;
     qmp_quit(&mut client).await?;
@@ -440,8 +432,8 @@ pub async fn quit(req: &QemuMediaLifecycleRequest) -> Result<QemuMediaLifecycleR
 /// transaction, without touching the registry.
 ///
 /// # Errors
-
-/// Returns the selector,open,and QMP transaction refusals as
+///
+/// Returns the selector, open, and QMP transaction refusals as
 /// [`MediaOpError`] variants.
 pub async fn attach(
     resolver: &BundleResolver,
@@ -451,14 +443,13 @@ pub async fn attach(
     run_attach_transaction(req.vm_id.as_str(), opened, false).await
 }
 
-/// Detach a USB media from a running VM,resolving the runtime selector
+/// Detach a USB media from a running VM, resolving the runtime selector
 /// against the live sysfs identity and the declared bus id.
 ///
 /// # Errors
-
+///
 /// Returns [`MediaOpError::InvalidBusId`] for invalid bus ids, sysfs
-/// readback failures,selector refusals,and QMP transaction failures.
-
+/// readback failures, selector refusals, and QMP transaction failures.
 pub async fn detach(
     resolver: &BundleResolver,
     req: &QemuMediaHotplugRequest,

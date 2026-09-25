@@ -190,7 +190,7 @@ pub fn tun_create_tap_fd(fd: &OwnedFd, ifname: &str) -> io::Result<()> {
 /// its fd closes.
 ///
 /// # Errors
-
+///
 /// Returns the ioctl error when the setting cannot be applied to `fd`.
 #[allow(unsafe_code)]
 pub fn tun_set_persist(fd: &OwnedFd, persist: bool) -> io::Result<()> {
@@ -205,10 +205,9 @@ pub fn tun_set_persist(fd: &OwnedFd, persist: bool) -> io::Result<()> {
 /// Set the TUN `TUNSETOWNER` ioctl:the uid that may open the tap.
 ///
 /// # Errors
-
+///
 /// Returns [`io::ErrorKind::InvalidInput`] when `uid` exceeds the
 /// `c_int` range, and the ioctl error when the setting cannot be applied.
-
 #[allow(unsafe_code)]
 pub fn tun_set_owner(fd: &OwnedFd, uid: u32) -> io::Result<()> {
     let value = libc::c_int::try_from(uid).map_err(|_| {
@@ -227,12 +226,9 @@ pub fn tun_set_owner(fd: &OwnedFd, uid: u32) -> io::Result<()> {
 /// Set the TUN `TUNSETGROUP` ioctl:the gid that may open the tap.
 ///
 /// # Errors
-
+///
 /// Returns [`io::ErrorKind::InvalidInput`] when `gid` exceeds the
 /// `c_int` range, and the ioctl error when the setting cannot be applied.
-
-
-
 #[allow(unsafe_code)]
 pub fn tun_set_group(fd: &OwnedFd, gid: u32) -> io::Result<()> {
     let value = libc::c_int::try_from(gid).map_err(|_| {
@@ -326,7 +322,7 @@ pub mod path_safe {
         Ok(())
     }
 
-    /// Refuse a parent directory not owned by uid 0,using the strict
+    /// Refuse a parent directory not owned by uid 0, using the strict
     /// no-exception rule for production paths under `/etc` and `/run`.
     pub fn refuse_non_root_parent(path: &Path) -> io::Result<()> {
         refuse_non_root_parent_except(path, None)

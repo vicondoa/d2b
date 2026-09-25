@@ -191,7 +191,6 @@ pub struct SendBurst {
 ///
 /// Packet-burst sends and receives are cancellation-safe:partial bursts
 /// are retained across an await.
-
 pub struct SeqpacketSocket {
     io: AsyncFd<OwnedFd>,
     received_any: AtomicBool,
@@ -210,7 +209,6 @@ impl SeqpacketSocket {
     ///
     /// Returns `UnixSessionError` when the descriptor is not a
     /// seqpacket socket or cannot be registered on the async surface.
-
     pub fn from_owned(fd: OwnedFd) -> Result<Self, UnixSessionError> {
         validate_socket(&fd, SocketType::SEQPACKET)?;
         Ok(Self {
@@ -227,7 +225,6 @@ impl SeqpacketSocket {
     /// Returns `UnixSessionError` when the descriptor fails the prearmed
     /// contract (socket type, async registration, or `passcred`
     /// not prearmed).
-
     pub fn from_parent_prearmed(fd: OwnedFd) -> Result<Self, UnixSessionError> {
         verify_parent_prearmed(&fd)?;
         Self::from_owned(fd)

@@ -318,7 +318,7 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
     /// `PlatformGateRejected`), thee effect port's launch and readiness
     /// failures, `WaitOwnerMismatch` when the launched process is not
     /// locally owned, `IdentityUnverified` when the launch evidence lacks
-    /// the required identity bindings,and `TerminalEvidenceMismatch`
+    /// the required identity bindings, and `TerminalEvidenceMismatch`
     /// when the identity does not match the ticket seal.
     async fn launch_with_inherited_fds(
         &self,

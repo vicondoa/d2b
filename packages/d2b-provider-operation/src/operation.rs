@@ -139,7 +139,6 @@ impl OperationAudit {
     ///
     /// Returns `TooManyAuditFields` when the retained-field or
     /// redaction-key list exceeds its bound.
-
     pub fn new(
         required: bool,
         mode: AuditMode,

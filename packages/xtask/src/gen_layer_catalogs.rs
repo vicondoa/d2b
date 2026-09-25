@@ -155,7 +155,7 @@ fn string_slice(name: &str, doc: &[&str], values: &[String]) -> String {
 }
 
 /// Render one closed `&[&str]` constant.
-
+///
 /// Render one `&[(&str, &str)]` constant.
 fn string_pair_slice(name: &str, doc: &[&str], values: &[(&str, &str)]) -> String {
     let mut out = doc_lines(doc);

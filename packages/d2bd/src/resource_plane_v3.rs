@@ -1840,21 +1840,21 @@ pub struct ConstructionInputs {
     /// daemon-built effect port (R2).
 pub user_facets: UserEffectFacets,
     /// The daemon-supplied facet set the VolumeBinding family's effects
-    /// implementation is built from (U6):the serving-socket probe,the
-    /// socket removal,and the guest-mount observation,supplied through the
+    /// implementation is built from (U6):the serving-socket probe, the
+    /// socket removal, and the guest-mount observation, supplied through the
     /// composition root. The family never receives a daemon-built effect
     /// port (R2).
     pub binding_facets: BindingEffectFacets,
     /// The daemon-supplied facet set the Endpoint family's effects
     /// implementation is built from (U6):the host socket surface and the
-    /// two row-evidence probes,supplied through the composition root. The
+    /// two row-evidence probes, supplied through the composition root. The
     /// family never receives a daemon-built effect port (R2).
     pub endpoint_facets: EndpointEffectFacets,
     /// The daemon-supplied facet set the Credential family's effects
     /// implementation is built from (U8):the daemon's Credential runtime
-    /// (the preserved Provider and execution-target reads,the lease-facts
-    /// read,the managed-identity agent probe,and the authenticated
-    /// Provider session handoff registry),supplied through the composition
+    /// (the preserved Provider and execution-target reads, the lease-facts
+    /// read, the managed-identity agent probe, and the authenticated
+    /// Provider session handoff registry), supplied through the composition
     /// root. The family never receives a daemon-built effect port (R2).
     pub credential_facets: CredentialEffectFacets,
     /// The daemon-supplied facet set the Volume family's effects
@@ -1865,8 +1865,8 @@ pub user_facets: UserEffectFacets,
     pub volume_facets: VolumeEffectFacets,
     /// The daemon-supplied facet set the Guest family's effects
     /// implementation is built from (U10):the zone's manager view (live
-    /// rows, committed Provider identities,and the controller-session
-    /// generation)andthe Cloud Hypervisor controller session,supplied
+    /// rows, committed Provider identities, and the controller-session
+    /// generation)andthe Cloud Hypervisor controller session, supplied
     /// through the composition root. The family never receives a
     /// daemon-built effect port (R2).
     pub guest_facets: GuestEffectFacets,
@@ -4760,9 +4760,9 @@ HOST_EFFECTS_SERVICE.id,
 
     /// U15:the composition root hosts the process-systemd family's
     /// declared effects service from the family's own factory over the
-    /// registered service identity (U3,R5: the registration table
+    /// registered service identity (U3, R5: the registration table
     /// carries the row;the daemon names no family string, only the
-    /// crate's declared service id),and the hosted service answers
+    /// crate's declared service id), and the hosted service answers
     /// `inspect-process-systemd` through the real invocation capability
     /// object carrying the real envelope payload - hermetic, served from
     /// the crate's own handler table, reaching no daemon state.

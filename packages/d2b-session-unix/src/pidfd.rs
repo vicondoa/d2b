@@ -6,7 +6,7 @@ use rustix::{
 use std::{fmt, fs, os::fd::AsRawFd, sync::Arc};
 
 /// Verified pidfd identity evidence: the first-packet credentials, the
-/// executable digest,and the cgroup digest must all match the expected
+/// executable digest, and the cgroup digest must all match the expected
 /// process.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PidfdEvidence {

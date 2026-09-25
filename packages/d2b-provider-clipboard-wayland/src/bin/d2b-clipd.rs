@@ -1128,8 +1128,8 @@ fn install_bridge_listeners(
     bridge_peers: &[BridgePeerConfig],
 ) -> Result<Vec<BridgeListener>, String> {
     let uid = rustix::process::getuid().as_raw();
-    Ok(bridge_peers
-        .into_iter()
+    bridge_peers
+        .iter()
         .map(|peer| {
             let path = bridge_socket_path(root, uid, &peer.socket_component)?;
             let parent = path
@@ -1170,7 +1170,7 @@ fn install_bridge_listeners(
                 listener,
             })
         })
-        .collect::<Result<Vec<_>, String>>()?)
+        .collect()
 }
 
 fn bridge_socket_path(root: &Path, uid: u32, component: &str) -> Result<PathBuf, String> {
