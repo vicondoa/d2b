@@ -701,6 +701,12 @@ impl RecordingManagerEndpoint {
     }
 }
 
+impl Default for RecordingManagerEndpoint {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl ManagerEndpoint for RecordingManagerEndpoint {
     async fn ensure_child(
