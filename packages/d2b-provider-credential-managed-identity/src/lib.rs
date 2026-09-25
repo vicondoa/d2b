@@ -625,15 +625,6 @@ impl ManagedIdentityPlacement {
         })
     }
 
-    /// Validate machine placement and bind it to one Zone.
-    pub fn in_zone(
-        binding: PlacementBinding,
-        execution_ref: ResourceRef,
-        zone_ref: ResourceRef,
-    ) -> Result<Self, ManagedIdentityProviderError> {
-        Self::new(binding, execution_ref, zone_ref)
-    }
-
     /// Return the placement binding.
     pub const fn binding(&self) -> PlacementBinding {
         self.binding
@@ -1276,20 +1267,21 @@ impl ManagedIdentityCredentialProvider {
                 ));
             }
         };
-        Ok(leases
-            .iter()
-            .flat_map(|(credential_ref, records)| {
-                records.iter().map(|record| ManagedIdentityLeaseCheckpoint {
+        let mut checkpoints = Vec::new();
+        for (credential_ref, records) in leases.iter() {
+            for record in records {
+                checkpoints.push(ManagedIdentityLeaseCheckpoint {
                     credential_ref: ResourceRef::parse(credential_ref)
-                        .expect("lease map keys are validated Credential refs"),
+                        .map_err(|_| invariant())?,
                     idempotency_key: record.idempotency_key.clone(),
                     metadata: record.metadata.clone(),
                     authenticated_subject: record.authenticated_subject.clone(),
                     session_expires_at_unix_ms: record.session_expires_at_unix_ms,
                     cleanup_only: record.cleanup_only,
-                })
-            })
-            .collect())
+                });
+            }
+        }
+        Ok(checkpoints)
     }
 
     /// Restore bounded lease metadata after a Provider restart.
