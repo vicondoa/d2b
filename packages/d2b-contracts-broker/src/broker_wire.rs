@@ -420,12 +420,10 @@ pub struct ForwardOperationRequest {
     pub chain_identities: Option<Vec<String>>,
     /// The positions, in the frame's SCM_RIGHTS attachment list, of the
     /// descriptors this request carries. Empty when the request carries none.
-
     #[serde(default)]
     pub fd_indexes: Vec<u32>,
     /// The kernel kind each declared descriptor must present, index-aligned
     /// with [`Self::fd_indexes`].
-
     #[serde(default)]
     pub fd_kinds: Vec<FdKind>,
 }
@@ -447,12 +445,10 @@ pub enum ForwardOperationOutcome {
         /// The positions, in the frame's SCM_RIGHTS attachment list, of the
         /// descriptors the answering peer returned. Empty when the response
         /// carries none.
-
         #[serde(default)]
         fd_indexes: Vec<u32>,
         /// The kernel kind each declared descriptor must present, index-aligned
         /// with the fd-index declarations.
-
         #[serde(default)]
         fd_kinds: Vec<FdKind>,
     },

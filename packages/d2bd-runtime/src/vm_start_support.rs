@@ -7,14 +7,11 @@ const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 #[derive(Debug, Clone, Copy)]
 pub enum VmStartNodeMode {
     /// The node is resolved for readiness only, never launched by VM boot.
-
     ReadinessOnly,
     /// The node runs once during VM start, governed by the named runner role.
-
     OneShot(RunnerRole),
     /// The node stays alive for the whole VM session, governed by the named
     /// runner role.
-
     LongLived(RunnerRole),
 }
 

@@ -225,7 +225,6 @@ struct RoleDeclaration {
 /// The parsed per-crate type authority inputs.
 struct AuthorityRegistry {
     /// Crate name -> declared type names.
-
     declarations: BTreeMap<String, BTreeSet<String>>,
     /// Crate name -> registered descriptor type names (extracted from the
     /// crate's Rust sources).

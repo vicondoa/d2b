@@ -1128,22 +1128,22 @@
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 10731,
+      "line": 10730,
       "reason": "awaited through tokio::time::timeout"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 26171,
+      "line": 26164,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 26568,
+      "line": 26561,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/resource_plane_v3.rs",
-      "line": 6742,
+      "line": 6728,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

@@ -3413,13 +3413,10 @@ fn bundle_desired(zone: &ZoneId, row: &BundleResource) -> DesiredResource {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BundleIngestReport {
     /// The rows this ingestion applied.
-
     pub applied: Vec<ResourceKey>,
     /// The rows this ingestion removed.
-
     pub removed: Vec<ResourceKey>,
     /// The rows this ingestion protected from management-plane mutation.
-
     pub api_protected: Vec<ResourceKey>,
 }
 
@@ -6268,7 +6265,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// A published Volume notice sets the pending flag and, after the drain,
     /// performs exactly one re-materialization.
-
     #[tokio::test(flavor = "multi_thread")]
     async fn a_volume_notice_sets_the_pending_flag_and_drains_into_one_rematerialization() {
         let rig = anchor_subscription_rig();
@@ -6424,7 +6420,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// A notice for a type the selector does not cover leaves the pending
     /// flag clear.
-
     #[tokio::test(flavor = "multi_thread")]
     async fn a_notice_for_an_uncovered_type_leaves_the_pending_flag_clear() {
         let rig = anchor_subscription_rig();
@@ -6524,9 +6519,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// An expired registration causes the same recovery path and does not end
     /// the subscription.
-
-
-
     #[tokio::test(flavor = "multi_thread")]
     async fn an_expired_registration_relists_and_does_not_end_the_subscription() {
         let rig = anchor_subscription_rig_with(WatchHubConfig {
@@ -6588,9 +6580,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// The registry rebuild after a relist reflects the durable rows,
     /// including a row committed while the subscription was between streams.
-
-
-
     #[tokio::test(flavor = "current_thread")]
     async fn a_relist_rebuild_reflects_durable_rows_including_one_committed_between_streams() {
         let rig = anchor_subscription_rig_with(WatchHubConfig {
@@ -6648,9 +6637,6 @@ HOST_EFFECTS_SERVICE.id,
 
     /// A status-source notice for a Volume row does not set the pending
     /// flag, so only durable changes trigger a re-materialization.
-
-
-
     #[tokio::test(flavor = "multi_thread")]
     async fn a_status_source_notice_does_not_set_the_pending_flag() {
         let rig = anchor_subscription_rig();

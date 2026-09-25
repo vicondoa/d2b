@@ -40,7 +40,6 @@ impl GuestTargetSession for DaemonGuestTargetSession {
     ///
     /// Returns [`GuestTargetError::SessionUnavailable`] when the session is
     /// no longer live or the request fails.
-
     async fn request(
         &self,
         request: ttrpc::Request,

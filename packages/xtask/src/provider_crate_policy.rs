@@ -8636,23 +8636,17 @@ fn render_provider_family_violation(signal: &ProviderFamilySignal) -> String {
 /// signal the tree no longer carries is stale. No row may be added unless the
 /// change that introduces a legitimate cross-family reference also records
 /// its reason here.
-
-
 #[derive(Clone)]
 struct ProviderFamilyKnowledgeExemption {
     /// The provider crate that carries the token (its Cargo package name).
     crate_name: &'static str,
     /// Repository-relative module path that carries the token.
-
     module: &'static str,
     /// The family identity token the module writes.
-
     token: &'static str,
     /// The family that owns the token.
-
     family: &'static str,
     /// What the reference is and why it stays.
-
     reason: &'static str,
 }
 

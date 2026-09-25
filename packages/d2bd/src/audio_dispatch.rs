@@ -377,7 +377,6 @@ pub(crate) fn combined_audio_applied(
     /// the audio serialization lock, and return [`TypedError::InternalIo`]
     /// for manifest, capability, lock, read, write, or enforcement
     /// failures.
-
     pub fn dispatch_audio(
     state: &ServerState,
     caller_role: BrokerCallerRole,

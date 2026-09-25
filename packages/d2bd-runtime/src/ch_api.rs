@@ -76,7 +76,6 @@ pub async fn get_vm_info(socket: &Path, timeout: Duration) -> Result<ChVmInfo, C
 ///
 /// Returns `ChApiError` when the control request cannot be delivered or the
 /// API answers a non-2xx status.
-
 pub async fn shutdown_vm(socket: &Path, timeout: Duration) -> Result<(), ChApiError> {
     request(socket, "PUT", "/api/v1/vm.shutdown", timeout)
         .await

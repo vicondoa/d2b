@@ -136,7 +136,6 @@ fn broker_round_trip_within_deadline(
 
 /// The wire `kind` discriminator of a broker response, or `unknown` when
 /// the payload carries none or cannot be serialized.
-
 pub fn broker_response_kind(response: &BrokerResponse) -> String {
     serde_json::to_value(response)
         .ok()
@@ -216,7 +215,6 @@ pub fn redact_broker_error_for_launcher(
 /// Render an operator-facing (summary, remediation) pair for the launcher
 /// role when the broker socket itself is unreachable (distinct from a broker
 /// error reply, which [`redact_broker_error_for_launcher`] shapes).
-
 pub fn redact_broker_dispatch_failure_for_launcher(op_name: &str) -> (String, String) {
     (
         format!("{op_name} failed"),

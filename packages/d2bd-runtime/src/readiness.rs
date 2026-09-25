@@ -126,7 +126,6 @@ pub fn unix_socket_listening(path: &str) -> bool {
 /// # Errors
 ///
 /// Returns "tcp-readiness-timeout:host:port" when the port never opens.
-
 pub async fn wait_for_tcp_port(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -148,8 +147,6 @@ pub async fn wait_for_tcp_port(host: &str, port: u16, timeout: Duration) -> Resu
 ///
 /// Returns "command-readiness-empty" for an empty argv and
 /// "command-readiness-exec-failed" when the program cannot be spawned.
-
-
 pub async fn command_ready(command: &[String]) -> Result<bool,String> {
     let Some(program) = command.first() else {
         return Err("command-readiness-empty".to_owned());

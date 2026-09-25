@@ -43,12 +43,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const HELPER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// How long a helper may fall silent before it is treated as stale.
-
 pub const HELPER_STALE_AFTER: Duration = Duration::from_secs(15);
 
 /// How long a launched helper operation may run before the daemon gives up.
-
-
 pub const HELPER_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 const HELPER_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const HELPER_LOOP_TICK: Duration = Duration::from_millis(200);
@@ -90,7 +87,6 @@ pub enum HelperAvailability {
 /// The outcome of a launched helper operation: a successful result or a
 /// rejection with a wire failure code.  Correlated by request id at the
 /// pending-request table.
-
 pub enum HelperReply {
     Operation(HelperOperationResult),
     Rejected(HelperOperationRejected),
@@ -214,7 +210,6 @@ struct RegistryState {
 ///
 /// Tracks per-UID helper generations, snapshots, and operation
 /// completions; all peer contact flows through [`Self::accept_loop`].
-
 pub struct HelperRegistry {
     daemon_uid: u32,
     allowed_uids: HashSet<u32>,
@@ -235,7 +230,6 @@ impl fmt::Debug for HelperRegistry {
 impl HelperRegistry {
     /// Create an empty registry admitting only `allowed_uids`, with the daemon's
     /// own peer uid recorded for socket-credential checks.
-
     pub fn new(daemon_uid: u32, allowed_uids: impl IntoIterator<Item = u32>) -> Self {
         Self {
             daemon_uid,
@@ -248,7 +242,6 @@ impl HelperRegistry {
     /// Blocking accept loop for the helper listener: each accepted socket
     /// is handled on its own dedicated thread.  Runs forever and surfaces
     /// accept errors to tracing only.
-
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn accept_loop(self: Arc<Self>, listener: Socket) {
         loop {
@@ -314,7 +307,6 @@ impl HelperRegistry {
 
     /// The wire failure code of the most recent rejected operation for `target` by
     /// `uid`, if any, used to surface stable operator diagnostics.
-
     pub fn last_failure(
         &self,
         uid: u32,
@@ -337,7 +329,6 @@ impl HelperRegistry {
     ///
     /// Returns the registry error for invalid launch shapes, unknown
     /// helpers, stale connections, or queue backpressure.
-
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn dispatch_launch(
         &self,

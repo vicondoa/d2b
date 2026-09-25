@@ -93,7 +93,6 @@ impl FixedEffectAdapter {
     ///
     /// Returns [`FixedEffectError::Broker`] when the broker socket instance
     /// fails validation.
-    
     pub fn validate_instance(&self) -> Result<(), FixedEffectError> {
         self.broker
             .validate_instance()

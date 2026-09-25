@@ -349,8 +349,6 @@ fn validate_record(
 
     /// Verify the chain tail shared by v1 and v2 records: prev/record digest
     /// shape, expected-previous linkage, canonical envelope, and digest equality.
-
-
 fn verify_chain(
     object: &serde_json::Map<String, Value>,
     fields_key: &str,

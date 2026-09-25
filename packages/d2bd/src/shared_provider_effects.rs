@@ -2930,7 +2930,6 @@ mod tests {
     /// (the durable deleting mark, an ungenerationed status, a stale
     /// generation) - the gate's phase equals the phase
     /// `ResourceView::wire_status` serves, so a future divergence fails here.
-
     #[test]
     fn view_phase_delegates_to_the_canonical_wire_phase() {
         let statuses = [

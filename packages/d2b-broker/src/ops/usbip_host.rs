@@ -168,15 +168,12 @@ pub struct UsbipHostDeviceInspection {
     /// The USBIP bus id the device was inspected under.
     pub bus_id: String,
     /// The observed USB vendor id.
-
     pub vendor: u16,
     /// The observed USB product id.
-
     pub product: u16,
     /// The physical bus number the device sits on.
     pub bus_number: u16,
     /// The physical port chain under the bus, root-first.
-
     pub port_chain: Vec<u8>,
     /// The device node (e.g. `/dev/bus/usb/...`) the device exposes.
     pub device_node: PathBuf,

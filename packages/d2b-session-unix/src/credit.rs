@@ -22,7 +22,6 @@ pub enum CreditError {
 ///
 /// Reservations are accounted atomically; dropping a reservation returns
 /// its credit.
-
 #[derive(Clone)]
 pub struct CreditPool {
     inner: Arc<CreditPoolInner>,

@@ -370,7 +370,6 @@ impl AdmissionPermit {
     /// Repeated calls are idempotent: only the first release touches the
     /// counter; later calls are no-ops, so a drop-order race cannot
     /// double-free an admission slot.
-
     pub fn release(&self) {
         if !self.inner.released.swap(true, Ordering::AcqRel) {
             let counter = match self.inner.kind {

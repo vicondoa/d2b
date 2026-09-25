@@ -3473,7 +3473,6 @@ fn admission_config(state: &ServerState) -> AdmissionConfig {
 /// startup-contract state (pidfs, state lock, socket path), IO failures
 /// (socket bind, helper socket, pidfd-table restore), and caller
 /// authorization refusals during the accept loop.
-
 pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     apply_overrides(&mut config, &options);
@@ -28424,7 +28423,6 @@ mod broker_dispatch_tests {
     /// dispatches the `apply-nm-unmanaged` kernel with the declared path,
     /// match criteria, reload behaviour, and ownership/mode - never a
     /// compiled constant.
-
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn host_prepare_installs_declared_nm_unmanaged_contract() {
