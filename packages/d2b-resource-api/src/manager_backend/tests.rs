@@ -1456,13 +1456,17 @@ async fn list_returns_snapshot_revision_and_watch_refuses_until_wired() {
         error_reason(&empty)
     );
     let snapshot = empty.snapshot_revision;
-    assert_eq!(
-        snapshot >> 32,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
-        "the wire snapshot carries the epoch-seconds mapping"
+    // The snapshot's epoch-seconds half is stamped when the list is served,
+    // which precedes the clock read here; a second boundary may cross in
+    // between, so the mapping holds within a one-second tolerance.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let snapshot_secs = snapshot >> 32;
+    assert!(
+        snapshot_secs <= now_secs && now_secs - snapshot_secs <= 1,
+        "the wire snapshot carries the epoch-seconds mapping: snapshot={snapshot_secs} now={now_secs}"
     );
 
     let created = service.create(trusted(create_request())).await;

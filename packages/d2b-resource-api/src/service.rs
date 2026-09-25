@@ -520,14 +520,14 @@ where
     pub async fn get(&self, trusted: TrustedRequest<wire::GetRequest>) -> wire::GetResponse {
         let identity = match parse_identity(trusted.request.target.as_ref()) {
             Ok(identity) => identity,
-            Err(error) => return get_error(error),
+            Err(error) => return error_response(error),
         };
         let auth = authorization_for_identity(ApiMethod::Get, ResourceVerb::Get, &identity);
         if let Err(error) = self.authorize(&trusted, auth) {
-            return get_error(error);
+            return error_response(error);
         }
         if let Err(error) = validate_request(&trusted.request) {
-            return get_error(error);
+            return error_response(error);
         }
         let operation = match operation_context(
             trusted.request.meta.as_ref(),
@@ -535,11 +535,11 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return get_error(error),
+            Err(error) => return error_response(error),
         };
         let projection = match parse_projection(trusted.request.projection.as_ref()) {
             Ok(projection) => projection,
-            Err(error) => return get_error(error),
+            Err(error) => return error_response(error),
         };
         match self
             .store
@@ -557,8 +557,8 @@ where
                 response.resource = MessageField::some(to_wire_resource(resource));
                 response
             }
-            Ok(_) => get_error(schema_error("resource response exceeds its byte bound")),
-            Err(error) => get_error(map_store_error(error)),
+            Ok(_) => error_response(schema_error("resource response exceeds its byte bound")),
+            Err(error) => error_response(map_store_error(error)),
         }
     }
 
@@ -570,7 +570,7 @@ where
             MAX_LIST_FILTERS,
         ) {
             Ok(parsed) => parsed,
-            Err(error) => return list_error(error),
+            Err(error) => return error_response(error),
         };
         let auth = AuthorizationRequest {
             method: ApiMethod::List,
@@ -578,10 +578,10 @@ where
             targets: collection_targets(&parsed, ResourceVerb::List),
         };
         if let Err(error) = self.authorize(&trusted, auth) {
-            return list_error(error);
+            return error_response(error);
         }
         if let Err(error) = validate_request(&trusted.request) {
-            return list_error(error);
+            return error_response(error);
         }
         let operation = match operation_context(
             trusted.request.meta.as_ref(),
@@ -589,7 +589,7 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return list_error(error),
+            Err(error) => return error_response(error),
         };
         let page_size = if trusted.request.page_size == 0 {
             DEFAULT_LIST_PAGE_SIZE
@@ -597,7 +597,7 @@ where
             trusted.request.page_size
         };
         if page_size > MAX_LIST_PAGE_SIZE {
-            return list_error(schema_error("page size exceeds its bound"));
+            return error_response(schema_error("page size exceeds its bound"));
         }
         let cursor = trusted
             .request
@@ -609,11 +609,11 @@ where
             .as_ref()
             .is_some_and(|cursor| cursor.len() > MAX_PAGE_CURSOR_BYTES)
         {
-            return list_error(schema_error("page cursor exceeds its bound"));
+            return error_response(schema_error("page cursor exceeds its bound"));
         }
         let projection = match parse_projection(trusted.request.projection.as_ref()) {
             Ok(projection) => projection,
-            Err(error) => return list_error(error),
+            Err(error) => return error_response(error),
         };
         match self
             .store
@@ -640,14 +640,14 @@ where
                 }
                 response.truncated = result.truncated;
                 if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
-                    list_error(schema_error(
+                    error_response(schema_error(
                         "list store result was not truncated at the byte bound",
                     ))
                 } else {
                     response
                 }
             }
-            Err(error) => list_error(map_store_error(error)),
+            Err(error) => error_response(map_store_error(error)),
         }
     }
 
@@ -659,7 +659,7 @@ where
             MAX_WATCH_FILTERS,
         ) {
             Ok(parsed) => parsed,
-            Err(error) => return watch_error(error),
+            Err(error) => return error_response(error),
         };
         let auth = AuthorizationRequest {
             method: ApiMethod::Watch,
@@ -667,10 +667,10 @@ where
             targets: collection_targets(&parsed, ResourceVerb::Watch),
         };
         if let Err(error) = self.authorize(&trusted, auth) {
-            return watch_error(error);
+            return error_response(error);
         }
         if let Err(error) = validate_request(&trusted.request) {
-            return watch_error(error);
+            return error_response(error);
         }
         let operation = match operation_context(
             trusted.request.meta.as_ref(),
@@ -678,7 +678,7 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return watch_error(error),
+            Err(error) => return error_response(error),
         };
         let credits = trusted
             .request
@@ -686,11 +686,11 @@ where
             .as_ref()
             .map_or(DEFAULT_WATCH_CREDITS, |credits| credits.initial);
         if credits == 0 || credits > MAX_WATCH_CREDITS {
-            return watch_error(schema_error("watch credits exceed their bound"));
+            return error_response(schema_error("watch credits exceed their bound"));
         }
         let projection = match parse_projection(trusted.request.projection.as_ref()) {
             Ok(projection) => projection,
-            Err(error) => return watch_error(error),
+            Err(error) => return error_response(error),
         };
         match self
             .store
@@ -712,7 +712,7 @@ where
                 response.snapshot_revision = receipt.snapshot_revision.get();
                 response
             }
-            Err(error) => watch_error(map_store_error(error)),
+            Err(error) => error_response(map_store_error(error)),
         }
     }
 
@@ -725,7 +725,7 @@ where
             .await
         {
             Ok(result) => mutation_response(result, trusted.request.mutation.as_ref(), true),
-            Err(error) => create_error(error),
+            Err(error) => error_response(error),
         }
     }
 
@@ -745,7 +745,7 @@ where
                 let common = mutation_response(result, trusted.request.mutation.as_ref(), true);
                 copy_update_spec_response(common)
             }
-            Err(error) => update_spec_error(error),
+            Err(error) => error_response(error),
         }
     }
 
@@ -766,7 +766,7 @@ where
                 trusted.request.mutation.as_ref(),
                 false,
             )),
-            Err(error) => update_status_error(error),
+            Err(error) => error_response(error),
         }
     }
 
@@ -787,7 +787,7 @@ where
                 trusted.request.mutation.as_ref(),
                 false,
             )),
-            Err(error) => update_metadata_error(error),
+            Err(error) => error_response(error),
         }
     }
 
@@ -808,7 +808,7 @@ where
                 trusted.request.mutation.as_ref(),
                 false,
             )),
-            Err(error) => update_finalizers_error(error),
+            Err(error) => error_response(error),
         }
     }
 
@@ -839,7 +839,7 @@ where
                 }
                 response
             }
-            Err(error) => delete_error(error),
+            Err(error) => error_response(error),
         }
     }
 
@@ -851,7 +851,7 @@ where
     }
 
     pub(crate) fn invalid_commit_batch(reason: &'static str) -> wire::CommitBatchResponse {
-        batch_error(schema_error(reason))
+        error_response(schema_error(reason))
     }
 
     /// Commit one bus-authorized assignment batch while carrying the same
@@ -872,7 +872,7 @@ where
         configuration_generation: Option<ConfigurationGeneration>,
     ) -> wire::CommitBatchResponse {
         if trusted.request.mutations.is_empty() {
-            return batch_error(schema_error("batch mutation count is zero"));
+            return error_response(schema_error("batch mutation count is zero"));
         }
         let routes = match trusted
             .request
@@ -882,7 +882,7 @@ where
             .collect::<Result<Vec<_>, _>>()
         {
             Ok(routes) => routes,
-            Err(error) => return batch_error(error),
+            Err(error) => return error_response(error),
         };
         let batch_zone = subject_zone(&trusted);
         if routes.iter().any(|route| {
@@ -892,7 +892,7 @@ where
                     .as_ref()
                     .is_some_and(|owner| owner.zone != batch_zone)
         }) {
-            return batch_error(ResourceError::terminal(
+            return error_response(ResourceError::terminal(
                 ResourceErrorKind::AuthorizationDenied,
                 "batch route is outside the authenticated Zone",
             ));
@@ -907,13 +907,13 @@ where
         };
         let grant = match self.authorize(&trusted, auth) {
             Ok(grant) => grant,
-            Err(error) => return batch_error(error),
+            Err(error) => return error_response(error),
         };
         if let Err(error) = validate_request(&trusted.request) {
-            return batch_error(error);
+            return error_response(error);
         }
         if trusted.request.mutations.len() > MAX_BATCH_MUTATIONS {
-            return batch_error(schema_error("batch mutation count exceeds its bound"));
+            return error_response(schema_error("batch mutation count exceeds its bound"));
         }
         let mut parsed = match trusted
             .request
@@ -924,12 +924,12 @@ where
             .collect::<Result<Vec<_>, _>>()
         {
             Ok(parsed) => parsed,
-            Err(error) => return batch_error(error),
+            Err(error) => return error_response(error),
         };
         if let Some(scoped_mutations) = scoped_mutations
             && let Err(error) = attach_scoped_fences(&mut parsed, scoped_mutations, &routes)
         {
-            return batch_error(error);
+            return error_response(error);
         }
         for mutation in &mut parsed {
             mutation.store.configuration_generation = configuration_generation;
@@ -940,7 +940,7 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return batch_error(error),
+            Err(error) => return error_response(error),
         };
         let mutations = parsed.into_iter().map(|item| item.store).collect();
         let admitted = match self.zone_uid.as_ref() {
@@ -950,7 +950,7 @@ where
         let admitted = match admitted {
             Ok(admitted) => admitted,
             Err(_) => {
-                return batch_error(ResourceError::terminal(
+                return error_response(ResourceError::terminal(
                     ResourceErrorKind::InternalIntegrityFailure,
                     "admission-invariant-violated",
                 ));
@@ -962,8 +962,8 @@ where
                 response.resources = result.resources.into_iter().map(to_wire_resource).collect();
                 response.revision = result.revision.get();
                 if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
-                    let mut limited =
-                        batch_error(schema_error("batch response exceeds its byte bound"));
+                    let mut limited: wire::CommitBatchResponse =
+                        error_response(schema_error("batch response exceeds its byte bound"));
                     limited.revision = response.revision;
                     limited
                 } else {
@@ -973,7 +973,8 @@ where
             Err(error) => {
                 let conflict_mutation_ordinal =
                     error.mutation_ordinal().map(|ordinal| ordinal.get());
-                let mut response = batch_error(map_store_error_with_revision_visibility(
+                let mut response: wire::CommitBatchResponse =
+                    error_response(map_store_error_with_revision_visibility(
                     error,
                     self.can_read_revision(&trusted, &routes),
                 ));
@@ -989,16 +990,16 @@ where
     ) -> wire::ResolveRefResponse {
         let identity = match parse_identity(trusted.request.target.as_ref()) {
             Ok(identity) => identity,
-            Err(error) => return resolve_error(error),
+            Err(error) => return error_response(error),
         };
         if let Err(error) = self.authorize(
             &trusted,
             authorization_for_identity(ApiMethod::ResolveRef, ResourceVerb::Get, &identity),
         ) {
-            return resolve_error(error);
+            return error_response(error);
         }
         if let Err(error) = validate_request(&trusted.request) {
-            return resolve_error(error);
+            return error_response(error);
         }
         let operation = match operation_context(
             trusted.request.meta.as_ref(),
@@ -1006,7 +1007,7 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return resolve_error(error),
+            Err(error) => return error_response(error),
         };
         match self
             .store
@@ -1023,7 +1024,7 @@ where
                 response.resource = MessageField::some(to_wire_resolved_identity(identity));
                 response
             }
-            Err(error) => resolve_error(map_store_error(error)),
+            Err(error) => error_response(map_store_error(error)),
         }
     }
 
@@ -1033,7 +1034,7 @@ where
     ) -> wire::InspectSchemaResponse {
         let resource_type = match ResourceTypeName::parse(&trusted.request.resource_type) {
             Ok(resource_type) => resource_type,
-            Err(_) => return inspect_error(ref_error("ResourceType is invalid")),
+            Err(_) => return error_response(ref_error("ResourceType is invalid")),
         };
         let auth = AuthorizationRequest {
             method: ApiMethod::InspectSchema,
@@ -1047,10 +1048,10 @@ where
             }],
         };
         if let Err(error) = self.authorize(&trusted, auth) {
-            return inspect_error(error);
+            return error_response(error);
         }
         if let Err(error) = validate_request(&trusted.request) {
-            return inspect_error(error);
+            return error_response(error);
         }
         let operation = match operation_context(
             trusted.request.meta.as_ref(),
@@ -1058,7 +1059,7 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return inspect_error(error),
+            Err(error) => return error_response(error),
         };
         match self
             .store
@@ -1080,12 +1081,12 @@ where
                 let mut response = wire::InspectSchemaResponse::new();
                 response.schema = MessageField::some(body);
                 if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
-                    inspect_error(schema_error("schema response exceeds its byte bound"))
+                    error_response(schema_error("schema response exceeds its byte bound"))
                 } else {
                     response
                 }
             }
-            Err(error) => inspect_error(map_store_error(error)),
+            Err(error) => error_response(map_store_error(error)),
         }
     }
 
@@ -1095,15 +1096,15 @@ where
     ) -> wire::UpgradeResponse {
         let identity = match parse_identity(trusted.request.target.as_ref()) {
             Ok(identity) => identity,
-            Err(error) => return upgrade_error(error),
+            Err(error) => return error_response(error),
         };
         let auth =
             authorization_for_identity(ApiMethod::Upgrade, ResourceVerb::UpdateSpec, &identity);
         if let Err(error) = self.authorize(&trusted, auth) {
-            return upgrade_error(error);
+            return error_response(error);
         }
         if let Err(error) = validate_request(&trusted.request) {
-            return upgrade_error(error);
+            return error_response(error);
         }
         let operation = match operation_context(
             trusted.request.meta.as_ref(),
@@ -1111,17 +1112,17 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return upgrade_error(error),
+            Err(error) => return error_response(error),
         };
         let expected_revision = match parse_precondition(trusted.request.precondition.as_ref()) {
             Ok(ExpectedRevision::Exact(revision)) => revision,
-            _ => return upgrade_error(schema_error("upgrade requires an exact revision")),
+            _ => return error_response(schema_error("upgrade requires an exact revision")),
         };
         let action = match trusted.request.action.enum_value() {
             Ok(wire::UpgradeAction::UPGRADE_ACTION_ASSESS) => UpgradeAction::Assess,
             Ok(wire::UpgradeAction::UPGRADE_ACTION_PLAN) => UpgradeAction::Plan,
             Ok(wire::UpgradeAction::UPGRADE_ACTION_EXECUTE) => UpgradeAction::Execute,
-            _ => return upgrade_error(schema_error("upgrade action is unspecified")),
+            _ => return error_response(schema_error("upgrade action is unspecified")),
         };
         match self
             .upgrade
@@ -1145,15 +1146,15 @@ where
                     .collect();
                 response.revision = result.revision.get();
                 if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
-                    let mut limited =
-                        upgrade_error(schema_error("upgrade response exceeds its byte bound"));
+                    let mut limited: wire::UpgradeResponse =
+                        error_response(schema_error("upgrade response exceeds its byte bound"));
                     limited.revision = response.revision;
                     limited
                 } else {
                     response
                 }
             }
-            Err(error) => upgrade_error(error),
+            Err(error) => error_response(error),
         }
     }
 
@@ -2249,29 +2250,97 @@ fn ref_error(reason: &'static str) -> ResourceError {
     ResourceError::terminal(ResourceErrorKind::ResourceRefInvalid, reason)
 }
 
-macro_rules! response_error {
-    ($name:ident, $ty:ty) => {
-        fn $name(error: ResourceError) -> $ty {
-            let mut response = <$ty>::new();
-            response.error = MessageField::some(to_wire_error(&error));
-            response
-        }
-    };
+/// Any wire response that carries an `error` field, so an error can be
+/// rendered into the response type each RPC method returns.
+trait ErrorResponse: Message {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>);
 }
 
-response_error!(get_error, wire::GetResponse);
-response_error!(list_error, wire::ListResponse);
-response_error!(watch_error, wire::WatchResponse);
-response_error!(create_error, wire::CreateResponse);
-response_error!(update_spec_error, wire::UpdateSpecResponse);
-response_error!(update_status_error, wire::UpdateStatusResponse);
-response_error!(update_metadata_error, wire::UpdateMetadataResponse);
-response_error!(update_finalizers_error, wire::UpdateFinalizersResponse);
-response_error!(delete_error, wire::DeleteResponse);
-response_error!(batch_error, wire::CommitBatchResponse);
-response_error!(resolve_error, wire::ResolveRefResponse);
-response_error!(inspect_error, wire::InspectSchemaResponse);
-response_error!(upgrade_error, wire::UpgradeResponse);
+impl ErrorResponse for wire::GetResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::ListResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::WatchResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::CreateResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::UpdateSpecResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::UpdateStatusResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::UpdateMetadataResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::UpdateFinalizersResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::DeleteResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::CommitBatchResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::ResolveRefResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::InspectSchemaResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+impl ErrorResponse for wire::UpgradeResponse {
+    fn set_error(&mut self, error: MessageField<wire::ResourceError>) {
+        self.error = error;
+    }
+}
+
+/// Render an error into the wire response type an RPC method returns; the
+/// response type is inferred from the method's return type.
+fn error_response<T: ErrorResponse>(error: ResourceError) -> T {
+    let mut response = T::new();
+    response.set_error(MessageField::some(to_wire_error(&error)));
+    response
+}
 
 #[cfg(test)]
 mod tests {
@@ -3381,13 +3450,20 @@ mod tests {
     }
 
     #[test]
-    fn status_owner_matching_generation_is_representable() {
-        let context = subject(Some(11));
-        assert_eq!(
-            context.controller_generation(),
-            Some(ControllerGeneration::new(11).unwrap())
-        );
-        let _: ResourceGeneration = ResourceGeneration::new(11).unwrap();
+    fn status_owner_generation_mismatch_is_rejected() {
+        // The status-owner check is a wire-compatibility contract: an
+        // UpdateStatus mutation is refused when the authenticated subject's
+        // controller generation differs from the authorization snapshot's,
+        // even when both generations are representable.
+        let trusted =
+            TrustedRequest::from_session_capability(subject(Some(11)), state(Some(12)), ());
+        let mut value = mutation(wire::MutationKind::MUTATION_KIND_UPDATE_STATUS);
+        value.resource = body(GOLDEN_HOST.to_vec());
+        let route =
+            parse_mutation_route(&value, Some(ResourceMutationKind::UpdateStatus), &trusted)
+                .unwrap();
+        let error = parse_mutation(&value, &route, &trusted).unwrap_err();
+        assert_eq!(error.kind(), ResourceErrorKind::ResourceStatusOwnerMismatch);
     }
 
     #[test]
