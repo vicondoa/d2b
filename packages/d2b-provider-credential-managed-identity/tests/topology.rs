@@ -79,19 +79,19 @@ fn live_methods_route_to_the_agent_and_stored_inspection_stays_secret_free() {
 #[test]
 fn teardown_releases_the_finalizer_only_after_revocation_and_process_deletion() {
     let stop = ManagedIdentityController::teardown_plan(true, false, false);
-    assert!(stop.stop_agent);
-    assert!(!stop.delete_agent);
-    assert!(!stop.clear_provider_revoke);
+    assert!(stop.stop_agent());
+    assert!(!stop.delete_agent());
+    assert!(!stop.clear_provider_revoke());
 
     let delete = ManagedIdentityController::teardown_plan(false, true, false);
-    assert!(!delete.stop_agent);
-    assert!(delete.delete_agent);
-    assert!(!delete.clear_provider_revoke);
+    assert!(!delete.stop_agent());
+    assert!(delete.delete_agent());
+    assert!(!delete.clear_provider_revoke());
 
     let clear = ManagedIdentityController::teardown_plan(false, true, true);
-    assert!(!clear.stop_agent);
-    assert!(!clear.delete_agent);
-    assert!(clear.clear_provider_revoke);
+    assert!(!clear.stop_agent());
+    assert!(!clear.delete_agent());
+    assert!(clear.clear_provider_revoke());
 }
 
 #[test]
