@@ -560,11 +560,6 @@ impl ChildMutation {
         self.precondition
     }
 
-    /// Return the absent UID fence on first create.
-    pub const fn expected_uid(&self) -> Option<&ResourceUid> {
-        None
-    }
-
     /// Borrow the typed create body.
     pub const fn body(&self) -> &ChildCreateBody {
         &self.body
@@ -876,12 +871,10 @@ impl fmt::Debug for PrivateRuntimeScope {
 pub fn derive_private_runtime_scope(
     zone_uid: &ResourceUid,
     guest_uid: &ResourceUid,
-    role: &str,
+    role: ChildRole,
     generation: d2b_contracts_resource::v3::ResourceGeneration,
 ) -> Result<PrivateRuntimeScope, ChildIdentityError> {
-    if !matches!(role, "vmm" | "ch-api" | "guest-control" | "system") {
-        return Err(ChildIdentityError::InvalidRuntimeRole);
-    }
+    let role = role.suffix();
     let mut digest = Sha256::new();
     digest.update(PRIVATE_RUNTIME_SCOPE_DOMAIN_TAG.as_bytes());
     digest.update([0]);

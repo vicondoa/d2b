@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    num::NonZeroUsize,
     sync::Arc,
 };
 
@@ -44,18 +45,17 @@ pub struct MicrophoneArbiter {
 pub type SharedMicrophoneArbiter = Arc<tokio::sync::Mutex<MicrophoneArbiter>>;
 
 /// Construct a shared microphone authority with the provider's queue bound.
-pub fn shared_microphone_arbiter(max_queue: usize) -> SharedMicrophoneArbiter {
+pub fn shared_microphone_arbiter(max_queue: NonZeroUsize) -> SharedMicrophoneArbiter {
     Arc::new(tokio::sync::Mutex::new(MicrophoneArbiter::new(max_queue)))
 }
 
 impl MicrophoneArbiter {
     /// Construct an arbiter with a bounded pending queue.
-    pub fn new(max_queue: usize) -> Self {
-        assert!(max_queue > 0);
+    pub fn new(max_queue: NonZeroUsize) -> Self {
         Self {
             active: None,
             queue: VecDeque::new(),
-            max_queue,
+            max_queue: max_queue.get(),
         }
     }
 
@@ -141,39 +141,38 @@ pub struct SpeakerMixer {
 
 impl SpeakerMixer {
     /// Construct a mixer with a bounded number of consumers.
-    pub fn new(max_consumers: usize) -> Self {
-        assert!(max_consumers > 0);
+    pub fn new(max_consumers: NonZeroUsize) -> Self {
         Self {
             levels: BTreeMap::new(),
             grants: BTreeSet::new(),
-            max_consumers,
+            max_consumers: max_consumers.get(),
         }
     }
 
-    /// Grant or revoke one speaker consumer.
+    /// Grant one speaker consumer.
     ///
     /// The return value is true when the aggregate speaker grant changed
-    /// from no consumers to at least one consumer, or back to none.
-    pub fn set_grant(
-        &mut self,
-        lease: AudioLeaseId,
-        on: bool,
-    ) -> Result<bool, AudioAuthorityError> {
-        if on {
-            if !self.grants.contains(&lease)
-                && !self.levels.contains_key(&lease)
-                && self.consumer_count() >= self.max_consumers
-            {
-                return Err(AudioAuthorityError::ConsumerLimit);
-            }
-            let was_empty = self.grants.is_empty();
-            self.grants.insert(lease);
-            Ok(was_empty)
-        } else {
-            let was_last = self.grants.len() == 1 && self.grants.contains(&lease);
-            self.grants.remove(&lease);
-            Ok(was_last)
+    /// from no consumers to at least one consumer.
+    pub fn grant(&mut self, lease: AudioLeaseId) -> Result<bool, AudioAuthorityError> {
+        if !self.grants.contains(&lease)
+            && !self.levels.contains_key(&lease)
+            && self.consumer_count() >= self.max_consumers
+        {
+            return Err(AudioAuthorityError::ConsumerLimit);
         }
+        let was_empty = self.grants.is_empty();
+        self.grants.insert(lease);
+        Ok(was_empty)
+    }
+
+    /// Revoke one speaker consumer.
+    ///
+    /// The return value is true when the revoked consumer was the last
+    /// grant holder.
+    pub fn revoke(&mut self, lease: AudioLeaseId) -> Result<bool, AudioAuthorityError> {
+        let was_last = self.grants.len() == 1 && self.grants.contains(&lease);
+        self.grants.remove(&lease);
+        Ok(was_last)
     }
 
     /// Return whether one lease currently holds a speaker grant.

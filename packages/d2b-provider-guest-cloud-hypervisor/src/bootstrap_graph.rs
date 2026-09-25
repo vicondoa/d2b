@@ -129,15 +129,8 @@ impl BootstrapGraph {
     }
 
     /// Check all pre-start dependencies without performing an effect.
-    pub fn vmm_readiness(
-        &self,
-        devices_ready: bool,
-        networks_ready: bool,
-        volumes_ready: bool,
-        bindings_ready: bool,
-        setup_ready: bool,
-    ) -> DependencyReadiness {
-        if devices_ready && networks_ready && volumes_ready && bindings_ready && setup_ready {
+    pub fn vmm_readiness(&self, snapshot: VmmReadinessSnapshot) -> DependencyReadiness {
+        if snapshot.all_ready() {
             DependencyReadiness::Ready
         } else {
             DependencyReadiness::Pending
@@ -145,24 +138,40 @@ impl BootstrapGraph {
     }
 
     /// Return the pure VMM lifecycle decision for a dependency snapshot.
-    pub fn vmm_lifecycle(
-        &self,
-        devices_ready: bool,
-        networks_ready: bool,
-        volumes_ready: bool,
-        bindings_ready: bool,
-        setup_ready: bool,
-    ) -> VmmLifecycleEligibility {
-        match self.vmm_readiness(
-            devices_ready,
-            networks_ready,
-            volumes_ready,
-            bindings_ready,
-            setup_ready,
-        ) {
+    pub fn vmm_lifecycle(&self, snapshot: VmmReadinessSnapshot) -> VmmLifecycleEligibility {
+        match self.vmm_readiness(snapshot) {
             DependencyReadiness::Ready => VmmLifecycleEligibility::Running,
             DependencyReadiness::Pending => VmmLifecycleEligibility::Stopped,
         }
+    }
+}
+
+/// Immutable readiness facts gating VMM start.
+///
+/// Carried as one struct so a swapped argument cannot silently change the
+/// start gate; the facts are produced by `GuestDependencySnapshot` accessors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VmmReadinessSnapshot {
+    /// Device family readiness.
+    pub devices_ready: bool,
+    /// Network family readiness.
+    pub networks_ready: bool,
+    /// Volume family readiness.
+    pub volumes_ready: bool,
+    /// VolumeBinding family readiness under the current fence.
+    pub bindings_ready: bool,
+    /// Descriptor setup-volume readiness.
+    pub setup_ready: bool,
+}
+
+impl VmmReadinessSnapshot {
+    /// Return whether every gating fact is ready.
+    pub const fn all_ready(self) -> bool {
+        self.devices_ready
+            && self.networks_ready
+            && self.volumes_ready
+            && self.bindings_ready
+            && self.setup_ready
     }
 }
 
@@ -325,9 +334,7 @@ mod tests {
         let batch = first.child_batch();
         assert_eq!(batch.mutations().len(), 4);
         assert!(batch.mutations().iter().all(|mutation| {
-            mutation.owner_ref() == &guest
-                && mutation.zone() == &zone
-                && mutation.expected_uid().is_none()
+            mutation.owner_ref() == &guest && mutation.zone() == &zone
         }));
 
         let rendered = format!("{first:?}");
@@ -357,23 +364,31 @@ mod tests {
         for pending in 0..5 {
             let mut ready = [true; 5];
             ready[pending] = false;
+            let snapshot = VmmReadinessSnapshot {
+                devices_ready: ready[0],
+                networks_ready: ready[1],
+                volumes_ready: ready[2],
+                bindings_ready: ready[3],
+                setup_ready: ready[4],
+            };
             assert_eq!(
-                graph.vmm_lifecycle(ready[0], ready[1], ready[2], ready[3], ready[4]),
+                graph.vmm_lifecycle(snapshot),
                 VmmLifecycleEligibility::Stopped
             );
-            assert_eq!(
-                graph.vmm_readiness(ready[0], ready[1], ready[2], ready[3], ready[4]),
-                DependencyReadiness::Pending
-            );
+            assert_eq!(graph.vmm_readiness(snapshot), DependencyReadiness::Pending);
         }
+        let all_ready = VmmReadinessSnapshot {
+            devices_ready: true,
+            networks_ready: true,
+            volumes_ready: true,
+            bindings_ready: true,
+            setup_ready: true,
+        };
         assert_eq!(
-            graph.vmm_lifecycle(true, true, true, true, true),
+            graph.vmm_lifecycle(all_ready),
             VmmLifecycleEligibility::Running
         );
-        assert_eq!(
-            graph.vmm_readiness(true, true, true, true, true),
-            DependencyReadiness::Ready
-        );
+        assert_eq!(graph.vmm_readiness(all_ready), DependencyReadiness::Ready);
     }
 
     #[test]
@@ -403,12 +418,26 @@ mod tests {
     fn legacy_three_dependency_readiness_remains_a_strict_subset() {
         let graph = BootstrapGraph::new(Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
             .unwrap();
+        let all_ready = VmmReadinessSnapshot {
+            devices_ready: true,
+            networks_ready: true,
+            volumes_ready: true,
+            bindings_ready: true,
+            setup_ready: true,
+        };
+        let volume_pending = VmmReadinessSnapshot {
+            devices_ready: true,
+            networks_ready: true,
+            volumes_ready: false,
+            bindings_ready: true,
+            setup_ready: true,
+        };
         assert_eq!(
-            graph.vmm_readiness(true, true, true, true, true),
+            graph.vmm_readiness(all_ready),
             DependencyReadiness::Ready
         );
         assert_eq!(
-            graph.vmm_readiness(true, true, false, true, true),
+            graph.vmm_readiness(volume_pending),
             DependencyReadiness::Pending
         );
     }

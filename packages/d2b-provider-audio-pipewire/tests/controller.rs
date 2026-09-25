@@ -180,7 +180,7 @@ fn queued_microphone_binding_is_not_ready() {
 
 #[test]
 fn bindings_can_share_one_service_microphone_authority() {
-    let shared = shared_microphone_arbiter(64);
+    let shared = shared_microphone_arbiter(AUDIO_QUEUE_BOUND);
     let mut first =
         AudioBindingController::with_shared_microphone(FakeAudioMediator::ready(), shared.clone());
     let mut second =
@@ -210,7 +210,7 @@ fn bindings_can_share_one_service_microphone_authority() {
 
 #[test]
 fn shared_finalization_does_not_enable_the_promoted_binding_through_the_old_mediator() {
-    let shared = shared_microphone_arbiter(64);
+    let shared = shared_microphone_arbiter(AUDIO_QUEUE_BOUND);
     let mut first =
         AudioBindingController::with_shared_microphone(FakeAudioMediator::ready(), shared.clone());
     let mut second =
@@ -225,7 +225,7 @@ fn shared_finalization_does_not_enable_the_promoted_binding_through_the_old_medi
         .unwrap();
 
     assert_eq!(
-        first.finalize_shared(AudioLeaseId::new(1)).unwrap(),
+        first.finalize(AudioLeaseId::new(1)).unwrap(),
         Some(AudioLeaseId::new(2))
     );
     assert_eq!(first.mediator().grant(), AudioGrant::Off);
@@ -303,7 +303,7 @@ fn speaker_admission_rejects_before_mutating_mediator() {
     let mut requested = binding();
     requested.grants.speaker_level =
         Some(d2b_provider_audio_pipewire::LevelPercent::new(25).expect("bounded test level"));
-    for lease in 1..=AUDIO_QUEUE_BOUND as u64 {
+    for lease in 1..=AUDIO_QUEUE_BOUND.get() as u64 {
         controller
             .reconcile(&requested, "zone-a", AudioLeaseId::new(lease))
             .unwrap();
@@ -311,7 +311,7 @@ fn speaker_admission_rejects_before_mutating_mediator() {
     let last_level = controller.mediator().level();
     assert_eq!(
         controller
-            .reconcile(&requested, "zone-a", AudioLeaseId::new(AUDIO_QUEUE_BOUND as u64 + 1))
+            .reconcile(&requested, "zone-a", AudioLeaseId::new(AUDIO_QUEUE_BOUND.get() as u64 + 1))
             .unwrap_err(),
         d2b_provider_audio_pipewire::AudioControllerError::Admission
     );

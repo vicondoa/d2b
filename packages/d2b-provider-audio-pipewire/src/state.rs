@@ -142,6 +142,21 @@ impl std::fmt::Display for AudioStateIoError {
     }
 }
 
+impl std::error::Error for AudioStateIoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::LockOpen(e)
+            | Self::LockAcquire(e)
+            | Self::StateRead(e)
+            | Self::TempFile(e)
+            | Self::TempWrite(e)
+            | Self::TempSync(e)
+            | Self::AtomicRename(e) => Some(e),
+            Self::StateParse(e) => Some(e),
+        }
+    }
+}
+
 /// Read the current audio state under a shared OFD lock.
 ///
 /// Opens `lock_path` with `O_RDONLY|O_CLOEXEC|O_CREAT` (the lock file is

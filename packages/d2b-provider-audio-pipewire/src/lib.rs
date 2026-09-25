@@ -29,7 +29,7 @@ pub use controller::{
     AudioArbitrationState, AudioBindingChannels, AudioBindingController, AudioBindingPhase,
     AudioBindingStatus, AudioControllerError, AudioEnforcementPosture, AudioLastSetApplied,
     AudioMicrophoneStatus, AudioReconcileResult, AudioReconcileResultWithChildren,
-    AudioSpeakerStatus, AUDIO_QUEUE_BOUND, AUDIO_REPAIR_INTERVAL_SECS, register_service,
+    AudioSpeakerStatus, AUDIO_QUEUE_BOUND, AUDIO_REPAIR_INTERVAL_SECS,
 };
 pub use mediator::{
     AudioChannel, AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator,
