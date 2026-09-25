@@ -456,6 +456,10 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
     generated = generated.replace("#![allow(unsafe_code)]\n", "");
     generated = generated.replace("#![allow(unknown_lints)]\n", "");
     generated = generated.replace("#![allow(clippy::all)]\n", "");
+    // Matches the ttrpc-compiler 0.8.0 marker verbatim, including its
+    // upstream spelling: the committed binding file must stay byte-stable
+    // across regeneration, so this strip is load-bearing, not dead code.
+    generated = generated.replace("#![allow(clipto_camel_casepy)]\n", "");
     generated = generated.replace(
         "#![cfg_attr(rustfmt, rustfmt_skip)]\n",
         "#![cfg_attr(rustfmt, rustfmt::skip)]\n",
