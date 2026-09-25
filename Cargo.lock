@@ -2098,14 +2098,11 @@ name = "d2b-session"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-audit",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-resource-api",
- "d2b-telemetry",
  "futures-util",
  "protobuf",
- "serde_json",
  "sha2",
  "snow",
  "tokio",
