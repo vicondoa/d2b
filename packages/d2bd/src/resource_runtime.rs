@@ -65,8 +65,9 @@ use d2b_provider_zone::{
 };
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
 use d2b_provider_credential::{
-    AgentReadyFuture, CredentialDependencyFacts, CredentialLeaseFacts, CredentialRuntime,
-    CredentialSession, is_credential_provider_ref,
+    AgentReadyFuture, CredentialDependencyFacts, CredentialLeaseFacts,
+    CredentialResourceRuntimeError, CredentialRuntime, CredentialSession,
+    is_credential_provider_ref,
 };
 use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_provider_network_local::{
@@ -4482,27 +4483,20 @@ impl ZoneResourceRuntime {
                 let execution_ref = execution_ref.clone();
                 Box::pin(async move {
                     let Some(plane) = published_plane_view(&planes, &zone) else {
-                        return None;
+                        return Ok(None);
                     };
-                    match credential_dependency_facts(
-                        plane.as_ref(),
-                        &provider_ref,
-                        &execution_ref,
-                    )
-                    .await
-                    {
-                        Ok(facts) => facts,
-                        Err(error) => {
-                            tracing::warn!(
+                    credential_dependency_facts(plane.as_ref(), &provider_ref, &execution_ref)
+                        .await
+                        .map_err(|error| {
+                            tracing::debug!(
                                 zone = %zone,
                                 provider = %provider_ref,
                                 execution = %execution_ref,
                                 error = %error,
                                 "credential dependency facts: manager read failed",
                             );
-                            None
-                        }
-                    }
+                            CredentialResourceRuntimeError::DependencyFacts
+                        })
                 })
             }),
             lease: Arc::new(|_credential_ref: &ResourceRef| Box::pin(async { None })),
@@ -6032,7 +6026,7 @@ impl CredentialRuntime for ProductionCredentialRuntime {
         &self,
         provider_ref: &ResourceRef,
         execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts> {
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError> {
         (self.facts)(provider_ref, execution_ref).await
     }
 

@@ -93,9 +93,9 @@ impl CredentialDriverEffects for FakeEffects {
         &self,
         _provider_ref: &ResourceRef,
         _execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts> {
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError> {
         self.log.lock().push("dependency-facts".to_owned()); // async-gate-allow: test-support recorder lock
-        self.facts.lock().clone() // async-gate-allow: test-support recorder lock
+        Ok(self.facts.lock().clone()) // async-gate-allow: test-support recorder lock
     }
 
     async fn lease_facts(&self, _credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
@@ -228,9 +228,9 @@ impl CredentialRuntime for RecordingRuntime {
         &self,
         _provider_ref: &ResourceRef,
         _execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts> {
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError> {
         self.log.lock().push("dependency-facts".to_owned()); // async-gate-allow: test-support recorder lock
-        self.facts.lock().clone() // async-gate-allow: test-support recorder lock
+        Ok(self.facts.lock().clone()) // async-gate-allow: test-support recorder lock
     }
 
     async fn lease_facts(&self, _credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
