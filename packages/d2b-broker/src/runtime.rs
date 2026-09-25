@@ -7140,7 +7140,7 @@ fn install_live_operation_envelope(
         // than being served by a process that does not declare it.
         None => crate::envelope::ForwardingDispatcher::default(),
     };
-    let kernels = crate::kernel_ops::kernel_table(&crate::kernel_ops::KernelConfig {
+    let kernels = crate::kernel_ops::kernel_table(crate::kernel_ops::KernelConfig {
         state_dir: config.state_dir.clone(),
         runtime_root: config
             .socket_path
@@ -14484,7 +14484,7 @@ mod tests {
             config.audit_retention_days,
         )
         .expect("open capturing audit log");
-        let kernels = kernel_table(&KernelConfig {
+        let kernels = kernel_table(KernelConfig {
             state_dir: config.state_dir.clone(),
             runtime_root: root.join("runtime"),
             daemon_uid: config.d2bd_uid,
@@ -14797,7 +14797,7 @@ mod tests {
             config.audit_retention_days,
         )
         .expect("open capturing audit log");
-        let kernels = kernel_table(&KernelConfig {
+        let kernels = kernel_table(KernelConfig {
             state_dir: config.state_dir.clone(),
             runtime_root: root.join("runtime"),
             daemon_uid: config.d2bd_uid,
@@ -15226,7 +15226,7 @@ mod tests {
                 config.audit_retention_days,
             )
             .expect("open capturing audit log");
-            let kernels = kernel_table(&KernelConfig {
+            let kernels = kernel_table(KernelConfig {
                 state_dir: config.state_dir.clone(),
                 runtime_root: root.join("runtime"),
                 daemon_uid: config.d2bd_uid,
@@ -15544,7 +15544,7 @@ mod tests {
                 config.audit_retention_days,
             )
             .expect("open capturing audit log");
-            let kernels = kernel_table(&KernelConfig {
+            let kernels = kernel_table(KernelConfig {
                 state_dir: config.state_dir.clone(),
                 runtime_root: runtime_root.to_path_buf(),
                 daemon_uid: config.d2bd_uid,
@@ -17640,7 +17640,7 @@ mod tests {
             config.audit_retention_days,
         )
         .expect("open capturing audit log");
-        let kernels = kernel_table(&KernelConfig {
+        let kernels = kernel_table(KernelConfig {
             state_dir: config.state_dir.clone(),
             runtime_root: root.join("runtime"),
             daemon_uid: config.d2bd_uid,
