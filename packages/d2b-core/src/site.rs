@@ -39,11 +39,26 @@ impl SiteJson {
 
     /// Fail-closed artifact validation: a malformed socket is an emitter
     /// contract violation and refuses the bundle load.
-    pub fn validate(&self) -> Result<(), &'static str> {
+    pub fn validate(&self) -> Result<(), SiteValidationError> {
         match self.wayland_socket.as_deref() {
             None => Ok(()),
             Some(socket) if wayland_socket_ok(socket) => Ok(()),
-            Some(_) => Err("invalid-wayland-socket"),
+            Some(_) => Err(SiteValidationError::InvalidWaylandSocket),
+        }
+    }
+}
+
+/// Validation failure for a [`SiteJson`] artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiteValidationError {
+    /// The Wayland socket does not match the accepted shape.
+    InvalidWaylandSocket,
+}
+
+impl std::fmt::Display for SiteValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidWaylandSocket => f.write_str("invalid-wayland-socket"),
         }
     }
 }
@@ -66,7 +81,7 @@ fn wayland_socket_ok(socket: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::SiteJson;
+    use super::{SiteJson, SiteValidationError};
 
     fn site(value: Option<&str>) -> SiteJson {
         SiteJson {
@@ -110,7 +125,7 @@ mod tests {
             let parsed = site(Some(socket));
             assert_eq!(
                 parsed.validate(),
-                Err("invalid-wayland-socket"),
+                Err(SiteValidationError::InvalidWaylandSocket),
                 "{socket} must not validate"
             );
             assert_eq!(

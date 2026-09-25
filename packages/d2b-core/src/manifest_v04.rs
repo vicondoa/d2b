@@ -344,7 +344,14 @@ pub struct VmShellMetadata {
 /// A validated shell name (`^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
-pub struct ManifestShellName(pub String);
+pub struct ManifestShellName(String);
+
+impl ManifestShellName {
+    /// The validated shell name.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl<'de> Deserialize<'de> for ManifestShellName {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

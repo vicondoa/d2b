@@ -157,7 +157,7 @@ fn privileges_json_denies_unknown_fields() {
 }
 
 fn w1_matrix_contains_public_and_broker_rows() {
-    let matrix = PrivilegesJson::w1("v1");
+    let matrix = PrivilegesJson::from_const_rows("v1");
     assert_eq!(matrix.public_operations.len(), PUBLIC_OPERATION_AUTHZ.len());
     assert_eq!(matrix.broker_operations.len(), BROKER_OPERATION_AUTHZ.len());
     assert!(

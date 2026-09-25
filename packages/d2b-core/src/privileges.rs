@@ -738,7 +738,7 @@ impl From<&OperationAuthzRow> for OperationAuthz {
 
 impl PrivilegesJson {
     /// Builds the canonical privileges matrix from the const rows.
-    pub fn w1(schema_version: impl Into<String>) -> Self {
+    pub fn from_const_rows(schema_version: impl Into<String>) -> Self {
         Self {
             schema_version: schema_version.into(),
             public_operations: PUBLIC_OPERATION_AUTHZ
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn w1_matrix_contains_public_and_broker_rows() {
-        let matrix = PrivilegesJson::w1("v1");
+        let matrix = PrivilegesJson::from_const_rows("v1");
         assert_eq!(matrix.public_operations.len(), PUBLIC_OPERATION_AUTHZ.len());
         assert_eq!(matrix.broker_operations.len(), BROKER_OPERATION_AUTHZ.len());
         assert!(

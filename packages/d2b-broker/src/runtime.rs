@@ -6401,7 +6401,7 @@ async fn prepare_runner_preopened_fds(
             })?;
         let intents = resolver
             .resolve_macvtap_intents(req.vm_id.as_str(), runner_intent.role_id.as_str())
-            .map_err(BrokerError::LiveHandler)?;
+            .map_err(|error| BrokerError::LiveHandler(error.to_string()))?;
         if intents.is_empty() {
             return Ok(RunnerPreopenedFds {
                 child_fds: Vec::new(),
