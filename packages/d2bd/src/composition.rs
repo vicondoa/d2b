@@ -12705,7 +12705,13 @@ fn remember_typed_shell_session_target(
     // is a tokio mutex in the converted d2bd-runtime); a collision skips the
     // cache update fail-closed - the caller's next list pass re-caches.
     if let Ok(mut sessions) = state.typed_shell_session_targets.try_lock() {
-        sessions.remember((peer_uid, name.as_str().to_owned()), target.to_owned());
+        sessions.remember(
+            d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(
+                peer_uid,
+                name.as_str().to_owned(),
+            ),
+            target.to_owned(),
+        );
     }
 }
 
@@ -12715,7 +12721,10 @@ fn forget_typed_shell_session_target(
     name: &public_wire::ShellName,
 ) {
     if let Ok(mut sessions) = state.typed_shell_session_targets.try_lock() {
-        sessions.forget(&(peer_uid, name.as_str().to_owned()));
+        sessions.forget(&d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(
+            peer_uid,
+            name.as_str().to_owned(),
+        ));
     }
 }
 
@@ -12738,10 +12747,16 @@ fn cache_unambiguous_typed_shell_session_targets(
     }
     if let Ok(mut sessions) = state.typed_shell_session_targets.try_lock() {
         for name in &conflicts {
-            sessions.forget(&(peer_uid, name.clone()));
+            sessions.forget(&d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(
+                peer_uid,
+                name.clone(),
+            ));
         }
         for (name, target) in unique {
-            sessions.remember((peer_uid, name), target);
+            sessions.remember(
+                d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(peer_uid, name),
+                target,
+            );
         }
     }
     if let Some(workload_id) = conflicts.into_iter().next() {
@@ -12785,7 +12800,12 @@ fn cached_typed_shell_session_target(
         .typed_shell_session_targets
         .try_lock()
         .ok()
-        .and_then(|mut sessions| sessions.cached(&(peer_uid, name.as_str().to_owned())))
+        .and_then(|mut sessions| {
+            sessions.cached(&d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(
+                peer_uid,
+                name.as_str().to_owned(),
+            ))
+        })
 }
 
 fn reserve_typed_shell_session_create(
@@ -12793,7 +12813,10 @@ fn reserve_typed_shell_session_create(
     peer_uid: u32,
     name: &public_wire::ShellName,
 ) -> Result<d2bd_runtime::typed_shell_targets::TypedShellSessionCreateReservation, TypedError> {
-    let key = (peer_uid, name.as_str().to_owned());
+    let key = d2bd_runtime::typed_shell_targets::TypedShellTargetKey::new(
+        peer_uid,
+        name.as_str().to_owned(),
+    );
     d2bd_runtime::typed_shell_targets::TypedShellSessionTargetCache::reserve(
         &state.typed_shell_session_targets,
         key,
