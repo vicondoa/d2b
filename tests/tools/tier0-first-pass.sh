@@ -40,20 +40,39 @@ ok() {
 
 ROOT=${ROOT:-$(find_repo_root)} || fail "cannot discover repository root"
 
+# Admitted vendored roots derive from the committed .agents/skills links:
+# the canonical tree each link resolves into. make update-agent-skills
+# refreshes the trees, the adapter links, and this admission set together,
+# so no version path is hard-coded here.
+declare -a dash_exempt_roots=()
+declare -A dash_exempt_root_seen=()
+for _adapter_link in "$ROOT"/.agents/skills/*; do
+  [[ -L $_adapter_link ]] || continue
+  _adapter_target=$(readlink -f "$_adapter_link") || continue
+  case $_adapter_target in "$ROOT"/*) ;; *) continue ;; esac
+  _adapter_root=${_adapter_target%/skills/*}
+  _adapter_root=${_adapter_root#"$ROOT/"}
+  if [[ -n $_adapter_root && -z ${dash_exempt_root_seen[$_adapter_root]:-} ]]; then
+    dash_exempt_root_seen[$_adapter_root]=1
+    dash_exempt_roots+=("$_adapter_root")
+  fi
+done
+unset _adapter_link _adapter_target _adapter_root
+
 is_dash_exempt() {
-  case "$1" in
+  local path=$1 root
+  case $path in
     AGENTS.md|tests/AGENTS.md|labs/venus-vulkan-video/AGENTS.md|CLAUDE.md)
       return 0
       ;;
-    third_party/agent-skills/*/skills/*|\
-    third_party/agent-skills/*/v*/skills/*|\
-    third_party/agent-skills/*/LICENSE|\
-    third_party/agent-skills/*/v*/LICENSE|\
-    third_party/agent-skills/*/UPSTREAM.json|\
-    third_party/agent-skills/*/v*/UPSTREAM.json)
-      return 0
-      ;;
   esac
+  for root in "${dash_exempt_roots[@]}"; do
+    case $path in
+      "$root"/skills/*|"$root"/LICENSE|"$root"/UPSTREAM.json)
+        return 0
+        ;;
+    esac
+  done
   return 1
 }
 

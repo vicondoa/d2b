@@ -45,6 +45,7 @@ refresh() {
     case "$base_name" in
       generated|.*|"") continue ;;
     esac
+    [[ -f "$dir/SKILL.md" ]] || continue
     cp -R "$dir" "$dest/skills/"
   done < <(find "$work/skills" -mindepth 1 -maxdepth 1 -type d | sort)
 
@@ -84,11 +85,12 @@ refresh https://github.com/EveryInc/compound-engineering-plugin \
 refresh https://github.com/JuliusBrussee/caveman \
   caveman third_party/agent-skills/caveman
 
-# Regenerate the .agents/skills links: one relative symlink per discovered
-# skill directory across every vendored tree. Relative targets keep the
+# Regenerate the adapter links: one relative symlink per discovered skill
+# directory across every vendored tree, in both omp-native (.agents/skills)
+# and Claude-compatible (.claude/skills) surfaces. Relative targets keep the
 # links portable inside a clone.
-rm -rf .agents/skills
-mkdir -p .agents/skills
+rm -rf .agents/skills .claude/skills
+mkdir -p .agents/skills .claude/skills
 
 for tree in third_party/agent-skills/compound-engineering/*/skills \
             third_party/agent-skills/caveman/*/skills \
@@ -102,7 +104,8 @@ for tree in third_party/agent-skills/compound-engineering/*/skills \
     [[ -f "$dir/SKILL.md" ]] || continue
     dir=${dir%/}
     ln -sfn "../../$dir" ".agents/skills/$base_name"
+    ln -sfn "../../$dir" ".claude/skills/$base_name"
   done < <(find "$tree" -mindepth 1 -maxdepth 1 -type d | sort)
 done
 
-echo "agent skills: $(find .agents/skills -mindepth 1 -maxdepth 1 | wc -l) links"
+echo "agent skills: $(find .agents/skills -mindepth 1 -maxdepth 1 | wc -l) omp links, $(find .claude/skills -mindepth 1 -maxdepth 1 | wc -l) claude links"
