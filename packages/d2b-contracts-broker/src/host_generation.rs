@@ -115,7 +115,6 @@ impl SourceGenerationCompatibilityFloorV1 {
             source_generation,
             target_generation,
             state: HandoffState::Recorded,
-            source_remains_usable: true,
         })
     }
 }
@@ -233,7 +232,6 @@ pub struct HandoffCoordinator {
     source_generation: u64,
     target_generation: u64,
     state: HandoffState,
-    source_remains_usable: bool,
 }
 
 impl HandoffCoordinator {
@@ -252,9 +250,10 @@ impl HandoffCoordinator {
         self.target_generation
     }
 
-    /// Whether source remains usable after this phase.
-    pub const fn source_remains_usable(&self) -> bool {
-        self.source_remains_usable
+    /// Whether source remains usable after this phase. The source is
+    /// retired only once the target completes; every other phase keeps it.
+    pub fn source_remains_usable(&self) -> bool {
+        self.state != HandoffState::Completed
     }
 
     /// Validate the authenticated target before mutation.
@@ -326,7 +325,6 @@ impl HandoffCoordinator {
             return Err(HandoffError::InvalidTransition);
         }
         self.state = HandoffState::Completed;
-        self.source_remains_usable = false;
         Ok(())
     }
 
@@ -344,7 +342,6 @@ impl HandoffCoordinator {
             return Err(HandoffError::InvalidTransition);
         }
         self.state = HandoffState::RolledBack;
-        self.source_remains_usable = true;
         Ok(())
     }
 }

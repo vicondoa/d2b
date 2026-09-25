@@ -48,13 +48,35 @@ impl core::fmt::Debug for AuditExportEntry {
     }
 }
 
+/// Failure classes for [`validate_audit_page`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditPageError {
+    CompleteWithCursor,
+    IncompleteWithoutCursor,
+}
+
+impl core::fmt::Display for AuditPageError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            AuditPageError::CompleteWithCursor => {
+                f.write_str("complete audit page must omit nextCursor")
+            }
+            AuditPageError::IncompleteWithoutCursor => {
+                f.write_str("incomplete audit page requires nextCursor")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AuditPageError {}
+
 pub fn validate_audit_page(
     complete: bool,
     next_cursor: Option<&AuditExportCursor>,
-) -> Result<(), &'static str> {
+) -> Result<(), AuditPageError> {
     match (complete, next_cursor.is_some()) {
-        (true, true) => Err("complete audit page must omit nextCursor"),
-        (false, false) => Err("incomplete audit page requires nextCursor"),
+        (true, true) => Err(AuditPageError::CompleteWithCursor),
+        (false, false) => Err(AuditPageError::IncompleteWithoutCursor),
         _ => Ok(()),
     }
 }
