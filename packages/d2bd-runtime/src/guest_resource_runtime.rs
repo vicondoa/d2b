@@ -29,11 +29,11 @@ use d2b_resource_api::{
     service::UnavailableUpgradeDispatcher,
 };
 use d2b_contracts_resource::v3::{
-    ExpectedRevision, MutationSealBody, ResourceMutationKind, SealedMutation, StoreCommitResult,
-    StoreError, StoreErrorKind, StoreGetRequest, StoreInspectSchemaRequest, StoreListRequest,
-    StoreListResult, StoreResolveRequest, StoreResolvedIdentity, StoreWatchReceipt,
-    StoreSlot, StoreWatchRequest, StoredResource, StoredSchema,
-    operations::seal::{MutationSealAcceptor, StoreSealIdentity},
+    ExpectedRevision, MutationSealBody, ResourceErrorKind, ResourceMutationKind, SealedMutation,
+    StateDigest, StoreCommitResult, StoreError, StoreErrorKind, StoreGetRequest,
+    StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreResolveRequest,
+    StoreResolvedIdentity, StoreWatchReceipt, StoreSlot, StoreWatchRequest, StoredResource,
+    StoredSchema, operations::seal::{MutationSealAcceptor, StoreSealIdentity},
 };
 use protobuf::Message;
 use ttrpc::{
@@ -508,7 +508,7 @@ impl GuestResourceStore {
 
     fn forbidden() -> StoreError {
         StoreError::new(
-            StoreErrorKind::AuthorizationDenied,
+            StoreErrorKind::Resource(ResourceErrorKind::AuthorizationDenied),
             None,
             None,
             RetryClass::Never,
@@ -518,7 +518,7 @@ impl GuestResourceStore {
 
     fn unavailable(reason: &'static str) -> StoreError {
         StoreError::new(
-            StoreErrorKind::ResourcePlaneUnavailable,
+            StoreErrorKind::Resource(ResourceErrorKind::ResourcePlaneUnavailable),
             None,
             None,
             RetryClass::AfterDelay,
@@ -528,7 +528,7 @@ impl GuestResourceStore {
 
     fn invalid(reason: &'static str) -> StoreError {
         StoreError::new(
-            StoreErrorKind::ResourceSchemaInvalid,
+            StoreErrorKind::Resource(ResourceErrorKind::ResourceSchemaInvalid),
             None,
             None,
             RetryClass::Never,
@@ -538,7 +538,7 @@ impl GuestResourceStore {
 
     fn unsupported_capability(reason: &'static str) -> StoreError {
         StoreError::new(
-            StoreErrorKind::UnsupportedCapability,
+            StoreErrorKind::Resource(ResourceErrorKind::UnsupportedCapability),
             None,
             None,
             RetryClass::Never,
@@ -548,7 +548,7 @@ impl GuestResourceStore {
 
     fn not_found() -> StoreError {
         StoreError::new(
-            StoreErrorKind::ResourceNotFound,
+            StoreErrorKind::Resource(ResourceErrorKind::ResourceNotFound),
             None,
             None,
             RetryClass::Never,
@@ -558,7 +558,7 @@ impl GuestResourceStore {
 
     fn conflict(revision: u64) -> StoreError {
         StoreError::new(
-            StoreErrorKind::ResourceConflict,
+            StoreErrorKind::Resource(ResourceErrorKind::ResourceConflict),
             Some(ZoneRevision::new(revision)),
             None,
             RetryClass::Reauthorize,
@@ -675,7 +675,7 @@ impl GuestResourceStore {
                     match mutation.expected {
                         ExpectedRevision::CreateAbsent if current.is_some() => {
                             return Err(StoreError::new(
-                                StoreErrorKind::ResourceAlreadyExists,
+                                StoreErrorKind::Resource(ResourceErrorKind::ResourceAlreadyExists),
                                 Some(ZoneRevision::new(state.revision)),
                                 None,
                                 RetryClass::Never,
@@ -722,12 +722,13 @@ impl GuestResourceStore {
                     }
                     let payload_digest = prepared
                         .payload_digest()
-                        .map(str::to_owned)
+                        .cloned()
                         .unwrap_or_else(|| {
-                            d2b_contracts_resource::v3::canonical_digest(
+                            StateDigest::parse(d2b_contracts_resource::v3::canonical_digest(
                                 d2b_contracts_resource::v3::resource_schema::RESOURCE_ENVELOPE_DOMAIN_TAG,
                                 &canonical,
-                            )
+                            ))
+                            .expect("a canonical digest is a valid state digest")
                         });
                     let resource = StoredResource {
                         resource_ref: mutation.target.clone(),
@@ -879,10 +880,11 @@ impl ResourceStoreBackend for GuestResourceStore {
             .to_canonical_bytes();
         Ok(StoredSchema {
             resource_type: request.resource_type,
-            payload_digest: d2b_contracts_resource::v3::canonical_digest(
+            payload_digest: SchemaFingerprint::parse(d2b_contracts_resource::v3::canonical_digest(
                 SCHEMA_DOMAIN_TAG,
                 &canonical,
-            ),
+            ))
+            .expect("a canonical digest is a valid schema fingerprint"),
             canonical_json: canonical,
         })
     }
@@ -1085,7 +1087,7 @@ fn validate_seed_request(
                 || identity.uid.is_some()
                 || identity.generation.is_some()
                 || identity.revision.is_some()
-        }) || resource.payload_digest
+        }) || resource.payload_digest.as_str()
             != d2b_contracts_resource::v3::canonical_digest(
                 RESOURCE_ENVELOPE_DOMAIN_TAG,
                 &resource.canonical_json,
@@ -1398,7 +1400,10 @@ mod tests {
         let error = bound
             .ensure_current()
             .expect_err("an older session generation must be fenced");
-        assert_eq!(error.kind(), StoreErrorKind::ResourcePlaneUnavailable);
+        assert_eq!(
+            error.kind(),
+            StoreErrorKind::Resource(ResourceErrorKind::ResourcePlaneUnavailable)
+        );
     }
 
     #[test]
@@ -1451,7 +1456,10 @@ mod tests {
             })
             .await
             .expect_err("Zone schema is not target-local");
-        assert_eq!(error.kind(), StoreErrorKind::AuthorizationDenied);
+        assert_eq!(
+            error.kind(),
+            StoreErrorKind::Resource(ResourceErrorKind::AuthorizationDenied)
+        );
     }
 
     #[tokio::test]
@@ -1486,7 +1494,10 @@ mod tests {
             })
             .await
             .expect_err("Zone watch is not target-local");
-        assert_eq!(error.kind(), StoreErrorKind::AuthorizationDenied);
+        assert_eq!(
+            error.kind(),
+            StoreErrorKind::Resource(ResourceErrorKind::AuthorizationDenied)
+        );
     }
 
     #[tokio::test]
@@ -1522,7 +1533,10 @@ mod tests {
             })
             .await
             .expect_err("a watch whose stream no one fills must be refused, not receipted");
-        assert_eq!(error.kind(), StoreErrorKind::UnsupportedCapability);
+        assert_eq!(
+            error.kind(),
+            StoreErrorKind::Resource(ResourceErrorKind::UnsupportedCapability)
+        );
         assert_eq!(error.reason_code(), "watch-not-wired");
         assert_eq!(error.retry_class(), RetryClass::Never);
     }

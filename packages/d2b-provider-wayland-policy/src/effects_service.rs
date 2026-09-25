@@ -671,7 +671,7 @@ fn validate_audio_dependency_identity(
         || envelope
             .digest()
             .map_err(|_| InteractionEffectError::InvalidResource)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         return Err(InteractionEffectError::InvalidResource);
     }
