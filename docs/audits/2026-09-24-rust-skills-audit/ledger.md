@@ -125,11 +125,11 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0092` | `idiom` | `d2b-resource-compiler` | low | actionable | leaf |  |  |  | `packages/d2b-resource-compiler/src/lib.rs:2402` |  |  |
 | `RS-0093` | `idiom` | `d2b-resource-compiler` | low | actionable | leaf |  |  |  | `packages/d2b-resource-compiler/src/lib.rs:1724` |  |  |
 | `RS-0094` | `idiom` | `d2b-resource-compiler` | low | actionable | leaf |  |  |  | `packages/d2b-resource-compiler/src/lib.rs:1913` |  |  |
-| `RS-0095` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/manager.rs:882, packages/d2b-resource-runtime/src/resour` |  |  |
-| `RS-0097` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/target.rs:732, packages/d2b-resource-runtime/src/guest_t` |  |  |
-| `RS-0096` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/manager.rs:1419, packages/d2b-resource-runtime/src/manag` |  |  |
-| `RS-0098` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/target.rs:581-584` |  |  |
-| `RS-0099` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/spec_store.rs:83-88, packages/d2b-resource-runtime/src/s` |  |  |
+| `RS-0095` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 4cbf82851 | `manager.rs` | derive Default on three unit structs; new() const kept |  |
+| `RS-0097` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf | declined | U2 |  | `target.rs` | sort_by_key and sort_by_cached_key both rejected by rustc 1.97 (lifetime may not live long enough; closure returns (&str,&str,&str) borrowing the element); kept sort_by |  |
+| `RS-0096` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 4cbf82851 | `manager.rs` | shared free manager_rpc transport; both endpoints route through it |  |
+| `RS-0098` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 69d4b615f | `target.rs` | derive Default on TargetDirectory |  |
+| `RS-0099` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | fb5ed9466 | `spec_store.rs` | impl FromStr for ResourceProvenance; store parses via str::parse |  |
 | `RS-0100` | `idiom` | `d2b-session` | low | actionable | leaf |  |  |  | `engine.rs:1802, engine.rs:1803, engine.rs:1807` |  |  |
 | `RS-0101` | `idiom` | `d2b-session` | low | actionable | leaf |  |  |  | `admission.rs:1593, admission.rs:956, admission.rs:958` |  |  |
 | `RS-0102` | `idiom` | `d2b-sk-frontend` | low | actionable | leaf |  |  |  | `packages/d2b-sk-frontend/src/config.rs:178` |  |  |
@@ -148,13 +148,13 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0115` | `idiom` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/unsafe_local_helper.rs` | fd extraction loops are filter_map+flatten collects |  |
 | `RS-0116` | `idiom` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/guest_mode.rs` | monotonic_tick deduped into runtime_util (LazyLock per repo std; lazy init preserved} |  |
 | `RS-0117` | `idiom` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/console_session.rs` | ConsoleSessionTable derives Default; manual impl deleted |  |
-| `RS-0118` | `idiom` | `xtask` | medium | actionable | leaf |  |  |  | `packages/xtask/src/gen_layer_catalogs.rs:147, packages/xtask/src/gen_layer_catalogs.rs:158` |  |  |
-| `RS-0120` | `idiom` | `xtask` | medium | actionable | leaf |  |  |  | `packages/xtask/src/main.rs:1031, packages/xtask/src/main.rs:1142, packages/xtask/src/main.` |  |  |
-| `RS-0123` | `idiom` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/resource_type_authority.rs:704, packages/xtask/src/resource_type_author` |  |  |
-| `RS-0124` | `idiom` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/nix_inventories.rs:721` |  |  |
-| `RS-0119` | `idiom` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/gen_layer_catalogs.rs:377, packages/xtask/src/main.rs:473` |  |  |
-| `RS-0121` | `idiom` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/main.rs:459` |  |  |
-| `RS-0122` | `idiom` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/provider_crate_policy.rs:6662, packages/xtask/src/provider_crate_policy` |  |  |
+| `RS-0118` | `idiom` | `xtask` | medium | actionable | leaf | applied | U2 | 80037234d | `gen_layer_catalogs.rs` | string_array deleted; ten call sites rerouted through string_slice |  |
+| `RS-0120` | `idiom` | `xtask` | medium | actionable | leaf | not-started | U2 |  | `packages/xtask/src/main.rs:1031, packages/xtask/src/main.rs:1142, packages/xtask/src/main.` | run budget exhausted mid-batch; anchors re-verified at HEAD |  |
+| `RS-0123` | `idiom` | `xtask` | low | actionable | leaf | applied | U2 | 7eef023f9 | `resource_type_authority.rs` | three statements reindented |  |
+| `RS-0124` | `idiom` | `xtask` | low | actionable | leaf | applied | U2 | fc0353eb1 | `nix_inventories.rs` | applied-variant: generic S: AsRef<str> + Display standard params (caller with Vec<String> cannot feed &[&str]); call site passes STANDARD_RESOURCE_TYPES.as_slice() |  |
+| `RS-0119` | `idiom` | `xtask` | low | actionable | leaf | not-started | U2 |  | `packages/xtask/src/gen_layer_catalogs.rs:377, packages/xtask/src/main.rs:473` | run budget exhausted mid-batch; anchors re-verified at HEAD |  |
+| `RS-0121` | `idiom` | `xtask` | low | actionable | leaf | applied | U2 | bbd40b6fd | `main.rs` | dead corrupted sanitizer strip line deleted; marker appears nowhere in generated files |  |
+| `RS-0122` | `idiom` | `xtask` | low | actionable | leaf | applied | U2 | 5f04f2119 | `provider_crate_policy.rs` | dead close-block reset replaced with scan end at closing brace |  |
 | `RS-0964` | `own` | `X3-cross-crate-duplication` | medium | actionable | family |  |  |  | `packages/d2bd/src/resource_plane_v3.rs:3227, packages/d2b-resource-runtime/src/target.rs:4` |  |  |
 | `RS-0150` | `own` | `d2b` | low | actionable | leaf | applied | U2 | d4e4604e4 | `packages/d2b/src/dispatch.rs` | cursor/page_token/reference moved into calls;call-site reassignment unchanged |  |
 | `RS-0151` | `own` | `d2b` | low | actionable | leaf | applied | U2 | d4e4604e4 | `packages/d2b/src/dispatch.rs` | try_parse_from consumes raw_args by value (sole caller, never reused) |  |
@@ -237,13 +237,13 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0203` | `own` | `d2b-resource-compiler` | low | actionable | leaf |  |  |  | `packages/d2b-resource-compiler/src/main.rs:1467, packages/d2b-resource-compiler/src/main.r` |  |  |
 | `RS-0204` | `own` | `d2b-resource-compiler` | low | actionable | leaf |  |  |  | `packages/d2b-resource-compiler/src/main.rs:269, packages/d2b-resource-compiler/src/main.rs` |  |  |
 | `RS-0205` | `own` | `d2b-resource-compiler` | low | actionable | leaf |  |  |  | `packages/d2b-resource-compiler/src/main.rs:704` |  |  |
-| `RS-0206` | `own` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/manager.rs:205` |  |  |
-| `RS-0209` | `own` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/spec_store.rs:520-541` |  |  |
-| `RS-0207` | `own` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/resource.rs:714, packages/d2b-resource-runtime/src/resou` |  |  |
-| `RS-0210` | `own` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/spec_store.rs:596-598` |  |  |
-| `RS-0208` | `own` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/metadata.rs:191` |  |  |
-| `RS-0211` | `own` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/target.rs:655, packages/d2b-resource-runtime/src/target.` |  |  |
-| `RS-0212` | `own` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/guest_target.rs:1004-1009` |  |  |
+| `RS-0206` | `own` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 4cbf82851 | `manager.rs` | observed_status filters before clone |  |
+| `RS-0209` | `own` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | fb5ed9466 | `spec_store.rs` | insert_new takes StoredDesiredResource by value; ensure passes by move |  |
+| `RS-0207` | `own` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 0e6061c1e | `resource.rs` | pre_start moves row into state; clones only for ResourceContext::new |  |
+| `RS-0210` | `own` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | fb5ed9466 | `spec_store.rs` | list binds borrowed selector str forms |  |
+| `RS-0208` | `own` | `d2b-resource-runtime` | low | actionable | leaf | declined | U2 |  | `metadata.rs` | ctx.spec::<Value>() returns Result<&Value,_>; Ok(spec) is E0308; the clone is required by the API |  |
+| `RS-0211` | `own` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 1f9423d9a | `target.rs` | assign moves assignment into map and clones once for return |  |
+| `RS-0212` | `own` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 75d64d039 | `guest_target.rs` | json_object moves member values; 17 call sites updated |  |
 | `RS-0213` | `own` | `d2b-session` | low | actionable | family |  |  |  | `engine.rs:689, admission.rs:593` |  |  |
 | `RS-0214` | `own` | `d2b-sk-frontend` | low | actionable | leaf |  |  |  | `packages/d2b-sk-frontend/src/main.rs:55, packages/d2b-sk-frontend/src/config.rs:83` |  |  |
 | `RS-0215` | `own` | `d2b-zone-routing` | low | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/engine.rs:345, packages/d2b-zone-routing/src/engine.rs:346` |  |  |
@@ -260,16 +260,16 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0226` | `own` | `d2bd-runtime` | low | actionable | leaf | applied-variant | U2 | c44ccbd0b | `packages/d2bd-runtime/src/unsafe_local_helper.rs` | complete_pending takes &str; two call sites pass as_str; third kept to_string because E0505 forbids borrow+move of result in one call (deviation) |  |
 | `RS-0227` | `own` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/console_session.rs` | Borrow<str> implemented; five map lookups/removes resolve without String alloc |  |
 | `RS-0228` | `own` | `d2bd-runtime` | low | actionable | leaf | applied-variant | U2 | c44ccbd0b | `packages/d2bd-runtime/src/daemon_audit.rs` | write_event* and enqueue take DaemonEvent by value, drop clone; caller migration in d2bd/src/composition.rs left to W1Daemon/orchestrator (cross-crate} |  |
-| `RS-0231` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/provider_crate_policy.rs:577, packages/xtask/src/provider_crate_policy.` |  |  |
-| `RS-0236` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/production_closure.rs:263, packages/xtask/src/production_closure.rs:379` |  |  |
-| `RS-0238` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/blocking_census.rs:1270, packages/xtask/src/blocking_census.rs:1287` |  |  |
-| `RS-0232` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/provider_crate_policy.rs:5200, packages/xtask/src/provider_crate_policy` |  |  |
-| `RS-0237` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/production_closure.rs:383, packages/xtask/src/production_closure.rs:386` |  |  |
-| `RS-0234` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/provider_packaging.rs:163, packages/xtask/src/provider_packaging.rs:206` |  |  |
-| `RS-0233` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/gen_broker_operations.rs:844, packages/xtask/src/gen_broker_operations.` |  |  |
-| `RS-0235` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/semantic_service_schemas.rs:32, packages/xtask/src/semantic_service_sch` |  |  |
-| `RS-0229` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/provider_crate_policy.rs:7257` |  |  |
-| `RS-0230` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/provider_crate_policy.rs:6375, packages/xtask/src/provider_crate_policy` |  |  |
+| `RS-0231` | `own` | `xtask` | low | actionable | leaf | applied | U2 | 5f04f2119 | `provider_crate_policy.rs` | check_members takes &[WorkspaceMember]; caller clones dropped; second caller borrows result |  |
+| `RS-0236` | `own` | `xtask` | low | actionable | leaf | declined | U2 |  | `production_closure.rs` | compute_* take ContextSpec by value today; ComputedContext struct owns spec; changing to &ContextSpec forces internal clones at the struct literals (= no net clone removal; E0308 evidence); reverted |  |
+| `RS-0238` | `own` | `xtask` | low | actionable | leaf | not-started | U2 |  | `packages/xtask/src/blocking_census.rs:1270, packages/xtask/src/blocking_census.rs:1287` | run budget exhausted mid-batch; anchors re-verified at HEAD |  |
+| `RS-0232` | `own` | `xtask` | low | actionable | leaf | applied | U2 | 5f04f2119 | `provider_crate_policy.rs` | family-knowledge exempt set keys &str pairs; probe via as_str |  |
+| `RS-0237` | `own` | `xtask` | low | actionable | leaf | applied | U2 | be3e0744b | `production_closure.rs` | duplicate approval clone binding removed; single clone at with_approval call |  |
+| `RS-0234` | `own` | `xtask` | low | actionable | leaf | applied | U2 | 44a90ab5e | `provider_packaging.rs` | nix_string_list generic over AsRef<str>; eight to_owned closures deleted |  |
+| `RS-0233` | `own` | `xtask` | low | actionable | leaf | applied | U2 | f01a683c7 | `gen_broker_operations.rs` | profile_catalog returns Vec<&str> via as_deref; string_list items are &str |  |
+| `RS-0235` | `own` | `xtask` | low | actionable | leaf | applied | U2 | 02238dbdd | `semantic_service_schemas.rs` | resource_ref_schema takes &str/&[&str]; five call sites pass borrowed forms |  |
+| `RS-0229` | `own` | `xtask` | low | actionable | leaf | applied | U2 | 5f04f2119 | `provider_crate_policy.rs` | mem::take on the mut slot before in-place edit |  |
+| `RS-0230` | `own` | `xtask` | low | actionable | leaf | applied | U2 | 5f04f2119 | `provider_crate_policy.rs` | two ratchet probes key borrowed strs via signal fields |  |
 | `RS-0954` | `type` | `X2-generated-boundary` | medium | actionable | family |  |  |  | `packages/xtask/src/gen_broker_operations.rs:979-987, packages/xtask/src/gen_broker_operati` |  |  |
 | `RS-0955` | `type` | `X2-generated-boundary` | medium | actionable | leaf |  |  |  | `packages/xtask/src/gen_broker_operations.rs:949, packages/d2b-broker/src/generated/broker_` |  |  |
 | `RS-0956` | `type` | `X2-generated-boundary` | low | actionable | family |  |  |  | `packages/xtask/src/gen_broker_operations.rs:853-858, packages/xtask/src/gen_broker_operati` |  |  |
@@ -761,11 +761,11 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0718` | `docs` | `d2b-resource-api` | medium | actionable | leaf |  |  |  | `packages/d2b-resource-api/src/authz.rs:630, packages/d2b-resource-api/src/authz.rs:864, pa` |  |  |
 | `RS-0717` | `docs` | `d2b-resource-api` | medium | actionable | leaf |  |  |  | `service.rs:198, store.rs:39, adapter.rs:71, manager_backend.rs:625` |  |  |
 | `RS-0719` | `docs` | `d2b-resource-client` | low | actionable | leaf |  |  |  | `packages/d2b-resource-client/src/call.rs:87, packages/d2b-resource-client/src/dispatch.rs:` |  |  |
-| `RS-0720` | `docs` | `d2b-resource-runtime` | medium | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/manager.rs:1500, packages/d2b-resource-runtime/src/manag` |  |  |
-| `RS-0721` | `docs` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/manager.rs:850, packages/d2b-resource-runtime/src/manage` |  |  |
-| `RS-0722` | `docs` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/manager.rs:51, packages/d2b-resource-runtime/src/resourc` |  |  |
-| `RS-0723` | `docs` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/guest_target.rs:205-228` |  |  |
-| `RS-0724` | `docs` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/identity.rs:20, packages/d2b-resource-runtime/src/identi` |  |  |
+| `RS-0720` | `docs` | `d2b-resource-runtime` | medium | actionable | leaf | applied | U2 | 4cbf82851 | `manager.rs` | # Errors on all 14 ResourceManagerClient pub methods |  |
+| `RS-0721` | `docs` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 4cbf82851 | `manager.rs` | ResourceManagerArgs.store/providers documented |  |
+| `RS-0722` | `docs` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 4cbf82851 | `manager.rs` | MODULE_NAME docs on five modules |  |
+| `RS-0723` | `docs` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 75d64d039 | `guest_target.rs` | TargetControlAssignment five methods documented |  |
+| `RS-0724` | `docs` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 69d4b615f | `target.rs` | doc contracts on target/spec/identity accessors |  |
 | `RS-0725` | `docs` | `d2b-resource-types` | low | actionable | leaf |  |  |  | `packages/d2b-resource-types/src/operation.rs:64, packages/d2b-resource-types/src/operation` |  |  |
 | `RS-0726` | `docs` | `d2b-session` | medium | actionable | leaf |  |  |  | `handshake.rs:25, handshake.rs:111, handshake.rs:155, handshake.rs:239` |  |  |
 | `RS-0728` | `docs` | `d2b-session` | medium | actionable | leaf |  |  |  | `lifecycle.rs:38, lifecycle.rs:81, lifecycle.rs:147, record.rs:62` |  |  |
@@ -793,11 +793,11 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0746` | `docs` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/ssh_host_key_preflight.rs` | workflow tokens dropped from doc and trace comment; 0440-with-ACL why kept |  |
 | `RS-0750` | `docs` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/ch_api.rs` | consts with provenance, ChApiError variants, ChVmInfo fields,and both entry fns documented |  |
 | `RS-0751` | `docs` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/target_runtime.rs` | AdmissionBudget/AdmissionPermit/ProviderDeployment accessors documented incl. release idempotence |  |
-| `RS-0755` | `docs` | `xtask` | medium | actionable | leaf |  |  |  | `packages/xtask/src/blocking_census.rs:71, packages/xtask/src/blocking_census.rs:658, packa` |  |  |
-| `RS-0756` | `docs` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/changelog.rs:149, packages/xtask/src/delivery/evidence.rs:97, packages/` |  |  |
-| `RS-0754` | `docs` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/delivery/snapshot.rs:87, packages/xtask/src/delivery/snapshot.rs:95, pa` |  |  |
-| `RS-0752` | `docs` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/provider_crate_policy.rs:5360, packages/xtask/src/provider_crate_policy` |  |  |
-| `RS-0753` | `docs` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/main.rs:1555, packages/xtask/src/main.rs:1544` |  |  |
+| `RS-0755` | `docs` | `xtask` | medium | actionable | leaf | not-started | U2 |  | `packages/xtask/src/blocking_census.rs:71, packages/xtask/src/blocking_census.rs:658, packa` | run budget exhausted mid-batch; anchors re-verified at HEAD |  |
+| `RS-0756` | `docs` | `xtask` | low | actionable | leaf | not-started | U2 |  | `packages/xtask/src/changelog.rs:149, packages/xtask/src/delivery/evidence.rs:97, packages/` | run budget exhausted mid-batch; anchors re-verified at HEAD |  |
+| `RS-0754` | `docs` | `xtask` | low | actionable | leaf | not-started | U2 |  | `packages/xtask/src/delivery/snapshot.rs:87, packages/xtask/src/delivery/snapshot.rs:95, pa` | run budget exhausted mid-batch; anchors re-verified at HEAD |  |
+| `RS-0752` | `docs` | `xtask` | low | actionable | leaf | applied | U2 | 6668d84dd | `provider_crate_policy.rs` | four doubled parens and whiche typo fixed; the audit's trailing \. doc lines do not exist at HEAD (grep zero), so that component is stale |  |
+| `RS-0753` | `docs` | `xtask` | low | actionable | leaf | applied | U2 | bbd40b6fd | `main.rs` | doc comments above today_utc_iso8601 and civil_from_days naming the Hinnant algorithm, constants, and epoch fallback |  |
 | `RS-0771` | `perf` | `d2b` | medium | actionable | leaf |  |  |  | `context.rs:570, context.rs:538` |  |  |
 | `RS-0757` | `perf` | `d2b-audit` | low | actionable | leaf |  |  |  | `packages/d2b-audit/src/sink.rs:386, packages/d2b-audit/src/segment.rs:970` |  |  |
 | `RS-0762` | `perf` | `d2b-broker` | medium | actionable | wide |  |  |  | `packages/d2b-broker/src/protocol.rs:86, packages/d2b-broker/src/protocol.rs:125` |  |  |
