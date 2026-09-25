@@ -745,4 +745,112 @@ mod tests {
         assert_eq!(plan.phase(), ProviderPhase::Ready);
         assert!(plan.actions().is_empty());
     }
+
+    // -- the fixed-provider observation policy ------------------------------
+
+    use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid, ZoneId, ZoneRevision};
+    use d2b_controller_toolkit::{DependencySnapshot, ResourceKey, ResourceSnapshot};
+
+    fn snapshot(
+        zone: &ZoneId,
+        resource_ref: &str,
+        generation: u64,
+        canonical_json: &[u8],
+    ) -> ResourceSnapshot {
+        ResourceSnapshot::new(
+            ResourceKey::new(
+                zone.clone(),
+                ResourceRef::parse(resource_ref).expect("reference"),
+                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("uid"),
+            ),
+            ZoneRevision::new(1),
+            ResourceGeneration::new(generation).expect("generation"),
+            canonical_json.to_vec(),
+            false,
+        )
+    }
+
+    /// The minijail Provider's Host-row gate: `providerRef` + `Ready` +
+    /// `observedGeneration` all must hold before the fixed Provider is
+    /// observed ready. Only system-core's Zone projection was pinned before.
+    #[test]
+    fn minijail_provider_readiness_gates_on_the_fixed_host_row() {
+        let zone = ZoneId::parse("work").expect("zone");
+        let provider = snapshot(
+            &zone,
+            SYSTEM_MINIJAIL_PROVIDER_REF,
+            1,
+            br#"{"spec":{"artifactId":"minijail","config":{}}}"#,
+        );
+
+        let ready_host = snapshot(
+            &zone,
+            SYSTEM_CORE_HOST_REF,
+            5,
+            br#"{"spec":{"providerRef":"Provider/system-core"},"status":{"phase":"Ready","observedGeneration":5}}"#,
+        );
+        let observation =
+            provider_observation(&provider, &[DependencySnapshot::new(ready_host)])
+                .expect("observation");
+        assert!(observation.required_dependencies_ready);
+        assert!(observation.required_components_ready);
+
+        // A Host row whose observed generation has not caught up keeps the
+        // gate closed.
+        let stale_host = snapshot(
+            &zone,
+            SYSTEM_CORE_HOST_REF,
+            5,
+            br#"{"spec":{"providerRef":"Provider/system-core"},"status":{"phase":"Ready","observedGeneration":4}}"#,
+        );
+        let observation =
+            provider_observation(&provider, &[DependencySnapshot::new(stale_host)])
+                .expect("observation");
+        assert!(!observation.required_dependencies_ready);
+
+        // A Host row bound to a different provider keeps the gate closed.
+        let foreign_host = snapshot(
+            &zone,
+            SYSTEM_CORE_HOST_REF,
+            5,
+            br#"{"spec":{"providerRef":"Provider/other"},"status":{"phase":"Ready","observedGeneration":5}}"#,
+        );
+        let observation =
+            provider_observation(&provider, &[DependencySnapshot::new(foreign_host)])
+                .expect("observation");
+        assert!(!observation.required_dependencies_ready);
+    }
+
+    /// The pure observation policy refuses a provider row whose canonical
+    /// JSON does not decode: the G5 bridge consumes this exact function, and
+    /// its error path was unpinned anywhere in the crate.
+    #[test]
+    fn provider_observation_refuses_an_undecodable_resource() {
+        let zone = ZoneId::parse("work").expect("zone");
+        let provider = snapshot(&zone, "Provider/example", 1, b"{not-json");
+        assert_eq!(
+            provider_observation(&provider, &[]).expect_err("undecodable provider"),
+            CoreReconcileError
+        );
+    }
+
+    /// The same closed refusal for an undecodable dependency row: a
+    /// dependency whose canonical JSON does not parse fails the whole
+    /// observation, never a silent partial projection.
+    #[test]
+    fn provider_observation_refuses_an_undecodable_dependency() {
+        let zone = ZoneId::parse("work").expect("zone");
+        let provider = snapshot(
+            &zone,
+            "Provider/example",
+            1,
+            br#"{"spec":{"artifactId":"example","config":{}}}"#,
+        );
+        let dependency = snapshot(&zone, "Process/controller", 1, b"{not-json");
+        assert_eq!(
+            provider_observation(&provider, &[DependencySnapshot::new(dependency)])
+                .expect_err("undecodable dependency"),
+            CoreReconcileError
+        );
+    }
 }
