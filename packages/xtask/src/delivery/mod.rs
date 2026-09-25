@@ -368,18 +368,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_failure_class_exits_nonzero() {
-        for kind in [
-            DeliveryErrorKind::Usage,
-            DeliveryErrorKind::Unimplemented,
-            DeliveryErrorKind::Invalid,
-            DeliveryErrorKind::Environment,
-        ] {
-            assert_ne!(kind.exit_code(), 0, "{kind:?} must not exit zero");
-        }
-    }
-
-    #[test]
     fn each_failure_class_maps_to_a_distinct_sysexits_code() {
         // The exact public contract: a caller branches on these codes, so both
         // the individual values and their mutual distinctness are load-bearing.

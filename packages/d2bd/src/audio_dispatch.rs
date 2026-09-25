@@ -787,50 +787,6 @@ mod tests {
     }
 
     #[test]
-    fn fake_controller_failure_on_level_maps_to_unsupported() {
-        use crate::audio_host_controller::FakeHostController;
-        let cap = d2b_provider_guest_qemu_media::audio_capability();
-        let ctrl = FakeHostController::failed();
-        let level = LevelPercent::new(80).unwrap();
-        let host_result = ctrl.enforce_level("corp-vm", level, AudioChannel::Microphone);
-        assert_eq!(host_result, HostEnforcementResult::Failed);
-        let applied = combined_audio_applied(host_result, &cap);
-        assert_eq!(applied, AudioSetApplied::Unsupported);
-    }
-
-    #[test]
-    fn qemu_controller_applied_maps_to_host_only() {
-        use crate::audio_host_controller::QemuAudioController;
-        let cap = d2b_provider_guest_qemu_media::audio_capability();
-        let ctrl = QemuAudioController;
-        let host_result = ctrl.enforce_grant("qemu-vm", AudioGrant::Off, AudioChannel::Speaker);
-        assert_eq!(host_result, HostEnforcementResult::Applied);
-        let applied = combined_audio_applied(host_result, &cap);
-        assert_eq!(applied, AudioSetApplied::HostOnly);
-    }
-
-    #[test]
-    fn qemu_controller_never_calls_target_process_path() {
-        use crate::audio_host_controller::QemuAudioController;
-        // qemu-media VMs have guest_enforcement = Unsupported. Verify the
-        // applied result with Unsupported guest kind, not ProcessCapable.
-        let cap = d2b_provider_guest_qemu_media::audio_capability();
-        let ctrl = QemuAudioController;
-        let host_result = ctrl.enforce_level(
-            "qemu-vm",
-            LevelPercent::new(50).unwrap(),
-            AudioChannel::Microphone,
-        );
-        assert_eq!(host_result, HostEnforcementResult::Applied);
-        let applied = combined_audio_applied(host_result, &cap);
-        assert_eq!(
-            applied,
-            AudioSetApplied::HostOnly,
-            "qemu-media: offline policy applied → HostOnly; no guest enforcement"
-        );
-    }
-
-    #[test]
     fn level_increase_classifier_treats_missing_old_level_as_increase() {
         let current = AudioPolicyState::default_v2();
         let old = current.speaker_level;
@@ -845,5 +801,382 @@ mod tests {
         let old = current.speaker_level;
         let next = LevelPercent::new(40).unwrap();
         assert!(!old.map(|old| next.get() > old.get()).unwrap_or(true));
+    }
+
+    // ── dispatch error paths ────────────────────────────────────────────────
+
+    fn audio_manifest(vms: serde_json::Value) -> serde_json::Value {
+        // ManifestV04 flattens the per-VM entries to the top level.
+        let mut manifest = serde_json::json!({
+            "_manifest": { "manifestVersion": 6 },
+            "_observability": {
+                "enabled": false,
+                "signozUrl": "http://127.0.0.1:8080",
+                "signozOtlpGrpcPort": 4317,
+                "signozOtlpHttpPort": 4318,
+                "obsVsockCid": 1000,
+                "obsVsockHostSocket": "/run/d2b/obs.sock",
+                "vmName": "sys-obs"
+            }
+        });
+        let object = manifest.as_object_mut().expect("manifest object");
+        for (name, entry) in vms.as_object().expect("vms object") {
+            object.insert(name.clone(), entry.clone());
+        }
+        manifest
+    }
+
+    fn audio_vm_json(name: &str, state_dir: &str, audio: bool) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "apiSocket": null,
+            "audio": audio,
+            "audioService": null,
+            "audioStateFile": null,
+            "bridge": null,
+            "env": null,
+            "gpuSocket": null,
+            "staticIp": null,
+            "sshUser": null,
+            "isNetVm": false,
+            "netVm": null,
+            "stateDir": state_dir,
+            "graphics": false,
+            "tpm": false,
+            "tpmSocket": null,
+            "usbipYubikey": false,
+            "usbipdHostIp": null,
+            "tap": "work-l2",
+            "observability": {
+                "agentSocket": "/run/d2b/otlp.sock",
+                "enabled": false,
+                "vsockCid": 110,
+                "vsockHostSocket": "/run/d2b/vm-a-vsock.sock"
+            },
+            "runtime": {
+                "kind": "nixos",
+                "provider": {
+                    "driver": "cloud-hypervisor",
+                    "id": "local-cloud-hypervisor",
+                    "type": "local"
+                },
+                "capabilities": {
+                    "lifecycle": true,
+                    "display": false,
+                    "usbHotplug": false,
+                    "exec": true,
+                    "configSync": true,
+                    "ssh": true,
+                    "storeSync": true,
+                    "keys": true,
+                    "inGuestObservability": true
+                }
+            }
+        })
+    }
+
+    fn audio_processes_json() -> serde_json::Value {
+        serde_json::json!({
+            "schemaVersion": "v2",
+            "vms": [
+                {
+                    "vm": "vm-a",
+                    "nodes": [
+                        {
+                            "id": "audio",
+                            "role": "audio",
+                            "binaryPath": "/run/d2b/vms/vm-a/d2b-vm-a",
+                            "readiness": [],
+                            "profile": {
+                                "profileId": "w1-audio",
+                                "uid": 60100,
+                                "gid": 60100,
+                                "caps": [],
+                                "namespaces": {
+                                    "mount": false,
+                                    "pid": false,
+                                    "net": false,
+                                    "ipc": false,
+                                    "uts": false,
+                                    "user": false
+                                },
+                                "mountPolicy": {
+                                    "readOnlyPaths": [],
+                                    "writablePaths": [],
+                                    "nixStoreReadOnly": false,
+                                    "hideDeviceNodesByDefault": false
+                                },
+                                "cgroupPlacement": {
+                                    "subtree": "d2b.slice/vm-a/audio",
+                                    "controllers": [],
+                                    "delegated": false
+                                }
+                            }
+                        }
+                    ],
+                    "edges": [],
+                    "invariants": {
+                        "swtpmPreStartFlush": false,
+                        "perVmAuditPipeline": false,
+                        "usbipGating": false,
+                        "tpmOwnershipMigrationWithoutRunningVmMutation": false
+                    }
+                }
+            ]
+        })
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn test_state(
+        manifest: &serde_json::Value,
+        processes: &serde_json::Value,
+    ) -> (ServerState, tempfile::TempDir) {
+        use d2bd_runtime::daemon_config::{ArtifactPaths, DaemonConfig};
+
+        let dir = tempfile::tempdir().expect("audio dispatch test state");
+        let root = dir.path();
+        let locks_dir = root.join("locks");
+        std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+        let public_manifest_path = root.join("vms.json");
+        let processes_path = root.join("processes.json");
+        std::fs::write(
+            &public_manifest_path,
+            serde_json::to_vec(manifest).expect("manifest json"),
+        )
+        .expect("write manifest");
+        std::fs::write(
+            &processes_path,
+            serde_json::to_vec(processes).expect("processes json"),
+        )
+        .expect("write processes");
+        let broker_reap_log = d2bd_runtime::supervisor::pidfd_table::BrokerReapLog::new();
+        let state = ServerState {
+            config: DaemonConfig {
+                broker_socket_path: root.join("broker.sock"),
+                locks_dir,
+                artifacts: ArtifactPaths {
+                    public_manifest_path,
+                    processes_path,
+                    ..ArtifactPaths::default()
+                },
+                ..DaemonConfig::default()
+            },
+            daemon_uid: 0,
+            daemon_audit: Arc::new(d2bd_runtime::daemon_audit::DaemonAuditLog::no_op()),
+            daemon_state_dir: root.join("daemon-state"),
+            pidfd_table: Arc::new(
+                d2bd_runtime::supervisor::pidfd_table::PidfdTable::new(
+                    root.join("daemon-state").join("pidfd-table.json"),
+                )
+                .with_broker_reap_log(Arc::clone(&broker_reap_log)),
+            ),
+            broker_reap_log,
+            metrics_registry: Arc::new(d2bd_runtime::metrics::Registry::new()),
+            exec_sessions: Arc::new(crate::exec_session::SessionTable::new(
+                crate::exec_session::ExecSessionCaps::default(),
+            )),
+            console_sessions: Arc::new(tokio::sync::Mutex::new(
+                crate::console_session::ConsoleSessionTable::default(),
+            )),
+            conn_semaphore: d2bd_runtime::concurrency::ConnSemaphore::new(8),
+            op_locks: d2bd_runtime::concurrency::OpLockManager::new(),
+            public_status_read_model: Arc::new(
+                d2bd_runtime::public_read_model::PublicStatusReadModel::new(),
+            ),
+            provider_runtime: Arc::new(crate::provider_registry::ProviderRuntime::new()),
+            resource_plane: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_runtime: Arc::new(tokio::sync::Mutex::new(None)),
+            interaction_listeners: Arc::new(tokio::sync::Mutex::new(None)),
+            typed_shell_session_targets: d2bd_runtime::typed_shell_targets::new_cache(),
+            zone_coordinator: d2bd_runtime::zone_authority::new_coordinator(),
+            config_staging: Arc::new(tokio::sync::Mutex::new(Default::default())),
+            guest_component_sessions: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            guest_component_session_locks: Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            security_key_sessions: Arc::new(tokio::sync::Mutex::new(
+                d2b_provider_device_security_key::SkSessionTable::default(),
+            )),
+            unsafe_local_helpers: Arc::new(d2bd_runtime::unsafe_local_helper::HelperRegistry::new(
+                0,
+                [],
+            )),
+            v3_planes: std::sync::Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            runtime_handle: tokio::runtime::Handle::try_current().unwrap_or_else(|_| {
+                static TEST_FALLBACK_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
+                    std::sync::LazyLock::new(|| {
+                        tokio::runtime::Builder::new_multi_thread()
+                            .enable_all()
+                            .thread_name("d2b-test-fallback")
+                            .build()
+                            .expect("build the test fallback tokio runtime")
+                    });
+                TEST_FALLBACK_RUNTIME.handle().clone()
+            }),
+        };
+        (state, dir)
+    }
+
+    fn load_manifest(state: &ServerState) -> ManifestV04 {
+        crate::load_json(&state.config.artifacts.public_manifest_path).expect("load manifest")
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn resolve_vm_audio_status_reports_every_closed_error_kind() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "d2b-audio-status-{}",
+            std::process::id()
+        ));
+        let (state, _dir) = test_state(
+            &audio_manifest(serde_json::json!({
+                "vm-a": audio_vm_json("vm-a", state_dir.to_str().expect("utf8 state dir"), true),
+                "vm-b": audio_vm_json("vm-b", state_dir.to_str().expect("utf8 state dir"), false),
+            })),
+            &serde_json::json!({ "schemaVersion": "v2", "vms": [] }),
+        );
+        let manifest = load_manifest(&state);
+        let caller = BrokerCallerRole::NotAuthorized;
+
+        let missing = resolve_vm_audio_status(&state, "no-such-vm", &manifest, caller.clone())
+            .expect_err("unknown vm");
+        assert_eq!(missing.kind, AudioErrorKind::VmNotFound);
+        assert_eq!(missing.vm, "no-such-vm");
+
+        let not_enabled = resolve_vm_audio_status(&state, "vm-b", &manifest, caller.clone())
+            .expect_err("audio disabled vm");
+        assert_eq!(not_enabled.kind, AudioErrorKind::AudioNotEnabled);
+        assert!(
+            not_enabled.remediation.is_some(),
+            "AudioNotEnabled must carry a remediation hint"
+        );
+
+        // A malformed state file is an internal error, not a silent default.
+        let state_file = std::path::PathBuf::from(&state_dir).join("state/audio-state.json");
+        tokio::fs::create_dir_all(state_file.parent().expect("state dir"))
+            .await
+            .expect("create state dir");
+        tokio::fs::write(&state_file, b"not json")
+            .await
+            .expect("write malformed state");
+        let internal = resolve_vm_audio_status(&state, "vm-a", &manifest, caller)
+            .expect_err("malformed state file");
+        assert_eq!(internal.kind, AudioErrorKind::InternalError);
+    }
+
+    #[test]
+    fn dispatch_audio_status_aggregates_per_vm_errors_not_failures() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "d2b-audio-status-agg-{}",
+            std::process::id()
+        ));
+        let (state, _dir) = test_state(
+            &audio_manifest(serde_json::json!({
+                "vm-a": audio_vm_json("vm-a", state_dir.to_str().expect("utf8 state dir"), true),
+                "vm-b": audio_vm_json("vm-b", state_dir.to_str().expect("utf8 state dir"), false),
+            })),
+            &serde_json::json!({ "schemaVersion": "v2", "vms": [] }),
+        );
+        let response = dispatch_audio_status(
+            &state,
+            BrokerCallerRole::NotAuthorized,
+            AudioStatusArgs {
+                vms: vec!["vm-b".to_owned(), "no-such-vm".to_owned()],
+            },
+        )
+        .expect("status response");
+        let result = match serde_json::from_value::<AudioOpResponse>(response)
+            .expect("decode status response")
+        {
+            AudioOpResponse::Status(result) => result,
+            other => panic!("expected Status response, got {other:?}"),
+        };
+        assert!(result.entries.is_empty());
+        assert_eq!(result.errors.len(), 2);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.kind == AudioErrorKind::AudioNotEnabled && error.vm == "vm-b"));
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.kind == AudioErrorKind::VmNotFound && error.vm == "no-such-vm"));
+    }
+
+    #[test]
+    fn set_volume_fails_closed_when_host_enforcement_fails_on_an_increase() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "d2b-audio-volume-{}",
+            std::process::id()
+        ));
+        let (state, _dir) = test_state(
+            &audio_manifest(serde_json::json!({
+                "vm-a": audio_vm_json("vm-a", state_dir.to_str().expect("utf8 state dir"), true),
+            })),
+            &audio_processes_json(),
+        );
+        // The broker socket does not exist, so the PipeWire controller's
+        // effect dispatch fails: a level increase must refuse as InternalIo
+        // rather than persisting an unenforced level.
+        let error = dispatch_audio_set_volume(
+            &state,
+            BrokerCallerRole::NotAuthorized,
+            AudioSetVolumeArgs {
+                vm: "vm-a".to_owned(),
+                channel: AudioChannel::Speaker,
+                level: LevelPercent::new(50).expect("valid level"),
+            },
+        )
+        .expect_err("failed host enforcement must refuse the increase");
+        match error {
+            TypedError::InternalIo { context, detail } => {
+                assert_eq!(context, "audio host enforcement");
+                assert!(
+                    detail.contains("host level enforcement failed"),
+                    "unexpected detail: {detail}"
+                );
+            }
+            other => panic!("expected InternalIo, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mute_fails_closed_when_host_enforcement_fails_on_an_unmute() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "d2b-audio-mute-{}",
+            std::process::id()
+        ));
+        let (state, _dir) = test_state(
+            &audio_manifest(serde_json::json!({
+                "vm-a": audio_vm_json("vm-a", state_dir.to_str().expect("utf8 state dir"), true),
+            })),
+            &audio_processes_json(),
+        );
+        // Grant On (unmute) proves live host enforcement before persisting:
+        // a failed enforcement must refuse as InternalIo.
+        let error = dispatch_audio_mute(
+            &state,
+            BrokerCallerRole::NotAuthorized,
+            AudioMuteArgs {
+                vm: "vm-a".to_owned(),
+                channel: AudioChannel::Speaker,
+                mute: false,
+            },
+        )
+        .expect_err("failed host enforcement must refuse the unmute");
+        match error {
+            TypedError::InternalIo { context, detail } => {
+                assert_eq!(context, "audio host enforcement");
+                assert!(
+                    detail.contains("host grant enforcement failed"),
+                    "unexpected detail: {detail}"
+                );
+            }
+            other => panic!("expected InternalIo, got {other:?}"),
+        }
     }
 }

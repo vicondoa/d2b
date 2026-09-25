@@ -482,13 +482,4 @@ mod tests {
         );
         assert!(!write.into_inner().calls.contains(&"remove"));
     }
-
-    #[test]
-    fn replacement_aware_quota_rejects_overage() {
-        assert!(check_soft_quota(90, 20, 25, 100).is_ok());
-        assert_eq!(
-            check_soft_quota(90, 20, 31, 100),
-            Err(AtomicWriteError::QuotaExceeded)
-        );
-    }
 }

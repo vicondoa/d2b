@@ -3176,4 +3176,82 @@ mod tests {
             "queue-full-drop-new"
         );
     }
-}
+#[test]
+    fn route_policy_committed_refuses_missing_binding_attach_and_stale_revision() {
+        // A link with no committed route binding refuses policy commits.
+        let mut handler = handler();
+        assert_eq!(
+            refused(
+                &mut handler,
+                ZoneLinkEvent::RoutePolicyCommitted {
+                    required_capability: ZoneRouteCapability::parse("resource-read").unwrap(),
+                    verb: OperationClass::Invoke,
+                    policy_revision: ZoneRevision::new(1),
+                },
+            ),
+            ZoneLinkError::RouteAdmissionBindingInvalid
+        );
+
+        // An attach verb and a non-increasing policy revision each refuse
+        // against a committed binding after a fresh commit holds.
+
+        let mut handler = route_handler();
+        drive_to_ready(&mut handler);
+        handler.mark_cursor_adopted();
+        let pass = handler
+            .begin(ZoneLinkEvent::RoutePolicyCommitted {
+                required_capability: ZoneRouteCapability::parse("resource-read").unwrap(),
+                verb: OperationClass::Invoke,
+                policy_revision: ZoneRevision::new(10),
+            })
+            .unwrap();
+        handler.commit(pass).unwrap();
+        assert_eq!(
+            refused(
+                &mut handler,
+                ZoneLinkEvent::RoutePolicyCommitted {
+                    required_capability: ZoneRouteCapability::parse("resource-read").unwrap(),
+                    verb: OperationClass::Attach,
+                    policy_revision: ZoneRevision::new(11),
+                },
+            ),
+            ZoneLinkError::RouteAdmissionBindingInvalid
+        );
+        assert_eq!(
+            refused(
+                &mut handler,
+                ZoneLinkEvent::RoutePolicyCommitted {
+                    required_capability: ZoneRouteCapability::parse("resource-read").unwrap(),
+                    verb: OperationClass::Invoke,
+                    policy_revision: ZoneRevision::new(9),
+                },
+            ),
+            ZoneLinkError::RouteAdmissionBindingInvalid
+        );
+        // A strict advance still lands.
+        assert!(handler
+            .begin(ZoneLinkEvent::RoutePolicyCommitted {
+                required_capability: ZoneRouteCapability::parse("resource-read").unwrap(),
+                verb: OperationClass::Invoke,
+                policy_revision: ZoneRevision::new(11),
+            })
+            .is_ok());
+    }
+
+    #[test]
+    fn psk_issuance_monotonicity_refuses_at_or_below_the_recorded_issuance() {
+        let mut handler = handler();
+        apply(&mut handler, ZoneLinkEvent::PskIssued { psk: psk(2) });
+        for issuance in [1, 2] {
+            assert_eq!(
+                refused(
+                    &mut handler,
+                    ZoneLinkEvent::PskIssued { psk: psk(issuance) },
+                ),
+                ZoneLinkError::BootstrapPskInvalidated
+            );
+        }
+        assert!(handler
+            .begin(ZoneLinkEvent::PskIssued { psk: psk(3) })
+            .is_ok());
+    }}

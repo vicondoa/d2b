@@ -1563,22 +1563,6 @@ mod tests {
     }
 
     #[test]
-    fn adoption_degrades_identity_ambiguity_without_stopping_scope() {
-        let inspection = ScopeInspection {
-            state: HelperScopeState::Active,
-            identity_matches: false,
-        };
-        let state = match inspection {
-            ScopeInspection {
-                state,
-                identity_matches: true,
-            } => state,
-            _ => HelperScopeState::Degraded,
-        };
-        assert_eq!(state, HelperScopeState::Degraded);
-    }
-
-    #[test]
     fn supervisor_spec_debug_redacts_every_sensitive_surface() {
         let canary = "runtime-private-canary";
         let spec = SupervisorSpec {

@@ -493,4 +493,108 @@ mod tests {
         drop(replacement);
         cleanup_socket(path);
     }
+
+    /// The deny-by-identity bind boundary: a relative socket path is
+    /// refused outright.
+    #[test]
+    fn bind_refuses_a_relative_socket_path() {
+        assert_eq!(
+            validate_socket_parent(Path::new("relative.sock"))
+                .err()
+                .map(|error| error.kind()),
+            Some(io::ErrorKind::InvalidInput),
+            "a non-absolute socket path is refused"
+        );
+    }
+
+    /// The deny-by-identity bind boundary: a symlink parent or a
+    /// world-writable parent is refused, and a private absolute parent
+    /// passes.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn bind_refuses_a_symlink_or_world_writable_parent() {
+        let sequence = SOCKET_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("d2b-o-{:x}-{sequence:x}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+
+        let real = root.join("real");
+        fs::create_dir(&real).unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(
+            validate_socket_parent(&link.join("telemetry.sock"))
+                .err()
+                .map(|error| error.kind()),
+            Some(io::ErrorKind::PermissionDenied),
+            "a symlink parent is refused"
+        );
+
+        let world = root.join("world");
+        fs::create_dir(&world).unwrap();
+        fs::set_permissions(&world, fs::Permissions::from_mode(0o777)).unwrap();
+        assert_eq!(
+            validate_socket_parent(&world.join("telemetry.sock"))
+                .err()
+                .map(|error| error.kind()),
+            Some(io::ErrorKind::PermissionDenied),
+            "a world-writable parent is refused"
+        );
+
+        let private = root.join("private");
+        fs::create_dir(&private).unwrap();
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            validate_socket_parent(&private.join("telemetry.sock")).is_ok(),
+            "a private absolute parent passes"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The bounded-storage byte budget: a frame that fits alone but pushes
+    /// the queue over `capacity_bytes` evicts the oldest frame instead of
+    /// being dropped itself.
+    #[test]
+    fn queued_frames_evict_for_the_byte_budget() {
+        let path = test_socket_path("budget");
+        let mut receiver = EmitterSocket::bind(&path, 250).unwrap();
+        let sender = UnixDatagram::unbound().unwrap();
+        let frame = br#"{"signal":"metric","value":{"name":"d2b_otel_ingress_policy_total","labels":{"ingress":"emitter_unix","outcome":"accepted","error_class":"none"},"value":1}}"#;
+        sender.send_to(frame, &path).unwrap();
+        sender.send_to(frame, &path).unwrap();
+        assert_eq!(receiver.drain_once().unwrap(), 2);
+        assert_eq!(
+            receiver.queued(),
+            1,
+            "the second frame evicted the first for the byte budget"
+        );
+        assert!(receiver.queued_bytes() <= 250);
+        assert_eq!(receiver.dropped(), 1);
+        drop(receiver);
+        cleanup_socket(path);
+    }
+
+    /// The bounded-storage age budget: a frame older than `MAX_RETAINED_AGE`
+    /// is pruned before it can be popped, and counted dropped.
+    #[test]
+    fn expired_frames_are_pruned_by_age() {
+        let path = test_socket_path("age");
+        let mut receiver = EmitterSocket::bind(&path, 512).unwrap();
+        let stale = QueuedFrame {
+            bytes: b"stale-frame".to_vec(),
+            enqueued_at: Instant::now() - MAX_RETAINED_AGE - Duration::from_secs(1),
+        };
+        receiver.queued_bytes = stale.bytes.len();
+        receiver.frames.push_back(stale);
+        assert_eq!(receiver.queued(), 1);
+        assert_eq!(
+            receiver.pop(),
+            None,
+            "the expired frame is pruned, never returned"
+        );
+        assert_eq!(receiver.queued(), 0);
+        assert_eq!(receiver.dropped(), 1);
+        drop(receiver);
+        cleanup_socket(path);
+    }
 }

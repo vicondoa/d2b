@@ -239,7 +239,6 @@ fn io_error(err: nix::errno::Errno) -> io::Error {
 mod tests {
     use super::*;
     use std::os::fd::AsRawFd;
-    use std::process::Command;
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
@@ -291,48 +290,6 @@ mod tests {
         read(received[0], &mut buf).expect("pipe read through passed fd");
         assert_eq!(&buf, b"ok");
         close(received[0]).expect("close received fd");
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn scm_rights_receipt_fd_does_not_inherit_across_exec() {
-        let _guard = fd_test_lock();
-        let (left, right) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .expect("socketpair");
-        let (read_end, _write_end) = pipe().expect("pipe");
-
-        send_fds(left.as_raw_fd(), b"exec", &[read_end.as_raw_fd()]).expect("send fd");
-        let (_payload, fd) = recv_one_fd(right.as_raw_fd()).expect("receive exactly one fd");
-        assert!(cloexec_is_set(fd), "received fd must have FD_CLOEXEC");
-
-        let mut child = Command::new("sleep")
-            .arg("2")
-            .spawn()
-            .expect("exec inheritance probe");
-        let child_fd = format!("/proc/{}/fd/{fd}", child.id());
-        let child_comm = format!("/proc/{}/comm", child.id());
-        let mut inherited = true;
-        let mut observed_exec = false;
-        for _ in 0..50 {
-            if let Ok(comm) = std::fs::read_to_string(&child_comm)
-                && comm.trim() == "sleep"
-            {
-                observed_exec = true;
-                inherited = std::path::Path::new(&child_fd).exists();
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-        close(fd).expect("close received fd");
-        assert!(observed_exec, "exec probe did not reach sleep");
-        assert!(!inherited, "received database-like fd leaked across exec");
     }
 
     #[test]

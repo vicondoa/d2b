@@ -12,6 +12,11 @@ rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+# The unit-test scratch-root resolver lives in d2b-core's feature-gated
+# `test_support`; only cfg(test) code consumes it, so it stays a dev-dep.
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
+
 # U33: this crate does not inherit `[workspace.lints]` (it carries its own lint
 # posture), but `clippy.toml` at the workspace root arms
 # `clippy::disallowed_methods` for every crate clippy checks - the lint is

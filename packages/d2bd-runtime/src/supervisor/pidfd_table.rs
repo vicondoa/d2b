@@ -868,7 +868,7 @@ mod tests {
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fresh_state_path(test_name: &str) -> PathBuf {
-        let root = crate::test_scratch_root().join("pidfd-table-tests");
+        let root = d2b_core::test_support::scratch_root("pidfd-table").join("pidfd-table-tests");
         fs::create_dir_all(&root).expect("create pidfd-table-tests dir");
         let path = root.join(format!(
             "{test_name}-{}-{}.json",
@@ -1514,7 +1514,7 @@ mod tests {
     fn mktemp_dir() -> PathBuf {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
-        let root = crate::test_scratch_root().join("pidfd-table-tests");
+        let root = d2b_core::test_support::scratch_root("pidfd-table").join("pidfd-table-tests");
         std::fs::create_dir_all(&root).expect("mkdir test root");
         let path = root.join(format!("d2b-pidfd-test-{pid}-{id}"));
         let _ = std::fs::remove_dir_all(&path);

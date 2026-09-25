@@ -1351,6 +1351,22 @@ mod tests {
         assert!(range.allows(&version));
     }
 
+    #[test]
+    fn semver_range_and_version_reject_invalid_input() {
+        for invalid in ["", "not-a-range", ">=, <0.5.0", "1.2.3.4"] {
+            assert!(
+                SemverRange::new(invalid).is_err(),
+                "range {invalid:?} must be rejected"
+            );
+        }
+        for invalid in ["", "not-a-version", "1.2", "v1.2.3", "1.2.3.4"] {
+            assert!(
+                Version::new(invalid).is_err(),
+                "version {invalid:?} must be rejected"
+            );
+        }
+    }
+
     /// Path-like substring: at least two slash-separated segments.
     fn path_regex() -> regex::Regex {
         regex::Regex::new(r"(/[a-zA-Z][a-zA-Z0-9_.-]*){2,}").unwrap()

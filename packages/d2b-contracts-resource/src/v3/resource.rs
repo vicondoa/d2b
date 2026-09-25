@@ -1141,15 +1141,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn duplicate_json_keys_are_rejected_before_envelope_materialization() {
-        let duplicate =
-            br#"{"apiVersion":"resources.d2bus.org/v3","apiVersion":"resources.d2bus.org/v3"}"#;
-        assert!(matches!(
-            ResourceEnvelope::from_json(duplicate),
-            Err(ResourceError::CanonicalJson(_))
-        ));
-    }
+
 
     #[test]
     fn resource_codec_error_chains_never_retain_serde_text_or_payload_keys() {

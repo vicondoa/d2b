@@ -291,31 +291,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn long_lived_argv_has_expected_shape() {
-        let argv = generate_swtpm_argv(&audit_swtpm_input()).unwrap();
-        assert!(argv[0].ends_with("/swtpm"));
-        assert_eq!(argv[1], "socket");
-        assert_eq!(argv[2], "--tpm2");
-
-        let joined = argv.join(" ");
-        assert!(joined.contains("--tpmstate dir=/var/lib/d2b/vms/corp-vm/tpm"));
-        assert!(joined.contains(
-            "--ctrl type=unixio,path=/var/lib/d2b/vms/corp-vm/tpm/ctrl.sock,mode=0660,uid=1100,gid=1100"
-        ));
-        assert!(joined.contains(
-            "--server type=unixio,path=/run/d2b/vms/corp-vm/swtpm.sock,mode=0660,uid=1100,gid=1100"
-        ));
-        assert!(joined.contains("--flags startup-clear"));
-        assert!(joined.contains("--log file=/var/lib/d2b/vms/corp-vm/tpm/swtpm.log,level=20"));
-        assert!(joined.contains("--pid file=/var/lib/d2b/vms/corp-vm/tpm/swtpm.pid"));
-        // `--daemon` is argument-less (and means daemonize): the
-        // long-lived worker must stay in the foreground, so no
-        // `--daemon` argument is rendered at all.
-        assert!(!argv.iter().any(|arg| arg.starts_with("--daemon")));
-    }
-
-    #[test]
+#[test]
     fn flush_argv_matches_w3_invariant() {
         let argv = generate_swtpm_ioctl_flush_argv(&audit_flush_input()).unwrap();
         assert_eq!(

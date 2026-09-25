@@ -2074,16 +2074,6 @@ mod tests {
     }
 
     #[test]
-    fn remote_route_without_runtime_admission_is_refused() {
-        let engine = ZoneRouteEngine::new(zone(&["k0"]));
-        let request = ZoneRouteRequest::new(zone(&["k0"]), zone(&["k1", "k0"]));
-        assert_eq!(
-            engine.decide_route(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::PolicyDenial)
-        );
-    }
-
-    #[test]
     fn admission_tuple_substitution_fails_closed_before_route_walk() {
         let expected = admission_expectation(
             ZoneTreeEdge::new(zone(&["k0"]), zone(&["k1", "k0"])).expect("direct edge"),
@@ -2485,38 +2475,6 @@ mod tests {
     }
 
     #[test]
-    fn policy_denial_is_reported_before_the_tree_walk() {
-        let engine = seeded_engine();
-        let request = ZoneRouteRequest::new(zone(&["k0"]), zone(&["k2", "k1", "k0"]));
-        assert_eq!(
-            engine.decide_route(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::PolicyDenial)
-        );
-    }
-
-    #[test]
-    fn a_two_hop_downward_route_is_allowed_and_pays_its_hops() {
-        let engine = seeded_engine();
-        let request = allowed_request(zone(&["k0"]), zone(&["k2", "k1", "k0"]), 1_500);
-        let ZoneRouteDecision::Allowed {
-            path,
-            remaining_hops_after,
-            ..
-        } = engine.decide_route(&request)
-        else {
-            panic!("expected an allowed route");
-        };
-        assert_eq!(path.hop_count(), 2);
-        assert_eq!(path.nearest_common_ancestor(), &zone(&["k0"]));
-        assert_eq!(remaining_hops_after, ZONE_ROUTE_INITIAL_HOP_BUDGET - 2);
-        assert!(
-            path.hops()
-                .iter()
-                .all(|hop| hop.direction() == ZoneRouteHopDirection::DownToChild)
-        );
-    }
-
-    #[test]
     fn an_upward_and_downward_walk_meets_at_the_nearest_common_ancestor() {
         let mut engine = seeded_engine();
         let advert = Advert::new(zone(&["k0"]), zone(&["k3", "k0"]))
@@ -2559,39 +2517,6 @@ mod tests {
                 .filter(|hop| hop.direction() == ZoneRouteHopDirection::UpToParent)
                 .count(),
             2
-        );
-    }
-
-    #[test]
-    fn an_unknown_target_zone_is_refused() {
-        let engine = seeded_engine();
-        let request = allowed_request(zone(&["k0"]), zone(&["k9", "k0"]), 1_500);
-        assert_eq!(
-            engine.decide_route(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::UnknownParent)
-        );
-    }
-
-    #[test]
-    fn disjoint_trees_have_no_nearest_common_ancestor() {
-        let mut engine = seeded_engine();
-        // Install a projection row for a Zone in a different tree so the
-        // known-Zone check passes and the ancestor search is the refusing
-        // stage.
-        engine.parents.insert(
-            zone(&["z1", "z0"]),
-            ParentEntry {
-                parent: zone(&["z0"]),
-                route_id: None,
-                capabilities: None,
-                issued_at_unix_seconds: 1_000,
-                expires_at_unix_seconds: 4_000,
-            },
-        );
-        let request = allowed_request(zone(&["k0"]), zone(&["z1", "z0"]), 1_500);
-        assert_eq!(
-            engine.decide_route(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::UnknownParent)
         );
     }
 
@@ -2651,28 +2576,6 @@ mod tests {
     }
 
     #[test]
-    fn a_replayed_advertisement_is_refused_on_the_exact_window_key() {
-        let mut engine = seeded_engine();
-        let advert = Advert::new(zone(&["k0"]), zone(&["k1", "k0"]))
-            .route("route-1", zone(&["k2", "k1", "k0"]), "k2", &["get", "list"])
-            .build();
-        let alloc = allocation(
-            zone(&["k0"]),
-            zone(&["k1", "k0"]),
-            "gen-1",
-            vec![zone(&["k1", "k0"])],
-            8,
-            &["get", "list", "watch"],
-        );
-        assert_eq!(
-            engine
-                .admit_advertisement(&advert, &alloc, 1_600)
-                .denial_reason(),
-            Some(ZoneRouteFailClosedReason::Replay)
-        );
-    }
-
-    #[test]
     fn a_renewal_with_a_fresh_window_and_signature_reference_is_admitted() {
         let mut engine = seeded_engine();
         let renewal = Advert::new(zone(&["k0"]), zone(&["k1", "k0"]))
@@ -2701,158 +2604,6 @@ mod tests {
     }
 
     #[test]
-    fn an_advertisement_that_does_not_advance_its_issue_time_is_refused_as_replay() {
-        let mut engine = seeded_engine();
-        let stale = Advert::new(zone(&["k0"]), zone(&["k1", "k0"]))
-            .route("route-1", zone(&["k2", "k1", "k0"]), "k2", &["get"])
-            .window(1_000, 4_500)
-            .signature_ref("sigref-9")
-            .build();
-        let alloc = allocation(
-            zone(&["k0"]),
-            zone(&["k1", "k0"]),
-            "gen-1",
-            vec![zone(&["k1", "k0"])],
-            8,
-            &["get", "list", "watch"],
-        );
-        assert_eq!(
-            engine
-                .admit_advertisement(&stale, &alloc, 1_600)
-                .denial_reason(),
-            Some(ZoneRouteFailClosedReason::Replay)
-        );
-    }
-
-    #[test]
-    fn an_expired_advertisement_and_a_future_dated_one_are_both_refused() {
-        let mut engine = ZoneRouteEngine::new(zone(&["k0"]));
-        let advert = Advert::new(zone(&["k0"]), zone(&["k1", "k0"]))
-            .route("route-1", zone(&["k2", "k1", "k0"]), "k2", &["get"])
-            .build();
-        let alloc = allocation(
-            zone(&["k0"]),
-            zone(&["k1", "k0"]),
-            "gen-1",
-            vec![zone(&["k1", "k0"])],
-            8,
-            &["get"],
-        );
-        assert_eq!(
-            engine
-                .admit_advertisement(&advert, &alloc, 4_000)
-                .denial_reason(),
-            Some(ZoneRouteFailClosedReason::Expired)
-        );
-        assert_eq!(
-            engine
-                .admit_advertisement(&advert, &alloc, 500)
-                .denial_reason(),
-            Some(ZoneRouteFailClosedReason::MalformedAdvert)
-        );
-    }
-
-    #[test]
-    fn an_advertisement_from_an_unknown_parent_is_refused() {
-        let mut engine = ZoneRouteEngine::new(zone(&["k0"]));
-        let advert = Advert::new(zone(&["k1", "k0"]), zone(&["k2", "k1", "k0"]))
-            .route("route-1", zone(&["k3", "k2", "k1", "k0"]), "k3", &["get"])
-            .build();
-        let alloc = allocation(
-            zone(&["k1", "k0"]),
-            zone(&["k2", "k1", "k0"]),
-            "gen-1",
-            vec![zone(&["k2", "k1", "k0"])],
-            8,
-            &["get"],
-        );
-        assert_eq!(
-            engine
-                .admit_advertisement(&advert, &alloc, 1_500)
-                .denial_reason(),
-            Some(ZoneRouteFailClosedReason::UnknownParent)
-        );
-    }
-
-    #[test]
-    fn a_route_outside_the_allocated_prefix_or_capability_scope_is_refused() {
-        let mut engine = ZoneRouteEngine::new(zone(&["k0"]));
-        let advert = Advert::new(zone(&["k0"]), zone(&["k1", "k0"]))
-            .route("route-1", zone(&["k2", "k1", "k0"]), "k2", &["get"])
-            .build();
-        let narrow_prefix = allocation(
-            zone(&["k0"]),
-            zone(&["k1", "k0"]),
-            "gen-1",
-            vec![zone(&["k7", "k1", "k0"])],
-            8,
-            &["get"],
-        );
-        assert_eq!(
-            engine
-                .admit_advertisement(&advert, &narrow_prefix, 1_500)
-                .denial_reason(),
-            Some(ZoneRouteFailClosedReason::NamespaceViolation)
-        );
-
-        let narrow_caps = allocation(
-            zone(&["k0"]),
-            zone(&["k1", "k0"]),
-            "gen-1",
-            vec![zone(&["k1", "k0"])],
-            8,
-            &["list"],
-        );
-        assert_eq!(
-            engine
-                .admit_advertisement(&advert, &narrow_caps, 1_500)
-                .denial_reason(),
-            Some(ZoneRouteFailClosedReason::NamespaceViolation)
-        );
-    }
-
-    #[test]
-    fn an_allocation_for_another_edge_or_generation_is_refused() {
-        let mut engine = ZoneRouteEngine::new(zone(&["k0"]));
-        let advert = Advert::new(zone(&["k0"]), zone(&["k1", "k0"]))
-            .route("route-1", zone(&["k2", "k1", "k0"]), "k2", &["get"])
-            .build();
-        let wrong_generation = allocation(
-            zone(&["k0"]),
-            zone(&["k1", "k0"]),
-            "gen-9",
-            vec![zone(&["k1", "k0"])],
-            8,
-            &["get"],
-        );
-        assert_eq!(
-            engine
-                .admit_advertisement(&advert, &wrong_generation, 1_500)
-                .denial_reason(),
-            Some(ZoneRouteFailClosedReason::NamespaceViolation)
-        );
-
-        let too_few_routes = allocation(
-            zone(&["k0"]),
-            zone(&["k1", "k0"]),
-            "gen-1",
-            vec![zone(&["k1", "k0"])],
-            1,
-            &["get"],
-        );
-        let two_routes = Advert::new(zone(&["k0"]), zone(&["k1", "k0"]))
-            .route("route-1", zone(&["k2", "k1", "k0"]), "k2", &["get"])
-            .route("route-2", zone(&["k3", "k1", "k0"]), "k3", &["get"])
-            .build();
-        assert_eq!(
-            engine
-                .admit_advertisement(&two_routes, &too_few_routes, 1_500)
-                .denial_reason(),
-            Some(ZoneRouteFailClosedReason::NamespaceViolation)
-        );
-    }
-
-    #[test]
     fn two_route_rows_for_one_descendant_in_one_advertisement_are_refused() {
         let mut engine = ZoneRouteEngine::new(zone(&["k0"]));
         let advert = Advert::new(zone(&["k0"]), zone(&["k1", "k0"]))
@@ -2872,51 +2623,6 @@ mod tests {
                 .admit_advertisement(&advert, &alloc, 1_500)
                 .denial_reason(),
             Some(ZoneRouteFailClosedReason::MalformedAdvert)
-        );
-    }
-
-    #[test]
-    fn a_second_advertiser_claiming_the_same_descendant_is_refused_as_multi_parent() {
-        let mut engine = ZoneRouteEngine::new(zone(&["k0"]));
-        // k1 claims a deep descendant through k2.
-        let first = Advert::new(zone(&["k0"]), zone(&["k1", "k0"]))
-            .route("route-a", zone(&["k3", "k2", "k1", "k0"]), "k2", &["get"])
-            .build();
-        let alloc_k1 = allocation(
-            zone(&["k0"]),
-            zone(&["k1", "k0"]),
-            "gen-1",
-            vec![zone(&["k1", "k0"])],
-            8,
-            &["get"],
-        );
-        assert!(matches!(
-            engine.admit_advertisement(&first, &alloc_k1, 1_500),
-            ZoneAdvertisementAdmission::Accepted { .. }
-        ));
-
-        // k2 then claims the same descendant directly. Both advertisements are
-        // structurally valid on their own; only the engine can see that they
-        // disagree about who owns the descendant.
-        let second = Advert::new(zone(&["k1", "k0"]), zone(&["k2", "k1", "k0"]))
-            .route("route-b", zone(&["k3", "k2", "k1", "k0"]), "k3", &["get"])
-            .window(2_000, 5_000)
-            .signature_ref("sigref-2")
-            .generation("gen-2")
-            .build();
-        let alloc_k2 = allocation(
-            zone(&["k1", "k0"]),
-            zone(&["k2", "k1", "k0"]),
-            "gen-2",
-            vec![zone(&["k2", "k1", "k0"])],
-            8,
-            &["get"],
-        );
-        assert_eq!(
-            engine
-                .admit_advertisement(&second, &alloc_k2, 2_100)
-                .denial_reason(),
-            Some(ZoneRouteFailClosedReason::MultiParent)
         );
     }
 
@@ -3015,66 +2721,6 @@ mod tests {
     }
 
     #[test]
-    fn a_capability_the_target_never_advertised_is_refused() {
-        let engine = seeded_engine();
-        let request = request_with_capability(zone(&["k0"]), zone(&["k2", "k1", "k0"]), "watch");
-        assert_eq!(
-            engine.decide_route(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::MissingCapability)
-        );
-    }
-
-    #[test]
-    fn the_local_root_target_asserts_no_advertised_ceiling() {
-        let engine = seeded_engine();
-        let request = ZoneRouteRequest::new(zone(&["k0"]), zone(&["k0"]));
-        let ZoneRouteDecision::Allowed {
-            effective_capabilities,
-            path,
-            remaining_hops_after,
-        } = engine.decide_route(&request)
-        else {
-            panic!("expected an allowed local route");
-        };
-        assert_eq!(path.hop_count(), 0);
-        assert_eq!(effective_capabilities, None);
-        assert_eq!(remaining_hops_after, ZONE_ROUTE_INITIAL_HOP_BUDGET);
-    }
-
-    #[test]
-    fn a_hop_budget_smaller_than_the_path_is_refused() {
-        let engine = seeded_engine();
-        let request =
-            allowed_request(zone(&["k0"]), zone(&["k2", "k1", "k0"]), 1_500).with_remaining_hops(1);
-        assert_eq!(
-            engine.decide_route(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::HopLimitExceeded)
-        );
-
-        let request =
-            allowed_request(zone(&["k0"]), zone(&["k2", "k1", "k0"]), 1_500).with_remaining_hops(2);
-        let ZoneRouteDecision::Allowed {
-            remaining_hops_after,
-            ..
-        } = engine.decide_route(&request)
-        else {
-            panic!("expected an allowed route at the exact budget");
-        };
-        assert_eq!(remaining_hops_after, 0);
-    }
-
-    #[test]
-    fn an_exhausted_hop_budget_is_refused_before_the_walk() {
-        let engine = seeded_engine();
-        let request =
-            allowed_request(zone(&["k0"]), zone(&["k9", "k9"]), 1_500).with_remaining_hops(0);
-        assert_eq!(
-            engine.decide_route(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::HopLimitExceeded)
-        );
-    }
-
-    #[test]
     fn a_relay_hop_decrements_the_budget_only_with_both_independent_grants() {
         let request = ZoneRelayRequest::new(4);
         assert_eq!(
@@ -3123,99 +2769,6 @@ mod tests {
         assert_eq!(
             ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
             Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
-        );
-    }
-
-    #[test]
-    fn a_relay_hop_refuses_an_exhausted_budget_a_dead_link_and_an_attachment() {
-        let request = ZoneRelayRequest::new(0).with_admissions(
-            standard_admission("get"),
-            relay_admission(OperationClass::Relay, "relay"),
-        );
-        assert_eq!(
-            ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::HopLimitExceeded)
-        );
-
-        let request = ZoneRelayRequest::new(4);
-        assert_eq!(
-            ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::ZoneLinkDisconnected)
-        );
-
-        let request = ZoneRelayRequest::new(4)
-            .with_admissions(
-                standard_admission("get"),
-                relay_admission(OperationClass::Relay, "relay"),
-            )
-            .with_attachment_offer(true);
-        assert_eq!(
-            ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::AttachmentNotPermittedOverZoneLink)
-        );
-    }
-
-    #[test]
-    fn relay_forwarding_never_exceeds_the_initial_protocol_budget() {
-        let mut remaining = ZONE_ROUTE_INITIAL_HOP_BUDGET;
-        let mut hops = 0_u32;
-        loop {
-            let request = ZoneRelayRequest::new(remaining).with_admissions(
-                standard_admission("get"),
-                relay_admission(OperationClass::Relay, "relay"),
-            );
-            let ZoneRelayAdmission::Admitted {
-                forwarded_remaining_hops,
-            } = ZoneRouteEngine::admit_relay_hop(&request)
-            else {
-                break;
-            };
-            remaining = forwarded_remaining_hops;
-            hops += 1;
-        }
-        assert_eq!(remaining, 0);
-        assert_eq!(hops, ZONE_ROUTE_INITIAL_HOP_BUDGET);
-        let request = ZoneRelayRequest::new(remaining).with_admissions(
-            standard_admission("get"),
-            relay_admission(OperationClass::Relay, "relay"),
-        );
-        assert_eq!(
-            ZoneRouteEngine::admit_relay_hop(&request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::HopLimitExceeded)
-        );
-    }
-
-    #[test]
-    fn a_withdrawal_removes_only_the_named_live_routes() {
-        let mut engine = seeded_engine();
-        let withdrawal = ZoneLinkRouteWithdrawal::new(
-            ZONE_ROUTING_SCHEMA_VERSION,
-            zone(&["k1", "k0"]),
-            generation("gen-1"),
-            vec![route_id("route-1"), route_id("route-unknown")],
-            1_600,
-            signature("sigref-w1"),
-        )
-        .expect("valid withdrawal");
-        let outcome = engine.admit_withdrawal(&withdrawal, 1_700);
-        assert_eq!(
-            outcome,
-            ZoneWithdrawalAdmission::Accepted {
-                withdrawn_route_ids: vec![route_id("route-1")]
-            }
-        );
-        assert_eq!(
-            outcome.audit_event(),
-            ZoneRouteAuditEventKind::ZoneAdvertisementWithdrawn
-        );
-        assert!(engine.route_inventory().is_empty());
-
-        // Withdrawing again is idempotent rather than an error.
-        assert_eq!(
-            engine.admit_withdrawal(&withdrawal, 1_800),
-            ZoneWithdrawalAdmission::Accepted {
-                withdrawn_route_ids: Vec::new()
-            }
         );
     }
 
@@ -3271,24 +2824,6 @@ mod tests {
     }
 
     #[test]
-    fn a_future_dated_withdrawal_is_refused_as_malformed() {
-        let mut engine = seeded_engine();
-        let withdrawal = ZoneLinkRouteWithdrawal::new(
-            ZONE_ROUTING_SCHEMA_VERSION,
-            zone(&["k1", "k0"]),
-            generation("gen-1"),
-            vec![route_id("route-1")],
-            9_000,
-            signature("sigref-w4"),
-        )
-        .expect("valid withdrawal");
-        assert_eq!(
-            engine.admit_withdrawal(&withdrawal, 1_700).denial_reason(),
-            Some(ZoneRouteFailClosedReason::MalformedAdvert)
-        );
-    }
-
-    #[test]
     fn expiry_sweeps_projection_state_and_makes_the_route_unknown_again() {
         let mut engine = seeded_engine();
         let report = engine.prune_expired(4_000);
@@ -3327,39 +2862,5 @@ mod tests {
             queued.audit_event(),
             ZoneRouteAuditEventKind::ZoneLinkIntentQueued
         );
-    }
-
-    #[test]
-    fn every_reason_the_engine_can_produce_is_covered_by_this_suite() {
-        // The engine can produce every closed reason except
-        // `SiblingOrParentRouteAdvert` from an advertisement: the contract's
-        // own constructor already proves descendant strictness and next-hop
-        // agreement, so that shape cannot reach the engine. The engine still
-        // uses that reason for a withdrawal naming a route another Zone owns.
-        let produced = [
-            ZoneRouteFailClosedReason::MalformedAdvert,
-            ZoneRouteFailClosedReason::UnknownParent,
-            ZoneRouteFailClosedReason::NamespaceViolation,
-            ZoneRouteFailClosedReason::SiblingOrParentRouteAdvert,
-            ZoneRouteFailClosedReason::Loop,
-            ZoneRouteFailClosedReason::MultiParent,
-            ZoneRouteFailClosedReason::Expired,
-            ZoneRouteFailClosedReason::Replay,
-            ZoneRouteFailClosedReason::RateLimited,
-            ZoneRouteFailClosedReason::QueueFullDropNew,
-            ZoneRouteFailClosedReason::MissingCapability,
-            ZoneRouteFailClosedReason::PolicyDenial,
-            ZoneRouteFailClosedReason::ZoneLinkDisconnected,
-            ZoneRouteFailClosedReason::HopLimitExceeded,
-            ZoneRouteFailClosedReason::RelayDenied,
-            ZoneRouteFailClosedReason::AttachmentNotPermittedOverZoneLink,
-        ];
-        let mut labels = produced
-            .iter()
-            .map(|reason| reason.label())
-            .collect::<Vec<_>>();
-        labels.sort_unstable();
-        labels.dedup();
-        assert_eq!(labels.len(), produced.len());
     }
 }

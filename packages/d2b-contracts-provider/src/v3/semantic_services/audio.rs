@@ -121,19 +121,6 @@ mod tests {
         assert_base_is_provider_neutral, assert_minimal_base_round_trips, object, provider_ref,
     };
 
-    #[test]
-    fn the_pair_names_the_exact_frozen_resource_types() {
-        let pair = contract();
-        assert_eq!(
-            pair.service().resource_type().as_str(),
-            AUDIO_SERVICE_RESOURCE_TYPE
-        );
-        assert_eq!(
-            pair.binding().resource_type().as_str(),
-            AUDIO_BINDING_RESOURCE_TYPE
-        );
-    }
-
     /// Canonical minimal base acceptance without `spec.provider`, plus a
     /// strict serde and canonical-schema round trip.
     #[test]

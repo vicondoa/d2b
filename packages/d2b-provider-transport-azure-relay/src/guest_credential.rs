@@ -1038,4 +1038,49 @@ mod tests {
         ));
         assert_eq!(port.active_lease_count(), 0);
     }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn sealed_envelope_rejects_unsupported_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credential.sealed.json");
+        fs::write(
+            &path,
+            r#"{"schemaVersion":2,"generation":1,"nonce":"AAAA","ciphertext":"AAAA"}"#,
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            GatewayCredential::load_sealed(
+                &path,
+                &sealing_key(),
+                &CredentialFilePolicy::default(),
+                1,
+            )
+            .unwrap_err(),
+            CredentialError::BadSchemaVersion(2)
+        );
+    }
+
+    #[test]
+    fn credential_path_must_be_a_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            GatewayCredential::load(dir.path(), &CredentialFilePolicy::default()).unwrap_err(),
+            CredentialError::BadFileType
+        );
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn sealing_key_load_rejects_wrong_length_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sealing.key");
+        fs::write(&path, [0x7f; 16]).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            SealingKey::load(&path, &CredentialFilePolicy::default()).unwrap_err(),
+            CredentialError::BadSealKey
+        );
+    }
 }

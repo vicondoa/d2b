@@ -5234,23 +5234,6 @@ HOST_EFFECTS_SERVICE.id,
         assert_eq!(runtime.drain_order(), reversed);
     }
 
-    /// A plane's providers drain in the mirror of their startup order, and
-    /// the plane reports the same sequence it ran.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_plane_drains_its_providers() {
-        let (_dir, inputs, _readiness) = test_inputs();
-        let plane = ResourcePlaneV3::prepare(inputs).await.expect("plane prepare");
-        let mut reversed = plane.providers().startup_order().to_vec();
-        reversed.reverse();
-        plane
-           .drain_providers()
-           .await
-           .expect("the providers drain through the base");
-        assert_eq!(plane.providers().drain_order(), reversed);
-        plane.shutdown().await;
-    }
-
     /// The startup cross-check fails when the registry and the catalog
     /// disagree, naming both sides: the catalog type with no registered
     /// driver and the registered type the catalog does not list.

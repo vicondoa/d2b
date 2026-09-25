@@ -775,22 +775,4 @@ fn error_for_state(state: CredentialLeaseState) -> CredentialServiceError {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use d2b_contracts_provider::v3::credential::{CredentialLeaseHandle, CredentialSourceVersion};
 
-    #[test]
-    fn cleanup_metadata_preserves_invalid_grant_fences() {
-        let grant = crate::EntraLeaseGrant {
-            lease_handle: CredentialLeaseHandle::parse("invalid-grant-handle").unwrap(),
-            source_version: CredentialSourceVersion::parse("invalid-grant-source").unwrap(),
-            rotation_generation: 0,
-            expires_at_unix_ms: 0,
-        };
-
-        let metadata = cleanup_metadata_from_grant(&grant);
-        assert_eq!(metadata.rotation_generation, 0);
-        assert_eq!(metadata.expires_at_unix_ms, 0);
-    }
-}

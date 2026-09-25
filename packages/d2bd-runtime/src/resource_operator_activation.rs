@@ -380,3 +380,92 @@ fn provider_ref_from_canonical(canonical_json: &[u8]) -> Result<ResourceRef, Wav
     }
     Ok(provider_ref)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn canonical(spec: Value) -> Vec<u8> {
+        serde_json::to_vec(&json!({ "spec": spec })).unwrap()
+    }
+
+    fn sample_resource(kind: Wave6ResourceKind) -> Wave6Resource {
+        Wave6Resource {
+            resource_ref: ResourceRef::parse(&format!("{}/sample", kind.resource_type())).unwrap(),
+            uid: ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+            generation: ResourceGeneration::new(1).unwrap(),
+            provider_ref: ResourceRef::parse("Provider/system-core").unwrap(),
+            canonical_json: canonical(json!({ "providerRef": "Provider/system-core" })),
+        }
+    }
+
+    #[test]
+    fn provider_ref_from_canonical_rejects_missing_or_invalid_routes() {
+        // A Wave 6 resource without a valid Provider route must fail
+        // closed: the activation sequence cannot route effects it cannot
+        // attribute to a Provider.
+        assert_eq!(
+            provider_ref_from_canonical(b"not json"),
+            Err(Wave6BoundaryError::ProviderRoute)
+        );
+        assert_eq!(
+            provider_ref_from_canonical(&canonical(json!({}))),
+            Err(Wave6BoundaryError::ProviderRoute)
+        );
+        assert_eq!(
+            provider_ref_from_canonical(&canonical(json!({ "providerRef": 7 }))),
+            Err(Wave6BoundaryError::ProviderRoute)
+        );
+        assert_eq!(
+            provider_ref_from_canonical(&canonical(json!({ "providerRef": "not a ref" }))),
+            Err(Wave6BoundaryError::ProviderRoute)
+        );
+        assert_eq!(
+            provider_ref_from_canonical(&canonical(json!({ "providerRef": "User/alice" }))),
+            Err(Wave6BoundaryError::ProviderRoute)
+        );
+        assert_eq!(
+            provider_ref_from_canonical(&canonical(json!({ "providerRef": "Provider/system-core" })))
+                .unwrap(),
+            ResourceRef::parse("Provider/system-core").unwrap()
+        );
+    }
+
+    #[test]
+    fn wave6_set_assembly_fails_closed_on_missing_kinds() {
+        // The acceptance set is exactly the four Wave 6 kinds; a partial
+        // selection must never assemble into a report with holes.
+        let mut partial = BTreeMap::new();
+        Wave6ResourceSet::insert(
+            &mut partial,
+            Wave6ResourceKind::Volume,
+            sample_resource(Wave6ResourceKind::Volume),
+        );
+        Wave6ResourceSet::insert(
+            &mut partial,
+            Wave6ResourceKind::Network,
+            sample_resource(Wave6ResourceKind::Network),
+        );
+        Wave6ResourceSet::insert(
+            &mut partial,
+            Wave6ResourceKind::DeviceTpm,
+            sample_resource(Wave6ResourceKind::DeviceTpm),
+        );
+        assert_eq!(
+            Wave6ResourceSet::from_resources(partial),
+            Err(Wave6BoundaryError::ResourceSelection)
+        );
+
+        let mut complete = BTreeMap::new();
+        for kind in [
+            Wave6ResourceKind::Volume,
+            Wave6ResourceKind::Network,
+            Wave6ResourceKind::DeviceTpm,
+            Wave6ResourceKind::CloudHypervisorGuest,
+        ] {
+            Wave6ResourceSet::insert(&mut complete, kind, sample_resource(kind));
+        }
+        assert!(Wave6ResourceSet::from_resources(complete).is_ok());
+    }
+}

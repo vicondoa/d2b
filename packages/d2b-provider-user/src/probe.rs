@@ -95,3 +95,46 @@ async fn discover_local_user(
         observed: UserObservation::from_verified(verified),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use d2b_contracts_resource::v3::user::OsUsername;
+
+    #[tokio::test]
+    async fn the_real_nss_probe_resolves_absent_accounts_and_derives_the_frozen_root_digest() {
+        let absent_spec =
+            UserSpec::minimal(OsUsername::parse("d2b-u5-no-such-account").unwrap());
+        assert!(matches!(
+            discover_local_user(
+                &ResourceRef::parse("User/no-such-account").unwrap(),
+                &absent_spec,
+            )
+            .await,
+            Ok(None)
+        ));
+
+        let root_spec = UserSpec::minimal(OsUsername::parse("root").unwrap());
+        let discovered =
+            discover_local_user(&ResourceRef::parse("User/root").unwrap(), &root_spec)
+                .await
+                .expect("probe completes")
+                .expect("root resolves on the host account database");
+        assert!(
+            discovered
+                .observed
+                .verified()
+                .contains(&UserBinding::NssRecord),
+            "the resolved record is always verified"
+        );
+        assert_eq!(
+            discovered.identity.to_hex(),
+            "d3e0054feb316672210c792a1a16b62ebb3d9a5fc3fdffaebae0b2d4e8f537bb"
+        );
+        let again = discover_local_user(&ResourceRef::parse("User/root").unwrap(), &root_spec)
+            .await
+            .unwrap()
+            .expect("root resolves on a second probe");
+        assert_eq!(again.identity, discovered.identity);
+    }
+}

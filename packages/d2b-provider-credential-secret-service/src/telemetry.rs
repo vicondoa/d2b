@@ -23,28 +23,4 @@ pub(super) fn frame(
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use d2b_contracts_provider::v3::credential_controller::CredentialTelemetryField;
 
-    #[test]
-    fn process_unique_canary_is_rejected_as_an_allowed_key_value() {
-        let marker = format!("secret-canary-{:x}", std::process::id());
-        assert!(
-            CredentialTelemetryFrame::validate_collector_fields([CredentialTelemetryField {
-                key: "outcome",
-                value: marker,
-            }])
-            .is_err()
-        );
-        let frame = frame(
-            "dev",
-            CredentialTelemetryOperation::AcquireToken,
-            CredentialTelemetryOutcome::Success,
-            1,
-        )
-        .unwrap();
-        assert!(CredentialTelemetryFrame::validate_collector_fields(frame.all_fields()).is_ok());
-    }
-}

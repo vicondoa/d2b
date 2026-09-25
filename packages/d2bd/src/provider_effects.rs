@@ -1874,8 +1874,8 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn persistent_admission_deduplicates_the_same_request_after_restart() {
-        let root = crate::test_scratch_root()
-            .join(format!("provider-lifecycle-restart-{}", std::process::id()));
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-restart").join(format!(
+            "provider-lifecycle-restart-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         let zone = ZoneId::parse("work").expect("Zone");
@@ -1911,7 +1911,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn applied_stop_intent_survives_idempotency_ttl_and_restart() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-stop-intent").join(format!(
             "provider-lifecycle-stop-intent-{}",
             std::process::id()
         ));
@@ -1973,7 +1973,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn legacy_generation_migration_preserves_temporal_latest_after_restart() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-legacy-temporal-migration").join(format!(
             "provider-lifecycle-legacy-temporal-migration-{}",
             std::process::id()
         ));
@@ -2047,7 +2047,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn legacy_generation_migration_rejects_conflicting_same_guest_timestamp_tie() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-legacy-tie-conflict").join(format!(
             "provider-lifecycle-legacy-tie-conflict-{}",
             std::process::id()
         ));
@@ -2075,7 +2075,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn legacy_generation_migration_orders_identical_timestamp_duplicates_deterministically() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-legacy-tie-duplicates").join(format!(
             "provider-lifecycle-legacy-tie-duplicates-{}",
             std::process::id()
         ));
@@ -2119,7 +2119,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn legacy_generation_migration_assigns_unique_values_above_mixed_explicit_state() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-legacy-mixed-generations").join(format!(
             "provider-lifecycle-legacy-mixed-generations-{}",
             std::process::id()
         ));
@@ -2235,7 +2235,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn persistent_admission_reexecutes_pending_when_actual_state_is_not_reached() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-pending-retry").join(format!(
             "provider-lifecycle-pending-retry-{}",
             std::process::id()
         ));
@@ -2274,7 +2274,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn persistent_pending_reconciles_without_effect_when_actual_state_is_reached() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-pending-reconcile").join(format!(
             "provider-lifecycle-pending-reconcile-{}",
             std::process::id()
         ));
@@ -2309,7 +2309,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn persistent_pending_state_unavailable_keeps_retryable_admission() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-pending-unavailable").join(format!(
             "provider-lifecycle-pending-unavailable-{}",
             std::process::id()
         ));
@@ -2382,7 +2382,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn concurrent_opposite_requests_keep_in_flight_rows_until_both_complete() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-concurrent-opposite").join(format!(
             "provider-lifecycle-concurrent-opposite-{}",
             std::process::id()
         ));
@@ -2538,7 +2538,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn completion_persist_failure_releases_execution_for_reconciliation() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-completion-persist-failure").join(format!(
             "provider-lifecycle-completion-persist-failure-{}",
             std::process::id()
         ));
@@ -2579,7 +2579,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn removal_persist_failure_releases_execution_for_retry() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-removal-persist-failure").join(format!(
             "provider-lifecycle-removal-persist-failure-{}",
             std::process::id()
         ));
@@ -2620,7 +2620,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn opposite_admissions_are_serialized_by_latest_desired_generation() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-opposite-generation").join(format!(
             "provider-lifecycle-opposite-generation-{}",
             std::process::id()
         ));
@@ -2692,7 +2692,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn restart_preserves_latest_desired_generation() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-generation-restart").join(format!(
             "provider-lifecycle-generation-restart-{}",
             std::process::id()
         ));
@@ -2751,7 +2751,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn restart_prunes_expired_unowned_pending_rows_for_bounded_recovery() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-expired-recovery").join(format!(
             "provider-lifecycle-expired-recovery-{}",
             std::process::id()
         ));
@@ -2795,8 +2795,8 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn persistent_start_stop_start_stop_retires_opposite_applied_entries() {
-        let root = crate::test_scratch_root()
-            .join(format!("provider-lifecycle-cycles-{}", std::process::id()));
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-cycles").join(format!(
+            "provider-lifecycle-cycles-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let zone = ZoneId::parse("work").expect("Zone");
         let caller = BrokerCallerRole::AdminUid { uid: 1000 };
@@ -2827,7 +2827,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn lifecycle_state_persists_the_complete_guest_identity() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-identity").join(format!(
             "provider-lifecycle-identity-{}",
             std::process::id()
         ));
@@ -2880,7 +2880,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn stale_lifecycle_identity_is_quarantined_without_replay_or_deletion() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-stale-identity").join(format!(
             "provider-lifecycle-stale-identity-{}",
             std::process::id()
         ));
@@ -3005,8 +3005,8 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn uidless_lifecycle_row_is_quarantined_and_retained() {
-        let root = crate::test_scratch_root()
-            .join(format!("provider-lifecycle-uidless-{}", std::process::id()));
+        let root = d2b_core::test_support::scratch_root("provider-lifecycle-uidless").join(format!(
+            "provider-lifecycle-uidless-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let path = root.join("lifecycle.json");
         std::fs::create_dir_all(&root).expect("create state directory");

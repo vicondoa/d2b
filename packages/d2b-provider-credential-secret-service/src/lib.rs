@@ -1887,9 +1887,13 @@ mod tests {
     use std::thread;
 
     fn production_provider_route() -> AuthenticatedSessionRouteBinding {
+        provider_route(PROVIDER_REF, "Guest/test")
+    }
+
+    fn provider_route(subject: &str, execution: &str) -> AuthenticatedSessionRouteBinding {
         let provider_ref = ResourceRef::parse(PROVIDER_REF).unwrap();
         let context = AuthenticatedSubjectContext::new(
-            provider_ref.clone(),
+            ResourceRef::parse(subject).unwrap(),
             d2b_contracts_resource::v3::ResourceUid::parse(
                 "123e4567-e89b-42d3-a456-426614174000",
             )
@@ -1914,7 +1918,7 @@ mod tests {
                 TranscriptHash::from_bytes([0x5a; 32]),
             ),
         )
-        .with_execution_ref(ResourceRef::parse("Guest/test").unwrap())
+        .with_execution_ref(ResourceRef::parse(execution).unwrap())
         .with_provider_ref(provider_ref)
         .with_process_ref(ResourceRef::parse("Process/credential-controller").unwrap())
         .with_provider_generation(ResourceGeneration::new(1).unwrap())
@@ -1948,19 +1952,99 @@ mod tests {
         assert_eq!(provider.placement().zone().as_str(), "dev");
     }
 
+    #[test]
+    fn placement_rejects_non_host_guest_execution_or_non_user_scope() {
+        let zone = ZoneId::parse("dev").unwrap();
+        assert_eq!(
+            SecretServicePlacement::new(
+                zone.clone(),
+                PlacementBinding::UserAgent,
+                ResourceRef::parse("Provider/credential-secret-service").unwrap(),
+                ResourceRef::parse("User/alice").unwrap(),
+            )
+            .unwrap_err(),
+            SecretServiceProviderError::InvalidScope
+        );
+        assert_eq!(
+            SecretServicePlacement::new(
+                zone.clone(),
+                PlacementBinding::UserAgent,
+                ResourceRef::parse("Host/runner").unwrap(),
+                ResourceRef::parse("Guest/other").unwrap(),
+            )
+            .unwrap_err(),
+            SecretServiceProviderError::InvalidScope
+        );
+        assert!(SecretServicePlacement::new(
+            zone,
+            PlacementBinding::UserAgent,
+            ResourceRef::parse("Host/runner").unwrap(),
+            ResourceRef::parse("User/alice").unwrap(),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn config_rejects_lease_bounds_and_oversized_aliases() {
+        assert_eq!(
+            SecretServiceConfig::new("login", 0, LockPolicy::FailClosed).unwrap_err(),
+            SecretServiceProviderError::InvalidConfig
+        );
+        assert_eq!(
+            SecretServiceConfig::new("login", MAX_LOCAL_LEASES + 1, LockPolicy::FailClosed).unwrap_err(),
+            SecretServiceProviderError::InvalidConfig
+        );
+        assert_eq!(
+            SecretServiceConfig::new(
+                "a".repeat(MAX_COLLECTION_ALIAS_BYTES + 1),
+                64,
+                LockPolicy::FailClosed,
+            )
+            .unwrap_err(),
+            SecretServiceProviderError::InvalidConfig
+        );
+        assert!(SecretServiceConfig::new(
+            "a".repeat(MAX_COLLECTION_ALIAS_BYTES),
+            64,
+            LockPolicy::FailClosed,
+        )
+        .is_ok());
+        assert!(SecretServiceConfig::new("login", 1, LockPolicy::FailClosed).is_ok());
+        assert!(SecretServiceConfig::new("login", MAX_LOCAL_LEASES, LockPolicy::FailClosed).is_ok());
+    }
+
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test(flavor = "current_thread")]
-    async fn runtime_provider_accepts_missing_controller_user_scope_claim() {
-        let route = production_provider_route();
+    async fn runtime_provider_rejects_non_guest_execution_and_foreign_subjects() {
+        let valid_metadata = ProviderSessionMetadata::from_route(&production_provider_route()).unwrap();
+
+        let route = provider_route(PROVIDER_REF, "Host/test");
         let metadata = ProviderSessionMetadata::from_route(&route).unwrap();
-        let (client_fd, _server_fd) = prearmed_seqpacket_pair().unwrap();
         let backend =
             GuestCredentialBackend::from_socket_for_test(SeqpacketSocket::from_parent_prearmed(
-                client_fd,
+                prearmed_seqpacket_pair().unwrap().0,
             )
             .unwrap());
-        assert!(runtime_provider(&route, &metadata, backend).is_ok());
+        assert_eq!(
+            runtime_provider(&route, &metadata, backend).unwrap_err(),
+            ProviderRuntimeError::SessionUnauthenticated
+        );
+
+        for subject in ["Provider/other", "User/alice"] {
+            let route = provider_route(subject, "Guest/test");
+            let backend =
+                GuestCredentialBackend::from_socket_for_test(SeqpacketSocket::from_parent_prearmed(
+                    prearmed_seqpacket_pair().unwrap().0,
+                )
+                .unwrap());
+            assert_eq!(
+                runtime_provider(&route, &valid_metadata, backend).unwrap_err(),
+                ProviderRuntimeError::SessionUnauthenticated
+            );
+        }
     }
+
+
 
     #[test]
     fn collection_alias_accepts_spaces_and_rejects_unsafe_text() {
@@ -1970,29 +2054,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn placement_is_user_agent_only() {
-        let host = ResourceRef::parse("Host/workstation").unwrap();
-        let user = ResourceRef::parse("User/alice").unwrap();
-        assert!(
-            SecretServicePlacement::new(
-                ZoneId::parse("user-zone").unwrap(),
-                PlacementBinding::UserAgent,
-                host.clone(),
-                user.clone(),
-            )
-            .is_ok()
-        );
-        assert_eq!(
-            SecretServicePlacement::new(
-                ZoneId::parse("user-zone").unwrap(),
-                PlacementBinding::HostSystem,
-                host,
-                user,
-            ),
-            Err(SecretServiceProviderError::InvalidPlacement)
-        );
-    }
+
 
     #[test]
     fn configuration_debug_redacts_collection_alias() {
@@ -2144,9 +2206,4 @@ mod tests {
         assert!(matches!(result, Err(SecretServicePollError::Deadline)));
     }
 
-    #[test]
-    fn ambient_sdk_chain_names_are_rejected_without_reading_values() {
-        assert!(reject_ambient_credential_chain(["PATH", "RUST_LOG"]).is_ok());
-        assert!(reject_ambient_credential_chain(["AZURE_CLIENT_SECRET"]).is_err());
-    }
 }

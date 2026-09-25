@@ -687,7 +687,7 @@ mod tests {
             nix::unistd::getegid().as_raw(),
         );
         let audit_log = crate::audit::AuditLog::open(
-            &crate::test_scratch_root().join(format!(
+            &d2b_core::test_support::scratch_root("w3-state-dir").join(format!(
                 "w3-state-dir-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()

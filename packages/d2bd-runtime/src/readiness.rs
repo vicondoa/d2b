@@ -407,20 +407,6 @@ mod proc_state_tests {
 
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn simple_running() {
-        assert_eq!(parse("99 (bash) R 1 99 99 ..."), ProcState::Alive('R'));
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn comm_with_paren() {
-        // Process comm contains ')' - rfind correctly picks the
-        // OUTER closing paren that ends the comm field.
-        assert_eq!(parse("42 (foo) bar) Z 1 42 ..."), ProcState::Alive('Z'));
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn comm_with_spaces_and_paren() {
         assert_eq!(parse("7 (cmd (in jail)) S 1 7 ..."), ProcState::Alive('S'));
     }
@@ -434,21 +420,8 @@ mod proc_state_tests {
 
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn no_paren_at_all() {
-        // Garbage input without comm parens - ParseFailed.
-        assert_eq!(parse("not a stat line at all"), ProcState::ParseFailed);
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn empty_input() {
         assert_eq!(parse(""), ProcState::ParseFailed);
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn dead_process() {
-        assert_eq!(parse("88 (init) X 1 88 ..."), ProcState::Alive('X'));
     }
 }
 

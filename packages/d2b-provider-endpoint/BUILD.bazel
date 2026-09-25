@@ -62,6 +62,13 @@ d2b_rust_test(
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
+d2b_rust_test(
+    name = "d2b_provider_endpoint_test",
+    compile_data = ["Cargo.toml"],
+    crate = ":d2b_provider_endpoint",
+    deps = all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
 # keep
 filegroup(
     name = "cargo_workspace_sources",

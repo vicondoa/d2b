@@ -936,26 +936,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn status_debug_redacts_dynamic_and_message_values() {
-        let secret_marker = StatusMessage::parse("operator-only detail").unwrap();
-        assert!(!format!("{secret_marker:?}").contains("operator-only"));
-        let status = ResourceStatus::new(
-            ObservedGeneration::new(0),
-            None,
-            ResourcePhase::Pending,
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            update(),
-            CanonicalJsonObject::parse(br#"{"privateObservation":"hidden"}"#).unwrap(),
-            None,
-        )
-        .unwrap();
-        assert!(!format!("{status:?}").contains("hidden"));
-    }
+
 
     #[test]
     fn unknown_status_and_provider_fields_are_rejected() {

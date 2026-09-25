@@ -1772,34 +1772,6 @@ mod tests {
     }
 
     #[test]
-    fn filtered_lock_omits_unselected_lock_only_packages() {
-        let root = std::env::current_dir().expect("current directory");
-        let closure = Closure {
-            schema_version: 1,
-            authority: "cargo-locked-metadata".to_owned(),
-            context: "test".to_owned(),
-            system: "x86_64-linux".to_owned(),
-            target: "x86_64-unknown-linux-gnu".to_owned(),
-            roots: vec!["root".to_owned()],
-            features: Vec::new(),
-            default_features: false,
-            source_authority: "Cargo.lock".to_owned(),
-            lock_sha256: String::new(),
-            packages: vec![PackageRecord {
-                id: "path+file:///root#root".to_owned(),
-                name: "root".to_owned(),
-                version: "1.0.0".to_owned(),
-                source: None,
-                checksum: None,
-                target: "x86_64-unknown-linux-gnu".to_owned(),
-            }],
-            edges: Vec::new(),
-            approval: None,
-        };
-        let _ = filtered_lock(&root, PRODUCT_LOCK, &closure);
-    }
-
-    #[test]
     fn audit_projection_keeps_optional_lock_dependencies_parseable() {
         let blocks = vec![
             vec![

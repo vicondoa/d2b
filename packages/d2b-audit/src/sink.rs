@@ -458,14 +458,6 @@ mod tests {
         segment::{FailureInjector, FailurePoint},
     };
 
-    fn writable_manifest_dir() -> std::path::PathBuf {
-        std::env::var_os("TEST_TMPDIR")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(std::path::PathBuf::from))
-            .or_else(|| std::env::current_dir().ok())
-            .expect("resolve test writable directory")
-    }
-
     fn sample(previous_hash: crate::AuditHash) -> AuditRecord {
         AuditRecord::new(
             1,
@@ -494,8 +486,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn privileged_writes_are_not_rate_limited() {
-        let directory = writable_manifest_dir()
-            .join("target")
+        let directory = d2b_core::test_support::scratch_root("audit-sink").join("target")
             .join(format!("d2b-audit-sink-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         let sink = AuditSink::open_with_limits(&directory, 1024, 30, 1).unwrap();
@@ -514,7 +505,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn sink_serializes_each_append_once() {
-        let directory = writable_manifest_dir().join("target").join(format!(
+        let directory = d2b_core::test_support::scratch_root("audit-sink").join("target").join(format!(
             "d2b-audit-sink-serialization-{}",
             std::process::id()
         ));
@@ -538,8 +529,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn sink_rejects_an_invalid_predecessor_chain() {
-        let directory = writable_manifest_dir()
-            .join("target")
+        let directory = d2b_core::test_support::scratch_root("audit-sink").join("target")
             .join(format!("d2b-audit-chain-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         let sink = AuditSink::open_with_limits(&directory, 1024, 30, 8).unwrap();
@@ -564,7 +554,7 @@ mod tests {
             FailurePoint::DataSync,
             FailurePoint::ParentSync,
         ] {
-            let directory = writable_manifest_dir().join("target").join(format!(
+            let directory = d2b_core::test_support::scratch_root("audit-sink").join("target").join(format!(
                 "d2b-audit-sink-fault-{point:?}-{}",
                 std::process::id()
             ));
@@ -585,7 +575,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn startup_retention_rebuilds_chain_head_from_retained_segments() {
-        let directory = writable_manifest_dir().join("target").join(format!(
+        let directory = d2b_core::test_support::scratch_root("audit-sink").join("target").join(format!(
             "d2b-audit-startup-retention-{}",
             std::process::id()
         ));
@@ -604,8 +594,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn post_write_failure_rolls_back_chain_and_allows_retry() {
         for point in [FailurePoint::DataSync, FailurePoint::ParentSync] {
-            let directory = writable_manifest_dir()
-                .join("target")
+            let directory = d2b_core::test_support::scratch_root("audit-sink").join("target")
                 .join(format!("d2b-audit-retry-{point:?}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&directory);
             let injector = FailureInjector::default();
@@ -628,7 +617,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn durable_append_is_success_even_when_automatic_retention_degrades() {
-        let directory = writable_manifest_dir().join("target").join(format!(
+        let directory = d2b_core::test_support::scratch_root("audit-sink").join("target").join(format!(
             "d2b-audit-retention-success-{}",
             std::process::id()
         ));
@@ -664,8 +653,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn restart_refuses_a_corrupt_hash_chain() {
-        let directory = writable_manifest_dir()
-            .join("target")
+        let directory = d2b_core::test_support::scratch_root("audit-sink").join("target")
             .join(format!("d2b-audit-corrupt-chain-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         let sink = AuditSink::open(&directory).unwrap();
@@ -703,8 +691,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn replay_after_append_before_clear_is_idempotent() {
-        let directory = writable_manifest_dir()
-            .join("target")
+        let directory = d2b_core::test_support::scratch_root("audit-sink").join("target")
             .join(format!("d2b-audit-idempotent-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         let sink = AuditSink::open(&directory).unwrap();
@@ -759,8 +746,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn sink_uses_one_lifetime_writer_lock_per_directory() {
-        let directory = writable_manifest_dir()
-            .join("target")
+        let directory = d2b_core::test_support::scratch_root("audit-sink").join("target")
             .join(format!("d2b-audit-single-writer-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
         let sink = AuditSink::open(&directory).unwrap();
@@ -771,5 +757,53 @@ mod tests {
         drop(sink);
         assert!(AuditSink::open(&directory).is_ok());
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn standard_and_best_effort_appends_are_rate_limited_after_the_bucket_empties() {
+        let directory = d2b_core::test_support::scratch_root("audit-sink").join("target")
+            .join(format!("d2b-audit-sink-limited-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let sink = AuditSink::open_with_limits(&directory, 1024, 30, 1).unwrap();
+        let first = sample(genesis_hash());
+        assert_eq!(
+            sink.append(AuditWriteClass::Standard, &first).unwrap(),
+            AuditWriteOutcome::Written
+        );
+        let second = sample(first.record_hash().clone());
+        assert_eq!(
+            sink.append(AuditWriteClass::Standard, &second).unwrap(),
+            AuditWriteOutcome::RateLimited
+        );
+        assert_eq!(
+            sink.append(AuditWriteClass::BestEffort, &second).unwrap(),
+            AuditWriteOutcome::RateLimited
+        );
+        assert_eq!(sink.chain_head().unwrap(), *first.record_hash());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn standard_and_best_effort_appends_drop_when_the_segment_is_unavailable() {
+        for class in [AuditWriteClass::Standard, AuditWriteClass::BestEffort] {
+            let directory = d2b_core::test_support::scratch_root("audit-sink").join("target")
+                .join(format!("d2b-audit-sink-dropped-{class:?}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&directory);
+            let injector = FailureInjector::default();
+            injector.fail_next(FailurePoint::Append);
+            let sink = AuditSink::open_with_injector(&directory, 1024, 30, 8, injector).unwrap();
+            let record = sample(genesis_hash());
+            assert_eq!(
+                sink.append(class, &record).unwrap(),
+                AuditWriteOutcome::DroppedUnavailable
+            );
+            assert_eq!(
+                sink.append(AuditWriteClass::Privileged, &record).unwrap(),
+                AuditWriteOutcome::Written
+            );
+            let _ = std::fs::remove_dir_all(directory);
+        }
     }
 }

@@ -91,19 +91,6 @@ mod tests {
         resource_envelope,
     };
 
-    #[test]
-    fn the_pair_names_the_exact_frozen_resource_types() {
-        let pair = contract();
-        assert_eq!(
-            pair.service().resource_type().as_str(),
-            SECURITY_KEY_SERVICE_RESOURCE_TYPE
-        );
-        assert_eq!(
-            pair.binding().resource_type().as_str(),
-            SECURITY_KEY_BINDING_RESOURCE_TYPE
-        );
-    }
-
     /// Canonical minimal base acceptance without `spec.provider`.
     #[test]
     fn the_canonical_minimal_base_is_accepted_without_a_provider_extension() {

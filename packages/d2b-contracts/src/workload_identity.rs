@@ -206,47 +206,6 @@ mod tests {
     }
 
     #[test]
-    fn workload_target_parse_canonical() {
-        let t = WorkloadTarget::parse("builder.dev.d2b").unwrap();
-        assert_eq!(t.to_canonical(), "builder.dev.d2b");
-        assert_eq!(t.workload.as_str(), "builder");
-    }
-
-    #[test]
-    fn workload_target_parse_nested_realm() {
-        let t = WorkloadTarget::parse("api.payments.work.d2b").unwrap();
-        assert_eq!(t.to_canonical(), "api.payments.work.d2b");
-        assert_eq!(t.workload.as_str(), "api");
-        assert_eq!(t.realm.target_form(), "payments.work");
-    }
-
-    #[test]
-    fn workload_target_rejects_no_dot() {
-        assert!(WorkloadTarget::parse("builder").is_err());
-    }
-
-    #[test]
-    fn workload_target_rejects_missing_d2b_suffix() {
-        assert!(WorkloadTarget::parse("builder.dev.org").is_err());
-    }
-
-    #[test]
-    fn workload_identity_new_has_none_optional_fields() {
-        let id = make_identity("demo", "work");
-        assert!(id.workload_name.is_none());
-        assert!(id.legacy_vm_name.is_none());
-        assert!(id.runtime_kind.is_none());
-        assert!(id.provider_id.is_none());
-        assert_eq!(id.canonical_target.to_canonical(), "demo.work.d2b");
-    }
-
-    #[test]
-    fn workload_identity_target_accessor() {
-        let id = make_identity("api", "dev");
-        assert_eq!(id.target().to_canonical(), "api.dev.d2b");
-    }
-
-    #[test]
     fn workload_identity_round_trips_minimal() {
         let id = make_identity("ci", "build");
         let json = serde_json::to_string(&id).unwrap();

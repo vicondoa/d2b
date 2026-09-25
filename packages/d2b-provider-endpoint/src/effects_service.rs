@@ -348,4 +348,24 @@ mod tests {
         assert!(!service.socket_present(&producer, "virtiofsd").await);
         assert_eq!(fake.call_order(), ["socket-present"]);
     }
+
+    /// An evidence purpose whose row never reports Ready exhausts the bounded
+    /// realize budget and fails retryably (R13), never hanging the caller.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(start_paused = true)]
+    async fn evidence_ensure_times_out_within_the_realize_budget() {
+        let fake = FakeSocketEffects::new();
+        let service = EndpointEffectsService::new(fake.facet_set());
+        let producer = ResourceRef::parse("Process/acceptance-guest-vmm").expect("producer");
+        let started = tokio::time::Instant::now();
+        let error = service
+            .ensure_socket(&producer, "ch-api")
+            .await
+            .expect_err("budget exhausted");
+        assert!(error.contains("not realized within its realize budget"));
+        assert!(
+            started.elapsed() >= SOCKET_REALIZE_BUDGET,
+            "the deadline is the budget, not an early return"
+        );
+    }
 }

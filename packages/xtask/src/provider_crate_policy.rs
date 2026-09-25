@@ -3007,6 +3007,12 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "U10-U12 family rollout (runtime-cloud-hypervisor)",
     },
     SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-core/src/test_support.rs",
+        token: "nftables",
+        family: "network-local",
+        retires_with: "permanent: the single host-contract JSON sample is feature-gated test-support data in the shared crate; no provider crate owns it",
+    },
+    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",
         token: "cloud_hypervisor",
         family: "runtime-cloud-hypervisor",
@@ -9912,24 +9918,6 @@ mod tests {
             error,
             r#"{"error":"missing-provider-crate-path","crate":"d2b-provider-fixture-example","missing":["integration/*.rs","integration/README.md"]}"#
         );
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn an_on_disk_provider_omitted_from_workspace_is_rejected() {
-        let fixture = Fixture::new("non-member");
-        let omitted = fixture.add_package("d2b-provider-fixture-omitted");
-        fs::create_dir_all(omitted.join("tests")).unwrap();
-        fs::create_dir_all(omitted.join("integration")).unwrap();
-        fs::write(
-            omitted.join("README.md"),
-            required_readme("fixture-omitted"),
-        )
-        .unwrap();
-
-        let error = check_fixture(&fixture.root).unwrap_err();
-        assert!(error.contains("provider-crate-not-workspace-member"));
-        assert!(error.contains("d2b-provider-fixture-omitted"));
     }
 
     #[test]

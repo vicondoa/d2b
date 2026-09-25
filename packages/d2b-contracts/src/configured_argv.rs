@@ -92,4 +92,25 @@ mod tests {
         assert!(ConfiguredArgv::new(vec!["x\0y".to_owned()]).is_err());
         assert!(ConfiguredArgv::new(vec!["x".repeat(MAX_CONFIGURED_ARG_LEN + 1)]).is_err());
     }
+
+    #[test]
+    fn configured_argv_enforces_the_argc_cap() {
+        let at_cap = vec!["x".to_owned(); MAX_CONFIGURED_ARGC];
+        assert!(ConfiguredArgv::new(at_cap).is_ok());
+        let over_cap = vec!["x".to_owned(); MAX_CONFIGURED_ARGC + 1];
+        let error = ConfiguredArgv::new(over_cap).expect_err("argc cap+1 is refused");
+        assert!(error.contains(&format!("{MAX_CONFIGURED_ARGC} arguments")));
+    }
+
+    #[test]
+    fn configured_argv_enforces_the_total_byte_cap() {
+        // Four max-length arguments sit exactly at the 16 KiB total cap.
+        let at_cap = vec!["x".repeat(MAX_CONFIGURED_ARG_LEN); 4];
+        assert!(ConfiguredArgv::new(at_cap).is_ok());
+        // A fifth max-length argument crosses it even though every
+        // individual argument is within its own length cap.
+        let over_cap = vec!["x".repeat(MAX_CONFIGURED_ARG_LEN); 5];
+        let error = ConfiguredArgv::new(over_cap).expect_err("total byte cap+1 is refused");
+        assert!(error.contains(&format!("{MAX_CONFIGURED_ARG_BYTES} bytes")));
+    }
 }

@@ -434,6 +434,26 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn anchored_read_reports_absent_and_not_regular_for_missing_and_directory_targets() {
+        let root = tempdir().expect("temporary root");
+        fs::create_dir_all(root.path().join("share")).expect("share directory");
+        let anchor = LinuxAnchoredDir::open(root.path()).expect("anchor");
+        assert_eq!(
+            anchor
+                .open_readable(LayoutPath::new("share/missing"))
+                .unwrap_err(),
+            LayoutError::Absent
+        );
+        assert_eq!(
+            anchor
+                .open_readable(LayoutPath::new("share"))
+                .unwrap_err(),
+            LayoutError::NotRegular
+        );
+    }
+
+    #[test]
     fn anchored_entries_are_relative_to_the_open_directory() {
         let root = tempdir().expect("temporary root");
         fs::create_dir(root.path().join("bin")).expect("bin directory");

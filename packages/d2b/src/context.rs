@@ -3050,6 +3050,7 @@ mod tests {
     #[cfg(test)]
     mod transport_contract_tests {
         use super::{MAX_FRAME_BYTES, test_socket_pair};
+        use crate::context::CliSocket;
         use crate::runtime::block_on;
         use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
         use std::{
@@ -3128,6 +3129,46 @@ mod tests {
             assert!(
                 started.elapsed() < Duration::from_secs(30),
                 "the 100ms receive budget must bound the wait, took {:?}",
+                started.elapsed()
+            );
+            drop(server);
+        }
+
+        #[test]
+        fn cli_socket_reports_a_stalled_send_as_a_bounded_deadline() {
+            let (client_fd, server) = rustix::net::socketpair(
+                rustix::net::AddressFamily::UNIX,
+                rustix::net::SocketType::SEQPACKET,
+                rustix::net::SocketFlags::NONBLOCK | rustix::net::SocketFlags::CLOEXEC,
+                None,
+            )
+            .expect("create seqpacket pair");
+            // Frame sized to half the send buffer: each datagram fits the
+            // socket, so the peer's silence is what stalls the send once the
+            // buffer fills (an oversized datagram would fail with EMSGSIZE
+            // instead of exercising the deadline path). The buffer is pinned
+            // explicitly so the test does not depend on the host's default.
+            rustix::net::sockopt::set_socket_send_buffer_size(&client_fd, 64 * 1024)
+                .expect("pin send buffer");
+            let frame_size = 32 * 1024;
+            let socket = block_on(async move { CliSocket::from_owned_fd(client_fd) })
+                .expect("client socket registers with the runtime reactor");
+            let started = Instant::now();
+            let payload = vec![0xa5_u8; frame_size];
+            let error = loop {
+                match block_on(socket.send_frame(&payload, Duration::from_millis(100))) {
+                    Ok(()) => continue,
+                    Err(error) => break error,
+                }
+            };
+            assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+            assert!(
+                error.to_string().contains("send"),
+                "the deadline must name the send path: {error}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "the 100ms send budget must bound the wait, took {:?}",
                 started.elapsed()
             );
             drop(server);

@@ -1571,4 +1571,24 @@ mod tests {
             .expect("saturated launch succeeds");
         assert_eq!(block_on(supervisor.probe(&probe_ticket)).unwrap(), None);
     }
+
+    /// The other documented "never produced a result" probe case: a probe
+    /// whose blocking call overruns its deadline. Like a saturated pool it
+    /// must surface as the transient `LaunchFailed` the driver retries -
+    /// never as the terminal `DeadlineExceeded` the minijail consumer
+    /// applies to a probe that *ran* and found no candidate.
+    #[test]
+    fn a_deadline_overrun_probe_is_transient_and_never_quarantined() {
+        assert_eq!(
+            map_probe_error(ProcessEffectError::DeadlineExceeded),
+            ProcessConformanceError::LaunchFailed
+        );
+        // Every other probe failure keeps the generic projection: an
+        // identity drift stays adoption-ambiguous, never folded into the
+        // transient code.
+        assert_eq!(
+            map_probe_error(ProcessEffectError::IdentityChanged),
+            ProcessConformanceError::AdoptionAmbiguous
+        );
+    }
 }

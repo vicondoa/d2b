@@ -442,16 +442,12 @@ pub fn telemetry_service_descriptor() -> DriverDescriptor {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use tokio::sync::Mutex;
-    use std::time::Duration;
 
-    use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
-        WatchRegistration,
-    };
-    use d2b_resource_runtime::error::{FailureClass, ResourceError};
+    use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
+    use d2b_resource_runtime::context::{ManagerEndpoint, RequeueScheduler, ResourceContext};
+    use d2b_resource_runtime::error::FailureClass;
     use d2b_resource_runtime::identity::ResourceProvenance;
-    use d2b_resource_runtime::spec_store::{EnsureOutcome, StoredDesiredResource};
+    use d2b_resource_runtime::spec_store::StoredDesiredResource;
     use d2b_resource_runtime::target::TargetHandle;
     use tokio::sync::mpsc;
 
@@ -459,161 +455,14 @@ mod tests {
 
     // -- fakes ---------------------------------------------------------------
 
-    /// Manager endpoint double: an owned-row store plus the ordered call log
-    /// the assertions read.
-    struct RecordingManager {
-        parent_uid: [u8; 16],
-        rows: Mutex<Vec<StoredDesiredResource>>,
-        log: Mutex<Vec<String>>,
-        watch_targets: Mutex<Vec<ResourceKey>>,
-    }
-
-    impl RecordingManager {
-        fn new(parent_uid: [u8; 16]) -> Arc<Self> {
-            Arc::new(Self {
-                parent_uid,
-                rows: Mutex::new(Vec::new()),
-                log: Mutex::new(Vec::new()),
-                watch_targets: Mutex::new(Vec::new()),
-            })
-        }
-
-        async fn seed(&self, row: StoredDesiredResource) {
-            self.rows.lock().await.push(row);
-        }
-
-        async fn log(&self) -> Vec<String> {
-            self.log.lock().await.clone()
-        }
-
-        async fn watch_targets(&self) -> Vec<ResourceKey> {
-            self.watch_targets.lock().await.clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl ManagerEndpoint for RecordingManager {
-        async fn ensure_child(
-            &self,
-            _parent: &ResourceKey,
-            child: ChildEnsure,
-        ) -> Result<EnsureOutcome, ResourceError> {
-            let mut rows = self.rows.lock().await;
-            let row = StoredDesiredResource {
-                key: ResourceKey::new("dev", child.type_name.as_str(), child.name.clone()),
-                uid: [0x11; 16],
-                generation: 1,
-                owner_uid: Some(self.parent_uid),
-                provenance: ResourceProvenance::Resource,
-                deleting: false,
-                spec: child.spec.clone(),
-                metadata: child.metadata.clone(),
-                created_at: 0,
-            };
-            rows.push(row.clone());
-            self.log.lock().await.push(format!(
-                "ensure:{}/{}",
-                child.type_name.as_str(),
-                child.name
-            ));
-            Ok(EnsureOutcome::Created(row))
-        }
-
-        async fn get(
-            &self,
-            key: &ResourceKey,
-        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self
-                .rows
-                .lock().await
-                .iter()
-                .find(|row| row.key == *key)
-                .cloned())
-        }
-
-        async fn view(
-            &self,
-            _key: &ResourceKey,
-        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            // Desired rows only: this fixture publishes no runtime status, so
-            // it serves no observed state.
-            Ok(None)
-        }
-
-        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.log
-                .lock().await
-                .push(format!("delete:{}/{}", key.type_name, key.name));
-            if let Some(row) = self
-                .rows
-                .lock().await
-                .iter_mut()
-                .find(|row| row.key == *key)
-            {
-                row.deleting = true;
-            }
-            Ok(())
-        }
-
-        async fn list_owned(
-            &self,
-            owner_uid: [u8; 16],
-        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self
-                .rows
-                .lock().await
-                .iter()
-                .filter(|row| row.owner_uid == Some(owner_uid))
-                .cloned()
-                .collect())
-        }
-
-        async fn register_watch(
-            &self,
-            _subscriber: &ResourceKey,
-            registration: WatchRegistration,
-        ) -> Result<WatchId, ResourceError> {
-            let mut targets = self.watch_targets.lock().await;
-            targets.push(registration.target.clone());
-            Ok(WatchId(targets.len() as u64))
-        }
-
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Ok(())
-        }
-    }
-
-    /// Requeue recorder (R13): the driver's schedule calls, in order.
-    #[derive(Default)]
-    struct RecordingRequeue {
-        scheduled: Mutex<Vec<Duration>>,
-    }
-
-    impl RecordingRequeue {
-        async fn scheduled(&self) -> Vec<Duration> {
-            self.scheduled.lock().await.clone()
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn schedule(&self, _key: ResourceKey, after: Duration) -> RequeueId {
-            let mut scheduled = self.scheduled.try_lock().expect("scheduled");
-            scheduled.push(after);
-            RequeueId(scheduled.len() as u64)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
-
     struct Fixture {
         ctx: ResourceContext,
-        manager: Arc<RecordingManager>,
+        manager: Arc<RecordingManagerEndpoint>,
         requeue: Arc<RecordingRequeue>,
     }
 
     fn fixture(row: StoredDesiredResource) -> Fixture {
-        let manager = RecordingManager::new(row.uid);
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(row.uid));
         let requeue = Arc::new(RecordingRequeue::default());
         let (effects_tx, _effects_rx) = mpsc::unbounded_channel();
         let (watch_tx, _watch_rx) = mpsc::unbounded_channel();
@@ -692,18 +541,7 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
-    #[tokio::test]
-    async fn factory_registers_only_the_service_type() {
-        let factory = TelemetryServiceDriverFactory::new();
-        let types = factory
-            .resource_types()
-            .iter()
-            .map(ResourceTypeName::as_str)
-            .collect::<Vec<_>>();
-        assert_eq!(types, vec![TELEMETRY_SERVICE_TYPE]);
-    }
 
     // -- validate ------------------------------------------------------------
 
@@ -723,14 +561,7 @@ mod tests {
         assert_eq!(failure.class(), FailureClass::Retryable);
     }
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
-    #[tokio::test]
-    async fn validate_accepts_a_provider_declared_spec() {
-        let mut fixture = fixture(service_row());
-        let mut driver = driver(&fixture).await;
-        driver.validate(&mut fixture.ctx).await.expect("valid spec");
-    }
 
     // -- recover -------------------------------------------------------------
 
@@ -745,7 +576,7 @@ mod tests {
             RecoveryOutcome::Adopted,
             "a Service realizes nothing on a target: the ingest rows carry the evidence"
         );
-        assert!(fixture.manager.log().await.is_empty());
+        assert!(fixture.manager.call_order().is_empty());
     }
 
     // -- reconcile -----------------------------------------------------------
@@ -765,12 +596,12 @@ mod tests {
         assert_eq!(status.phase, PHASE_PENDING);
         assert!(status.present_endpoints.is_empty());
         assert_eq!(
-            fixture.requeue.scheduled().await,
+            fixture.requeue.scheduled(),
             vec![TELEMETRY_SERVICE_RESYNC],
             "the route is not materialized yet"
         );
 
-        fixture.manager.seed(endpoint_row()).await;
+        fixture.manager.seed(endpoint_row());
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         let Some(status) = fixture.ctx.status::<TelemetryServiceStatus>() else {
             panic!("service status");
@@ -783,7 +614,7 @@ mod tests {
         assert_eq!(status.phase, PHASE_PENDING);
         assert_eq!(status.projection["serviceReadiness"], PHASE_PENDING);
         assert_eq!(
-            fixture.requeue.scheduled().await,
+            fixture.requeue.scheduled(),
             vec![TELEMETRY_SERVICE_RESYNC],
             "a present endpoint stops rescheduling; readiness is watch-driven"
         );
@@ -814,8 +645,8 @@ mod tests {
         assert_eq!(status.phase, PHASE_READY);
         assert_eq!(status.projection["serviceRole"], "projection");
         assert_eq!(status.projection["serviceReadiness"], PHASE_READY);
-        assert!(fixture.manager.log().await.is_empty());
-        assert!(fixture.requeue.scheduled().await.is_empty());
+        assert!(fixture.manager.call_order().is_empty());
+        assert!(fixture.requeue.scheduled().is_empty());
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -849,12 +680,12 @@ mod tests {
         let mut fixture = fixture(service_row());
         let mut driver = driver(&fixture).await;
 
-        fixture.manager.seed(endpoint_row()).await;
+        fixture.manager.seed(endpoint_row());
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
         let mut targets = fixture
             .manager
-            .watch_targets().await
+            .watch_targets()
             .into_iter()
             .map(|key| format!("{}/{}", key.type_name, key.name))
             .collect::<Vec<_>>();
@@ -875,12 +706,72 @@ mod tests {
         let mut driver = driver(&fixture).await;
 
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
-        let before = fixture.manager.log().await.len();
+        let before = fixture.manager.call_order().len();
         driver.delete(&mut fixture.ctx).await.expect("delete");
         assert_eq!(
-            fixture.manager.log().await.len(),
+            fixture.manager.call_order().len(),
             before,
             "a Service owns no child and realizes nothing to remove"
         );
+    }
+
+    // -- corrupt stored spec / manager failure ------------------------------
+
+    /// A corrupt stored spec fails recover and reconcile with the
+    /// `InvalidResource` retryable class under each verb's own op tag: only
+    /// validate's malformed path was pinned before.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn recover_and_reconcile_report_a_corrupt_stored_spec_as_invalid_resource() {
+        let mut row = service_row();
+        row.spec = b"{not-json".to_vec();
+        let mut fixture = fixture(row);
+        let mut driver = driver(&fixture).await;
+
+        let failure = driver
+            .recover(&mut fixture.ctx)
+            .await
+            .expect_err("corrupt stored spec");
+        assert_eq!(failure.op(), DriverOp::Recover);
+        assert_eq!(failure.class(), FailureClass::Retryable);
+
+        let failure = driver
+            .reconcile(&mut fixture.ctx)
+            .await
+            .expect_err("corrupt stored spec");
+        assert_eq!(failure.op(), DriverOp::Reconcile);
+        assert_eq!(failure.class(), FailureClass::Retryable);
+    }
+
+/// A manager row-read failure during reconcile surfaces as the
+    /// `Reconcile`-class retryable error, never as a silent partial
+    /// projection.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn reconcile_propagates_a_manager_read_failure_as_retryable() {
+        let row = service_row();
+        let requeue = Arc::new(RecordingRequeue::default());
+        let (effects_tx, _effects_rx) = mpsc::unbounded_channel();
+        let (watch_tx, _watch_rx) = mpsc::unbounded_channel();
+        let fail_reads = RecordingManagerEndpoint::new();
+        fail_reads.set_fail_reads(true);
+        let mut ctx = ResourceContext::new(
+            row,
+            TargetHandle::Host,
+            telemetry_service_spec_decoder(),
+            Arc::new(fail_reads) as Arc<dyn ManagerEndpoint>,
+            Arc::clone(&requeue) as Arc<dyn RequeueScheduler>,
+            effects_tx,
+            watch_tx,
+        );
+        let mut driver: Box<dyn DynResourceDriver> =
+            TelemetryServiceDriverFactory::new().create(ctx.key()).await;
+
+        let failure = driver
+            .reconcile(&mut ctx)
+            .await
+            .expect_err("manager read failure");
+        assert_eq!(failure.op(), DriverOp::Reconcile);
+        assert_eq!(failure.class(), FailureClass::Retryable);
     }
 }

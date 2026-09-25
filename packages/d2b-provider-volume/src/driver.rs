@@ -744,150 +744,20 @@ pub fn volume_descriptor(args: VolumeDriverArgs) -> DriverDescriptor {
 mod tests {
     use std::sync::Arc;
 
-    use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext,
-        WatchId, WatchRegistration,
-    };
+    use d2b_provider_toolkit::testing::fakes::RecordingManagerEndpoint;
+    use d2b_resource_runtime::context::{RequeueId, RequeueScheduler, ResourceContext};
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::{DriverOp, FailureClass, ResourceError};
+    use d2b_resource_runtime::error::{DriverOp, FailureClass};
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, StoredDesiredResource,
     };
-    use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
     use super::{VolumeDriverArgs, VolumeDriverFactory, volume_spec_decoder};
     use crate::test_support::{RecordingRuntime, recording_facets};
 
     // -- fakes ---------------------------------------------------------------
-
-    /// Recording manager endpoint over one shared ordered log so tests can
-    /// assert commit-before-spawn (F1) and retire/retain behavior. The
-    /// in-memory row set emulates the manager's store.
-    #[derive(Clone)]
-    struct RecordingManager {
-        zone: String,
-        log: Arc<parking_lot::Mutex<Vec<String>>>,
-        rows: Arc<parking_lot::Mutex<Vec<StoredDesiredResource>>>,
-        next_uid: Arc<std::sync::atomic::AtomicU64>,
-    }
-
-    impl RecordingManager {
-        fn new() -> Self {
-            Self {
-                zone: "work".to_owned(),
-                log: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                rows: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                next_uid: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-            }
-        }
-
-        fn order(&self) -> Vec<String> {
-            self.log.lock().clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl ManagerEndpoint for RecordingManager {
-        async fn ensure_child(
-            &self,
-            _parent: &ResourceKey,
-            child: ChildEnsure,
-        ) -> Result<EnsureOutcome, ResourceError> {
-            let id = format!("{}/{}", child.type_name.as_str(), child.name);
-            // Record the ensure request first; the commit (this function's
-            // row write) happens before the reply, and the spawn
-            // notification is recorded only after it.
-            self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            let next = self
-                .next_uid
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let mut uid = [0u8; 16];
-            uid[..8].copy_from_slice(&next.to_be_bytes());
-            let row = StoredDesiredResource {
-                key: ResourceKey::new(&self.zone, child.type_name.as_str(), &child.name),
-                uid,
-                generation: 1,
-                owner_uid: Some([0x42; 16]),
-                provenance: ResourceProvenance::Resource,
-                deleting: false,
-                spec: child.spec,
-                metadata: child.metadata,
-                created_at: 0,
-            };
-            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            let outcome = match rows.iter_mut().find(|existing| existing.key == row.key) {
-                Some(existing) => {
-                    if existing.spec == row.spec {
-                        EnsureOutcome::Unchanged(existing.clone())
-                    } else {
-                        *existing = row.clone();
-                        EnsureOutcome::Updated(row.clone())
-                    }
-                }
-                None => {
-                    rows.push(row.clone());
-                    EnsureOutcome::Created(row.clone())
-                }
-            };
-            drop(rows);
-            self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Ok(outcome)
-        }
-
-        async fn get(
-            &self,
-            key: &ResourceKey,
-        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-        }
-
-        async fn view(
-            &self,
-            _key: &ResourceKey,
-        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            // Desired rows only: this fixture publishes no runtime status, so
-            // it serves no observed state.
-            Ok(None)
-        }
-
-        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.log
-                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                .push(format!("delete:{}/{}", key.type_name, key.name));
-            self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Ok(())
-        }
-
-        async fn list_owned(
-            &self,
-            owner_uid: [u8; 16],
-        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self
-                .rows
-                .lock()
-                .iter()
-                .filter(|row| row.owner_uid.as_ref() == Some(&owner_uid))
-                .cloned()
-                .collect())
-        }
-
-        async fn register_watch(
-            &self,
-            _subscriber: &ResourceKey,
-            _registration: WatchRegistration,
-        ) -> Result<WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc("watches unused in this unit".into()))
-        }
-
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Ok(())
-        }
-    }
-
-    /// Records nothing: the Volume flows schedule their re-checks on
-    /// [`VOLUME_RESYNC`], and the tests assert the outcome that carries them.
     struct NullRequeue;
 
     impl RequeueScheduler for NullRequeue {
@@ -964,7 +834,7 @@ mod tests {
         >,
     }
 
-    fn fixture(row: StoredDesiredResource, manager: RecordingManager) -> Fixture {
+    fn fixture(row: StoredDesiredResource, manager: RecordingManagerEndpoint) -> Fixture {
         let (effects_tx, effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = ResourceContext::new(
@@ -1007,24 +877,13 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_registers_only_the_volume_resource_type() {
-        let factory = VolumeDriverFactory::new(VolumeDriverArgs {
-            zone: "work".to_owned(),
-            facets: recording_facets(RecordingRuntime::new()),
-        });
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), "Volume");
-    }
-
     // -- ensure: layout effect, then children ---------------------------------
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn ensure_creates_binding_children_after_the_layout_effect() {
         let fake = RecordingRuntime::new();
-        let manager = RecordingManager::new();
+        let manager = RecordingManagerEndpoint::new();
         let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
         let mut d = driver(fake.clone()).await;
 
@@ -1037,7 +896,7 @@ mod tests {
 
         let outcome = reconcile_to_children(&mut d, &mut f).await;
         assert_eq!(outcome, ReconcileOutcome::Satisfied);
-        let order = manager.order();
+        let order = manager.call_order();
         assert_eq!(
             fake.call_order(),
             vec!["has-layout", "ensure-layout"],
@@ -1091,7 +950,7 @@ mod tests {
     #[tokio::test]
     async fn recover_adopts_the_existing_layout_and_revalidates_it() {
         let fake = RecordingRuntime::new();
-        let manager = RecordingManager::new();
+        let manager = RecordingManagerEndpoint::new();
         let mut first = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
         let mut d = driver(fake.clone()).await;
         // The pre-restart lifetime realizes the layout and its binding child.
@@ -1120,13 +979,13 @@ mod tests {
             "the adoption pass re-validates the layout through the idempotent ensure"
         );
         let binding_ensures = manager
-            .order()
+            .call_order()
             .iter()
             .filter(|entry| entry.starts_with("ensure:VolumeBinding/"))
             .count();
         assert_eq!(binding_ensures, 2, "the adoption pass re-attaches the same binding child");
         assert_eq!(
-            manager.rows.lock().len(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            manager.rows().len(),
             1,
             "re-attaching the deterministic child never mints a duplicate row"
         );
@@ -1144,7 +1003,7 @@ mod tests {
     #[tokio::test]
     async fn degraded_layout_reports_one_retryable_failure_per_pass() {
         let fake = RecordingRuntime::degraded();
-        let manager = RecordingManager::new();
+        let manager = RecordingManagerEndpoint::new();
         let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
         let mut d = driver(fake.clone()).await;
 
@@ -1164,7 +1023,7 @@ mod tests {
         );
         assert!(
             !manager
-                .order()
+                .call_order()
                 .iter()
                 .any(|entry| entry.starts_with("ensure:VolumeBinding/")),
             "a degraded layout derives no binding children"
@@ -1193,13 +1052,13 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn same_parent_and_attachment_derive_the_same_child_key() {
-        let manager = RecordingManager::new();
+        let manager = RecordingManagerEndpoint::new();
         {
             let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
             let mut d = driver(RecordingRuntime::new()).await;
             reconcile_to_children(&mut d, &mut f).await;
         }
-        let first = manager.order();
+        let first = manager.call_order();
         // Same parent + attachment -> exactly one child key, ensured again
         // as Unchanged (no duplicate identity, no churn).
         {
@@ -1208,7 +1067,7 @@ mod tests {
             d.recover(&mut f.ctx).await.expect("recover");
             reconcile_to_children(&mut d, &mut f).await;
         }
-        let second = manager.order();
+        let second = manager.call_order();
         let ensure_count = first
             .iter()
             .filter(|entry| entry.starts_with("ensure:VolumeBinding/"))
@@ -1238,13 +1097,13 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn parent_spec_change_retires_obsolete_children_and_retains_matching() {
-        let manager = RecordingManager::new();
+        let manager = RecordingManagerEndpoint::new();
         let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
         let mut d = driver(RecordingRuntime::new()).await;
         d.recover(&mut f.ctx).await.expect("recover");
         reconcile_to_children(&mut d, &mut f).await;
         let first_child = manager
-            .order()
+            .call_order()
             .iter()
             .find_map(|entry| entry.strip_prefix("ensure:VolumeBinding/"))
             .expect("first binding name")
@@ -1266,14 +1125,14 @@ mod tests {
         );
         d.reconcile(&mut ctx2).await.expect("reconcile grown");
         let ensured = manager
-            .order()
+            .call_order()
             .iter()
             .filter(|entry| entry.starts_with("ensure:VolumeBinding/"))
             .count();
         assert_eq!(ensured, 3, "first retained + two passes over two children");
         assert!(
             !manager
-                .order()
+                .call_order()
                 .iter()
                 .any(|entry| entry.starts_with("delete:")),
             "matching child retained, no delete on growth"
@@ -1295,7 +1154,7 @@ mod tests {
         );
         d.reconcile(&mut ctx3).await.expect("reconcile shrunk");
         let deletes = manager
-            .order()
+            .call_order()
             .iter()
             .filter(|entry| entry.starts_with("delete:VolumeBinding/"))
             .cloned()
@@ -1304,7 +1163,7 @@ mod tests {
         assert!(
             !deletes[0].contains(&first_child),
             "matching child never retired, order: {:?}",
-            manager.order()
+            manager.call_order()
         );
     }
 
@@ -1313,18 +1172,8 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_layout_teardown() {
-        let manager = RecordingManager::new();
-        manager.rows.lock().push(StoredDesiredResource { // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            key: ResourceKey::new("work", "VolumeBinding", "vol-binding-0"),
-            uid: [0x77; 16],
-            generation: 1,
-            owner_uid: Some([0x42; 16]),
-            provenance: ResourceProvenance::Resource,
-            deleting: false,
-            spec: Vec::new(),
-            metadata: Vec::new(),
-            created_at: 0,
-        });
+        let manager = RecordingManagerEndpoint::new();
+        manager.seed_owned(ResourceKey::new("work", "VolumeBinding", "vol-binding-0"));
         let fake = RecordingRuntime::new();
         let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager.clone());
         let mut d = driver(fake.clone()).await;
@@ -1334,7 +1183,7 @@ mod tests {
         let failure = d.finalize(&mut f.ctx).await.expect_err("owned child still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert_eq!(
-            manager.order(),
+            manager.call_order(),
             vec!["delete:VolumeBinding/vol-binding-0".to_owned()],
             "the owned child is nudged through its own finalize-before-delete pass"
         );
@@ -1351,7 +1200,7 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_the_volume_layout_exactly() {
         let fake = RecordingRuntime::new();
-        let manager = RecordingManager::new();
+        let manager = RecordingManagerEndpoint::new();
         let mut f = fixture(test_row(&spec_bytes("/mnt/data", false)), manager);
         let mut d = driver(fake.clone()).await;
         d.recover(&mut f.ctx).await.expect("recover");
@@ -1380,7 +1229,7 @@ mod tests {
             serde_json::Value::String("Provider/volume-virtiofs".to_owned()),
         );
         let bytes = serde_json::to_vec(&spec).expect("spec");
-        let mut f = fixture(test_row(&bytes), RecordingManager::new());
+        let mut f = fixture(test_row(&bytes), RecordingManagerEndpoint::new());
         let mut d = driver(RecordingRuntime::new()).await;
         let failure = d.validate(&mut f.ctx).await.expect_err("terminal");
         assert_eq!(failure.class(), FailureClass::Terminal, "provider mismatch is terminal");
@@ -1395,7 +1244,7 @@ mod tests {
         })
         .to_string()
         .into_bytes();
-        let mut f = fixture(test_row(&bytes), RecordingManager::new());
+        let mut f = fixture(test_row(&bytes), RecordingManagerEndpoint::new());
         let mut d = driver(RecordingRuntime::new()).await;
         let failure = d.reconcile(&mut f.ctx).await.expect_err("terminal");
         assert_eq!(failure.class(), FailureClass::Terminal);

@@ -475,13 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn stable_fingerprint_orders_by_capability_code() {
-        let a = CapabilitySet::from_caps([Capability::Logs, Capability::Exec]);
-        let b = CapabilitySet::from_caps([Capability::Exec, Capability::Logs]);
-        assert_eq!(a.stable_fingerprint(), b.stable_fingerprint());
-    }
-
-    #[test]
     fn capability_fingerprint_is_stable_and_order_independent() {
         let a = CapabilitySet::from_caps([Capability::Exec, Capability::Logs]);
         let b = CapabilitySet::from_caps([Capability::Logs, Capability::Exec]);

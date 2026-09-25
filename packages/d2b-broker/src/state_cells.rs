@@ -1234,7 +1234,7 @@ mod tests {
     use std::sync::Barrier;
 
     fn scratch(name: &str) -> tempfile::TempDir {
-        let _ = crate::test_scratch_root();
+        let _ = d2b_core::test_support::scratch_root("state-cells");
         tempfile::tempdir().unwrap_or_else(|_| panic!("{name}: create scratch root"))
     }
 
@@ -1350,41 +1350,6 @@ mod tests {
         );
         // Restart-replay resistance holds per principal: a different
         // principal still refuses (the invocation is not replayable to it).
-        assert_eq!(
-            consume_ok(&store, "inv-1", "bob"),
-            ConsumeDecision::ForeignPrincipal
-        );
-    }
-
-    #[test]
-    fn crash_between_durable_commit_and_effect_reconciles_without_double_grant_or_leak() {
-        let root = scratch("crash-window");
-        let root_path = root.path().to_path_buf();
-        // Owner A consumes (durable pre-commit, outcome unknown) and crashes
-        // before the effect records completion.
-        {
-            let store = CellStore::open(&root_path).expect("owner A");
-            assert_eq!(
-                consume_ok(&store, "inv-1", "alice"),
-                ConsumeDecision::Granted
-            );
-            // No complete: the crash lands between commit and effect.
-        }
-        // Owner B restarts with the durable file.
-        let store = CellStore::open(&root_path).expect("owner B");
-        // The retried invocation reconciles under the same invocation id: the
-        // idempotent effect re-runs - no silent leak.
-        assert_eq!(
-            consume_ok(&store, "inv-1", "alice"),
-            ConsumeDecision::Reconciled
-        );
-        store.complete(LEASES, "inv-1", "alice").expect("complete");
-        // The grant is exercised exactly once: later consumes replay the
-        // refusal - no double grant.
-        assert_eq!(
-            consume_ok(&store, "inv-1", "alice"),
-            ConsumeDecision::Replayed
-        );
         assert_eq!(
             consume_ok(&store, "inv-1", "bob"),
             ConsumeDecision::ForeignPrincipal

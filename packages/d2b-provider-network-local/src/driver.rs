@@ -393,20 +393,14 @@ pub fn declared_dependency_refs(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::time::Duration;
 
-    use async_trait::async_trait;
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use d2b_contracts_resource::v3::network::{Ipv4Cidr, NetworkSpec};
     use d2b_provider_toolkit::SharedProviderSpecEnvelope;
-    use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, WatchId, WatchRegistration,
-    };
-    use d2b_resource_runtime::error::ResourceError;
+    use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
     };
-    use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
     use serde_json::json;
 
@@ -415,104 +409,6 @@ mod tests {
         network_descriptor, network_spec,
     };
     use crate::test_support::{RecordingRuntime, recording_facets};
-
-    /// Ordered log the fixture writes, so ordering is one assertion.
-    type Log = Arc<tokio::sync::Mutex<Vec<String>>>;
-
-    struct RecordingManager {
-        log: Log,
-        owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
-    }
-
-    impl RecordingManager {
-        fn new(log: Log) -> Arc<Self> {
-            Arc::new(Self {
-                log,
-                owned: tokio::sync::Mutex::new(Vec::new()),
-            })
-        }
-    }
-
-    #[async_trait]
-    impl ManagerEndpoint for RecordingManager {
-        async fn ensure_child(
-            &self,
-            _parent: &ResourceKey,
-            child: ChildEnsure,
-        ) -> Result<EnsureOutcome, ResourceError> {
-            self.log
-                .lock()
-                .await
-                .push(format!("ensure:{}/{}", child.type_name.as_str(), child.name));
-            Ok(EnsureOutcome::Created(test_row(
-                child.type_name.as_str(),
-                &child.name,
-            )))
-        }
-
-        async fn get(
-            &self,
-            key: &ResourceKey,
-        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self
-                .owned
-                .lock()
-                .await
-                .iter()
-                .find(|row| row.key == *key)
-                .cloned())
-        }
-
-        async fn view(
-            &self,
-            _key: &ResourceKey,
-        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            Ok(None)
-        }
-
-        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.log
-                .lock()
-                .await
-                .push(format!("delete:{}/{}", key.type_name, key.name));
-            Ok(())
-        }
-
-        async fn list_owned(
-            &self,
-            _owner_uid: [u8; 16],
-        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self.owned.lock().await.clone())
-        }
-
-        async fn register_watch(
-            &self,
-            _subscriber: &ResourceKey,
-            _registration: WatchRegistration,
-        ) -> Result<WatchId, ResourceError> {
-            Ok(WatchId(1))
-        }
-
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Ok(())
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingRequeue {
-        scheduled: parking_lot::Mutex<Vec<RequeueId>>,
-    }
-
-impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, _key: ResourceKey, _after: Duration) -> RequeueId {
-            let mut scheduled = self.scheduled.lock();
-            let id = RequeueId(scheduled.len() as u64 + 1);
-            scheduled.push(id);
-            id
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
 
     fn test_row(type_name: &str, name: &str) -> StoredDesiredResource {
         StoredDesiredResource {
@@ -556,7 +452,7 @@ impl RequeueScheduler for RecordingRequeue {
     fn context(
         descriptor: &d2b_resource_types::DriverDescriptor,
         spec: serde_json::Value,
-        manager: Arc<RecordingManager>,
+        manager: Arc<RecordingManagerEndpoint>,
     ) -> d2b_resource_runtime::context::ResourceContext {
         let mut row = test_row(NETWORK_TYPE_NAME, "net-main");
         row.spec = serde_json::to_vec(&spec).expect("spec");
@@ -605,14 +501,13 @@ impl RequeueScheduler for RecordingRequeue {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn reconcile_commits_the_declared_children_before_the_effect() {
-        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let effects = Arc::new(RecordingRuntime::default());
         let descriptor = descriptor(Arc::clone(&effects));
-        let manager = RecordingManager::new(Arc::clone(&log));
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_zone("dev"));
         let mut ctx = context(
             &descriptor,
             network_spec_value(NETWORK_PROVIDER_REF),
-            manager,
+            Arc::clone(&manager),
         );
         let mut driver = descriptor.factory.create(ctx.key()).await;
         driver.validate(&mut ctx).await.expect("network row validates");
@@ -624,7 +519,7 @@ impl RequeueScheduler for RecordingRequeue {
         let uid = d2b_provider_toolkit::resource_uid(&[0x42; 16]).expect("uid");
         let vm = crate::ifname::derive_network_child_name(&uid, "vm");
         let agent = crate::ifname::derive_network_child_name(&uid, "agent");
-        let entries = log.lock().await.clone();
+        let entries = manager.call_order();
         assert_eq!(
             entries
                 .iter()
@@ -690,7 +585,7 @@ impl RequeueScheduler for RecordingRequeue {
     #[tokio::test]
     async fn validate_rejects_a_foreign_provider() {
         let descriptor = descriptor(Arc::new(RecordingRuntime::default()));
-        let manager = RecordingManager::new(Arc::new(tokio::sync::Mutex::new(Vec::new())));
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_zone("dev"));
         let mut ctx = context(
             &descriptor,
             network_spec_value("Provider/network-other"),
@@ -729,11 +624,11 @@ impl RequeueScheduler for RecordingRequeue {
     async fn recording_effects_records_ordered_calls() {
         let effects = Arc::new(RecordingRuntime::default());
         let descriptor = descriptor(Arc::clone(&effects));
-        let manager = RecordingManager::new(Arc::new(tokio::sync::Mutex::new(Vec::new())));
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_zone("dev"));
         let mut ctx = context(
             &descriptor,
             network_spec_value(NETWORK_PROVIDER_REF),
-            manager,
+            Arc::clone(&manager),
         );
         let mut driver = descriptor.factory.create(ctx.key()).await;
         driver.validate(&mut ctx).await.expect("network row validates");

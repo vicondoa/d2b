@@ -5,10 +5,7 @@
 //! systemd bus, a broker socket, a privileged host, or a real process.
 
 use std::collections::BTreeSet;
-use std::future::Future;
-use std::pin::pin;
 use std::sync::Mutex;
-use std::task::{Context, Poll, Waker};
 
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
@@ -29,18 +26,9 @@ use crate::ticket::{
 ///
 /// The conformance suite is hermetic and never waits on I/O or wall time,
 /// so a busy-free single-poll driver is sufficient and keeps the crate free
-/// of an async runtime dependency.
-pub fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = pin!(future);
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => std::hint::spin_loop(),
-        }
-    }
-}
+/// of an async runtime dependency. The driver itself lives in
+/// `d2b_core::test_support`, once.
+pub use d2b_core::test_support::block_on;
 
 /// One recorded effect-port call.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -456,35 +456,4 @@ mod tests {
             }
         }
     }
-
-    struct UncertainCredentialSession;
-
-    #[async_trait::async_trait]
-    impl CredentialSession for UncertainCredentialSession {
-        fn session_generation(&self) -> Option<ReconnectGeneration> {
-            Some(ReconnectGeneration::new(7).expect("uncertain session generation"))
-        }
-
-        async fn revoke_credential(
-            &self,
-            _request: &CredentialRevocationRequest,
-        ) -> Result<CredentialRevocationOutcome, CredentialResourceRuntimeError> {
-            Ok(CredentialRevocationOutcome::Uncertain)
-        }
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn uncertain_revocation_never_unblocks_cleanup() {
-        // A live session that cannot confirm revocation must keep the
-        // credential row alive.
-        let session = UncertainCredentialSession;
-        assert_eq!(
-            session
-                .revoke_credential(&revocation_request(7))
-                .await
-                .unwrap(),
-            CredentialRevocationOutcome::Uncertain
-        );
-    }
 }

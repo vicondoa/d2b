@@ -486,12 +486,12 @@ mod tests {
         host::{HOST_PROVIDER_REF, HostSpec},
     };
     use d2b_provider_system_core::HostCapabilityClass;
+    use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
-        WatchRegistration,
+        ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration,
     };
     use d2b_resource_runtime::driver::{
-        DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
+        DynResourceDriver, RecoveryOutcome, ReconcileOutcome,
     };
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
@@ -502,9 +502,8 @@ mod tests {
     use crate::test_support::{RecordingEffects, RecordingProbe, scripted_facets};
 
     use super::{
-        HostDriver, HostDriverFactory, HostDriverStatus, host_descriptor, host_spec_decoder,
+        HostDriver, HostDriverStatus, host_descriptor, host_spec_decoder,
     };
-    use crate::HostEffectFacets;
 
     // -- fakes ---------------------------------------------------------------
 
@@ -605,31 +604,6 @@ mod tests {
         }
     }
 
-    struct RecordingRequeue {
-        calls: tokio::sync::Mutex<Vec<u64>>,
-    }
-
-    impl RecordingRequeue {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: tokio::sync::Mutex::new(Vec::new()),
-            })
-        }
-
-        fn call_count(&self) -> usize {
-            self.calls.try_lock().expect("uncontended test mutex").len()
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, _key: ResourceKey, after: std::time::Duration) -> RequeueId {
-            self.calls.try_lock().expect("uncontended test mutex").push(after.as_millis() as u64);
-            RequeueId(0)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
-
     // -- fixtures ------------------------------------------------------------
 
     fn host_spec_bytes(provider_ref: Option<&str>) -> Vec<u8> {
@@ -658,7 +632,7 @@ mod tests {
     fn fixture(
         row: StoredDesiredResource,
         manager: Arc<RecordingManager>,
-        requeue: Arc<RecordingRequeue>,
+        requeue: RecordingRequeue,
     ) -> ResourceContext {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -667,7 +641,7 @@ mod tests {
             TargetHandle::Host,
             host_spec_decoder(),
             manager,
-            requeue,
+            Arc::new(requeue),
             effects_tx,
             notify_tx,
         )
@@ -684,44 +658,22 @@ mod tests {
         ResourceContext,
         Arc<RecordingEffects>,
         Arc<RecordingManager>,
-        Arc<RecordingRequeue>,
+        RecordingRequeue,
         Box<dyn DynResourceDriver>,
     ) {
         let effects = RecordingEffects::new();
         let manager = RecordingManager::new();
-        let requeue = RecordingRequeue::new();
+        let requeue = RecordingRequeue::default();
         let ctx = fixture(
             row(host_spec_bytes(Some(HOST_PROVIDER_REF))),
             Arc::clone(&manager),
-            Arc::clone(&requeue),
+            requeue.clone(),
         );
         let driver = build_driver(Arc::clone(&effects)).await;
         (ctx, effects, manager, requeue, driver)
     }
 
-    /// The facet set the factory and declaration tests build over: the
-    /// daemon-supplied minijail gate source double (the plane supplies the
-    /// other probe inputs as host state the probe reads itself).
-    fn facets() -> HostEffectFacets {
-        crate::test_support::recording_facets(crate::test_support::RecordingMinijailGate::new(
-            d2b_provider_system_core::MinijailPlatformGate::new(6, 9, true),
-        ))
-    }
-
-    // -- factory -------------------------------------------------------------
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_registers_exactly_the_host_resource_type() {
-        let factory = HostDriverFactory::new(facets());
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), "Host");
-        factory
-            .create(&ResourceKey::new("work", "Host", "host-system"))
-            .await;
-    }
-
-    /// The declaration registers the type and the registry serves the
+/// The declaration registers the type and the registry serves the
     /// declared factory, so a Host row reaches its driver through the
     /// registry alone; the driver's effects come from the crate's own
     /// implementation over the facet set (U5), so no externally built port
@@ -743,7 +695,7 @@ mod tests {
         let mut ctx = fixture(
             row(host_spec_bytes(Some(HOST_PROVIDER_REF))),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("reconcile"),
@@ -772,7 +724,7 @@ mod tests {
         let mut ctx = fixture(
             row(host_spec_bytes(Some("Provider/network-local"))),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = build_driver(RecordingEffects::new()).await;
         let failure = driver.validate(&mut ctx).await.expect_err("terminal");
@@ -785,7 +737,7 @@ mod tests {
         let mut ctx = fixture(
             row(host_spec_bytes(None)),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = build_driver(RecordingEffects::new()).await;
         let failure = driver.validate(&mut ctx).await.expect_err("terminal");
@@ -798,7 +750,7 @@ mod tests {
         let mut ctx = fixture(
             row(br#"{"nonsense":true}"#.to_vec()),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = build_driver(RecordingEffects::new()).await;
         let failure = driver.validate(&mut ctx).await.expect_err("terminal");
@@ -865,7 +817,7 @@ mod tests {
              and wake every watcher on this Host's readiness"
         );
         assert_eq!(
-            requeue.call_count(),
+            requeue.scheduled().len(),
             1,
             "the degraded observation re-probes instead of pinning itself for the generation"
         );
@@ -896,7 +848,7 @@ mod tests {
         let effects = RecordingEffects::new();
         let manager = RecordingManager::new();
         manager.seed_owned(ResourceKey::new("work", "Process", "system-core-child"));
-        let requeue = RecordingRequeue::new();
+        let requeue = RecordingRequeue::default();
         let mut ctx = fixture(
             row(host_spec_bytes(Some(HOST_PROVIDER_REF))),
             Arc::clone(&manager),
@@ -943,7 +895,7 @@ mod tests {
             manager.call_order()
         );
         assert_eq!(
-            requeue.call_count(),
+            requeue.scheduled().len(),
             0,
             "no self-requeue: the old runner's 5s relist never re-observed a current status"
         );

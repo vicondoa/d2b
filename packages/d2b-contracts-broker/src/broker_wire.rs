@@ -2386,6 +2386,14 @@ pub enum RunnerRole {
     QemuMedia,
     /// Target-local one-shot NixOS activation runner. Guest mode may spawn
     /// this role only from the bundle-authoritative process intent.
+    ///
+    /// The wire token is renamed to the frozen `role_id`/template spelling
+    /// (`activation-nixos-runner`, pinned by the bundle schema, ADR-046, and
+    /// the provider's `ACTIVATION_RUNNER_TEMPLATE`) so the wire token and
+    /// [`RunnerRole::as_str`] agree for the same role. The pre-rename
+    /// kebab-case spelling stays accepted on the read side, so a frame or
+    /// persisted record written before the rename still decodes.
+    #[serde(rename = "activation-nixos-runner", alias = "activation-nixos")]
     ActivationNixos,
     /// virtiofsd sidecar; one per `d2b.vms.<vm>.runner.shares` row. The
     /// daemon/bundle provides argv from the runner-shape generators.
@@ -2905,7 +2913,7 @@ impl BrokerCallerRole {
         match self {
             Self::AdminUid { .. } => "d2b-admin",
             Self::LauncherUid { .. } => "d2b-launcher",
-            Self::RootUid { .. } => "RootUid",
+            Self::RootUid { .. } => "d2b-root",
             Self::HostShutdownUid { .. } => "d2b-host-shutdown",
             Self::NotAuthorized => "d2b-not-authorized",
         }
@@ -3132,14 +3140,6 @@ mod tests {
     }
 
     #[test]
-    fn broker_caller_role_default_is_not_authorized() {
-        assert!(matches!(
-            BrokerCallerRole::default(),
-            BrokerCallerRole::NotAuthorized
-        ));
-    }
-
-    #[test]
     fn broker_caller_role_admin_passes_predicate() {
         assert!(BrokerCallerRole::AdminUid { uid: 1000 }.is_admin_uid());
         assert!(!BrokerCallerRole::LauncherUid { uid: 1000 }.is_admin_uid());
@@ -3160,6 +3160,14 @@ mod tests {
             BrokerCallerRole::NotAuthorized.for_display(),
             "d2b-not-authorized"
         );
+        assert_eq!(
+            BrokerCallerRole::RootUid { uid: 0 }.for_display(),
+            "d2b-root"
+        );
+        assert_eq!(
+            BrokerCallerRole::HostShutdownUid { uid: 0 }.for_display(),
+            "d2b-host-shutdown"
+        );
     }
 
     #[test]
@@ -3175,30 +3183,6 @@ mod tests {
             let parsed: BrokerCallerRole = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, role);
         }
-    }
-
-    #[test]
-    fn broker_request_envelope_round_trips_with_admin() {
-        // U10: the generic envelope carrier now takes the retired
-        // process-family variants' place on the wire.
-        let env = BrokerRequestEnvelope {
-            request: BrokerRequest::EnvelopeInvoke(EnvelopeInvokeRequest {
-                operation: "signal-pidfd".to_owned(),
-                zone: "zone-a".to_owned(),
-                payload: serde_json::json!({ "signal": 15 }),
-                chain_root_invocation_id: None,
-                chain_identities: None,
-                fd_indexes: vec![0],
-                fd_kinds: vec![FdKind::Any],
-            }),
-            caller_role: BrokerCallerRole::AdminUid { uid: 1000 },
-            test_peer_uid: None,
-            audit_join: None,
-        };
-        let frame = encode_frame(&env).expect("encodes");
-        let parsed: BrokerRequestEnvelope =
-            decode_frame("BrokerRequestEnvelope", &frame).expect("decodes");
-        assert_eq!(parsed, env);
     }
 
     #[test]
@@ -3427,68 +3411,6 @@ mod tests {
             serde_json::from_value(invoke.payload).expect("payload is the typed flags request");
         assert_eq!(req.vm_id.as_str(), "corp-vm");
         assert_eq!(req.role_id.as_str(), "workload-lan");
-    }
-
-    /// Regression guard: an envelope payload that still contains the
-    /// legacy raw authority fields is rejected by the typed payload
-    /// parse (`deny_unknown_fields`). This pins the opaque-only contract.
-    #[test]
-    fn set_bridge_port_flags_rejects_raw_bridge_field() {
-        let frame = encode_frame(&envelope_invoke_json(
-            "SetBridgePortFlags",
-            serde_json::json!({
-                "vmId": "corp-vm",
-                "roleId": "workload-lan",
-                "bridge": "br-x",
-                "port": "tap-x",
-                "isolated": true,
-                "neighSuppress": false
-            }),
-        ))
-        .expect("encodes");
-        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
-            panic!("expected EnvelopeInvoke");
-        };
-        assert!(
-            serde_json::from_value::<SetBridgePortFlagsRequest>(invoke.payload).is_err(),
-            "raw bridge/port/flags must be refused"
-        );
-    }
-
-    #[test]
-    fn create_persistent_tap_rejects_raw_ifname_field() {
-        let frame = encode_frame(&envelope_invoke_json(
-            "CreatePersistentTap",
-            serde_json::json!({
-                "roleId": "runner-lan",
-                "vmId": "corp-vm",
-                "ifnameDerived": "d2b-bXXXXXXXX"
-            }),
-        ))
-        .expect("encodes");
-        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
-            panic!("expected EnvelopeInvoke");
-        };
-        assert!(
-            serde_json::from_value::<CreatePersistentTapRequest>(invoke.payload).is_err(),
-            "raw ifname_derived must be refused"
-        );
-    }
-
-    #[test]
-    fn usbip_bind_firewall_rule_rejects_raw_bus_id_field() {
-        let frame = encode_frame(&serde_json::json!({
-            "kind": "UsbipBindFirewallRule",
-            "payload": {
-                "bundleUsbipFirewallIntentRef": "usbip-fw-1-2",
-                "busId": "1-2"
-            }
-        }))
-        .expect("encodes");
-        let result = decode_frame::<BrokerRequest>("BrokerRequest", &frame);
-        assert!(result.is_err(), "raw bus_id must be refused on the W3 wire");
     }
 
     /// Earlier rejection guards lumped multiple legacy authority fields
@@ -3791,35 +3713,6 @@ mod tests {
         ));
     }
 
-    /// Regression guard: this test was reframed when `ifname_derived`
-    /// was removed from `CreateTapFdRequest`. The payload-side
-    /// validation it used to assert is now the broker's responsibility
-    /// (it derives the ifname from the trusted bundle row keyed by
-    /// `role_id` + `vm_id`). U12 retired the typed frame, so what we
-    /// still want to guarantee here is that an envelope payload carrying
-    /// the dropped `ifnameDerived` field fails the typed payload parse,
-    /// preventing a future caller from supplying it.
-    #[test]
-    fn create_tap_fd_rejects_invalid_ifname() {
-        let frame = encode_frame(&envelope_invoke_json(
-            "CreateTapFd",
-            serde_json::json!({
-                "ifnameDerived": "bad.name",
-                "roleId": "runner",
-                "vmId": "corp-vm"
-            }),
-        ))
-        .expect("encodes");
-        let decoded = decode_frame::<BrokerRequest>("BrokerRequest", &frame).expect("decodes");
-        let BrokerRequest::EnvelopeInvoke(invoke) = decoded else {
-            panic!("expected EnvelopeInvoke");
-        };
-        assert!(
-            serde_json::from_value::<CreateTapFdRequest>(invoke.payload).is_err(),
-            "dropped ifnameDerived field must fail the typed payload parse"
-        );
-    }
-
     /// SpawnRunner carries only opaque IDs (vm_id, role_id,
     /// bundle_runner_intent_ref). The broker resolves the full launch
     /// context (argv inputs, uid/gid, caps, seccomp, cgroup) from the
@@ -4108,7 +4001,10 @@ mod tests {
         // token so wire compatibility is stable across daemon /
         // broker upgrades.
         let pairs = [
+            (RunnerRole::ProviderController, "\"provider-controller\""),
             (RunnerRole::CloudHypervisor, "\"cloud-hypervisor\""),
+            (RunnerRole::QemuMedia, "\"qemu-media\""),
+            (RunnerRole::ActivationNixos, "\"activation-nixos-runner\""),
             (RunnerRole::Virtiofsd, "\"virtiofsd\""),
             (RunnerRole::Swtpm, "\"swtpm\""),
             (RunnerRole::SwtpmFlush, "\"swtpm-flush\""),
@@ -4124,6 +4020,20 @@ mod tests {
             assert_eq!(serde_json::to_string(&role).unwrap(), expected);
             assert_eq!(role.as_str(), expected.trim_matches('"'));
         }
+    }
+
+    #[test]
+    fn spawn_runner_role_still_decodes_the_pre_rename_token() {
+        // A frame or persisted record written before the token alignment
+        // carried the kebab-case spelling; it must still decode.
+        assert_eq!(
+            serde_json::from_str::<RunnerRole>("\"activation-nixos\"").unwrap(),
+            RunnerRole::ActivationNixos
+        );
+        assert_eq!(
+            serde_json::from_str::<RunnerRole>("\"activation-nixos-runner\"").unwrap(),
+            RunnerRole::ActivationNixos
+        );
     }
 
     #[test]

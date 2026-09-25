@@ -30,6 +30,10 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
+[dev-dependencies]
+# Paused-time test clock for the realize-budget timeout case.
+tokio = { workspace = true, features = ["test-util"] }
+
 [[test]]
 name = "registration"
 path = "tests/registration.rs"

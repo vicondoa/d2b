@@ -41,7 +41,6 @@ impl BootstrapProvider {
 pub enum ZoneAdmissionError {
     PeerUidMismatch,
     InvalidPeerUid,
-    ZoneInvalid,
 }
 
 impl fmt::Display for ZoneAdmissionError {
@@ -49,7 +48,6 @@ impl fmt::Display for ZoneAdmissionError {
         formatter.write_str(match self {
             Self::PeerUidMismatch => "zone-bootstrap-peer-uid-mismatch",
             Self::InvalidPeerUid => "zone-bootstrap-peer-uid-invalid",
-            Self::ZoneInvalid => "zone-bootstrap-zone-invalid",
         })
     }
 }
@@ -125,5 +123,90 @@ impl ZoneBootstrapIdentity {
 impl fmt::Debug for ZoneBootstrapIdentity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ZoneBootstrapIdentity(<redacted>)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
+    use rustix::process::getuid;
+
+    /// One kernel-verified peer carrying the current process credentials.
+    fn verified_peer() -> VerifiedUnixPeer {
+        let (left, _right) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        let socket = crate::SeqpacketSocket::from_owned(left).unwrap();
+        VerifiedUnixPeer::verify_seqpacket(&socket).unwrap()
+    }
+
+    fn zone() -> ZoneId {
+        ZoneId::parse("work").unwrap()
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn verify_rejects_zero_expected_uid() {
+        // A zero expected UID is never a valid bootstrap admission target:
+        // the fixed service-manager UID must be a real non-root account.
+        assert_eq!(
+            ZoneBootstrapIdentity::verify(
+                verified_peer(),
+                0,
+                zone(),
+                BootstrapProvider::SystemCore,
+            ),
+            Err(ZoneAdmissionError::InvalidPeerUid)
+        );
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn verify_rejects_mismatched_peer_uid() {
+        // The kernel-observed peer UID must equal the fixed expected UID;
+        // any other peer is refused even though the credentials are real.
+        let current_uid = getuid().as_raw();
+        let wrong_uid = current_uid.checked_add(1).unwrap_or(current_uid - 1);
+        assert_ne!(wrong_uid, 0);
+        assert_ne!(wrong_uid, current_uid);
+        assert_eq!(
+            ZoneBootstrapIdentity::verify(
+                verified_peer(),
+                wrong_uid,
+                zone(),
+                BootstrapProvider::SystemMinijail,
+            ),
+            Err(ZoneAdmissionError::PeerUidMismatch)
+        );
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn verify_accepts_matching_peer_uid() {
+        // The happy path is only exercisable when the test process is not
+        // root: a zero expected UID is itself refused.
+        let current_uid = getuid().as_raw();
+        if current_uid == 0 {
+            return;
+        }
+        let identity = ZoneBootstrapIdentity::verify(
+            verified_peer(),
+            current_uid,
+            zone(),
+            BootstrapProvider::SystemCore,
+        )
+        .expect("matching peer UID admits");
+        assert_eq!(identity.peer_uid(), current_uid);
+        assert_eq!(identity.zone(), &zone());
+        assert_eq!(identity.provider(), BootstrapProvider::SystemCore);
+        assert_eq!(
+            identity.subject_ref(),
+            BootstrapProvider::SystemCore.resource_ref()
+        );
     }
 }

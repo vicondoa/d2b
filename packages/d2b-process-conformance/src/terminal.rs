@@ -303,4 +303,43 @@ mod tests {
             Err(ProcessConformanceError::InvalidTerminalResult)
         );
     }
+
+    #[test]
+    fn exited_refuses_out_of_range_codes() {
+        assert!(ProcessOutcome::exited(0).is_ok());
+        assert!(ProcessOutcome::exited(255).is_ok());
+        assert_eq!(
+            ProcessOutcome::exited(256),
+            Err(ProcessConformanceError::InvalidTerminalResult)
+        );
+        assert_eq!(
+            ProcessOutcome::exited(-1),
+            Err(ProcessConformanceError::InvalidTerminalResult)
+        );
+    }
+
+    #[test]
+    fn verified_by_refuses_zero_identity_and_zero_token() {
+        let operation = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        assert_eq!(
+            ParentWaitEvidence::verified_by(
+                WaitReapOwner::Local,
+                ProcessIdentityDigest::from_bytes([0; 32]),
+                operation.clone(),
+                [1; 32],
+            )
+            .unwrap_err(),
+            ProcessConformanceError::InvalidTerminalResult
+        );
+        assert_eq!(
+            ParentWaitEvidence::verified_by(
+                WaitReapOwner::Local,
+                ProcessIdentityDigest::from_bytes([1; 32]),
+                operation,
+                [0; 32],
+            )
+            .unwrap_err(),
+            ProcessConformanceError::InvalidTerminalResult
+        );
+    }
 }

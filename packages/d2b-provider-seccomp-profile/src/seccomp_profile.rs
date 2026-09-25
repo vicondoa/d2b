@@ -301,6 +301,63 @@ mod tests {
     }
 
     #[test]
+    fn device_bind_bounds_fail_closed() {
+        let bind = || {
+            DeviceBind::new(
+                DeviceNodePath::parse("/dev/null").unwrap(),
+                DeviceNodeKind::Char,
+                1,
+                3,
+                SeccompDeviceAccess::ReadWrite,
+            )
+        };
+        let devices = (0..MAX_SECCOMP_DEVICE_BINDS + 1).map(|_| bind()).collect();
+        assert_eq!(
+            SeccompProfileSpec::new(
+                Vec::new(),
+                SeccompNamespaces::default(),
+                SeccompCgroups::default(),
+                devices,
+            ),
+            Err(SeccompProfileContractError::TooManyDeviceBinds)
+        );
+    }
+
+    /// The device-node path length bound: exactly `MAX_DEVICE_NODE_PATH_BYTES`
+    /// admits, one byte over refuses.
+    #[test]
+    fn device_path_length_bound_is_enforced() {
+        let at_bound = format!("/dev/{}", "a".repeat(MAX_DEVICE_NODE_PATH_BYTES - 5));
+        assert_eq!(at_bound.len(), MAX_DEVICE_NODE_PATH_BYTES);
+        assert!(DeviceNodePath::parse(&at_bound).is_ok(), "at the bound");
+
+        let over = format!("/dev/{}", "a".repeat(MAX_DEVICE_NODE_PATH_BYTES - 4));
+        assert_eq!(over.len(), MAX_DEVICE_NODE_PATH_BYTES + 1);
+        assert_eq!(
+            DeviceNodePath::parse(&over),
+            Err(SeccompProfileContractError::InvalidDevicePath)
+        );
+    }
+
+    /// A JSON profile carrying a bad `/dev` path is rejected at
+    /// deserialization: the parse error maps onto the serde error, so the
+    /// wire never admits a profile with an invalid bind.
+    #[test]
+    fn wire_level_invalid_device_paths_are_refused() {
+        let bad = json!({
+            "syscalls": [],
+            "devices": [{
+                "path": "/etc/passwd",
+                "kind": "char",
+                "major": 1,
+                "minor": 3,
+                "access": "read-write"
+            }]
+        });
+        assert!(serde_json::from_value::<SeccompProfileSpec>(bad).is_err());
+    }
+
+    #[test]
     fn the_wire_shape_round_trips_and_is_closed() {
         let profile = profile();
         let bytes =

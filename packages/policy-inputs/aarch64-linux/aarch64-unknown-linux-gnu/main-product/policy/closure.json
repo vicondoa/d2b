@@ -99,7 +99,7 @@
   "features": [],
   "default_features": true,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "b07b0e99bdd12d67979d2608dba5aa396e6aea33b20911e68b099e1c06a956ba",
+  "lock_sha256": "8353d2e4630f11f8ed80cd5dff151f60e73663713eddc0236f76a7e321b50809",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -4105,6 +4105,12 @@
     },
     {
       "from": "d2b-audit@0.0.0-bootstrap#path",
+      "to": "d2b-core@0.0.0-bootstrap#path",
+      "kind": "dev",
+      "target": null
+    },
+    {
+      "from": "d2b-audit@0.0.0-bootstrap#path",
       "to": "d2b-telemetry@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -4934,6 +4940,12 @@
     {
       "from": "d2b-process-conformance@0.0.0-bootstrap#path",
       "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-process-conformance@0.0.0-bootstrap#path",
+      "to": "d2b-core@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -6284,6 +6296,12 @@
     {
       "from": "d2b-provider-endpoint@0.0.0-bootstrap#path",
       "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "dev",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-endpoint@0.0.0-bootstrap#path",
+      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -6633,6 +6651,12 @@
       "from": "d2b-provider-guest@0.0.0-bootstrap#path",
       "to": "thiserror@2.0.20#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-guest@0.0.0-bootstrap#path",
+      "to": "tokio@1.53.1#registry+https://github.com/rust-lang/crates.io-index",
+      "kind": "dev",
       "target": null
     },
     {
@@ -7237,6 +7261,12 @@
     },
     {
       "from": "d2b-provider-provider@0.0.0-bootstrap#path",
+      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-provider@0.0.0-bootstrap#path",
       "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -7609,6 +7639,12 @@
     },
     {
       "from": "d2b-provider-system-core@0.0.0-bootstrap#path",
+      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-system-core@0.0.0-bootstrap#path",
       "to": "serde@1.0.229#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
@@ -7663,6 +7699,12 @@
     },
     {
       "from": "d2b-provider-telemetry-binding@0.0.0-bootstrap#path",
+      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-telemetry-binding@0.0.0-bootstrap#path",
       "to": "d2b-resource-runtime@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
@@ -7700,6 +7742,12 @@
     {
       "from": "d2b-provider-telemetry-service@0.0.0-bootstrap#path",
       "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-telemetry-service@0.0.0-bootstrap#path",
+      "to": "d2b-provider-toolkit@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -7826,6 +7874,12 @@
     {
       "from": "d2b-provider-toolkit@0.0.0-bootstrap#path",
       "to": "d2b-session@0.0.0-bootstrap#path",
+      "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-toolkit@0.0.0-bootstrap#path",
+      "to": "parking_lot@0.12.5#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
       "target": null
     },
@@ -8276,6 +8330,12 @@
     {
       "from": "d2b-provider-volume-local@0.0.0-bootstrap#path",
       "to": "d2b-core@0.0.0-bootstrap#path",
+      "kind": "dev",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-volume-local@0.0.0-bootstrap#path",
+      "to": "d2b-core@0.0.0-bootstrap#path",
       "kind": "normal",
       "target": null
     },
@@ -8337,6 +8397,12 @@
       "from": "d2b-provider-volume-virtiofs@0.0.0-bootstrap#path",
       "to": "d2b-contracts-resource@0.0.0-bootstrap#path",
       "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-provider-volume-virtiofs@0.0.0-bootstrap#path",
+      "to": "d2b-core@0.0.0-bootstrap#path",
+      "kind": "dev",
       "target": null
     },
     {

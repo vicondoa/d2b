@@ -332,30 +332,4 @@ mod tests {
             ManagedIdentityClientState::Unavailable
         );
     }
-
-    #[test]
-    fn agent_is_planned_only_after_admission_and_dependency_readiness() {
-        let controller = ManagedIdentityController::new(
-            ManagedIdentityPlacement::new(
-                PlacementBinding::GuestAgent,
-                ResourceRef::parse("Guest/aca-sandbox").unwrap(),
-                ResourceRef::parse("Zone/dev").unwrap(),
-            )
-            .unwrap(),
-        );
-        let credential = ResourceRef::parse("Credential/aca-relay-mi").unwrap();
-        assert!(
-            controller
-                .plan_agent(credential.clone(), false, true)
-                .unwrap()
-                .is_none()
-        );
-        let agent = controller
-            .plan_agent(credential, true, true)
-            .unwrap()
-            .unwrap();
-        assert_eq!(agent.binary(), AGENT_BINARY);
-        assert!(!agent.allow_egress());
-        assert!(agent.requires_effect_port_client());
-    }
 }

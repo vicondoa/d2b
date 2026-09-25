@@ -333,3 +333,199 @@ async fn validated_recovery_receipt(
     )
     .map_err(|_| AuthorityPersistenceError::RowInvalid)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::authority::{
+        AuthorityOwnerProof, AuthorityRequest, AuthorityStorageClaim, AuthorityStorageOperation,
+        claim_digest,
+    };
+    use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
+
+    const OP_ID: &str = "recovered-helper-operation";
+    const STORE_BINDING_DIGEST: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+    #[derive(Clone, Copy)]
+    enum FailStep { Close, Release }
+
+    struct FailingPersistence { fail: FailStep }
+
+    impl AuthorityPersistence for FailingPersistence {
+        fn prepare<'a>(
+            &'a self,
+            _operation_id: &'a str,
+            _claim: &'a AuthorityStorageClaim,
+        ) -> AuthorityFuture<'a, PreparedAuthorityOperation> {
+            unreachable!("prepare must not run during recovery resolution")
+        }
+
+        fn record_effect<'a>(
+            &'a self,
+            _capability: &'a AuthorityOperationCapability,
+            _state: AuthorityOperationState,
+        ) -> AuthorityFuture<'a, ()> {
+            unreachable!("record_effect must not run during recovery resolution")
+        }
+
+        fn record_close<'a>(
+            &'a self,
+            _capability: &'a AuthorityOperationCapability,
+        ) -> AuthorityFuture<'a, ()> {
+            if matches!(self.fail, FailStep::Close) {
+                Box::pin(async { Err(AuthorityPersistenceError::StoreUnavailable) })
+            } else {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        fn release<'a>(
+            &'a self,
+            _capability: &'a AuthorityOperationCapability,
+        ) -> AuthorityFuture<'a, ()> {
+            if matches!(self.fail, FailStep::Release) {
+                Box::pin(async { Err(AuthorityPersistenceError::StoreUnavailable) })
+            } else {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        fn recover<'a>(&'a self) -> AuthorityFuture<'a, AuthorityRecoveryData> {
+            unreachable!("recover must not run during recovery resolution")
+        }
+    }
+
+    fn recovery_data() -> AuthorityRecoveryData {
+        let host_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let guest_uid = ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap();
+        let request = AuthorityRequest::guest_store_view_writer(
+            host_uid,
+            guest_uid,
+            AuthorityOwnerProof::new(
+                ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").unwrap(),
+                ResourceGeneration::new(1).unwrap(),
+            ),
+        )
+        .unwrap();
+        let claim = AuthorityStorageClaim::Generic(request.durable_claim());
+        let operation = AuthorityStorageOperation {
+            operation_id: OP_ID.to_owned(),
+            claim_digest: claim_digest(&claim).expect("claim digest"),
+            state: AuthorityOperationState::Pending,
+            claim,
+            store_binding_digest: STORE_BINDING_DIGEST.to_owned(),
+        };
+        let prepared = PreparedAuthorityOperation::new(
+            OP_ID.to_owned(),
+            STORE_BINDING_DIGEST.to_owned(),
+            7,
+        )
+        .expect("prepared operation");
+        AuthorityRecoveryData::new(
+            vec![operation],
+            BTreeMap::from([(OP_ID.to_owned(), prepared)]),
+        )
+    }
+
+    fn recovery_coordinator(fail: FailStep) -> (AuthorityRecoveryCoordinator, String, u64) {
+
+        let data = recovery_data();
+        let (operations, prepared_operations) = data.into_parts();
+        let nonce = prepared_operations
+            .get(OP_ID)
+            .expect("prepared operation")
+            .nonce();
+        let receipt =
+            HostGlobalAuthorityIndex::recovery_receipt_from_operations_with_prepared_capabilities(
+                operations,
+                None,
+                prepared_operations,
+            )
+            .expect("recovery receipt");
+        let index = HostGlobalAuthorityIndex::rehydrate(receipt).expect("rehydrate index");
+        let coordinator = AuthorityRecoveryCoordinator {
+            index: Arc::new(tokio::sync::Mutex::new(index)),
+            persistence: Arc::new(FailingPersistence { fail }),
+        };
+        (coordinator, OP_ID.to_owned(), nonce)
+    }
+
+    #[tokio::test]
+async fn failed_record_close_restores_capability_and_quarantines() {
+        let (coordinator, operation_id, nonce) = recovery_coordinator(FailStep::Close);
+        assert_eq!(
+            coordinator.resolve_observed_closed(&operation_id).await.unwrap_err(),
+            AuthorityPersistenceError::StoreUnavailable,
+        );
+        let restored = coordinator
+            .index()
+            .lock()
+            .await
+            .take_recovery_capability(&operation_id)
+            .expect("capability restored for retry");
+        assert_eq!(restored.nonce(), nonce);
+        // Even after the operation is observed as resolved, the quarantine
+        // keeps readiness blocked..
+        coordinator.resolve_observed_and_adopted(&operation_id).await.unwrap();
+        assert!(!coordinator.is_ready_for_readiness().await);
+    }
+
+    #[tokio::test]
+    async fn failed_release_restores_capability_and_quarantines() {
+        let (coordinator, operation_id, nonce) = recovery_coordinator(FailStep::Release);
+        assert_eq!(
+            coordinator.resolve_observed_closed(&operation_id).await.unwrap_err(),
+            AuthorityPersistenceError::StoreUnavailable,
+        );
+        let restored = coordinator
+            .index()
+            .lock()
+            .await
+            .take_recovery_capability(&operation_id)
+            .expect("capability restored for retry");
+        assert_eq!(restored.nonce(), nonce);
+        coordinator.resolve_observed_and_adopted(&operation_id).await.unwrap();
+        assert!(!coordinator.is_ready_for_readiness().await);
+    }
+
+    #[tokio::test]
+    async fn provenance_rejection_aborts_rehydration_with_the_adapter_error() {
+        struct RefusingProvenance;
+        impl AuthorityRecoveryProvenance for RefusingProvenance {
+            fn validate<'a>(
+                &'a self,
+                _operation: &'a AuthorityStorageOperation,
+            ) -> AuthorityFuture<'a, ()> {
+                Box::pin(async { Err(AuthorityPersistenceError::StoreUnavailable) })
+            }
+        }
+
+        assert!(matches!(
+            validated_recovery_receipt(recovery_data(), &RefusingProvenance).await,
+            Err(AuthorityPersistenceError::StoreUnavailable),
+        ));
+    }
+
+    #[test]
+    fn prepared_operation_rejects_empty_fields_and_zero_nonce() {
+        assert!(
+            PreparedAuthorityOperation::new(
+                "op-1".to_owned(),
+                STORE_BINDING_DIGEST.to_owned(),
+                1,
+            )
+            .is_ok()
+        );
+        for (operation_id, store_digest, nonce) in [
+            (String::new(), STORE_BINDING_DIGEST.to_owned(), 1),
+            ("op-1".to_owned(), String::new(), 1),
+            ("op-1".to_owned(), STORE_BINDING_DIGEST.to_owned(), 0),
+        ] {
+            assert_eq!(
+                PreparedAuthorityOperation::new(operation_id, store_digest, nonce),
+                Err(AuthorityPersistenceError::RowInvalid),
+            );
+        }
+    }
+}

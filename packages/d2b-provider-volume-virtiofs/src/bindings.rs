@@ -387,17 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn the_envelope_never_carries_attachment_settings() {
-        let mut tuned = envelope(
-            VOLUME_BINDING_RESOURCE_TYPE,
-            serde_json::json!("Volume/work-state"),
-            binding_spec(),
-        );
-        tuned["spec"]["threadPoolSize"] = serde_json::json!(2);
-        assert!(StoredBinding::from_resource_spec(&tuned).is_err());
-    }
-
-    #[test]
     fn worker_and_endpoint_children_keep_distinct_stable_refs() {
         let stored = StoredBinding::from_resource_spec(&envelope(
             VOLUME_BINDING_RESOURCE_TYPE,

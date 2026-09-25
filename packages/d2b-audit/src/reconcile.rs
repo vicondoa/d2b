@@ -175,20 +175,6 @@ mod tests {
     }
 
     #[test]
-    fn impossible_success_is_integrity_failure_and_one_sided_terminal_is_not_replayed() {
-        let impossible = evidence("operation", DurabilityOutcome::Success, false);
-        assert_eq!(
-            reconcile(Some(&impossible), Some(&impossible)),
-            Reconciliation::IntegrityFailure
-        );
-        let failed = evidence("operation", DurabilityOutcome::Failure, false);
-        assert_eq!(
-            reconcile(Some(&failed), None),
-            Reconciliation::IntegrityFailure
-        );
-    }
-
-    #[test]
     fn evidence_requires_a_closed_pair_and_matching_supplied_key() {
         let zone = ZoneId::derive("work").unwrap();
         let operation = OperationIdentity::derive("operation").unwrap();
@@ -223,6 +209,54 @@ mod tests {
                 Some("success"),
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn valid_decision_result_pairs_parse_to_typed_outcomes() {
+        let zone = ZoneId::derive("work").unwrap();
+        let operation = OperationIdentity::derive("operation").unwrap();
+        let key = ZoneOperationKey::new(zone.clone(), operation.clone());
+        let parse = |decision: &str, result: &str| {
+            evidence_from_decision_result(
+                zone.clone(),
+                operation.clone(),
+                Some(&key),
+                Some(decision),
+                Some(result),
+            )
+        };
+        let allowed = parse("allowed", "success").unwrap();
+        assert_eq!(allowed.outcome, DurabilityOutcome::Success);
+        assert!(allowed.effect_durable);
+        for decision in ["denied", "denied-refused", "denied-policy", "denied-unknown"] {
+            let denied = parse(decision, "denied").unwrap();
+            assert_eq!(denied.outcome, DurabilityOutcome::Failure);
+            assert!(!denied.effect_durable);
+        }
+        for (decision, result) in [("error", "error"), ("errored", "errored"), ("error", "errored")]
+        {
+            let errored = parse(decision, result).unwrap();
+            assert_eq!(errored.outcome, DurabilityOutcome::Failure);
+            assert!(!errored.effect_durable);
+        }
+    }
+
+    #[test]
+    fn pending_evidence_requires_replay_on_either_side() {
+        let broker = evidence("operation", DurabilityOutcome::Pending, false);
+        let resource = evidence("operation", DurabilityOutcome::Pending, false);
+        assert_eq!(
+            reconcile(Some(&broker), Some(&resource)),
+            Reconciliation::ReplayRequired
+        );
+        assert_eq!(
+            reconcile(Some(&broker), None),
+            Reconciliation::ReplayRequired
+        );
+        assert_eq!(
+            reconcile(None, Some(&resource)),
+            Reconciliation::ReplayRequired
         );
     }
 }

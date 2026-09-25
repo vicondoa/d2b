@@ -946,24 +946,22 @@ mod tests {
         ActivationDetail, ActivationMode, ActivationOutcomeCode, ArtifactId, NixosGenerationSpec,
         ResourcePhase, ResourceRef,
     };
-    use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, ResourceContext, WatchCondition, WatchId, WatchRegistration,
-    };
+    use d2b_provider_toolkit::testing::fakes::RecordingManagerEndpoint;
+    use d2b_resource_runtime::context::ResourceContext;
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::{FailureClass, ResourceError};
+    use d2b_resource_runtime::error::FailureClass;
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, StoredDesiredResource,
     };
-    use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
-        ACTIVATION_TYPE_NAME, ActivationApplicationVerifier, ActivationController,
-        ActivationDriver, ActivationDriverArgs, ActivationDriverFactory, ActivationDriverStatus,
-        HostHandoffResult, RunnerRequest, activation_runner_ref, activation_spec_decoder,
-        ordinal_from_name,
+        ACTIVATION_TYPE_NAME, RUNNER_TYPE_NAME, ActivationApplicationVerifier,
+        ActivationController, ActivationDriver, ActivationDriverArgs, ActivationDriverFactory,
+        ActivationDriverStatus, HostHandoffResult, RunnerRequest, activation_detail,
+        activation_runner_ref, activation_spec_decoder, host_handoff_outcome, ordinal_from_name,
     };
     use crate::ActivationVerificationError;
     use crate::test_support::FakeActivationEffects;
@@ -979,140 +977,6 @@ mod tests {
             _controller: &ActivationController,
             _request: &RunnerRequest,
         ) -> Result<(), ActivationVerificationError> {
-            Ok(())
-        }
-    }
-
-    /// Recording manager endpoint over one shared ordered log; owned rows
-    /// carry the generation's uid as their owner.
-    #[derive(Clone)]
-    struct RecordingManager {
-        zone: String,
-        owner_uid: [u8; 16],
-        log: Arc<parking_lot::Mutex<Vec<String>>>,
-        rows: Arc<parking_lot::Mutex<Vec<StoredDesiredResource>>>,
-        next_uid: Arc<std::sync::atomic::AtomicU64>,
-    }
-
-    impl RecordingManager {
-        fn new(owner_uid: [u8; 16]) -> Self {
-            Self {
-                zone: "work".to_owned(),
-                owner_uid,
-                log: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                rows: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                next_uid: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-            }
-        }
-
-        fn with_row(self, row: StoredDesiredResource) -> Self {
-            self.rows.lock().push(row);
-            self
-        }
-
-        fn log(&self) -> Vec<String> {
-            self.log.lock().clone()
-        }
-
-        fn row(&self, key: &ResourceKey) -> Option<StoredDesiredResource> {
-            self.rows.lock().iter().find(|row| row.key == *key).cloned()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl ManagerEndpoint for RecordingManager {
-        async fn ensure_child(
-            &self,
-            _parent: &ResourceKey,
-            child: ChildEnsure,
-        ) -> Result<EnsureOutcome, ResourceError> {
-            let id = format!("{}/{}", child.type_name.as_str(), child.name);
-            self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            let next = self
-                .next_uid
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let mut uid = [0u8; 16];
-            uid[..8].copy_from_slice(&next.to_be_bytes());
-            let row = StoredDesiredResource {
-                key: ResourceKey::new(&self.zone, child.type_name.as_str(), &child.name),
-                uid,
-                generation: 1,
-                owner_uid: Some(self.owner_uid),
-                provenance: ResourceProvenance::Resource,
-                deleting: false,
-                spec: child.spec,
-                metadata: child.metadata,
-                created_at: 0,
-            };
-            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            let outcome = match rows.iter_mut().find(|existing| existing.key == row.key) {
-                Some(existing) if existing.spec == row.spec => EnsureOutcome::Unchanged(existing.clone()),
-                Some(existing) => {
-                    *existing = row.clone();
-                    EnsureOutcome::Updated(row.clone())
-                }
-                None => {
-                    rows.push(row.clone());
-                    EnsureOutcome::Created(row.clone())
-                }
-            };
-            // The spawn notification the manager emits after the commit (F1).
-            self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Ok(outcome)
-        }
-
-        async fn get(
-            &self,
-            key: &ResourceKey,
-        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self.row(key))
-        }
-
-        async fn view(
-            &self,
-            _key: &ResourceKey,
-        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            // Desired rows only: this fixture publishes no runtime status, so
-            // it serves no observed state.
-            Ok(None)
-        }
-
-        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.log.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                "delete:{}/{}",
-                key.type_name, key.name
-            ));
-            self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Ok(())
-        }
-
-        async fn list_owned(
-            &self,
-            owner_uid: [u8; 16],
-        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self
-                .rows
-                .lock()
-                .iter()
-                .filter(|row| row.owner_uid.as_ref() == Some(&owner_uid))
-                .cloned()
-                .collect())
-        }
-
-        async fn register_watch(
-            &self,
-            _subscriber: &ResourceKey,
-            registration: WatchRegistration,
-        ) -> Result<WatchId, ResourceError> {
-            assert_eq!(registration.condition, WatchCondition::Ready);
-            self.log.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                "watch:{}/{}",
-                registration.target.type_name, registration.target.name
-            ));
-            Ok(WatchId(1))
-        }
-
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
             Ok(())
         }
     }
@@ -1177,10 +1041,10 @@ mod tests {
 
     struct Fixture {
         ctx: ResourceContext,
-        manager: RecordingManager,
+        manager: RecordingManagerEndpoint,
     }
 
-    fn fixture(row: StoredDesiredResource, manager: RecordingManager) -> Fixture {
+    fn fixture(row: StoredDesiredResource, manager: RecordingManagerEndpoint) -> Fixture {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = ResourceContext::new(
@@ -1211,18 +1075,7 @@ mod tests {
 
     // -- factory and validation ----------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_registers_only_the_generation_resource_type() {
-        let factory = ActivationDriverFactory::new(ActivationDriverArgs {
-            zone: "work".to_owned(),
-            facets: crate::test_support::recording_facets(
-                crate::test_support::RecordingBrokerDispatch::new(),
-            ),
-        });
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), ACTIVATION_TYPE_NAME);
-    }
+
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
@@ -1230,7 +1083,7 @@ mod tests {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);
         let mut f = fixture(
             generation_row("gen-1", "Host/host-system", ActivationMode::Switch, None, GENERATION_UID),
-            RecordingManager::new(GENERATION_UID),
+            RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID),
         );
         let mut d = driver(effects, Arc::new(AllowVerifier)).await;
         d.validate(&mut f.ctx).await.expect("valid contract");
@@ -1244,7 +1097,7 @@ mod tests {
             GENERATION_UID,
         );
         malformed.spec = b"{\"providerRef\":\"Provider/other\"}".to_vec();
-        let mut f_malformed = fixture(malformed, RecordingManager::new(GENERATION_UID));
+        let mut f_malformed = fixture(malformed, RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID));
         let mut d_malformed = driver(
             FakeActivationEffects::new(HostHandoffResult::Incomplete),
             Arc::new(AllowVerifier),
@@ -1262,7 +1115,7 @@ mod tests {
             source_generation: 1,
             target_generation: 2,
         });
-        let manager = RecordingManager::new(GENERATION_UID).with_row(generation_row(
+        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID).with_row(generation_row(
             "gen-1",
             "Host/host-system",
             ActivationMode::Switch,
@@ -1310,7 +1163,7 @@ mod tests {
         assert_eq!(projected.detail(), ActivationDetail::Applied);
         assert_eq!(projected.outcome(), Some(ActivationOutcomeCode::Succeeded));
         // A Host target realizes through the broker: no runner child.
-        assert!(f.manager.log().is_empty());
+        assert!(f.manager.call_order().is_empty());
     }
 
     /// The facets -> factory -> driver -> handoff seam the refactor
@@ -1339,7 +1192,7 @@ mod tests {
             },
             Arc::new(AllowVerifier),
         );
-        let manager = RecordingManager::new(GENERATION_UID).with_row(generation_row(
+        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID).with_row(generation_row(
             "gen-1",
             "Host/host-system",
             ActivationMode::Switch,
@@ -1393,7 +1246,7 @@ mod tests {
             zone: "work".to_owned(),
             facets: crate::test_support::recording_facets(broker.clone()),
         });
-        let manager = RecordingManager::new(GENERATION_UID).with_row(generation_row(
+        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID).with_row(generation_row(
             "gen-1",
             "Host/host-system",
             ActivationMode::Switch,
@@ -1436,7 +1289,7 @@ mod tests {
                 None,
                 GENERATION_UID,
             ),
-            RecordingManager::new(GENERATION_UID),
+            RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID),
         );
         let mut d = driver(effects.clone(), Arc::new(AllowVerifier)).await;
         d.reconcile(&mut f.ctx).await.expect("reconcile");
@@ -1449,7 +1302,7 @@ mod tests {
             projected.outcome(),
             Some(ActivationOutcomeCode::HelperRefused)
         );
-        assert!(f.manager.log().is_empty());
+        assert!(f.manager.call_order().is_empty());
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -1468,7 +1321,7 @@ mod tests {
                 Some("gen-1"),
                 GENERATION_UID,
             ),
-            RecordingManager::new(GENERATION_UID),
+            RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID),
         );
         let mut d = driver(effects.clone(), Arc::new(AllowVerifier)).await;
         assert!(d.reconcile(&mut f.ctx).await.is_err());
@@ -1483,7 +1336,7 @@ mod tests {
                 Some("gen-1"),
                 GENERATION_UID,
             ),
-            RecordingManager::new(GENERATION_UID).with_row(generation_row(
+            RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID).with_row(generation_row(
                 "gen-1",
                 "Host/other-host",
                 ActivationMode::Switch,
@@ -1496,46 +1349,7 @@ mod tests {
         assert!(effects.dispatches().is_empty());
     }
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn offline_verification_refuses_before_the_handoff_is_dispatched() {
-        let effects = FakeActivationEffects::new(HostHandoffResult::Completed {
-            source_generation: 1,
-            target_generation: 2,
-        });
-        let mut f = fixture(
-            generation_row(
-                "gen-2",
-                "Host/host-system",
-                ActivationMode::Switch,
-                Some("gen-1"),
-                GENERATION_UID,
-            ),
-            RecordingManager::new(GENERATION_UID).with_row(generation_row(
-                "gen-1",
-                "Host/host-system",
-                ActivationMode::Switch,
-                None,
-                [0x41; 16],
-            )),
-        );
-        let mut d = driver(
-            effects.clone(),
-            Arc::new(crate::FailClosedActivationVerifier),
-        )
-        .await;
-        d.reconcile(&mut f.ctx).await.expect("reconcile");
 
-        assert!(
-            effects.dispatches().is_empty(),
-            "the fail-closed verifier must refuse before any effect"
-        );
-        let projected = status(&f.ctx);
-        assert_eq!(
-            projected.outcome(),
-            Some(ActivationOutcomeCode::HelperRefused)
-        );
-    }
 
     // -- guest-target reconcile -----------------------------------------------
 
@@ -1543,7 +1357,7 @@ mod tests {
     #[tokio::test]
     async fn guest_target_mints_the_runner_as_an_owned_process_resource() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);
-        let manager = RecordingManager::new(GENERATION_UID);
+        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID);
         let mut f = fixture(
             generation_row(
                 "gen-1",
@@ -1563,7 +1377,7 @@ mod tests {
         // KTD13: the launch is a Process-resource mint through the manager,
         // never a spawn from this controller, and the child row is committed
         // before its spawn notification (F1).
-        let log = manager.log();
+        let log = manager.call_order();
         let ensure = log
             .iter()
             .position(|entry| entry.starts_with("ensure:EphemeralProcess/"))
@@ -1610,7 +1424,7 @@ mod tests {
     #[tokio::test]
     async fn guest_rejoin_waits_on_the_settle_edge_without_duplicating_the_runner() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);
-        let manager = RecordingManager::new(GENERATION_UID);
+        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID);
         let mut f = fixture(
             generation_row(
                 "gen-1",
@@ -1625,7 +1439,7 @@ mod tests {
         d.reconcile(&mut f.ctx).await.expect("first reconcile");
         d.reconcile(&mut f.ctx).await.expect("rejoin reconcile");
 
-        let log = manager.log();
+        let log = manager.call_order();
         assert_eq!(
             log.iter().filter(|entry| entry.starts_with("ensure:")).count(),
             1,
@@ -1639,11 +1453,68 @@ mod tests {
         assert_eq!(status(&f.ctx).detail(), ActivationDetail::Applying);
     }
 
+    #[test]
+    fn host_handoff_outcome_maps_equal_generations_to_stale() {
+        assert_eq!(
+            host_handoff_outcome(HostHandoffResult::Completed {
+                source_generation: 2,
+                target_generation: 2,
+            }),
+            ActivationOutcomeCode::StaleGeneration
+        );
+        assert_eq!(
+            host_handoff_outcome(HostHandoffResult::Completed {
+                source_generation: 1,
+                target_generation: 2,
+            }),
+            ActivationOutcomeCode::Succeeded
+        );
+    }
+
+    #[test]
+    fn activation_detail_covers_superseded_and_adopted_branches() {
+        // Superseded: a non-success outcome observed at a Ready phase.
+        assert_eq!(
+            activation_detail(
+                ActivationMode::Switch,
+                ActivationOutcomeCode::StaleGeneration,
+                ResourcePhase::Ready,
+            ),
+            ActivationDetail::Superseded
+        );
+        assert_eq!(
+            activation_detail(
+                ActivationMode::Boot,
+                ActivationOutcomeCode::HelperFailed,
+                ResourcePhase::Ready,
+            ),
+            ActivationDetail::Superseded
+        );
+        // Adopted wins regardless of mode and phase.
+        assert_eq!(
+            activation_detail(
+                ActivationMode::Switch,
+                ActivationOutcomeCode::Adopted,
+                ResourcePhase::Pending,
+            ),
+            ActivationDetail::Adopted
+        );
+        // A non-success outcome at a non-Ready phase stays Planning.
+        assert_eq!(
+            activation_detail(
+                ActivationMode::Switch,
+                ActivationOutcomeCode::StaleGeneration,
+                ResourcePhase::Pending,
+            ),
+            ActivationDetail::Planning
+        );
+    }
+
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_an_existing_runner_and_reports_missing_without_one() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);
-        let manager = RecordingManager::new(GENERATION_UID);
+        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID);
         let row = generation_row(
             "gen-1",
             "Guest/guest-a",
@@ -1661,7 +1532,7 @@ mod tests {
             f.ctx.status::<ActivationDriverStatus>().is_none(),
             "no runner to rejoin: recovery projects nothing"
         );
-        assert!(manager.log().is_empty());
+        assert!(manager.call_order().is_empty());
 
         // The Host target realizes through the broker authority.
         let mut host = fixture(
@@ -1672,7 +1543,7 @@ mod tests {
                 None,
                 GENERATION_UID,
             ),
-            RecordingManager::new(GENERATION_UID),
+            RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID),
         );
         let mut host_driver = driver(effects, Arc::new(AllowVerifier)).await;
         assert_eq!(
@@ -1681,12 +1552,65 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn recover_adopts_an_existing_owned_runner_and_projects_staged() {
+        let runner_ref = activation_runner_ref(
+            &ResourceRef::parse(&format!("{ACTIVATION_TYPE_NAME}/gen-1"))
+                .expect("generation ref"),
+        );
+        let manager = RecordingManagerEndpoint::new()
+            .with_owner_uid(GENERATION_UID)
+            .with_row(StoredDesiredResource {
+                key: ResourceKey::new("work", RUNNER_TYPE_NAME, runner_ref.name().as_str()),
+                owner_uid: Some(GENERATION_UID),
+                ..generation_row(
+                    "gen-1",
+                    "Guest/guest-a",
+                    ActivationMode::Switch,
+                    None,
+                    [0x77; 16],
+                )
+            });
+        let mut f = fixture(
+            generation_row(
+                "gen-1",
+                "Guest/guest-a",
+                ActivationMode::Switch,
+                None,
+                GENERATION_UID,
+            ),
+            manager.clone(),
+        );
+        let mut d = driver(
+            FakeActivationEffects::new(HostHandoffResult::Incomplete),
+            Arc::new(AllowVerifier),
+        )
+        .await;
+
+        assert_eq!(
+            d.recover(&mut f.ctx).await.expect("recover"),
+            RecoveryOutcome::Adopted
+        );
+        let projected = status(&f.ctx);
+        assert_eq!(projected.phase(), ResourcePhase::Pending);
+        assert_eq!(projected.detail(), ActivationDetail::Staged);
+        assert!(
+            manager
+                .call_order()
+                .iter()
+                .all(|call| call.starts_with("watch:")),
+            "adoption must not re-mint or dispatch: {:?}",
+            manager.call_order()
+        );
+    }
+
     // -- finalize: the owned runner retires before the generation (F3) --------
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_the_owned_runner_before_the_generation_teardown() {
-        let manager = RecordingManager::new(GENERATION_UID).with_row(StoredDesiredResource {
+        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID).with_row(StoredDesiredResource {
             owner_uid: Some(GENERATION_UID),
             ..generation_row(
                 "runner-gen-1",
@@ -1716,7 +1640,7 @@ mod tests {
         let failure = d.finalize(&mut ctx).await.expect_err("owned runner still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert!(
-            manager.log().iter().any(|call| call.starts_with("delete:")),
+            manager.call_order().iter().any(|call| call.starts_with("delete:")),
             "the owned runner is nudged through its own finalize-before-delete pass"
         );
 
@@ -1730,7 +1654,7 @@ mod tests {
     #[tokio::test]
     async fn delete_retires_only_the_owned_runner_child_and_is_idempotent() {
         let effects = FakeActivationEffects::new(HostHandoffResult::Incomplete);
-        let manager = RecordingManager::new(GENERATION_UID);
+        let manager = RecordingManagerEndpoint::new().with_owner_uid(GENERATION_UID);
         let mut f = fixture(
             generation_row(
                 "gen-2",
@@ -1754,7 +1678,7 @@ mod tests {
         .as_str()
         .to_owned();
         let deletions = manager
-            .log()
+            .call_order()
             .into_iter()
             .filter(|entry| entry.starts_with("delete:"))
             .collect::<BTreeSet<_>>();

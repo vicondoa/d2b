@@ -644,6 +644,49 @@ mod tests {
     }
 
     #[test]
+    fn a_reduced_remote_verdict_retries_only_immediate() {
+        let read = || driver(read_profile(), 4, false, false);
+        assert_eq!(
+            read().record_remote_verdict(ResourceErrorKind::Backpressure, RetryClass::Immediate),
+            AttemptDisposition::RetryNow
+        );
+        // A reduced AfterDelay verdict has no delay scalar left; Never and
+        // Reauthorize are terminal regardless of the remaining budget.
+        for retry in [RetryClass::AfterDelay, RetryClass::Never, RetryClass::Reauthorize] {
+
+            assert_eq!(
+                read().record_remote_verdict(ResourceErrorKind::Backpressure, retry),
+                AttemptDisposition::Fail(ClientError::Remote {
+                    kind: ResourceErrorKind::Backpressure,
+                    retry,
+                })
+            );
+        }
+        // Attachments and an exhausted budget both suppress the retry..
+        assert_eq!(
+            driver(read_profile(),4,false,true).record_remote_verdict(
+                ResourceErrorKind::Backpressure,
+                RetryClass::Immediate,
+            ),
+            AttemptDisposition::Fail(ClientError::Remote {
+                kind: ResourceErrorKind::Backpressure,
+                retry: RetryClass::Immediate,
+            })
+        );
+        let mut exhausted = driver(read_profile(),1,false,false);
+        exhausted
+            .begin_attempt(&CancellationToken::default())
+            .expect("only attempt");
+        assert_eq!(
+            exhausted.record_remote_verdict(ResourceErrorKind::Backpressure, RetryClass::Immediate),
+            AttemptDisposition::Fail(ClientError::Remote {
+                kind: ResourceErrorKind::Backpressure,
+                retry: RetryClass::Immediate,
+            })
+        );
+    }
+
+    #[test]
     fn the_attempt_timeout_never_exceeds_the_method_ceiling() {
         let profile = MethodProfile::new(ZoneServiceKind::Resource, false, false, 5).unwrap();
         let mut driver = driver(profile, 2, false, false);

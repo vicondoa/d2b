@@ -2170,15 +2170,16 @@ mod tests {
     use crate::effects::{ProviderAdoption, ProviderLiveness};
     use crate::execution::ExecutionMode;
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::process::ProcessSpec;
     use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
     use d2b_process_conformance::testing::fixtures;
     use d2b_process_conformance::{
         AdoptionCandidate, AdoptionCondition, IdentityBinding, ObservedIdentity,
         ProcessIdentityDigest, ProcessPhaseClass, ProcessStatusReport, WaitReapOwner,
     };
+    use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext,
-        WatchRegistration,
+        ChildEnsure, ManagerEndpoint, ResourceContext, WatchRegistration,
     };
     use d2b_resource_runtime::driver::{
         DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriverFactory,
@@ -2191,13 +2192,12 @@ mod tests {
     };
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
-    use parking_lot::Mutex;
     use tokio::sync::mpsc;
 
     use super::{
         AllowedSources, EPHEMERAL_PROCESS_TYPE_NAME, PROCESS_TYPE_NAME, ProcessDriver,
         ProcessDriverArgs, ProcessDriverErrorKind, ProcessDriverFactory, ProcessDriverStatus,
-        process_family_descriptors, process_spec_decoder,
+        process_family_descriptors, process_spec_decoder, restart_delay,
     };
 
     use crate::test_support::{FakeFacets, FakeFacetsConfig};
@@ -2464,57 +2464,6 @@ mod tests {
         }
     }
 
-    /// Recording requeue scheduler over tokio paused time: every schedule is
-    /// recorded with its exact delay and delivers one id after the backoff.
-    #[derive(Clone)]
-    struct RecordingRequeue {
-        inner: Arc<Mutex<RecordingRequeueInner>>,
-    }
-
-    struct RecordingRequeueInner {
-        calls: Vec<(ResourceKey, Duration)>,
-        next: u64,
-        delivered_tx: Option<mpsc::UnboundedSender<u64>>,
-    }
-
-    impl RecordingRequeue {
-        fn new() -> (Self, mpsc::UnboundedReceiver<u64>) {
-            let (tx, rx) = mpsc::unbounded_channel();
-            (
-                Self {
-                    inner: Arc::new(Mutex::new(RecordingRequeueInner {
-                        calls: Vec::new(),
-                        next: 1,
-                        delivered_tx: Some(tx),
-                    })),
-                },
-                rx,
-            )
-        }
-
-        fn recorded(&self) -> Vec<(ResourceKey, Duration)> {
-            self.inner.lock().calls.clone()
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, key: ResourceKey, after: Duration) -> RequeueId {
-            let mut inner = self.inner.lock();
-            let id = inner.next;
-            inner.next += 1;
-            inner.calls.push((key, after));
-            if let Some(tx) = inner.delivered_tx.clone() {
-                tokio::spawn(async move {
-                    tokio::time::sleep(after).await;
-                    let _ = tx.send(id);
-                });
-            }
-            RequeueId(id)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
-
     struct Fixture {
         ctx: ResourceContext,
         effects: mpsc::UnboundedReceiver<d2b_resource_runtime::context::EffectCompleted>,
@@ -2562,11 +2511,7 @@ mod tests {
 
     impl Fixture {
         fn requeue_calls(&self) -> Vec<Duration> {
-            self.requeue
-                .recorded()
-                .into_iter()
-                .map(|(_, after)| after)
-                .collect()
+            self.requeue.scheduled()
         }
     }
 
@@ -4325,41 +4270,7 @@ mod tests {
         }
     }
 
-    /// The terminal set is the closed unresolvable-ticket spellings, not every
-    /// launch error: a genuine provider-effect refusal - the identity the
-    /// ticket path could not bind yet is the case the seeding exists for -
-    /// still drains the restart budget and retries at the policy backoff.
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-#[tokio::test(flavor = "current_thread", start_paused = true)]
-    async fn durable_provider_effect_launch_failure_still_retries_under_the_budget() {
-        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
-            adoption: VecDeque::from([ProviderAdoption::Absent]),
-            launch: Err("provider-controller-provider-identity-missing".to_owned()),
-            ..FakeFacetsConfig::default()
-        }));
-        let mut f = fixture(test_row());
-        let mut driver = driver(fake.clone()).await;
-
-        expect_in_progress(driver.reconcile(&mut f.ctx).await);
-        yield_until_effects_settled().await;
-        let completed = f.effects.recv().await.expect("completion");
-        assert!(matches!(
-            completed.result,
-            d2b_resource_runtime::context::EffectResult::Failed(failure)
-                if failure.class() == FailureClass::Retryable
-        ));
-        assert_eq!(driver.restart_count(), 1);
-
-        // The next pass schedules exactly one policy-backoff requeue, and it
-        // reports the scheduled retry (never Ready: no process exists yet).
-        assert_eq!(
-            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
-            ReconcileOutcome::RetryScheduled
-        );
-        assert_eq!(f.requeue_calls(), [Duration::from_secs(1)]);
-    }
-
-    // -- validate ------------------------------------------------------------
+// -- validate ------------------------------------------------------------
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
@@ -4388,5 +4299,50 @@ mod tests {
         let failure = driver.validate(&mut f.ctx).await.unwrap_err();
         assert_eq!(failure.class(), FailureClass::Terminal);
         assert_eq!(failure.op(), DriverOp::Validate);
+    }
+
+// -- execution-target gate -------------------------------------------------
+
+/// A Guest `executionRef` under a Host-mode driver is refused
+/// `process-execution-unsupported`: the Host driver drives Host-executing
+/// rows only, and the whole Guest-mode gate is otherwise unpinned.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+    async fn validate_rejects_a_guest_execution_under_a_host_driver() {
+        let mut row = test_row();
+        row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Guest/vm-a","processClass":"worker","template":"reaction","drainTimeout":"250ms"}"#
+            .to_vec();
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
+        let mut f = fixture(row);
+        let mut driver = driver(fake).await;
+
+        let failure = driver.validate(&mut f.ctx).await.unwrap_err();
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.op(), DriverOp::Validate);
+        assert!(
+            failure.to_string().contains("process-execution-unsupported"),
+            "failure names the execution gate: {failure}"
+        );
+    }
+
+// -- restart backoff arithmetic -------------------------------------------
+
+/// The preserved restart backoff: `base * multiplier^(count-1)`, capped at
+/// `backoff_max`. Every restart test observes count == 1 (delay == base),
+/// so the 2nd+ restart arithmetic and the cap are pinned here.
+#[test]
+    fn restart_delay_backs_off_exponentially_and_caps_at_the_maximum() {
+        let spec: ProcessSpec = serde_json::from_slice(
+            br#"{"executionRef":"Host/host-system","processClass":"worker","template":"reaction","restartPolicy":{"backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"maxRestarts":2,"resetAfter":"300s"}}"#,
+        )
+        .expect("spec decodes");
+        assert_eq!(restart_delay(&spec, 1), Duration::from_secs(1), "first restart waits the base");
+        assert_eq!(restart_delay(&spec, 2), Duration::from_secs(2), "2x multiplier");
+        assert_eq!(restart_delay(&spec, 3), Duration::from_secs(4), "4x multiplier");
+        assert_eq!(
+            restart_delay(&spec, 7),
+            Duration::from_secs(60),
+            "the exponential backoff is capped at backoff_max"
+        );
     }
 }

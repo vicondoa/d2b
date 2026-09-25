@@ -10,7 +10,7 @@
   "features": [],
   "default_features": false,
   "source_authority": "Cargo.lock",
-  "lock_sha256": "b07b0e99bdd12d67979d2608dba5aa396e6aea33b20911e68b099e1c06a956ba",
+  "lock_sha256": "8353d2e4630f11f8ed80cd5dff151f60e73663713eddc0236f76a7e321b50809",
   "packages": [
     {
       "id": "adler2@2.0.1#registry+https://github.com/rust-lang/crates.io-index",
@@ -700,6 +700,12 @@
       "from": "crypto-common@0.1.7#registry+https://github.com/rust-lang/crates.io-index",
       "to": "typenum@1.20.1#registry+https://github.com/rust-lang/crates.io-index",
       "kind": "normal",
+      "target": null
+    },
+    {
+      "from": "d2b-audit@0.0.0-bootstrap#path",
+      "to": "d2b-core@0.0.0-bootstrap#path",
+      "kind": "dev",
       "target": null
     },
     {

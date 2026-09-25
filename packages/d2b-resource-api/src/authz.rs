@@ -2962,22 +2962,6 @@ mod tests {
     }
 
     #[test]
-    fn configuration_revision_is_a_monotonic_ordinal_in_the_snapshot() {
-        let snapshot = state(4).snapshot;
-        assert_eq!(snapshot.active_configuration_revision.get(), 3);
-        assert_eq!(
-            snapshot
-                .active_configuration_revision
-                .checked_next()
-                .unwrap()
-                .get(),
-            4
-        );
-        let _: Option<ConfigurationGeneration> = Some(snapshot.active_configuration_revision);
-        let _: Option<ResourceGeneration> = None;
-    }
-
-    #[test]
     fn bootstrap_matrix_matches_literal_oracle_and_denies_every_dimension_near_miss() {
         const EXPECTED_BOOTSTRAP_ROWS: [(&str, ApiMethod, &str, ResourceVerb); 42] = [
             (

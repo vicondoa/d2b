@@ -13,7 +13,7 @@
 
 use std::{
     future::Future,
-    pin::{Pin, pin},
+    pin::Pin,
     sync::{Mutex, MutexGuard, mpsc},
     task::{Context, Poll, Waker},
     thread,
@@ -21,6 +21,7 @@ use std::{
 };
 
 use d2b_core::loader_worker::{self, LoaderRefusal, MAX_LOADER_QUEUE_DEPTH};
+use d2b_core::test_support::block_on;
 
 /// Longest a refusal may take before the test declares the caller parked.
 const REFUSAL_DEADLINE: Duration = Duration::from_secs(10);
@@ -34,20 +35,6 @@ fn worker_lock() -> MutexGuard<'static, ()> {
     WORKER_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Drive a future with no executor, reactor, or timer: a no-op waker and a
-/// hand-rolled poll loop, as the other tests in this workspace do.
-fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    let mut future = pin!(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => thread::yield_now(),
-        }
-    }
 }
 
 /// Await a `run` future on a scratch thread: a regression that parks the caller

@@ -17,6 +17,7 @@ pub struct FakeServingEffects {
     log: Arc<Mutex<Vec<String>>>,
     ready: std::sync::atomic::AtomicBool,
     mounted: std::sync::atomic::AtomicBool,
+    fail_remove_socket: std::sync::atomic::AtomicBool,
 }
 
 impl FakeServingEffects {
@@ -32,6 +33,7 @@ impl FakeServingEffects {
             log,
             ready: std::sync::atomic::AtomicBool::new(false),
             mounted: std::sync::atomic::AtomicBool::new(false),
+            fail_remove_socket: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -40,9 +42,14 @@ impl FakeServingEffects {
         self.ready.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// The guest observes the mount: the drain gate must block.
+/// The guest observes the mount: the drain gate must block.
     pub fn make_mounted(&self) {
         self.mounted.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Script `remove_socket` to fail with a serving error.
+    pub fn set_fail_remove_socket(&self, fail: bool) {
+        self.fail_remove_socket.store(fail, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The ordered serving-effect log, shared with any manager logger.
@@ -82,6 +89,9 @@ struct ScriptedRemove(Arc<FakeServingEffects>);
 impl crate::facets::SocketRemoveSource for ScriptedRemove {
     async fn remove(&self, _socket: &SocketIdentity) -> Result<(), String> {
         self.0.log.lock().push("remove-socket".to_owned()); // async-gate-allow: test-support recorder lock
+        if self.0.fail_remove_socket.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("scripted remove failure".to_owned());
+        }
         Ok(())
     }
 }
@@ -107,6 +117,9 @@ impl BindingDriverEffects for FakeServingEffects {
 
     async fn remove_socket(&self, _socket: &SocketIdentity) -> Result<(), String> {
         self.log.lock().push("remove-socket".to_owned()); // async-gate-allow: test-support recorder lock
+        if self.fail_remove_socket.load(std::sync::atomic::Ordering::SeqCst){
+            return Err("scripted remove failure".to_owned());
+        }
         Ok(())
     }
 

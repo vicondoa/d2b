@@ -398,4 +398,60 @@ mod tests {
         );
         assert!(agent.is_empty());
     }
+
+    /// `process_effect` records the closed process-effect event with its
+    /// redacted Zone, and every out-of-vocabulary token is refused without
+    /// retaining input.
+    #[test]
+    fn process_effect_records_closed_tokens_and_rejects_unknown() {
+        let mut agent = ProviderAgentProcess::new("work", "observability-otel", 2).unwrap();
+        agent
+            .process_effect("launch", "minijail", "system", "ok")
+            .unwrap();
+        let event = agent.drain().next().unwrap();
+        assert_eq!(event.method(), "launch");
+        assert_eq!(event.record_class(), "process-effect");
+        assert_eq!(event.transport_class(), "zone_link");
+        assert_eq!(event.outcome(), ProviderAgentAuditOutcome::Accepted);
+        assert_eq!(event.zone(), "work");
+        let rendered = serde_json::to_string(&event).unwrap();
+        assert!(rendered.contains("process-effect"));
+        assert!(!rendered.contains("work"), "the Zone is redacted");
+
+        assert_eq!(
+            agent.process_effect("launch", "not-a-provider", "system", "ok"),
+            Err(ProviderAgentError::InvalidInput),
+            "an unknown provider token is refused"
+        );
+        assert_eq!(
+            agent.process_effect("launch", "minijail", "root", "ok"),
+            Err(ProviderAgentError::InvalidInput),
+            "an unknown domain token is refused"
+        );
+        assert_eq!(
+            agent.process_effect("exec", "minijail", "system", "ok"),
+            Err(ProviderAgentError::InvalidInput),
+            "an unknown event token is refused"
+        );
+        assert_eq!(
+            agent.process_effect("launch", "minijail", "system", "unexpected"),
+            Err(ProviderAgentError::InvalidInput),
+            "an unknown outcome is refused"
+        );
+        assert!(agent.is_empty());
+    }
+
+    /// The bounded audit ring: a full ring refuses with
+    /// `AuditBackpressure` instead of evicting or growing.
+    #[test]
+    fn the_full_audit_ring_refuses_with_backpressure() {
+        let mut agent = ProviderAgentProcess::new("work", "observability-otel", 1).unwrap();
+        agent.session_connect("connect", "allowed", "ok").unwrap();
+        assert_eq!(
+            agent.session_connect("connect", "allowed", "ok"),
+            Err(ProviderAgentError::AuditBackpressure),
+            "a full ring refuses instead of evicting"
+        );
+        assert_eq!(agent.len(), 1);
+    }
 }

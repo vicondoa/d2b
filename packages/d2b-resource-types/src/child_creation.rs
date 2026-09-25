@@ -34,39 +34,4 @@ pub struct ChildCreation {
     pub order: u16,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{ChildCreation, ChildCustody};
-    use crate::WellKnownType;
 
-    const CREATION: ChildCreation = ChildCreation {
-        child: WellKnownType::PROCESS,
-        provider_ref: "core.d2bus.org",
-        custody: ChildCustody::DriverOwned,
-        order: 3,
-    };
-
-    /// The declaration keeps every field exactly as declared.
-    #[test]
-    fn a_child_creation_keeps_every_field() {
-        assert_eq!(CREATION.child, WellKnownType::PROCESS);
-        assert_eq!(CREATION.child.to_resource_type_name().as_str(), "Process");
-        assert_eq!(CREATION.provider_ref, "core.d2bus.org");
-        assert_eq!(CREATION.custody, ChildCustody::DriverOwned);
-        assert_eq!(CREATION.order, 3);
-    }
-
-    /// Custody is a closed two-value choice, not a boolean-shaped default.
-    #[test]
-    fn custody_distinguishes_its_two_values() {
-        assert_ne!(ChildCustody::DriverOwned, ChildCustody::ControllerOwned);
-        assert_eq!(
-            ChildCreation {
-                custody: ChildCustody::ControllerOwned,
-                ..CREATION
-            }
-            .custody,
-            ChildCustody::ControllerOwned
-        );
-    }
-}

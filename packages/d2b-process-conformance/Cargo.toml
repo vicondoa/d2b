@@ -15,6 +15,12 @@ await_holding_refcell_ref = "deny"
 
 [dependencies]
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+# The no-op-waker driver (`testing::block_on`) is re-exported from
+# `d2b_core::test_support` (KTD2). It must be a normal dependency: the
+# `testing` module is public API consumed by sibling Provider crates'
+# suites, so the re-export has to resolve in every build of this crate,
+# not only its own tests.
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2.workspace = true

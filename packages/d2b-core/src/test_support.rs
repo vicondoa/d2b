@@ -8,7 +8,28 @@ use crate::sandbox_profile::{
     BindMount, CgroupPlacement, MountPolicy, NamespaceSet, WritablePath,
 };
 use crate::processes::{ProcessRole, RoleProfile, RoleUserNamespace};
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::pin;
+use std::task::{Context, Poll, Waker};
+
+/// Drive a future to completion on the calling thread.
+///
+/// A no-op-waker poll loop: every seam this workspace tests is immediately
+/// ready, so the driver needs no executor, reactor, or timer. This is the
+/// sanctioned home for the `block_on` helpers that Provider and daemon
+/// crates used to carry as private copies.
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => std::hint::spin_loop(),
+        }
+    }
+}
 
 // ── RoleProfileBuilder ──────────────────────────────────────────────────────
 
@@ -418,5 +439,94 @@ impl ResolvedRunnerIntentBuilder {
 impl Default for ResolvedRunnerIntentBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── scratch_root ────────────────────────────────────────────────────────────
+
+/// Resolve a writable scratch root for a unit test.
+///
+/// The base is `TEST_TMPDIR` (the Bazel test-sandbox var) when set, else
+/// `CARGO_TARGET_TMPDIR`, else the crate's gitignored `target/` dir, else the
+/// system temp dir; the returned path is the stable
+/// `<base>/d2b-test-scratch/<test_name>` directory, created on demand. The
+/// path is deliberately stable across calls with the same name so a test that
+/// writes through one call and reads through another resolves the same
+/// directory; callers that need a fresh private directory join their own
+/// unique suffix onto it. This is the sanctioned home for the
+/// `test_scratch_root` / `test_root` / `writable_manifest_dir` helpers that
+/// broker, daemon, runtime and audit crates used to carry as private copies.
+pub fn scratch_root(test_name: &str) -> PathBuf {
+    let base = std::env::var_os("TEST_TMPDIR")
+        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("CARGO_MANIFEST_DIR")
+                .map(PathBuf::from)
+                .map(|dir| dir.join("target"))
+        })
+        .unwrap_or_else(std::env::temp_dir);
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    let root = {
+        let root = base.join("d2b-test-scratch").join(test_name);
+        std::fs::create_dir_all(&root).expect("create test scratch root");
+        root
+    };
+    root
+}
+
+// ── sample_zone_native_host_json ────────────────────────────────────────────
+
+/// The v3 host contract doc the generation side emits: `empty_zone_native_host`
+/// fields plus the declared NetworkManager unmanaged contract, with
+/// `tableHashAfterApply`/optional fields skipped the same way serde
+/// serialises them.
+pub fn sample_zone_native_host_json() -> serde_json::Value {
+    serde_json::json!({
+        "schemaVersion": "v3",
+        "site": { "allowUnsafeEastWest": false },
+        "environments": [],
+        "nftables": {
+            "family": "inet",
+            "table": "d2b",
+            "chains": [],
+            "ownershipId": ""
+        },
+        "networkManager": {
+            "filePath": "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf",
+            "matchCriteria": ["interface-name:d2b-*"],
+            "reloadBehavior": "atomic-reload",
+            "ownership": {
+                "owner": "root",
+                "group": "d2bd",
+                "mode": "0640",
+                "driftPolicy": "preserve"
+            }
+        },
+        "hostsFile": {
+            "startMarker": "# d2b-managed begin",
+            "endMarker": "# d2b-managed end",
+            "rule": ""
+        },
+        "kernelModules": [],
+        "fdOwnership": [],
+        "cloudHypervisorCapabilities": []
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scratch_root_resolves_the_same_path_for_one_test_name() {
+        // The stability contract: a test that writes through one call and
+        // reads through another resolves the same directory. Callers that
+        // need a private directory join their own unique suffix.
+        let first = scratch_root("stability-probe");
+        let second = scratch_root("stability-probe");
+        assert_eq!(first, second, "one name resolves one directory");
+        assert_ne!(first, scratch_root("stability-probe-other"));
+        assert!(first.is_dir(), "the scratch root is created on demand");
     }
 }

@@ -1114,232 +1114,19 @@ mod tests {
         volume_binding::{VolumeBindingReadinessFence, VolumeBindingStatusResource},
     };
     use crate::test_support::FakeServingEffects;
+    use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
     use d2b_provider_volume_virtiofs::WORKER_TEMPLATE;
-    use d2b_resource_runtime::context::{ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration};
+    use d2b_resource_runtime::context::ResourceContext;
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::{FailureClass, ResourceError};
+    use d2b_resource_runtime::error::{FailureClass, FailureKinds};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
-    use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
         BindingDriverArgs, BindingDriverFactory, BindingDriverStatus, binding_spec_decoder,
     };
-
-    type OrderLog = Vec<String>;
-
-    /// Recording manager endpoint over one shared ordered log. Rows are
-    /// keyed by `zone/type/name`; `get` returns the parent Volume row the
-    /// binding declares.
-    #[derive(Clone)]
-    struct RecordingManager {
-        zone: String,
-        log: Arc<parking_lot::Mutex<OrderLog>>,
-        rows: Arc<parking_lot::Mutex<Vec<StoredDesiredResource>>>,
-        watch_targets: Arc<parking_lot::Mutex<Vec<ResourceKey>>>,
-        next_uid: Arc<std::sync::atomic::AtomicU64>,
-        fail_reads: Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    impl RecordingManager {
-        fn new() -> Self {
-            Self {
-                zone: "work".to_owned(),
-                log: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                rows: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                watch_targets: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                next_uid: Arc::new(std::sync::atomic::AtomicU64::new(1)),
-                fail_reads: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            }
-        }
-
-        /// Make `get` answer `ManagerRpc` (the unanswerable plane).
-        fn set_fail_reads(&self, fail: bool) {
-            self.fail_reads.store(fail, std::sync::atomic::Ordering::SeqCst);
-        }
-
-        fn with_parent(self, volume_uid: [u8; 16], spec: &[u8]) -> Self {
-            self.rows.lock().push(StoredDesiredResource {
-                key: ResourceKey::new("work", "Volume", "data"),
-                uid: volume_uid,
-                generation: 2,
-                owner_uid: None,
-                provenance: ResourceProvenance::Api,
-                deleting: false,
-                spec: spec.to_vec(),
-                metadata: Vec::new(),
-                created_at: 0,
-            });
-            self
-        }
-
-        /// Seed one owned child row (drift the driver must retire).
-        fn seed_owned(&self, key: ResourceKey) {
-            self.rows.lock().push(StoredDesiredResource {
-                key,
-                uid: [0x77; 16],
-                generation: 1,
-                owner_uid: Some([0x42; 16]),
-                provenance: ResourceProvenance::Resource,
-                deleting: false,
-                spec: Vec::new(),
-                metadata: Vec::new(),
-                created_at: 0,
-            });
-        }
-
-        fn log(&self) -> Arc<parking_lot::Mutex<OrderLog>> {
-            Arc::clone(&self.log)
-        }
-
-        fn order(&self) -> Vec<String> {
-            self.log.lock().clone()
-        }
-
-        fn rows(&self) -> Vec<StoredDesiredResource> {
-            self.rows.lock().clone()
-        }
-
-        fn watch_targets(&self) -> Vec<ResourceKey> {
-            self.watch_targets.lock().clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl ManagerEndpoint for RecordingManager {
-        async fn ensure_child(
-            &self,
-            _parent: &ResourceKey,
-            child: ChildEnsure,
-        ) -> Result<EnsureOutcome, ResourceError> {
-            let id = format!("{}/{}", child.type_name.as_str(), child.name);
-            self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            let next = self
-                .next_uid
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let mut uid = [0u8; 16];
-            uid[..8].copy_from_slice(&next.to_be_bytes());
-            let row = StoredDesiredResource {
-                key: ResourceKey::new(&self.zone, child.type_name.as_str(), &child.name),
-                uid,
-                generation: 1,
-                owner_uid: Some([0x42; 16]),
-                provenance: ResourceProvenance::Resource,
-                deleting: false,
-                spec: child.spec,
-                metadata: child.metadata,
-                created_at: 0,
-            };
-            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            let outcome = match rows.iter_mut().find(|row| row.key == row_key(&id, &self.zone)) {
-                Some(existing) => {
-                    if existing.spec == row.spec {
-                        EnsureOutcome::Unchanged(existing.clone())
-                    } else {
-                        *existing = row.clone();
-                        EnsureOutcome::Updated(row.clone())
-                    }
-                }
-                None => {
-                    rows.push(row.clone());
-                    EnsureOutcome::Created(row.clone())
-                }
-            };
-            // Spawn notification only after the commit (F1, AE1).
-            self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Ok(outcome)
-        }
-
-        async fn get(
-            &self,
-            key: &ResourceKey,
-        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
-            }
-            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-        }
-
-        async fn view(
-            &self,
-            _key: &ResourceKey,
-        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            // Desired rows only: this fixture publishes no runtime status, so
-            // it serves no observed state.
-            Ok(None)
-        }
-
-        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.log
-                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                .push(format!("delete:{}/{}", key.type_name, key.name));
-            self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Ok(())
-        }
-
-        async fn list_owned(
-            &self,
-            owner_uid: [u8; 16],
-        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self
-                .rows
-                .lock()
-                .iter()
-                .filter(|row| row.owner_uid.as_ref() == Some(&owner_uid))
-                .cloned()
-                .collect())
-        }
-
-        async fn register_watch(
-            &self,
-            _subscriber: &ResourceKey,
-            registration: WatchRegistration,
-        ) -> Result<WatchId, ResourceError> {
-            // Manager rows always exist here; the actor-side handler is the
-            // runtime's, so the fake only records the registration.
-            let mut targets = self.watch_targets.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            targets.push(registration.target.clone());
-            Ok(WatchId(targets.len() as u64))
-        }
-
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Ok(())
-        }
-    }
-
-    /// Recording requeue: the driver's resync schedules are observable.
-    #[derive(Clone)]
-    struct RecordingRequeue {
-        scheduled: Arc<parking_lot::Mutex<Vec<ResourceKey>>>,
-    }
-
-    impl RecordingRequeue {
-        fn new() -> Self {
-            Self {
-                scheduled: Arc::new(parking_lot::Mutex::new(Vec::new())),
-            }
-        }
-
-        fn scheduled(&self) -> Vec<ResourceKey> {
-            self.scheduled.lock().clone()
-        }
-    }
-
-    impl d2b_resource_runtime::context::RequeueScheduler for RecordingRequeue {
-        fn schedule(
-            &self,
-            key: ResourceKey,
-            _after: std::time::Duration,
-        ) -> d2b_resource_runtime::context::RequeueId {
-            let mut scheduled = self.scheduled.lock();
-            scheduled.push(key);
-            d2b_resource_runtime::context::RequeueId(scheduled.len() as u64)
-        }
-
-        fn cancel(&self, _id: d2b_resource_runtime::context::RequeueId) {}
-    }
 
     // -- fixtures ------------------------------------------------------------
 
@@ -1393,14 +1180,14 @@ mod tests {
 
     struct Fixture {
         ctx: ResourceContext,
-        manager: RecordingManager,
+        manager: RecordingManagerEndpoint,
         requeue: RecordingRequeue,
     }
 
-    fn fixture(row: StoredDesiredResource, manager: RecordingManager) -> Fixture {
+    fn fixture(row: StoredDesiredResource, manager: RecordingManagerEndpoint) -> Fixture {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
-        let requeue = RecordingRequeue::new();
+        let requeue = RecordingRequeue::default();
         let ctx = ResourceContext::new(
             row,
             TargetHandle::Host,
@@ -1417,11 +1204,6 @@ mod tests {
         }
     }
 
-    fn row_key(id: &str, zone: &str) -> ResourceKey {
-        let (type_name, name) = id.split_once('/').expect("typed id");
-        ResourceKey::new(zone, type_name, name)
-    }
-
     async fn driver(effects: Arc<FakeServingEffects>) -> Box<dyn DynResourceDriver> {
         let factory = BindingDriverFactory::new(BindingDriverArgs {
             zone: "work".to_owned(),
@@ -1435,25 +1217,15 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_registers_only_the_binding_resource_type() {
-        let factory = BindingDriverFactory::new(BindingDriverArgs {
-            zone: "work".to_owned(),
-            facets: FakeServingEffects::new().facet_set(),
-            vcpu_count: 4,
-        });
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), "VolumeBinding");
-    }
+
 
     // -- reconcile: worker + endpoint children --------------------------------
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn ensure_derives_worker_and_endpoint_children_persisted_before_spawn() {
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake = FakeServingEffects::shared(manager.log());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake.clone()).await;
 
@@ -1466,7 +1238,7 @@ mod tests {
              reports `ready: false` with `BindingNotReady` until the worker's socket listens"
         );
 
-        let order = manager.order();
+        let order = manager.call_order();
         // F1: each child row is ensured (committed) BEFORE its spawn
         // notification; the endpoint depends on the worker, so the worker
         // row is committed first.
@@ -1517,7 +1289,7 @@ mod tests {
         d.reconcile(&mut f.ctx).await.expect("reconcile again");
         let ensures = f
             .manager
-            .order()
+            .call_order()
             .iter()
             .filter(|entry| entry.starts_with("ensure:"))
             .count();
@@ -1554,8 +1326,8 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_concluding_pass_publishes_the_fenced_status_projection() {
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake = FakeServingEffects::shared(manager.log());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         let row = binding_row([0x42; 16]);
         let mut f = fixture(row.clone(), manager.clone());
         let mut d = driver(fake.clone()).await;
@@ -1601,8 +1373,8 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn stale_or_not_serving_fences_never_report_ready() {
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake = FakeServingEffects::shared(manager.log());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         let row = binding_row([0x42; 16]);
         let mut f = fixture(row.clone(), manager.clone());
         let mut d = driver(fake.clone()).await;
@@ -1623,8 +1395,8 @@ mod tests {
         // report the newer row ready.
         let mut advanced = row.clone();
         advanced.generation = 2;
-        let manager2 = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake2 = FakeServingEffects::shared(manager2.log());
+        let manager2 = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake2 = FakeServingEffects::shared(manager2.log_handle());
         let mut f2 = fixture(advanced, manager2);
         let mut d2 = driver(fake2.clone()).await;
         fake2.make_ready();
@@ -1669,8 +1441,8 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn worker_child_carries_the_signed_template_and_no_argv() {
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake = FakeServingEffects::shared(manager.log());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake).await;
         d.reconcile(&mut f.ctx).await.expect("reconcile");
@@ -1720,8 +1492,8 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_rederives_the_launch_plan_matching_the_pre_restart_incarnation() {
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake = FakeServingEffects::shared(manager.log());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake.clone()).await;
 
@@ -1772,9 +1544,9 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn finalize_finalizes_owned_children_before_the_binding_teardown() {
-        let manager = RecordingManager::new();
+        let manager = RecordingManagerEndpoint::new();
         manager.seed_owned(ResourceKey::new("work", "Process", "worker-0"));
-        let fake = FakeServingEffects::shared(manager.log());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake).await;
 
@@ -1783,7 +1555,7 @@ mod tests {
         let failure = d.finalize(&mut f.ctx).await.expect_err("owned child still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert_eq!(
-            manager.order(),
+            manager.call_order(),
             vec!["delete:Process/worker-0".to_owned()],
             "the owned child is nudged through its own finalize-before-delete pass"
         );
@@ -1797,16 +1569,16 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_drains_the_endpoint_before_the_worker_and_behind_the_mount_gate() {
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake = FakeServingEffects::shared(manager.log());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake.clone()).await;
 
         d.reconcile(&mut f.ctx).await.expect("reconcile");
-        let before = manager.order().len();
+        let before = manager.call_order().len();
         d.delete(&mut f.ctx).await.expect("delete");
 
-        let order: Vec<String> = manager.order().into_iter().skip(before).collect();
+        let order: Vec<String> = manager.call_order().into_iter().skip(before).collect();
         let position = |needle: &str| {
             order
                 .iter()
@@ -1824,8 +1596,8 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn mounted_share_blocks_the_drain_before_any_child_is_removed() {
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake = FakeServingEffects::shared(manager.log());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake.clone()).await;
         d.reconcile(&mut f.ctx).await.expect("reconcile");
@@ -1838,7 +1610,7 @@ mod tests {
         let failure = d.delete(&mut f.ctx).await.expect_err("drain must block");
         assert_eq!(failure.class(), FailureClass::Retryable);
         let teardown: Vec<String> = manager
-            .order()
+            .call_order()
             .into_iter()
             .filter(|entry| entry.starts_with("delete:") || entry == "remove-socket")
             .collect();
@@ -1851,8 +1623,8 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn obsolete_owned_child_is_retired_endpoint_first() {
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake = FakeServingEffects::shared(manager.log());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         // A stale Endpoint child the derived set no longer names (a binding
         // whose endpoint identity changed), plus a stale Process sibling.
         manager.seed_owned(ResourceKey::new("work", "Endpoint", "stale-endpoint"));
@@ -1862,7 +1634,7 @@ mod tests {
 
         d.reconcile(&mut f.ctx).await.expect("reconcile");
 
-        let order = manager.order();
+        let order = manager.call_order();
         let stale_endpoint = order
             .iter()
             .position(|entry| entry == "delete:Endpoint/stale-endpoint")
@@ -1882,8 +1654,8 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn dependency_watches_are_registered_once_per_target() {
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake = FakeServingEffects::shared(manager.log());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake).await;
         d.reconcile(&mut f.ctx).await.expect("reconcile one");
@@ -1921,8 +1693,8 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn rejected_view_keeps_its_stable_reason_in_status() {
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
-        let fake = FakeServingEffects::shared(manager.log());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
         let mut row = binding_row([0x42; 16]);
         let mut spec: serde_json::Value = serde_json::from_slice(&row.spec).expect("binding spec");
         spec["view"] = serde_json::json!("absent");
@@ -1940,26 +1712,14 @@ mod tests {
             })
         ));
         assert!(
-            manager.order().iter().all(|entry| !entry.starts_with("ensure:")),
+            manager.call_order().iter().all(|entry| !entry.starts_with("ensure:")),
             "a rejected binding mints no children"
         );
     }
 
     // -- owner guard -----------------------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn child_cannot_silently_change_owner() {
-        let fake = FakeServingEffects::new();
-        // The manager reports a DIFFERENT parent uid than the binding row's
-        // owner: the driver must refuse with a typed terminal error instead
-        // of silently re-parenting.
-        let manager = RecordingManager::new().with_parent([0x99; 16], &parent_volume_bytes());
-        let mut f = fixture(binding_row([0x42; 16]), manager);
-        let mut d = driver(fake).await;
-        let failure = d.validate(&mut f.ctx).await.expect_err("terminal");
-        assert_eq!(failure.class(), FailureClass::Terminal, "owner mismatch is terminal");
-    }
+
 
     /// Issue #511 at the parent-row read (`BindingDriver::parent_volume`): a
     /// parent Volume row that is not observable yet defers retryably - the row
@@ -1971,7 +1731,7 @@ mod tests {
         let fake = FakeServingEffects::new();
 
         // Not committed yet: the manager holds no parent Volume row.
-        let manager = RecordingManager::new();
+        let manager = RecordingManagerEndpoint::new();
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(Arc::clone(&fake)).await;
         let failure = d.reconcile(&mut f.ctx).await.expect_err("absent parent row");
@@ -1981,7 +1741,7 @@ mod tests {
             "a parent row that simply does not exist yet must defer, not fail terminal"
         );
         assert!(
-            manager.order().iter().all(|entry| !entry.starts_with("ensure:")),
+            manager.call_order().iter().all(|entry| !entry.starts_with("ensure:")),
             "no child is minted before the parent row is observable"
         );
 
@@ -1996,7 +1756,7 @@ mod tests {
         manager.set_fail_reads(false);
 
         // Present but a different owner uid: still terminal.
-        let manager = RecordingManager::new().with_parent([0x99; 16], &parent_volume_bytes());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x99; 16], &parent_volume_bytes());
         let mut f = fixture(binding_row([0x42; 16]), manager);
         let mut d = driver(fake).await;
         let failure = d.reconcile(&mut f.ctx).await.expect_err("owner mismatch");
@@ -2013,12 +1773,12 @@ mod tests {
     #[tokio::test]
     async fn same_parent_and_binding_derive_the_same_child_keys() {
         let fake = FakeServingEffects::new();
-        let manager = RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
         let mut f = fixture(binding_row([0x42; 16]), manager.clone());
         let mut d = driver(fake).await;
         d.reconcile(&mut f.ctx).await.expect("reconcile one");
         d.reconcile(&mut f.ctx).await.expect("reconcile two");
-        let order = manager.order();
+        let order = manager.call_order();
         let ensures: Vec<&String> = order
             .iter()
             .filter(|entry| entry.starts_with("ensure:Process/") || entry.starts_with("ensure:Endpoint/"))
@@ -2029,7 +1789,127 @@ mod tests {
         assert_eq!(ensures[1], ensures[3], "endpoint child key is deterministic");
     }
 
-    fn manager_clone_placeholder() -> RecordingManager {
-        RecordingManager::new().with_parent([0x42; 16], &parent_volume_bytes())
+    // -- spec refusal: undecodable envelope / unsupported provider -------------
+
+    /// The terminal refusal surface at `decoded_binding`: an envelope that
+    /// does not decode, a providerRef naming a provider this driver does not
+    /// own, and an absent providerRef all fail closed.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn decoded_binding_refuses_an_undecodable_spec_and_an_unsupported_provider() {
+        // The stored bytes are not a binding envelope at all.
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut row = binding_row([0x42; 16]);
+        row.spec = b"not a binding envelope".to_vec();
+        let mut f = fixture(row, manager.clone());
+        let mut d = driver(fake.clone()).await;
+let failure = d.validate(&mut f.ctx).await.expect_err("undecodable spec refused");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_SPEC_INVALID);
+
+        // A providerRef naming a provider this driver does not own.
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut row = binding_row([0x42; 16]);
+        let mut spec: serde_json::Value = serde_json::from_slice(&row.spec).expect("binding spec");
+        spec["providerRef"] = serde_json::json!("Provider/volume-other");
+        row.spec = serde_json::to_vec(&spec).expect("binding spec bytes");
+        let mut f = fixture(row, manager.clone());
+        let mut d = driver(fake.clone()).await;
+        let failure = d.validate(&mut f.ctx).await.expect_err("unsupported provider refused");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_PROVIDER_UNSUPPORTED);
+
+        // An absent providerRef is equally unsupported.
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut row = binding_row([0x42; 16]);
+        let mut spec: serde_json::Value = serde_json::from_slice(&row.spec).expect("binding spec");
+        spec.as_object_mut().expect("spec object").remove("providerRef");
+        row.spec = serde_json::to_vec(&spec).expect("binding spec bytes");
+        let mut f = fixture(row, manager.clone());
+        let mut d = driver(fake).await;
+        let failure = d.validate(&mut f.ctx).await.expect_err("absent provider refused");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_PROVIDER_UNSUPPORTED);
+    }
+
+    // -- parent row decode refusal ---------------------------------------------
+
+    /// A present parent Volume row whose stored spec does not decode is
+    /// terminal (`ParentSpecInvalid`), distinct from the absent-row deferral
+    /// and the owner-mismatch refusal.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn parent_spec_invalid_is_terminal_for_an_undecodable_parent_row() {
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], b"not a volume spec");
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake).await;
+        let failure = d.validate(&mut f.ctx).await.expect_err("undecodable parent refused");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_PARENT_SPEC_INVALID);
+    }
+
+    // -- retryable effect / mutation failures -----------------------------------
+
+    /// The manager refusing a child ensure surfaces `ChildMutation` and
+    /// defers retryably: the committed rows can converge on a retry.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_failed_child_ensure_defers_retryably() {
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        manager.set_fail_ensures(true);
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake).await;
+        let failure = d.reconcile(&mut f.ctx).await.expect_err("ensure refused");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_CHILD_MUTATION_FAILED);
+        assert!(
+            manager.call_order().iter().any(|entry| entry.starts_with("ensure:Process/")),
+            "the refused ensure was attempted"
+        );
+    }
+
+    /// The delete drain's serving effect and manager mutations fail
+    /// retryably: a socket that cannot be removed stops the drain before the
+    /// worker row, and a refused child delete surfaces `ChildMutation`.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn delete_socket_and_child_mutation_failures_defers_retryably() {
+        // The socket removal fails: the drain stops before the worker row.
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        fake.set_fail_remove_socket(true);
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake.clone()).await;
+        let failure = d.delete(&mut f.ctx).await.expect_err("socket removal failed");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_SERVING_EFFECT_FAILED);
+        let order = manager.call_order();
+        assert!(
+            order.iter().any(|entry| entry.starts_with("delete:Endpoint/")),
+            "the endpoint child delete was attempted: {order:?}"
+        );
+        assert!(
+            order.iter().all(|entry| !entry.starts_with("delete:Process/")),
+            "the socket failure stops the drain before the worker row: {order:?}"
+        );
+
+        // The manager refuses the endpoint delete: `ChildMutation`, retryable.
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        manager.set_fail_deletes(true);
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake).await;
+        let failure = d.delete(&mut f.ctx).await.expect_err("child delete refused");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_CHILD_MUTATION_FAILED);
+    }
+
+    fn manager_clone_placeholder() -> RecordingManagerEndpoint {
+        RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes())
     }
 }

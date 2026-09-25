@@ -306,3 +306,72 @@ impl std::fmt::Display for ModeBoundBrokerError {
 }
 
 impl std::error::Error for ModeBoundBrokerError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use d2b_contracts::types::{RoleId, VmId};
+    use d2b_contracts_broker::broker_wire::LaunchMinijailChildRequest;
+
+    /// A host-only broker operation: refused by the Guest profile before
+    /// any socket is opened.
+    fn host_only_request() -> BrokerRequest {
+        BrokerRequest::LaunchMinijailChild(LaunchMinijailChildRequest {
+            vm_id: VmId::new("corp-vm"),
+            role_id: RoleId::new("runner"),
+            tracing_span_id: None,
+        })
+    }
+
+    #[test]
+    fn validate_instance_rejects_relative_socket_paths() {
+        let adapter = ModeBoundBrokerAdapter::host("guest-broker.sock", 0);
+        assert!(matches!(
+            adapter.validate_instance(),
+            Err(ModeBoundBrokerError::SocketPath)
+        ));
+        let adapter = ModeBoundBrokerAdapter::host("/run/d2b/guest-broker.sock", 0);
+        assert!(adapter.validate_instance().is_ok());
+    }
+
+    #[test]
+    fn guest_validate_instance_requires_the_fixed_socket_basename() {
+        // Guest mode may only talk to its own fixed broker socket; any
+        // other basename is an instance mismatch, never a fallback.
+        let adapter = ModeBoundBrokerAdapter::guest("/run/d2b/broker.sock", 0);
+        assert!(matches!(
+            adapter.validate_instance(),
+            Err(ModeBoundBrokerError::InstanceMismatch)
+        ));
+        let adapter = ModeBoundBrokerAdapter::guest("/run/d2b/guest-broker.sock", 0);
+        assert!(adapter.validate_instance().is_ok());
+    }
+
+    #[test]
+    fn dispatch_denies_requests_outside_the_bound_profile() {
+        // The profile gate runs before instance validation and before any
+        // socket I/O: a host-only operation on a Guest adapter is refused
+        // with the bound profile named.
+        let adapter = ModeBoundBrokerAdapter::guest("/run/d2b/guest-broker.sock", 0);
+        assert!(matches!(
+            adapter.dispatch(host_only_request(), None),
+            Err(ModeBoundBrokerError::RequestDenied {
+                profile: BrokerProfile::Guest,
+                operation: "LaunchMinijailChild",
+            })
+        ));
+    }
+
+    #[test]
+    fn broker_remaining_before_op_times_out_when_the_deadline_passed() {
+        // An expired absolute deadline must fail closed as a broker timeout
+        // instead of attempting a round trip with a zero budget.
+        let expired = Instant::now() - Duration::from_secs(1);
+        assert!(matches!(
+            broker_remaining_before_op(expired, Path::new("/run/d2b/guest-broker.sock")),
+            Err(TypedError::InternalBrokerTimeout { .. })
+        ));
+        let future = Instant::now() + Duration::from_secs(60);
+        assert!(broker_remaining_before_op(future, Path::new("/run/d2b/guest-broker.sock")).is_ok());
+    }
+}
