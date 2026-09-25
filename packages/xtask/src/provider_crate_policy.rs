@@ -2472,12 +2472,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         retires_with: "permanent: shared controller-session crate; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-core-controller/src/coordinator.rs",
-        token: "usbip",
-        family: "device-usbip",
-        retires_with: "permanent: shared controller-session crate; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/security_key.rs",
         token: "usbip",
         family: "device-usbip",
@@ -3533,6 +3527,18 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         token: "nixos",
         family: "activation-nixos",
         retires_with: "permanent: v3 contract files are shared wire vocabulary consumed by the bus, broker, daemon, and core crates; relocating them into a provider crate would add a shared-to-provider dependency edge, which the dependency-direction detector at provider_crate_policy.rs:6999 refuses",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
+        token: "network_local",
+        family: "network-local",
+        retires_with: "permanent: the unsafe-local workload limits are shared wire vocabulary whose error variants are family-named; no shared crate may depend on a provider crate",
+    },
+    SharedFamilyKnowledgeExemption {
+        module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
+        token: "volume_local",
+        family: "volume-local",
+        retires_with: "permanent: the unsafe-local workload limits are shared wire vocabulary whose error variants are family-named; no shared crate may depend on a provider crate",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
@@ -8707,7 +8713,6 @@ const PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS: &[ProviderFamilyKnowledgeExemption] 
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "system_minijail", family: "system-minijail", reason: "the supervisor dispatches runner roles" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-supervisor", module: "packages/d2b-provider-supervisor/src/broker.rs", token: "system_systemd", family: "system-systemd", reason: "the supervisor dispatches runner roles" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-system-core", module: "packages/d2b-provider-system-core/src/host.rs", token: "audio_pipewire", family: "audio-pipewire", reason: "the system-core host names the audio-pipewire workload kind" },
-    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/driver.rs", token: "system_core", family: "system-core", reason: "the user error-code strings keep the system-core prefix stable" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/probe.rs", token: "system_core", family: "system-core", reason: "the user probe implements the system-core-declared discovery port whose error type is system-core's" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-user", module: "packages/d2b-provider-user/src/test_support.rs", token: "system_core", family: "system-core", reason: "test-support fixture provider names the system-core provider" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-volume", module: "packages/d2b-provider-volume/src/driver.rs", token: "volume_local", family: "volume-local", reason: "the volume provider's own name const uses its sibling family's id" },
@@ -8719,6 +8724,7 @@ const PROVIDER_FAMILY_KNOWLEDGE_EXEMPTIONS: &[ProviderFamilyKnowledgeExemption] 
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-policy", module: "packages/d2b-provider-wayland-policy/src/vocabulary.rs", token: "shell_terminal", family: "shell-terminal", reason: "family-qualified resource type names the shell-terminal family's type" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-wayland-session", module: "packages/d2b-provider-wayland-session/src/wayland_session.rs", token: "display_wayland", family: "display-wayland", reason: "the wayland-session provider's interface types name the display-wayland surface" },
     ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-zone", module: "packages/d2b-provider-zone/src/zone_status.rs", token: "system_core", family: "system-core", reason: "the zone status emitter names the system-core session phases" },
+    ProviderFamilyKnowledgeExemption { crate_name: "d2b-provider-zone", module: "packages/d2b-provider-zone/src/lib.rs", token: "system_core", family: "system-core", reason: "the crate re-exports the status emitter whose name states the system-core session phases" },
 ];
 
 fn provision_family_exemptions() -> Vec<ProviderFamilyKnowledgeExemption> {
