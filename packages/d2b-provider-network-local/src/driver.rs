@@ -375,19 +375,18 @@ pub fn declared_dependency_refs(
     spec: &Value,
     _metadata: &Value,
 ) -> Vec<ResourceRef> {
-    let mut refs = Vec::new();
-    if let Some(attachments) = spec.pointer("/spec/attachments").and_then(Value::as_array) {
-        for attachment in attachments {
-            if let Some(reference) = attachment
+    spec
+        .pointer("/spec/attachments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|attachment| {
+            attachment
                 .get("executionRef")
                 .and_then(Value::as_str)
                 .and_then(|value| ResourceRef::parse(value).ok())
-            {
-                refs.push(reference);
-            }
-        }
-    }
-    refs
+        })
+        .collect()
 }
 
 #[cfg(test)]
