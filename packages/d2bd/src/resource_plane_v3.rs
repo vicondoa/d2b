@@ -1937,9 +1937,8 @@ impl ConstructionInputs {
            .parent()
            .map(Path::to_path_buf)
            .unwrap_or_else(|| PathBuf::from("/run/d2b"));
-        let zone_token = BoundedToken::parse(zone.as_str().to_owned()).map_err(|_| {
-            PlaneError::Authority(format!("zone {} is not a bounded token", zone.as_str()))
-        })?;
+        let zone_token = BoundedToken::parse(zone.as_str().to_owned())
+            .map_err(|error| PlaneError::Authority(error.into()))?;
         // Reuse the daemon's shared, already-composed fixed Process
         // Providers; compose and attach once when absent (identical inputs
         // to the old composition path at composition.rs:3653).
@@ -1962,7 +1961,7 @@ impl ConstructionInputs {
         };
         let registry = Arc::new(PlaneResourceRegistry::new());
         let controller_generation = ControllerGeneration::new(1)
-           .map_err(|error| PlaneError::Authority(error.to_string()))?;
+           .map_err(|error| PlaneError::Authority(error.into()))?;
         let endpoint_socket_runtime_dir = socket_runtime_dir.clone();
         let endpoint_zone_token = zone_token.clone();
         let probe = BindingSocketProbe {
@@ -2629,7 +2628,7 @@ pub enum PlaneError {
     #[error("spec store open failed: {0}")]
     SpecStore(#[from] d2b_resource_runtime::spec_store::SpecStoreError),
     #[error("foundation seed failed: {0}")]
-    FoundationSeed(String),
+    FoundationSeed(#[from] crate::foundation_seed::SeedError),
     #[error("provider registration failed: {0}")]
     ProviderRegistration(
         #[from] d2b_resource_runtime::provider::ProviderDirectoryError,
@@ -2652,15 +2651,15 @@ pub enum PlaneError {
         unexpected: Vec<String>,
     },
     #[error("manager spawn failed: {0}")]
-    ManagerSpawn(String),
+    ManagerSpawn(#[from] ractor::SpawnErr),
     #[error("manager rpc failed: {0}")]
     ManagerRpc(#[from] ResourceError),
     #[error("zone authority inputs invalid: {0}")]
-    Authority(String),
+    Authority(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("target layer refused: {0}")]
-    Target(String),
+    Target(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("bundle invalid: {0}")]
-    Bundle(String),
+    Bundle(#[from] d2b_contracts_zone_session::v3::resource_bundle::ResourceBundleError),
 }
 
 /// The canonical core Host target every non-guest resource realizes on
@@ -2995,7 +2994,7 @@ impl ResourcePlaneV3 {
         let store_path = Self::spec_store_path(&inputs.spec_store_dir);
         if let Some(parent) = store_path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                PlaneError::Authority(format!("spec store dir create failed: {error}"))
+                PlaneError::Authority(error.into())
             })?;
         }
         let store = Arc::new(
@@ -3003,9 +3002,7 @@ impl ResourcePlaneV3 {
                 SpecStore::open(store_path.clone()).map_err(PlaneError::from)
             })
            .await
-           .map_err(|error| {
-                PlaneError::Authority(format!("spec store open refused: {error:?}"))
-            })??,
+           .map_err(|error| PlaneError::Authority(error.into()))??,
         );
         // The registry caches store-derived rows for the production effects;
         // the store is the authority its socket-target lookups load from on
@@ -3057,10 +3054,7 @@ impl ResourcePlaneV3 {
                 foundation.declarations.clone(),
                 foundation.allocation.clone(),
             );
-            let report = seed
-               .run(&store, &providers)
-               .await
-               .map_err(|error| PlaneError::FoundationSeed(error.to_string()))?;
+            let report = seed.run(&store, &providers).await?;
             tracing::info!(
                 zone = %inputs.zone.as_str(),
                 committed = report.committed.len(),
@@ -3088,7 +3082,7 @@ impl ResourcePlaneV3 {
         let anchor_revision = hub.snapshot_revision();
         let targets = Arc::new(TargetDirectory::new());
         let host_target = TargetRef::host(CORE_HOST_TARGET_NAME)
-           .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.into()))?;
         // Every registered driver's declaration carries its type's decoder,
         // so the registry is the authority: the plane wires no decoder table
         // of its own.
@@ -3108,9 +3102,7 @@ impl ResourcePlaneV3 {
             target_resolver: Arc::new(DeclaredExecutionRef),
             backoff: PLANE_BACKOFF,
         };
-        let (actor, _join) = ractor::Actor::spawn(None, ResourceManager::new(), args)
-           .await
-           .map_err(|error| PlaneError::ManagerSpawn(error.to_string()))?;
+        let (actor, _join) = ractor::Actor::spawn(None, ResourceManager::new(), args).await?;
         readiness.set_manager_started(true);
         readiness.set_spec_store_ready(true);
         // The anchor projection subscription: one long-lived consumer of the
@@ -3223,7 +3215,7 @@ impl ResourcePlaneV3 {
         let outcome = self
            .targets
            .connect_guest(guest, session_generation, control)
-           .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.into()))?;
         self.client
            .actor()
            .send_message(ResourceManagerMsg::TargetReconnected {
@@ -3231,7 +3223,7 @@ impl ResourcePlaneV3 {
                 session_generation: outcome.session_generation(),
                 pending_adoption: outcome.pending_adoption().to_vec(),
             })
-           .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.into()))?;
         Ok(())
     }
 
@@ -3246,7 +3238,7 @@ impl ResourcePlaneV3 {
         let outcome = self
            .targets
            .disconnect_guest(guest, session_generation)
-           .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.into()))?;
         self.client
            .actor()
            .send_message(ResourceManagerMsg::TargetUnavailable {
@@ -3254,7 +3246,7 @@ impl ResourcePlaneV3 {
                 session_generation: outcome.session_generation(),
                 affected: outcome.affected().to_vec(),
             })
-           .map_err(|error| PlaneError::Target(error.to_string()))?;
+           .map_err(|error| PlaneError::Target(error.into()))?;
         Ok(())
     }
 
@@ -3325,7 +3317,7 @@ pub async fn partition_nix_bundle(
     bundle: &ResourceBundle,
     store: &SpecStore,
 ) -> Result<BundleIngestPlan, PlaneError> {
-    bundle.verify().map_err(|error| PlaneError::Bundle(error.to_string()))?;
+    bundle.verify()?;
     let durable_by_key: HashMap<ResourceKey, StoredDesiredResource> = store
        .list(SpecSelector {
             zone: Some(zone.as_str().to_owned()),
