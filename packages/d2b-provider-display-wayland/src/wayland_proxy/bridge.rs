@@ -28,6 +28,16 @@ pub struct BridgeConfig {
 }
 
 impl BridgeConfig {
+    /// Build the bridge configuration from an explicit socket path or the
+    /// identity-derived per-user path.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BridgeConfigError::InvalidReconnectPolicy` when the reconnect
+    /// initial delay exceeds the max delay, `BridgeConfigError::InvalidEndpointComponent`
+    /// when the identity-derived path component is not a valid endpoint
+    /// component, and `BridgeConfigError::SocketPathTooLong` when the socket
+    /// path exceeds the Linux `sockaddr_un` limit.
     pub fn from_identity_parts(
         explicit_socket: Option<PathBuf>,
         root: &Path,
@@ -66,6 +76,12 @@ pub struct BridgeReconnectPolicy {
     pub max_delay: Duration,
 }
 
+/// Derive the per-user bridge socket path for an identity.
+///
+/// # Errors
+///
+/// Returns `BridgeConfigError::InvalidEndpointComponent` when the identity's
+/// bridge component is empty, `.`, `..`, or contains `/` or NUL.
 pub fn path_for_user_identity(
     root: &Path,
     user_uid: u32,

@@ -145,9 +145,10 @@ impl SanitizedLabel {
 
 pub fn sanitize_label(input: &str) -> Option<SanitizedLabel> {
     let mut out = String::new();
+    let mut written = 0usize;
     let mut pending_space = false;
     for ch in input.chars() {
-        if out.chars().count() >= MAX_LABEL_CHARS {
+        if written >= MAX_LABEL_CHARS {
             break;
         }
         if ch.is_control() {
@@ -160,6 +161,7 @@ pub fn sanitize_label(input: &str) -> Option<SanitizedLabel> {
         }
         if pending_space && !out.is_empty() {
             out.push(' ');
+            written += 1;
         }
         pending_space = false;
         if ch.is_ascii_graphic() {
@@ -167,6 +169,7 @@ pub fn sanitize_label(input: &str) -> Option<SanitizedLabel> {
         } else {
             out.push('?');
         }
+        written += 1;
     }
     let out = out.trim().to_owned();
     if out.is_empty() {
@@ -1802,7 +1805,7 @@ impl XdgToplevelHandler for WrapperToplevelHandler {
 }
 
 // memfd is memory-backed: write_all cannot block on I/O; called from the
-    // sync wayland-proxy handler path.
+// sync wayland-proxy handler path.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn create_memfd_with_contents(contents: &[u8], size: u64) -> io::Result<OwnedFd> {
     let name = CString::new("d2b-wayland-border").expect("static memfd name has no nul");

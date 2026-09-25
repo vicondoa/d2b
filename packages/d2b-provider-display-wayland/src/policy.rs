@@ -111,12 +111,12 @@ impl FilterInput {
         Ok(value)
     }
 
-    /// Add an allowed global to this layer.
+    /// Borrow the allowed globals of this layer.
     pub fn allow_globals(&self) -> &[String] {
         &self.allow_globals
     }
 
-    /// Add a denied global to this layer.
+    /// Borrow the denied globals of this layer.
     pub fn deny_globals(&self) -> &[String] {
         &self.deny_globals
     }
@@ -256,6 +256,12 @@ pub struct WaylandPolicy;
 
 impl WaylandPolicy {
     /// Compile defaults, Zone policy, and session overrides in that order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PolicyCompileError::BoundsExceeded` when a layer exceeds a
+    /// fixed count or byte bound, and `PolicyCompileError::UnknownInterface`
+    /// when a layer names a global outside the compiled catalog.
     pub fn compile(
         defaults: &FilterInput,
         zone: &FilterInput,

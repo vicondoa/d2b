@@ -618,11 +618,6 @@ impl VirtualClipboardState {
                 self.enqueue_bridge_handoff(local_fd, metadata);
             }
             crate::wayland_proxy::bridge::HandoffStatus::Failed(error) => {
-                let status = crate::wayland_proxy::bridge::HandoffStatus::Failed(error);
-                let error = match status {
-                    crate::wayland_proxy::bridge::HandoffStatus::Failed(error) => error,
-                    _ => unreachable!(),
-                };
                 let _ = local_fd.close_after_handoff(
                     crate::wayland_proxy::bridge::HandoffStatus::Failed(error),
                 );
@@ -766,8 +761,8 @@ impl VirtualClipboardState {
             .map(|stream| (stream, self.pending_bridge_poll_flags()))
     }
 
-    // Non-blocking read (WouldBlock handled** at a poll-driven sync bridge
-    // boundary driven by the CLI loop;no async form fits this surface.
+    // Non-blocking read (WouldBlock handled) at a poll-driven sync bridge
+    // boundary driven by the CLI loop; no async form fits this surface.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn drain_bridge_messages(clipboard: &Rc<RefCell<Self>>) {
         let mut refresh = false;
@@ -1250,80 +1245,73 @@ impl WlRegistryHandler for FilterRegistryHandler {
 
         // Install per-interface handlers before forwarding, so we can
         // intercept the object's lifecycle from the first message.
-        match id.try_downcast::<XdgWmBase>() {
-            Some(wm_base) => {
-                wm_base.set_handler(FilterXdgWmBaseHandler {
-                    policy: self.policy.clone(),
+        if let Some(wm_base) = id.try_downcast::<XdgWmBase>() {
+            wm_base.set_handler(FilterXdgWmBaseHandler {
+                policy: self.policy.clone(),
+                decoration: self.decoration.clone(),
+                positioners: Rc::new(RefCell::new(HashMap::new())),
+            });
+        } else if let Some(eglstream_display) = id.try_downcast::<WlEglstreamDisplay>() {
+            eglstream_display.set_handler(FilterEglstreamDisplayHandler {
+                identity_label: self.policy.identity_label.clone(),
+                diag: self.diag.clone(),
+                decoration: self.decoration.clone(),
+            });
+        } else if let Some(compositor) = id.try_downcast::<WlCompositor>() {
+            compositor.set_handler(FilterCompositorHandler {
+                decoration: self.decoration.clone(),
+            });
+            slf.send_bind(name, compositor);
+            return;
+        } else {
+            if let Some(shm) = id.try_downcast::<WlShm>() {
+                shm.set_handler(FilterShmHandler {
                     decoration: self.decoration.clone(),
-                    positioners: Rc::new(RefCell::new(HashMap::new())),
                 });
+                slf.send_bind(name, shm);
+                return;
             }
-            _ => match id.try_downcast::<WlEglstreamDisplay>() {
-                Some(eglstream_display) => {
-                    eglstream_display.set_handler(FilterEglstreamDisplayHandler {
-                        identity_label: self.policy.identity_label.clone(),
-                        diag: self.diag.clone(),
-                        decoration: self.decoration.clone(),
+            if let Some(subcompositor) = id.try_downcast::<WlSubcompositor>() {
+                if self.decoration.is_some() {
+                    subcompositor.set_handler(FilterSubcompositorHandler);
+                }
+                slf.send_bind(name, subcompositor);
+                return;
+            }
+            if let Some(seat) = id.try_downcast::<WlSeat>() {
+                if let Some(decoration) = &self.decoration {
+                    seat.set_handler(FilterSeatHandler {
+                        decoration: decoration.clone(),
                     });
                 }
-                _ => {
-                    if let Some(compositor) = id.try_downcast::<WlCompositor>() {
-                        compositor.set_handler(FilterCompositorHandler {
-                            decoration: self.decoration.clone(),
-                        });
-                        slf.send_bind(name, compositor);
-                        return;
-                    }
-                    if let Some(shm) = id.try_downcast::<WlShm>() {
-                        shm.set_handler(FilterShmHandler {
-                            decoration: self.decoration.clone(),
-                        });
-                        slf.send_bind(name, shm);
-                        return;
-                    }
-                    if let Some(subcompositor) = id.try_downcast::<WlSubcompositor>() {
-                        if self.decoration.is_some() {
-                            subcompositor.set_handler(FilterSubcompositorHandler);
-                        }
-                        slf.send_bind(name, subcompositor);
-                        return;
-                    }
-                    if let Some(seat) = id.try_downcast::<WlSeat>() {
-                        if let Some(decoration) = &self.decoration {
-                            seat.set_handler(FilterSeatHandler {
-                                decoration: decoration.clone(),
-                            });
-                        }
-                        slf.send_bind(name, seat);
-                        return;
-                    }
-                    if let Some(viewporter) = id.try_downcast::<WpViewporter>()
-                        && let Some(decoration) = &self.decoration
-                    {
-                        viewporter.set_handler(FilterViewporterHandler {
-                            decoration: decoration.clone(),
-                        });
-                    }
-                    if let Some(dmabuf) = id.try_downcast::<ZwpLinuxDmabufV1>()
-                        && (!self.policy.dmabuf_filters.is_empty() || self.decoration.is_some())
-                    {
-                        dmabuf.set_handler(DmabufHandler::new(
-                            self.policy.dmabuf_filters.clone(),
-                            self.diag.clone(),
-                            self.decoration.clone(),
-                        ));
-                    }
-                    if let Some(drm) = id.try_downcast::<WlDrm>() {
-                        if let Some(decoration) = &self.decoration {
-                            drm.set_handler(FilterDrmHandler {
-                                decoration: decoration.clone(),
-                            });
-                        }
-                        slf.send_bind(name, drm);
-                        return;
-                    }
+                slf.send_bind(name, seat);
+                return;
+            }
+            if let Some(viewporter) = id.try_downcast::<WpViewporter>()
+                && let Some(decoration) = &self.decoration
+            {
+                viewporter.set_handler(FilterViewporterHandler {
+                    decoration: decoration.clone(),
+                });
+            }
+            if let Some(dmabuf) = id.try_downcast::<ZwpLinuxDmabufV1>()
+                && (!self.policy.dmabuf_filters.is_empty() || self.decoration.is_some())
+            {
+                dmabuf.set_handler(DmabufHandler::new(
+                    self.policy.dmabuf_filters.clone(),
+                    self.diag.clone(),
+                    self.decoration.clone(),
+                ));
+            }
+            if let Some(drm) = id.try_downcast::<WlDrm>() {
+                if let Some(decoration) = &self.decoration {
+                    drm.set_handler(FilterDrmHandler {
+                        decoration: decoration.clone(),
+                    });
                 }
-            },
+                slf.send_bind(name, drm);
+                return;
+            }
         }
 
         slf.send_bind(name, id);
@@ -2798,7 +2786,7 @@ fn bind_matches_advertised_cap(
 }
 
 // SOCK_NONBLOCK connect with EINPROGRESS/EAGAIN tolerated; readiness is
-    // driven by the CLI poll loop;no async form fits this path.
+// driven by the CLI poll loop; no async form fits this path.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn connect_bridge_nonblocking(path: &PathBuf) -> std::io::Result<UnixStream> {
     use nix::sys::socket::{AddressFamily, SockFlag, SockType, UnixAddr, connect, socket};

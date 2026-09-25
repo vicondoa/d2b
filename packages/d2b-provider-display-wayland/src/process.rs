@@ -399,7 +399,6 @@ impl LaunchGrants {
 
     /// Construct grants for both workers and one authenticated controller
     /// generation.
-    #[allow(dead_code)]
     pub(crate) const fn from_supervisor_for_session_with_frontend_and_controller(
         compositor: AttachmentGrantHandle,
         gpu: AttachmentGrantHandle,
@@ -673,7 +672,6 @@ impl ProcessObservation {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) const fn from_supervisor(
         proxy: WorkerState,
         frontend: WorkerState,

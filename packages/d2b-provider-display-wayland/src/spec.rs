@@ -114,6 +114,13 @@ impl<'de> Deserialize<'de> for DisplayIdentity {
 
 impl DisplayIdentity {
     /// Validate a display identity with default border and label settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaylandSpecError::InvalidLabel` when the label does not match
+    /// the closed identifier grammar, `WaylandSpecError::LabelTooLong` when the
+    /// label exceeds its bound, and `WaylandSpecError::InvalidColor` when a
+    /// color is not a six-digit RGB value.
     pub fn new(
         label: impl Into<String>,
         active_color: impl Into<String>,
@@ -289,6 +296,12 @@ impl<'de> Deserialize<'de> for WaylandSessionSpec {
 
 impl WaylandSessionSpec {
     /// Validate and construct a trusted cross-domain session.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaylandSpecError::InvalidReference` when a ref has the wrong
+    /// closed resource type, and `WaylandSpecError::CrossDomainUntrusted` when
+    /// the session is not explicitly trusted.
     pub fn new(
         guest_ref: ResourceRef,
         host_ref: ResourceRef,

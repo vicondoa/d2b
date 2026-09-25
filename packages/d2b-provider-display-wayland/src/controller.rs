@@ -12,7 +12,7 @@ use crate::{
 };
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_toolkit::{AuthenticatedComponentSession, AuthenticatedSessionRouteBinding};
-use sha2::{Digest, Sha256};
+
 use std::collections::BTreeMap;
 
 /// Default shared-Runner repair interval for display resources.
@@ -461,7 +461,6 @@ impl FinalizationInput {
         clippy::too_many_arguments,
         reason = "finalization evidence keeps every owned authority explicit"
     )]
-    #[allow(dead_code)]
     pub(crate) const fn from_supervisor(
         stop_requested: StopRequest,
         proxy: WorkerState,
@@ -749,6 +748,13 @@ impl DisplayController {
 
     /// Reconcile only after binding the desired state to an authenticated
     /// Guest ComponentSession.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaylandSpecError::InvalidReference` when the authenticated
+    /// session's guest or host ref, reconnect generation, or zone does not
+    /// match the spec, and any `WaylandSpecError` raised by the reconcile step
+    /// itself.
     #[expect(
         clippy::too_many_arguments,
         reason = "the authenticated controller fence keeps every authority input explicit"
@@ -1440,17 +1446,7 @@ fn session_key(spec: &WaylandSessionSpec, controller_generation: u64) -> String 
 }
 
 pub(crate) fn session_digest(spec: &WaylandSessionSpec, controller_generation: u64) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(spec.guest_ref().to_canonical_string().as_bytes());
-    digest.update([0]);
-    digest.update(spec.host_ref().to_canonical_string().as_bytes());
-    digest.update([0]);
-    digest.update(spec.user_ref().to_canonical_string().as_bytes());
-    digest.update([0]);
-    digest.update(spec.reconnect_generation().to_be_bytes());
-    digest.update([0]);
-    digest.update(controller_generation.to_be_bytes());
-    digest.finalize().into()
+    spec.session_digest(controller_generation)
 }
 
 #[cfg(test)]
