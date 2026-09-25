@@ -48,9 +48,16 @@ pub struct FileFingerprint {
 }
 
 #[derive(Debug)]
-struct CachedPublicFrame {
+pub struct CachedPublicFrame {
     fingerprint: PublicArtifactFingerprint,
     value: Value,
+}
+
+impl CachedPublicFrame {
+    /// The rendered read-model frame.
+    pub fn value(&self) -> &Value {
+        &self.value
+    }
 }
 
 #[derive(Debug)]
@@ -83,11 +90,11 @@ impl PublicStatusReadModel {
         self.status.store(None);
     }
 
-    pub fn load_list(&self, pidfd_generation: u64) -> Option<Value> {
+    pub fn load_list(&self, pidfd_generation: u64) -> Option<Arc<CachedPublicFrame>> {
         self.load_if_fresh(pidfd_generation, &self.list)
     }
 
-    pub fn load_status(&self, pidfd_generation: u64) -> Option<Value> {
+    pub fn load_status(&self, pidfd_generation: u64) -> Option<Arc<CachedPublicFrame>> {
         self.load_if_fresh(pidfd_generation, &self.status)
     }
 
@@ -113,9 +120,9 @@ impl PublicStatusReadModel {
         &self,
         pidfd_generation: u64,
         slot: &ArcSwapOption<CachedPublicFrame>,
-    ) -> Option<Value> {
+    ) -> Option<Arc<CachedPublicFrame>> {
         let cached = slot.load_full()?;
-        (cached.fingerprint.pidfd_generation == pidfd_generation).then(|| cached.value.clone())
+        (cached.fingerprint.pidfd_generation == pidfd_generation).then_some(cached)
     }
 
     fn publish_stable(
