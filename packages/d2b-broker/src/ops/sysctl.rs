@@ -215,7 +215,7 @@ mod tests {
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn scratch() -> PathBuf {
-        let dir = crate::test_scratch_root()
+        let dir = d2b_core::test_support::scratch_root("sysctl")
             .join("test-scratch")
             .join(format!(
                 "d2b-w3-s2-sysctl-{}-{}",

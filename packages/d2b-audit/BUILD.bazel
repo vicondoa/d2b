@@ -48,6 +48,9 @@ d2b_rust_test(
     name = "d2b_audit_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_audit",
+    deps = [
+        "//packages/d2b-core:d2b_core_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
 # keep

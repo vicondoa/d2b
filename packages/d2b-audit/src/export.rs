@@ -300,19 +300,10 @@ mod tests {
     };
     use std::io::Write;
 
-    fn writable_manifest_dir() -> std::path::PathBuf {
-        std::env::var_os("TEST_TMPDIR")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(std::path::PathBuf::from))
-            .or_else(|| std::env::current_dir().ok())
-            .expect("resolve test writable directory")
-    }
-
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn export_reports_hash_breaks_inline_without_old_fields() {
-        let directory = writable_manifest_dir()
-            .join("target")
+        let directory = d2b_core::test_support::scratch_root("audit-export").join("target")
             .join(format!("d2b-audit-export-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).unwrap();

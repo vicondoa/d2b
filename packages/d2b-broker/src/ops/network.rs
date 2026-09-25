@@ -1344,7 +1344,7 @@ mod tests {
     #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn v3_realization_persists_and_removes_after_fenced_cleanup() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("network-realization").join(format!(
             "network-realization-{}",
             std::process::id()
         ));
@@ -1431,7 +1431,7 @@ mod tests {
     #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn v3_realization_reclaims_stale_temp_and_rejects_conflicting_row() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("network-realization-retry").join(format!(
             "network-realization-retry-{}",
             std::process::id()
         ));
@@ -1499,7 +1499,7 @@ mod tests {
     #[tokio::test]
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn deleted_realization_tombstone_makes_duplicate_cleanup_idempotent() {
-        let root = crate::test_scratch_root().join(format!(
+        let root = d2b_core::test_support::scratch_root("network-realization-tombstone").join(format!(
             "network-realization-tombstone-{}",
             std::process::id()
         ));

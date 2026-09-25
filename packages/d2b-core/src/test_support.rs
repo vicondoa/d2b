@@ -441,3 +441,66 @@ impl Default for ResolvedRunnerIntentBuilder {
         Self::new()
     }
 }
+
+// ── scratch_root ────────────────────────────────────────────────────────────
+
+/// Resolve a writable scratch root for a unit test.
+///
+/// `TEST_TMPDIR` (the Bazel test-sandbox var) wins when set; otherwise a
+/// per-crate directory under the system temp dir is used. The base is created
+/// on demand, and the returned path is a unique per-call subdirectory
+/// (`{test_name}-{pid}-{nanos}`) so parallel tests never collide. This is the
+/// sanctioned home for the `test_scratch_root` / `test_root` /
+/// `writable_manifest_dir` helpers that broker, daemon, runtime and audit
+/// crates used to carry as private copies.
+pub fn scratch_root(test_name: &str) -> PathBuf {
+    let base = std::env::var_os("TEST_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("d2b-bundle-resolver-tests"));
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    std::fs::create_dir_all(&base).expect("create test scratch root");
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    base.join(format!("{test_name}-{}-{unique}", std::process::id()))
+}
+
+// ── sample_zone_native_host_json ────────────────────────────────────────────
+
+/// The v3 host contract doc the generation side emits: `empty_zone_native_host`
+/// fields plus the declared NetworkManager unmanaged contract, with
+/// `tableHashAfterApply`/optional fields skipped the same way serde
+/// serialises them.
+pub fn sample_zone_native_host_json() -> serde_json::Value {
+    serde_json::json!({
+        "schemaVersion": "v3",
+        "site": { "allowUnsafeEastWest": false },
+        "environments": [],
+        "nftables": {
+            "family": "inet",
+            "table": "d2b",
+            "chains": [],
+            "ownershipId": ""
+        },
+        "networkManager": {
+            "filePath": "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf",
+            "matchCriteria": ["interface-name:d2b-*"],
+            "reloadBehavior": "atomic-reload",
+            "ownership": {
+                "owner": "root",
+                "group": "d2bd",
+                "mode": "0640",
+                "driftPolicy": "preserve"
+            }
+        },
+        "hostsFile": {
+            "startMarker": "# d2b-managed begin",
+            "endMarker": "# d2b-managed end",
+            "rule": ""
+        },
+        "kernelModules": [],
+        "fdOwnership": [],
+        "cloudHypervisorCapabilities": []
+    })
+}

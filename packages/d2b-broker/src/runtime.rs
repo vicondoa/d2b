@@ -12402,7 +12402,7 @@ mod tests {
     }
 
     fn test_audit_dir(test_name: &str) -> PathBuf {
-        let root = crate::test_scratch_root().join("runtime-audit-tests");
+        let root = d2b_core::test_support::scratch_root("runtime-audit").join("runtime-audit-tests");
         crate::sys::path_safe::ensure_dir(&root, 0o750, None, None)
             .expect("create audit test root");
         let unique = SystemTime::now()
@@ -12951,7 +12951,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn prepare_test_usb_sysfs_device(vendor: &str, product: &str, devpath: &str) -> PathBuf {
-        let root = crate::test_scratch_root().join("runtime-usb-sysfs-root");
+        let root = d2b_core::test_support::scratch_root("runtime-usb-sysfs").join("runtime-usb-sysfs-root");
         TEST_USB_SYSFS_ROOT
             .set(root.clone())
             .unwrap_or_else(|_| assert_eq!(TEST_USB_SYSFS_ROOT.get(), Some(&root)));
@@ -18839,7 +18839,7 @@ mod tests {
         let bundle = build_test_bundle(&root);
         let intent = test_usbip_intent_with_lock(&root, &bundle);
         let _ = take_test_usbip_backend_acl_events();
-        let sysfs_root = crate::test_scratch_root().join("runtime-usb-sysfs-root");
+        let sysfs_root = d2b_core::test_support::scratch_root("runtime-usb-sysfs").join("runtime-usb-sysfs-root");
         TEST_USB_SYSFS_ROOT
             .set(sysfs_root.clone())
             .unwrap_or_else(|_| assert_eq!(TEST_USB_SYSFS_ROOT.get(), Some(&sysfs_root)));

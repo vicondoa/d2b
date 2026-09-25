@@ -404,7 +404,7 @@ mod tests {
     }
 
     fn scratch_dir(name: &str) -> std::path::PathBuf {
-        let base = crate::test_scratch_root();
+        let base = d2b_core::test_support::scratch_root("store-sync-export");
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()

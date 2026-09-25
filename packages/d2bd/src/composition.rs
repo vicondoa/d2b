@@ -372,17 +372,6 @@ impl std::fmt::Debug for CommittedGuestSessionTarget {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_scratch_root() -> PathBuf {
-    std::env::var_os("TEST_TMPDIR")
-        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
-        .or_else(|| std::env::current_dir().ok())
-        .map(|path| path.join("target"))
-        .expect("resolve test scratch root")
-}
-
 use d2bd_runtime::admission::{
     AdmissionConfig, PeerIdentity, PeerRole, authorize_peer, broker_caller_role_for_peer,
     verb_allowed_for_host_shutdown, verb_requires_admin,
@@ -24130,7 +24119,7 @@ mod broker_dispatch_tests {
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn test_daemon_state_dir(test_name: &str) -> PathBuf {
-        let dir = crate::test_scratch_root().join("d2bd-state");
+        let dir = d2b_core::test_support::scratch_root("d2bd-state").join("d2bd-state");
         fs::create_dir_all(&dir).expect("create broker dispatch scratch dir");
         let state_dir = dir.join(format!(
             "{test_name}-{}-{}",
@@ -28241,42 +28230,6 @@ mod broker_dispatch_tests {
         );
     }
 
-    /// The v3 host contract document the generation side emits:the
-    /// `empty_zone_native_host` fields plus the declared NetworkManager
-    /// unmanaged contract.
-    fn sample_v3_host_contract_json() -> serde_json::Value {
-        json!({
-            "schemaVersion": "v3",
-            "site": { "allowUnsafeEastWest": false },
-            "environments": [],
-            "nftables": {
-                "family": "inet",
-                "table": "d2b",
-                "chains": [],
-                "ownershipId": ""
-            },
-            "networkManager": {
-                "filePath": "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf",
-                "matchCriteria": ["interface-name:d2b-*"],
-                "reloadBehavior": "atomic-reload",
-                "ownership": {
-                    "owner": "root",
-                    "group": "d2bd",
-                    "mode": "0640",
-                    "driftPolicy": "preserve"
-                }
-            },
-            "hostsFile": {
-                "startMarker": "# d2b-managed begin",
-                "endMarker": "# d2b-managed end",
-                "rule": ""
-            },
-            "kernelModules": [],
-            "fdOwnership": [],
-            "cloudHypervisorCapabilities": []
-        })
-    }
-
     /// Run `host prepare` against a v3 zone-native bundle fixture that
     /// optionally declares the hashed `host.json` contract artifact, over a
     /// fake broker capturing the two kernel envelope invocations. Returns the
@@ -28399,7 +28352,7 @@ mod broker_dispatch_tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn host_prepare_installs_declared_nm_unmanaged_contract() {
-        let host_contract = sample_v3_host_contract_json();
+        let host_contract = d2b_core::test_support::sample_zone_native_host_json();
         let (operations, nm_payload, response) =
             run_host_prepare_nm_scenario("host-prepare-nm-declared", Some(&host_contract));
         assert_eq!(operations, vec!["apply-nftables", "apply-nm-unmanaged"]);

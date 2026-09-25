@@ -1234,7 +1234,7 @@ mod tests {
     use std::sync::Barrier;
 
     fn scratch(name: &str) -> tempfile::TempDir {
-        let _ = crate::test_scratch_root();
+        let _ = d2b_core::test_support::scratch_root("state-cells");
         tempfile::tempdir().unwrap_or_else(|_| panic!("{name}: create scratch root"))
     }
 
