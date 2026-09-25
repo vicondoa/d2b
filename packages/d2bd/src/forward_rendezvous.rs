@@ -1809,6 +1809,10 @@ mod tests {
     /// A handler that holds its call on the gate until the test releases it.
     struct GatedHandler {
         gate: &'static StallGate,
+        /// When present, records the thread that executed the call before
+        /// holding it: the concurrent-calls test counts the distinct
+        /// threads across the held calls.
+        seen: Option<&'static tokio::sync::Mutex<Vec<std::thread::ThreadId>>>,
     }
 
     #[async_trait::async_trait]
@@ -1818,6 +1822,9 @@ mod tests {
             _ctx: OperationCtx<'_>,
             _payload: ValidatedPayload,
         ) -> Result<OperationResult, OperationFailure> {
+            if let Some(seen) = self.seen {
+                seen.lock().await.push(std::thread::current().id());
+            }
             self.gate.hold().await;
             Ok(stall_result())
         }
@@ -1838,11 +1845,20 @@ mod tests {
         }
     }
 
+    /// The threads that executed the held stall-threads calls, one entry
+    /// per call, recorded at handler entry. This recorder is this test's
+    /// own: only the calls the concurrent-calls test forwards execute the
+    /// stall-threads handler, so nothing another test does can inflate it.
+    static THREADS_SEEN: tokio::sync::Mutex<Vec<std::thread::ThreadId>> =
+        tokio::sync::Mutex::const_new(Vec::new());
+
     static THREADS_HANDLER: GatedHandler = GatedHandler {
         gate: &THREADS_GATE,
+        seen: Some(&THREADS_SEEN),
     };
     static CAPACITY_HANDLER: GatedHandler = GatedHandler {
         gate: &CAPACITY_GATE,
+        seen: None,
     };
     static STALLED_HANDLER: StalledHandler = StalledHandler;
 
@@ -2278,10 +2294,20 @@ mod tests {
         let connection =
             AsyncSeqpacket::register(Socket::from(socket)).expect("register the forwarded call");
         let deadline = Duration::from_secs(10);
-        connection
-            .write_frame(&encoded, deadline)
-            .await
-            .expect("write the request frame");
+        // A refused peer is answered before its frame is read: the server
+        // writes the refusal, drains briefly, and closes, so a write that
+        // races the close can fail with EPIPE even though the refusal is
+        // already queued for this socket. Read the queued refusal instead
+        // of failing the call; only a write error with no reply is a
+        // failure.
+        if let Err(write_error) = connection.write_frame(&encoded, deadline).await {
+            let frame = connection.read_frame(deadline).await;
+            if let Ok(frame) = frame {
+                return serde_json::from_slice(&frame)
+                    .expect("the reply is a ForwardOperationResponse");
+            }
+            panic!("write the request frame: {write_error:?}");
+        }
         let frame = connection
             .read_frame(deadline)
             .await
@@ -2357,27 +2383,6 @@ mod tests {
         sink
     }
 
-    /// The threads this process is running, one per task entry.
-    ///
-    /// `tokio::fs` (plan U10): the count probes the process's own thread
-    /// table, so the async form never parks an executor worker on the
-    /// directory read.
-    async fn thread_count() -> usize {
-        let mut entries = tokio::fs::read_dir("/proc/self/task")
-            .await
-            .expect("/proc/self/task is readable");
-        let mut count = 0usize;
-        while entries
-            .next_entry()
-            .await
-            .expect("/proc/self/task is readable")
-            .is_some()
-        {
-            count += 1;
-        }
-        count
-    }
-
     /// The production posture with a test's own in-flight cap and handler
     /// deadline.
     fn posture(max_inflight: usize, handler_deadline: Duration) -> ServingPosture {
@@ -2412,8 +2417,19 @@ mod tests {
         // endpoint is exercised against the exact bytes the broker sends.
         let encoded =
             canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
-        d2bd_runtime::unix_transport::write_frame(&socket, &encoded)
-            .expect("write the request frame");
+        // A refused peer is answered before its frame is read: the server
+        // writes the refusal, drains briefly, and closes, so a write that
+        // races the close can fail with EPIPE even though the refusal is
+        // already queued for this socket. Read the queued refusal instead
+        // of failing the call; only a write error with no reply is a
+        // failure.
+        if let Err(write_error) = d2bd_runtime::unix_transport::write_frame(&socket, &encoded) {
+            if let Ok(frame) = read_frame(&socket) {
+                return serde_json::from_slice(&frame)
+                    .expect("the reply is a ForwardOperationResponse");
+            }
+            panic!("write the request frame: {write_error:?}");
+        }
         let frame = read_frame(&socket).expect("read the reply frame");
 serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     }
@@ -2444,7 +2460,19 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         let encoded =
             canonical_json_bytes(&request).expect("the request encodes as canonical JSON");
         let socket = connect_seqpacket(socket_path).expect("dial the rendezvous");
-        write_frame_with_fds(&socket, &encoded, fds).expect("write the request frame with fds");
+        // A refused peer is answered before its frame is read: the server
+        // writes the refusal, drains briefly, and closes, so a write that
+        // races the close can fail with EPIPE even though the refusal is
+        // already queued for this socket. Read the queued refusal instead
+        // of failing the call; only a write error with no reply is a
+        // failure.
+        if let Err(write_error) = write_frame_with_fds(&socket, &encoded, fds) {
+            if let Ok(frame) = read_frame(&socket) {
+                return serde_json::from_slice(&frame)
+                    .expect("the reply is a ForwardOperationResponse");
+            }
+            panic!("write the request frame with fds: {write_error:?}");
+        }
         let frame = read_frame(&socket).expect("read the reply frame");
         serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     }
@@ -2902,6 +2930,9 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_calls_are_held_on_the_runtime_without_a_thread_each() {
         const CALLS: usize = 4;
+        // The runtime this test runs on: the serving path registers with
+        // `Handle::current()`, so the held calls execute on these workers.
+        const WORKER_THREADS: usize = 2;
         let serving = ServingRendezvous::start().await;
         // One warm call, so the runtime's workers exist before the baseline.
         let warm = forward_async(
@@ -2916,7 +2947,9 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
             ForwardOperationOutcome::Result { .. }
         ));
 
-        let before = thread_count().await;
+        // The recorder is this test's own: only the calls below execute the
+        // stall-threads handler, so no other test can inflate the count.
+        THREADS_SEEN.lock().await.clear();
         let calls: Vec<_> = (0..CALLS)
             .map(|_| {
                 tokio::spawn(forward_async(
@@ -2930,18 +2963,29 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         // Every call reached the handler while none of them was released: the
         // second call does not wait for the first.
         THREADS_GATE.wait_for(CALLS).await;
-        let held = thread_count().await;
-        // The counter is process-wide (/proc/self/task): other tests'
-        // runtimes and their blocking pools grow concurrently under
-        // parallel test load, and this runtime's own blocking pool expands
-        // amortized (reused, bounded by peak concurrency), so the bound is
-        // a few slots per call, never a thread owned per call. A
-        // per-call thread-ownership regression - one OS thread held for
-        // the lifetime of each in-flight call - blows far past this.
-        assert!(
-            held <= before + CALLS * 4,
-            "{CALLS} calls in flight must not each own a thread: {before} -> {held}"
+        // The held calls all run on this runtime's own workers: at most
+        // WORKER_THREADS distinct threads can have executed the handler. A
+        // per-call thread-ownership regression - one OS thread held for the
+        // lifetime of each in-flight call - puts each call on its own
+        // thread, far past the worker count. The measurement is per-test
+        // (threads that executed this test's handler), so parallel test
+        // load cannot inflate it.
+        let seen = THREADS_SEEN.lock().await;
+        assert_eq!(
+            seen.len(),
+            CALLS,
+            "every held call recorded the thread that executed it"
         );
+        let distinct = seen
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        assert!(
+            distinct.len() <= WORKER_THREADS,
+            "{CALLS} calls in flight must not each own a thread: held on {} distinct threads (the runtime has {WORKER_THREADS} workers)",
+            distinct.len()
+        );
+        drop(seen);
 
         THREADS_GATE.release(CALLS);
         for call in calls {
