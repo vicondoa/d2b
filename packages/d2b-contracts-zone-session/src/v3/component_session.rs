@@ -2388,6 +2388,43 @@ impl fmt::Debug for BootstrapPskBinding {
     }
 }
 
+#[cfg(test)]
+mod bootstrap_identity_binding_tests {
+    use super::*;
+
+    fn binding(subject_ref: &str) -> BootstrapIdentityBinding {
+        BootstrapIdentityBinding {
+            subject_ref: ResourceRef::parse(subject_ref).unwrap(),
+            subject_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            zone: ZoneId::parse("dev").unwrap(),
+            purpose: SessionPurpose::parse("resource-api").unwrap(),
+        }
+    }
+
+    #[test]
+    fn bootstrap_identity_binding_accepts_only_the_admitted_subject_types() {
+        for admitted in [
+            "Host/host-1",
+            "Guest/guest-1",
+            "Provider/system-core",
+            "Zone/dev",
+            "Process/runner-1",
+        ] {
+            assert!(
+                binding(admitted).validate().is_ok(),
+                "{admitted} must be admitted"
+            );
+        }
+        for refused in ["User/alice", "Volume/data", "Network/net-1", "Device/gpu-0"] {
+            assert_eq!(
+                binding(refused).validate(),
+                Err(ContractError::InvalidBinding),
+                "{refused} must be refused"
+            );
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RequestEnvelope {
