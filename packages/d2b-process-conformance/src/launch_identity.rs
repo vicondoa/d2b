@@ -149,16 +149,13 @@ impl LaunchIdentity {
                 owner_uid: owner_uid.as_str().to_owned(),
             });
         }
-        if owner_ref
+        if let Some(owner) = owner_ref
             .as_ref()
-            .is_some_and(|owner| owner.resource_type().as_str() == "VolumeBinding")
+            .filter(|owner| owner.resource_type().as_str() == "VolumeBinding")
             && target_ref.is_none()
         {
             return Err(LaunchIdentityError::MissingTargetRef {
-                owner_ref: owner_ref
-                    .as_ref()
-                    .expect("binding owner is present")
-                    .to_canonical_string(),
+                owner_ref: owner.to_canonical_string(),
             });
         }
         if !valid_identity_name(process_name) {
