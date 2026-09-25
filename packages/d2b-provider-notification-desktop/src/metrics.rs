@@ -178,4 +178,62 @@ mod tests {
             .is_err()
         );
     }
+
+    /// The collector-field injection fence: duplicate keys, newline or
+    /// oversized values, `d2b.provider` spoofing, and out-of-vocabulary
+    /// categories are all rejected.
+    #[test]
+    fn collector_field_validation_rejects_injection_and_spoofing() {
+        let field = |key: &'static str, value: &str| NotificationTelemetryField {
+            key,
+            value: value.to_owned(),
+        };
+        assert!(
+            NotificationTelemetryFrame::validate_collector_fields([
+                field("d2b.zone", "work"),
+                field("d2b.provider", "notification-desktop"),
+                field("category", "system.info"),
+                field("outcome", "accepted"),
+            ])
+            .is_ok()
+        );
+
+        assert!(
+            NotificationTelemetryFrame::validate_collector_fields([
+                field("category", "system.info"),
+                field("category", "system.warning"),
+            ])
+            .is_err(),
+            "duplicate keys are rejected"
+        );
+        assert!(
+            NotificationTelemetryFrame::validate_collector_fields([field("d2b.zone", "work\nsecret")])
+                .is_err(),
+            "newline values are rejected"
+        );
+        assert!(
+            NotificationTelemetryFrame::validate_collector_fields([field(
+                "d2b.zone",
+                &"x".repeat(129)
+            )])
+            .is_err(),
+            "oversized values are rejected"
+        );
+        assert!(
+            NotificationTelemetryFrame::validate_collector_fields([field(
+                "d2b.provider",
+                "other-provider"
+            )])
+            .is_err(),
+            "d2b.provider spoofing is rejected"
+        );
+        assert!(
+            NotificationTelemetryFrame::validate_collector_fields([field(
+                "category",
+                "not-a-category"
+            )])
+            .is_err(),
+            "a category outside the closed vocabulary is rejected"
+        );
+    }
 }
