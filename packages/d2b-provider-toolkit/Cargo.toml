@@ -8,6 +8,7 @@ license.workspace = true
 [features]
 default = ["unix-transport"]
 unix-transport = ["dep:d2b-session-unix", "d2b-session-unix/host-socket"]
+test-support = []
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -45,3 +46,8 @@ sha2.workspace = true
 [[bin]]
 name = "d2b-provider-toolkit"
 path = "src/bin/d2b-provider-toolkit.rs"
+
+[[test]]
+name = "supervised_runtime"
+path = "tests/supervised_runtime.rs"
+required-features = ["test-support"]

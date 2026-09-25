@@ -40,7 +40,7 @@ d2b_rust_library(
     name = "d2b_provider_toolkit_test_support",
     srcs = d2b_provider_toolkit_srcs,
     compile_data = ["Cargo.toml"],
-    crate_features = ["unix-transport"],
+    crate_features = ["unix-transport", "test-support"],
     crate_name = "d2b_provider_toolkit",
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
