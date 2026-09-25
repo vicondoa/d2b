@@ -380,10 +380,9 @@ fn check_outputs(root: &Path) -> Result<Vec<PathBuf>, String> {
         let advisory = policy
             .get(&spec.key())
             .ok_or_else(|| format!("missing advisory context {}", spec.key()))?;
-        let approval = advisory.approval.clone();
         let expected_production = serde_json::to_string_pretty(&with_approval(
             &computed.production,
-            Some(approval.clone()),
+            Some(advisory.approval.clone()),
         ))
         .map_err(|error| format!("serialize production closure: {error}"))?
             + "\n";
