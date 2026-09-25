@@ -6,19 +6,29 @@ use d2b_contracts_zone_session::v3::component_session::{
 
 use crate::{Result, SessionError};
 
+/// Phase of a component session lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionPhase {
+    /// The session is established and exchanging records.
     Established,
+    /// The session lost its transport and is not yet reconnecting.
     Disconnected,
+    /// A reconnect attempt is in progress.
     Reconnecting,
+    /// The session is closing.
     Closing,
+    /// The session is closed.
     Closed,
 }
 
+/// Action a keepalive poll asks the caller to take.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum KeepaliveAction {
+    /// No action is due.
     None,
+    /// Send a keepalive ping carrying the given record.
     SendPing(KeepaliveRecord),
+    /// Close the session with the given record.
     Close(CloseRecord),
 }
 
@@ -35,6 +45,7 @@ impl fmt::Debug for KeepaliveAction {
     }
 }
 
+/// Tracks session phase, generation, keepalive state, and reconnect budget.
 pub struct SessionLifecycle {
     phase: SessionPhase,
     generation: u64,
@@ -47,6 +58,12 @@ pub struct SessionLifecycle {
 }
 
 impl SessionLifecycle {
+    /// Construct an established lifecycle for one generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::GenerationMismatch`] when `generation` is zero,
+    /// and the limit-profile validation error when `limits` is invalid.
     pub fn new(generation: u64, limits: LimitProfile, now: Instant) -> Result<Self> {
         limits.validate()?;
         if generation == 0 {
@@ -64,20 +81,28 @@ impl SessionLifecycle {
         })
     }
 
+    /// Return the current phase.
     pub fn phase(&self) -> SessionPhase {
         self.phase
     }
 
+    /// Return the current generation.
     pub fn generation(&self) -> u64 {
         self.generation
     }
 
+    /// Record transport activity while established, refreshing the keepalive idle clock.
     pub fn on_activity(&mut self, now: Instant) {
         if self.phase == SessionPhase::Established {
             self.last_activity = now;
         }
     }
 
+    /// Decide the keepalive action due at `now`.
+    ///
+    /// Returns `SendPing` when the keepalive interval elapsed without a pending
+    /// ping, `Close` when the ping timeout elapsed or ping nonces are exhausted,
+    /// and `None` otherwise.
     pub fn poll_keepalive(&mut self, now: Instant) -> KeepaliveAction {
         if self.phase != SessionPhase::Established {
             return KeepaliveAction::None;
@@ -123,6 +148,13 @@ impl SessionLifecycle {
         })
     }
 
+    /// Accept a pong for the pending ping.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::GenerationMismatch`] when the pong generation
+    /// differs, and [`SessionErrorCode::UnknownControl`] when the pong does not
+    /// match the pending ping.
     pub fn receive_pong(&mut self, pong: KeepaliveRecord, now: Instant) -> Result<()> {
         if pong.reconnect_generation != self.generation {
             return Err(SessionError::new(SessionErrorCode::GenerationMismatch));
@@ -137,6 +169,7 @@ impl SessionLifecycle {
         }
     }
 
+    /// Mark the session disconnected, resetting the reconnect budget.
     pub fn disconnect(&mut self, now: Instant) {
         self.phase = SessionPhase::Disconnected;
         self.pending_ping = None;
@@ -144,6 +177,14 @@ impl SessionLifecycle {
         self.reconnect_attempts = 0;
     }
 
+    /// Begin a reconnect attempt, advancing the generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::InternalInvariant`] when the phase is not
+    /// `Disconnected` or `Reconnecting`, [`SessionErrorCode::SessionDisconnected`]
+    /// when the reconnect budget or window is exhausted, and
+    /// [`SessionErrorCode::NonceExhausted`] when the generation overflows.
     pub fn begin_reconnect(&mut self, now: Instant) -> Result<u64> {
         if !matches!(
             self.phase,
@@ -173,6 +214,12 @@ impl SessionLifecycle {
         Ok(self.generation)
     }
 
+    /// Mark a reconnect attempt established.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::InternalInvariant`] when the phase is not
+    /// `Reconnecting`.
     pub fn reconnect_established(&mut self, now: Instant) -> Result<()> {
         if self.phase != SessionPhase::Reconnecting {
             return Err(SessionError::new(SessionErrorCode::InternalInvariant));
@@ -185,6 +232,7 @@ impl SessionLifecycle {
         Ok(())
     }
 
+    /// Close the session, returning the close record to emit.
     pub fn close(&mut self, reason: CloseReason, remediation: Remediation) -> CloseRecord {
         self.phase = SessionPhase::Closed;
         CloseRecord {
