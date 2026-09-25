@@ -1184,4 +1184,86 @@ mod tests {
             "the manager cascades owned children before the driver delete pass"
         );
     }
+
+    // -- manager failure -----------------------------------------------------
+
+    /// A manager endpoint whose dependency reads fail: the recording
+    /// fixture never errors, so the driver's explicit `Reconcile`-class
+    /// error path was unpinned anywhere in the crate.
+    struct FailingManager;
+
+    #[async_trait::async_trait]
+    impl ManagerEndpoint for FailingManager {
+        async fn ensure_child(
+            &self,
+            _parent: &ResourceKey,
+            _child: ChildEnsure,
+        ) -> Result<EnsureOutcome, ResourceError> {
+            unreachable!("no ensure runs in this test")
+        }
+
+        async fn get(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
+            Err(ResourceError::ManagerRpc("fixture failure".to_owned()))
+        }
+
+        async fn view(
+            &self,
+            _key: &ResourceKey,
+        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
+            Ok(None)
+        }
+
+        async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
+            Ok(())
+        }
+
+        async fn list_owned(
+            &self,
+            _owner_uid: [u8; 16],
+        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            Ok(Vec::new())
+        }
+
+        async fn register_watch(
+            &self,
+            _subscriber: &ResourceKey,
+            _registration: WatchRegistration,
+        ) -> Result<WatchId, ResourceError> {
+            Ok(WatchId(1))
+        }
+
+        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
+            Ok(())
+        }
+    }
+
+    /// A manager read failure during child derivation surfaces as the
+    /// `Reconcile`-class retryable error, never as a fence or a silent
+    /// partial projection.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn reconcile_reports_a_manager_read_failure_as_retryable() {
+        let row = binding_row(binding_spec(TELEMETRY_PROVIDER_REF));
+        let requeue = Arc::new(RecordingRequeue::default());
+        let (effects_tx, _effects_rx) = mpsc::unbounded_channel();
+        let (watch_tx, _watch_rx) = mpsc::unbounded_channel();
+        let mut ctx = ResourceContext::new(
+            row,
+            TargetHandle::Host,
+            telemetry_binding_spec_decoder(),
+            Arc::new(FailingManager) as Arc<dyn ManagerEndpoint>,
+            Arc::clone(&requeue) as Arc<dyn RequeueScheduler>,
+            effects_tx,
+            watch_tx,
+        );
+        let mut driver: Box<dyn DynResourceDriver> =
+            TelemetryBindingDriverFactory::new().create(ctx.key()).await;
+
+        let failure = driver.reconcile(&mut ctx).await.expect_err("manager read failure");
+        assert_eq!(failure.op(), DriverOp::Reconcile);
+        assert_eq!(failure.class(), FailureClass::Retryable);
+    }
 }
