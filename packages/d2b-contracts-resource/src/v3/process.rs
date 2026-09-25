@@ -20,8 +20,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::{
     ActivationRunnerInput, ResourceRef,
     execution_policy::{
-        BoundedToken, BudgetSpec, DurationMs, ExecutionDomain, PrimitiveSpecError, redacted_debug,
-        require_execution_ref, require_resource_type,
+        BoundedToken, BudgetSpec, DurationMs, ExecutionDomain, PrimitiveSpecError, ensure_unique,
+        redacted_debug, require_execution_ref, require_resource_type,
     },
 };
 
@@ -1572,14 +1572,7 @@ fn check_unique<T: Ord + Clone>(values: &[T], max: usize) -> Result<(), Primitiv
     if values.len() > max {
         return Err(PrimitiveSpecError::TooManyEntries);
     }
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable();
-    sorted.dedup();
-    if sorted.len() == values.len() {
-        Ok(())
-    } else {
-        Err(PrimitiveSpecError::DuplicateEntry)
-    }
+    ensure_unique(values)
 }
 
 fn check_duration(value: &DurationMs, min: u64, max: u64) -> Result<(), PrimitiveSpecError> {

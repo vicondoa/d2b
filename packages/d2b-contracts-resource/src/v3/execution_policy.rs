@@ -171,6 +171,18 @@ pub fn require_execution_ref(reference: &ResourceRef) -> Result<(), PrimitiveSpe
     }
 }
 
+/// Ensure a collection that must be unique carries no duplicate entry.
+pub(crate) fn ensure_unique<T: Ord + Clone>(values: &[T]) -> Result<(), PrimitiveSpecError> {
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    if sorted.len() == values.len() {
+        Ok(())
+    } else {
+        Err(PrimitiveSpecError::DuplicateEntry)
+    }
+}
+
 /// Render one base-spec value as a `ResourceSpec` base object.
 ///
 /// Primitive base specs are Layer 2 data, so the rendered object never
@@ -790,12 +802,7 @@ impl ExecutionPolicy {
         if allowed_domains.is_empty() || allowed_domains.len() > 2 {
             return Err(PrimitiveSpecError::TooManyEntries);
         }
-        let mut unique = allowed_domains.clone();
-        unique.sort_unstable();
-        unique.dedup();
-        if unique.len() != allowed_domains.len() {
-            return Err(PrimitiveSpecError::DuplicateEntry);
-        }
+        ensure_unique(&allowed_domains)?;
         if !allowed_domains.contains(&default_domain) {
             return Err(PrimitiveSpecError::ConflictingFields);
         }

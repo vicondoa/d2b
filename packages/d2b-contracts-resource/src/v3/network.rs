@@ -527,16 +527,17 @@ pub enum SharingPolicy {
 
 /// IPv4 address acquisition method.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum Ipv4Method {
+    #[default]
     Dhcp,
     Static,
 }
 
 /// External IPv4 configuration.
-#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ExternalIpv4Spec {
     method: Ipv4Method,
@@ -591,17 +592,6 @@ impl ExternalIpv4Spec {
     /// Borrow the static DNS resolver addresses.
     pub fn dns(&self) -> &[Ipv4Address] {
         &self.dns
-    }
-}
-
-impl Default for ExternalIpv4Spec {
-    fn default() -> Self {
-        Self {
-            method: Ipv4Method::Dhcp,
-            address: None,
-            gateway: None,
-            dns: Vec::new(),
-        }
     }
 }
 
