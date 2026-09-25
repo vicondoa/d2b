@@ -1,0 +1,97 @@
+# d2b-provider-guest-azure-virtual-machine - d2b-provider-guest-azure-virtual-machine
+Baseline: 6ebdd4cec22e6537d1376e83ff7a82b00a8492c0 | LOC audited: 2839 (src 1882 + tests 957, excl. src/generated/**) | modules: whole crate (bootstrap.rs, config.rs, error.rs, lib.rs, controller/mod.rs, effect/mod.rs + tests/)
+Lenses: idiom, own, type, api, err, serde, obs, docs, perf, conc, async, unsafe, ffi, macro, test | Partitions: whole crate
+
+## idiom
+- d2b-provider-guest-azure-virtual-machine#1 sev=low blast=leaf effort=S verdict=actionable - hand-written `impl Default for BootstrapService` where a derive with a `#[default]` variant covers it - fix: add `#[derive(Default)]` with `#[default]` on `BootstrapServiceState::Waiting` (bootstrap.rs:124) and `#[derive(Default)]` on `BootstrapService`, delete the manual impl - [src/bootstrap.rs:138, src/bootstrap.rs:124]
+  evidence: seed 2 `impl (Default|From|PartialEq|Eq|Debug|Clone|Hash) for` = 1 hit (bootstrap.rs:138); seed 1 `for \w+ in 0\.\.` = 1 hit, seed 3 `let mut \w+ = (String|Vec)::new\(\)` = 0
+- clean: the single index loop (bootstrap.rs:28, `BootstrapPsk::matches`) is a deliberate constant-time comparison over max(len) with no early exit; an iterator chain would obscure the timing property; the hand-written `Debug` impls (BootstrapPsk, DataDiskSpec, AzureVmConfig, AzureVmGuestSettings, AzureVmStatus, AzureVmHandle, AzureOperationHandle, TagDigest) are deliberate secret redaction (derive would leak) - per-card false positive.
+
+## own
+- d2b-provider-guest-azure-virtual-machine#2 sev=medium blast=leaf effort=S verdict=actionable - PSK secret copied twice in `start_psk_delivery`: `copy_for_delivery()` already returns an owned `Zeroizing<Vec<u8>>` and the extra `.to_vec()` produces a plain, non-zeroized `Vec<u8>` copy of the secret - fix: `PskExtensionPayload::from_secret(psk.copy_for_delivery().into_inner())` (or pass the `Zeroizing` value directly; zeroize 1.9 implements `From<Zeroizing<T>> for T`) - [src/controller/mod.rs:791, src/bootstrap.rs:42]
+  evidence: seed 1 `\.clone\(\)` + seed 2 `\.to_owned\(\)|\.to_vec\(\)|\.to_string\(\)` = 18 hits; site read in full
+- d2b-provider-guest-azure-virtual-machine#3 sev=low blast=leaf effort=S verdict=actionable - `self.vm_handle.clone().ok_or)...)` clones the handle only to pass it by reference to an effect call - fix: `let handle = self.vm_handle.as_ref().ok_or(AzureVmError::Ambiguous)?;` and pass `handle` (no mutable borrow of `vm_handle` is live across the effect await) - [src/controller/mod.rs:640, src/controller/mod.rs:764]
+  evidence: seed 1 = 18 hits; both sites read with borrow analysis
+- d2b-provider-guest-azure-virtual-machine#4 sev=low blast=leaf effort=S verdict=actionable - `self.pending_delete_operation_id.clone().ok_or)...)` clones a `String` only to borrow it for `start_vm_delete` - fix: `let operation_id = self.pending_delete_operation_id.as_deref().ok_or(AzureVmError::Ambiguous)?;` and pass `operation_id` - [src/controller/mod.rs:852]
+  evidence: seed 1 = 18 hits; site read
+- d2b-provider-guest-azure-virtual-machine#5 sev=low blast=leaf effort=S verdict=actionable - `base32(&digest.finalize())[..20].to_owned()` allocates the full base32 string and then a second 20-char copy - fix: `let mut id = base32(&digest.finalize()); id.truncate(20); id` (or cap the length inside `base32`) - [src/controller/mod.rs:1046]
+  evidence: seed 2 `.to_owned()` = 1 hit (controller/mod.rs:1046); `base32` already pre-sizes with `String::with_capacity` (controller/mod.rs:1051)
+- clean: the remaining clones are explainable - `recovery_state()` export clones (controller/mod.rs:260-265) build an owned sealed record from `&self`; `finalize`'s `get_or_insert_with)...).clone()` (controller/mod.rs:687) re-owns the id it may have just inserted; `verify_owned_vm` stores and returns the same handle (controller/mod.rs:959); `validate_update` clones `settings` (controller/mod.rs:986-997) to validate a prospective state without mutating `self`; `TagDigest::from_tags` copies the tag slice to sort it (effect/mod.rs:101); no `Rc`/`RefCell`/`Arc<Mutex>`/`Cow` in src (seeds 3-4 = 0).
+
+## type
+- d2b-provider-guest-azure-virtual-machine#6 sev=medium blast=leaf effort=M verdict=actionable - `operation: Option<AzureOperationHandle>` and `operation_started_at_unix_ms: Option<u64>` are always Some-together/None-together on the controller (controller/mod.rs:186-187) and in `AzureVmRecoveryState` (controller/mod.rs:110-118), and `restore_recovery_state` line 278 exists only to reject the illegal half-Some combination - fix: group into `Option<InFlightOperation { operation, started_at }>` in both the controller and the recovery record, and delete the pair check at controller/mod.rs:278 - [src/controller/mod.rs:278, src/controller/mod.rs:186]
+  evidence: seed 1 `fn validate_\w+|fn check_\w+` = 1 hit (validate_update, controller/mod.rs:979); the Option-pair invariant read at set_operation/clear_operation (controller/mod.rs:963-970) and restore_recovery_state (controller/mod.rs:278)
+- d2b-provider-guest-azure-virtual-machine#7 sev=medium blast=leaf effort=S verdict=actionable - `BootstrapAdmission { psk: Option<BootstrapPsk>, state: BootstrapAdmissionState }` (bootstrap.rs:65-68) can represent Consumed/Expired-with-`Some(psk)`; `consume()` manually forces `psk = None` on every transition - fix: `enum BootstrapAdmission { Pending { psk: BootstrapPsk, expires_at_unix_ms: u64 }, Consumed, Expired }` so the illegal combination is unconstructible (the skill's Option-pair smell) - [src/bootstrap.rs:65, src/bootstrap.rs:82]
+  evidence: seed 2 `is_\w+: bool|\w+_flag: bool` = 0, seed 3 `(mode|kind|state): String` = 0; struct and all transition sites read
+- d2b-provider-guest-azure-virtual-machine#8 sev=low blast=leaf effort=S verdict=actionable - `AzureVmUpdate::Resize.size: String` is parse-validated at `validate_update` (controller/mod.rs:982) and parsed again at `apply_update` (controller/mod.rs:1008); `OpaqueAzureRef` is a validating, serde-transparent string wire type - fix: carry `size: OpaqueAzureRef` in the wire enum (JSON shape unchanged, a plain string) and drop both re-parses - [src/controller/mod.rs:82, src/controller/mod.rs:982]
+  evidence: seed 1 = 1 hit; `OpaqueAzureRef::parse` signature and validating `Deserialize` read at d2b-contracts/src/foundation_effects.rs:163,187
+- clean: `AzureVmRecoveryState.finalizer_installed` + `phase` invariant (finalizer false only when Finalized) is enforced once at the restore boundary (controller/mod.rs:286), which is the correct placement for a serialized record; no boolean flag soup or stringly-typed state found.
+
+## api
+- d2b-provider-guest-azure-virtual-machine#9 sev=low blast=family effort=M verdict=actionable - the mutable-update/adoption/enrollment surface has no in-tree production caller: `update()`/`AzureVmUpdate`, `adopt()`, `complete_enrollment`, `status()`/`AzureVmStatus`, `controller_execution_ref()` are exercised only by this crate's tests, while the framework adapter (d2b-provider-guest/src/effects_service.rs) drives only `reconcile` (1303-1308), `poll_operation`/`recovery_state` (1384-1396), `finalize` (1384-1396) and `finalizer_installed` (590) - fix: wire the update path in the framework adapter (it already implements the resize/attach/detach/tags effect methods at effects_service.rs:499-565) or trim the surface - [src/controller/mod.rs:608, src/controller/mod.rs:418, src/controller/mod.rs:748]
+  evidence: census: `AzureVmUpdate|complete_enrollment|controller\.adopt` over packages/ = this crate's definitions + its tests only (0 hits in d2b-provider-guest, d2bd, and all other crates)
+- d2b-provider-guest-azure-virtual-machine#10 sev=low blast=leaf effort=S verdict=actionable - `AzureVmController::new` takes `effect: Arc<E>` (controller/mod.rs:211) and stores it, but the only call site constructs a fresh `Arc::new(FrameworkAzureEffect {...})` with no sharing (d2b-provider-guest/src/effects_service.rs:1186-1189) - fix: take `effect: E` by value and store it, removing `Arc` from the public signature - [src/controller/mod.rs:211, packages/d2b-provider-guest/src/effects_service.rs:1186]
+  evidence: seed 2 `pub .*\b(Arc|Rc|Box|RefCell)<` = 3 hits (controller/mod.rs:211, 250, 183); call site read; `Arc<dyn Clock>` (with_clock) and `Arc<dyn AzureCredentialPort>` are the deliberate #G100 clock seam and the trait-object credential port, not flagged
+- clean: seed 1 = 77 pub items, seed 3 = 8 `pub use` arms; lib.rs re-exports are the house single-surface pattern (sibling guest crates use the same `pub mod` + `pub use` shape); `AzureVmStatus` keeps private fields with accessors; `PskExtensionPayload::{len,is_empty}` are kept per refusal-ledger row #G77 (they are the inner field's only readers); `BootstrapPskDelivery` one-variant enum is a kept refusal (#G78, live construction at d2b-provider-guest/src/effects_service.rs:1892); `AzureVmConfig.tenant_id/client_id` are kept refusal #G83 (deny_unknown_fields wire fields).
+
+## err
+- clean: skill audit `\.unwrap\(\)|\.expect\(` over src/ = 0 (all unwraps live in tests/); `let _ =`/`.ok();` = 0; `panic!|unreachable!|todo!|unimplemented!` = 0; seed 4 `enum \w*Error` = 1 hit (error.rs:7). `AzureVmError` is a closed 17-variant wire-code enum with stable `code()` strings and `Display` = code; 7 variants (ArmQuotaExceeded, ArmNetworkUnavailable, ArmCredentialDenied, ArmThrottled, CredentialUnavailable, Cancelled, DeadlineExpired) have no in-tree constructor - reserved vocabulary for the out-of-tree ARM adapter, not flagged; `Transient` is the retry signal the framework maps on. No panic-policy or taxonomy finding.
+
+## serde
+- clean: seeds 1-4 = 21 hits; every wire type (`DiskSku`, `DataDiskSpec`, `BootstrapPskDelivery`, `AzureVmConfig`, `AzureVmGuestSettings`, `AzureVmUpdate`, `AzureVmRecoveryState`, `BootstrapServiceState`) uses `rename_all = "camelCase"` + `deny_unknown_fields`; `AzureVmHandle` is `serde(transparent)`; `AzureOperationHandle` has a hand-written base64 `Serialize`/`Deserialize` (deliberate opaque-bytes wire encoding with bounds re-checked in `from_core`); the three recovery-record bools carry `#[serde(default)]` (forward-compatible sealed records); secrets (`BootstrapPsk`, `PskExtensionPayload`, `AzureAccessToken`) never serialize; wire-value pinning and recovery round-trip tests exist (tests/lifecycle_hermetic.rs:251, 390). No finding.
+
+## obs
+- d2b-provider-guest-azure-virtual-machine#11 sev=low blast=leaf effort=M verdict=actionable - the literal `provider = "runtime-azure-virtual-machine"` field is repeated on all 27 events and the `resource_group` field renders `OpaqueAzureRef(<redacted>)` via `Display` (d2b-contracts/src/foundation_effects.rs:181-184), so events that log only resource_group carry no correlation value - fix: add a `#[tracing::instrument(skip_all, fields(provider = "runtime-azure-virtual-machine"))]` span on the controller entry points (reconcile, adopt, poll_operation, update, finalize) and drop the per-event literal; log zone/resource where available instead of the redacted resource_group - [src/controller/mod.rs:346, src/controller/mod.rs:425]
+  evidence: seed 4 `tracing::|log::` = 27 hits (bootstrap.rs 4, controller/mod.rs 23); every event read; seed 1 `println!|eprintln!` = 0, seed 2 interpolated-message-without-fields = 0, seed 3 `.instrument|#[instrument]` = 0
+- clean: all events use named fields (`zone`, `resource`, `state`, `code`, `attempts`, `stage`); no secret in any field; message-only events carry their context in fields; the ADR 0010/0028 redaction posture is respected (opaque refs pre-redacted at Display).
+
+## docs
+- d2b-provider-guest-azure-virtual-machine#12 sev=medium blast=leaf effort=M verdict=actionable - Result-returning public methods carry no `# Errors` sections, so the framework caller cannot learn from docs which failures are transient/retryable vs fatal: `reconcile`, `adopt`, `poll_operation`, `update`, `finalize`, `complete_enrollment`, `restore_recovery_state` (controller/mod.rs:333-760), `BootstrapPsk::from_bytes`, `BootstrapAdmission::consume` (bootstrap.rs:15,82), `DataDiskSpec::validate`, `AzureVmConfig::validate`, `AzureVmGuestSettings::validate` (config.rs:49,103,177) - fix: add `# Errors` sections naming the `AzureVmError` variants each call returns, especially the `Transient` vs fatal split - [src/controller/mod.rs:333, src/controller/mod.rs:446]
+  evidence: seed 2 `/// # (Examples|Errors|Panics|Safety)` = 0 hits; seed 3 `-> Result<` = 27 hits; seed 1 `^\s*pub (fn|struct|enum|trait|const|type)` = 77 hits
+- d2b-provider-guest-azure-virtual-machine#13 sev=low blast=leaf effort=S verdict=actionable - `BootstrapPsk::matches` does not document the constant-time comparison guarantee that justifies its index loop over max(len) with zero-padding - fix: document "constant-time in the presented length; never exits early on mismatch" (the security contract of the loop shape) - [src/bootstrap.rs:25]
+  evidence: seed 1 = 77 hits; site read
+- d2b-provider-guest-azure-virtual-machine#14 sev=low blast=leaf effort=S verdict=actionable - `BootstrapAdmission::consume` doc says "if the nonce is fresh" but there is no nonce; the parameter is the presented PSK bytes - fix: reword to "Consume the PSK when the presented bytes match and the deadline is valid" - [src/bootstrap.rs:82]
+  evidence: static read of the doc comment and the signature
+- clean: `#![deny(missing_docs)]` (lib.rs:3) - every pub item has a one-line first sentence; all five modules carry `//!` docs; magic values are named (`AZURE_VM_REPAIR_INTERVAL_SECS`, `MAX_AZURE_TAGS`, `MAX_DATA_DISKS`, `MAX_LRO_AGE_MS`); no doctests exist (no `# Examples` anywhere - the crate's contract is the hermetic suite, acceptable).
+
+## perf
+- clean: seeds `format!\(` / `Vec::new\(\)|VecDeque::new\(\)|HashMap::new\(\)|BTreeMap::new\(\)` / `\.to_string\(\)` = 0/0/0; `base32` pre-sizes with `String::with_capacity` (controller/mod.rs:1051); no hot-path allocation observed; no benchmark exists, so any perf claim would be static - none made.
+
+## conc
+- N/A: seeds `std::thread::|thread::spawn|thread::scope` / `\bMutex<|\bRwLock<` / `Atomic\w+|Ordering::` / `thread_local!|unsafe impl (Send|Sync) for` = 0/0/0/0 in src/ (the only locks are `tokio::sync::Mutex` in tests/lifecycle_hermetic.rs, test-only synchronization); no threads, atomics, or manual Send/Sync claims exist.
+
+## async
+- clean: seeds = 72/0/0/0 (async fns + awaits only; no `tokio::spawn`/`spawn_blocking`/`JoinSet`/`select!`/`join!` in src - the framework owns task spawning); no std lock held across an `.await` (`await_holding_lock` denied at the manifest, Cargo.toml `[lints.clippy]`); the only awaits are non-blocking `AzureEffectPort`/`AzureCredentialPort` calls; cancellation safety is structural - every state transition is re-observable via `get_vm_state` and the sealed `AzureVmRecoveryState`, so a future dropped at any await leaves a resumable state; `#[async_trait]` on both ports is justified by the `dyn AzureCredentialPort` usage; the double `arm_token()` acquisition in the Absent branch (controller/mod.rs:362,368) is deliberate token freshness across the observation await - not flagged.
+
+## unsafe
+- N/A: seeds 1-3 (`\bunsafe \{|\bunsafe fn|\bunsafe impl|\bunsafe extern` / `// SAFETY:` / `transmute|from_raw|MaybeUninit|mem::zeroed`) = 0/0/0; the single hit is seed 4 `unsafe_code` = `#![forbid(unsafe_code)]` (lib.rs:4), backed by `unsafe_code = "forbid"` in the manifest lints - a forbid attribute alone does not apply the lens per the card.
+
+## ffi
+- N/A: seeds `extern "C"|no_mangle|unsafe\(link_section` / `catch_unwind` / `repr\(C\)|repr\(transparent\)` / `CStr|CString|c_char` = 0/0/0/0; no FFI surface exists.
+
+## macro
+- N/A: seeds `macro_rules!` / `proc_macro|syn::|quote!` / `\$crate` / `to_compile_error|new_spanned` = 0/0/0/0; no macros defined.
+
+## test
+- d2b-provider-guest-azure-virtual-machine#15 sev=medium blast=leaf effort=M verdict=actionable - the config/PSK/handle validation contract has no rejection test: nothing constructs an invalid `AzureVmGuestSettings`/`DataDiskSpec`/`AzureVmConfig`/`BootstrapPsk`/`AzureVmHandle` and asserts `InvalidConfiguration`/`InvalidOperationHandle` (os_disk_size_gb outside 30..=4095, admin_user charset, LUN duplicates or >= 64, azure_tags > 50 or `d2b:` prefix, size_gb 0 or > 32767, label rules, empty or > 8192 PSK, handle chars), and `restore_recovery_state` rejection branches (controller/mod.rs:278-296) are untested - all tests restore valid records - fix: add a table-driven rejection test per `validate()` boundary and one invalid-record restore test - [src/config.rs:177, src/config.rs:49, src/controller/mod.rs:278]
+  evidence: seed 2 `assert_eq!\(|assert_ne!\(|assert!\(|matches!` = 106 hits across tests/; no test asserting `AzureVmError::InvalidConfiguration` or `InvalidOperationHandle` found in any of the 3 test files
+- d2b-provider-guest-azure-virtual-machine#16 sev=low blast=leaf effort=S verdict=actionable - `every_controller_error_has_a_documented_stable_code` (tests/error_redaction.rs:17-38) asserts `!code().is_empty()` over a hand-enumerated variant list, but `code()` is a const fn whose exhaustive match makes an empty arm a compile error and the enumeration is not compiler-forced, so the test cannot meaningfully fail - fix: drop the loop and keep exact-code pinning (as `errors_and_handles_do_not_render_remote_values` already does for `arm-credential-denied`), or pin the full code table - [tests/error_redaction.rs:17]
+  evidence: seed 1 `#\[test\]|#\[tokio::test\]` = 25 tests (3 bootstrap_hermetic + 2 error_redaction + 20 lifecycle_hermetic); site read
+- clean: the suite asserts error variants via `matches!`/`assert_eq` on enums, never `Display` strings; deterministic (injected `FixedClock`, no sleeps, no network, scripted LRO poll queues); redaction canaries present (tests/error_redaction.rs:6-13, tests/lifecycle_hermetic.rs:390-396 assert no secret material in Debug/serialized recovery output); wire-value pinning (tests/lifecycle_hermetic.rs:251-265); `#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]` on the tokio tests is the sanctioned (d)4 reason; no `#[ignore]` tests; no proptest/insta/rstest (seed 3 = 0 - the scripted-fake form fits the state machine).
+
+## Coverage
+- idiom: 1 finding | clean (seeds: 1/1/0; index loop checked, deliberate constant-time)
+- own: 4 findings | clean (seeds: 18; remaining clones explainable)
+- type: 3 findings | clean (seeds: 1/0/0)
+- api: 2 findings | clean (seeds: 77/3/8; refusals #G77/#G78/#G83 honored)
+- err: clean (seeds: 0/0/0/1; closed wire-code taxonomy, no panic sites in src)
+- serde: clean (seeds: 21; consistent camelCase + deny_unknown_fields, opaque base64 handle, forward-compatible recovery defaults)
+- obs: 1 finding | clean (seeds: 0/0/0/27; named fields everywhere, no secrets)
+- docs: 3 findings | clean (seeds: 77/0/27; deny(missing_docs) satisfied)
+- perf: clean (seeds: 0/0/0)
+- conc: N/A (seeds: 0/0/0/0 in src; only test-only tokio::sync::Mutex)
+- async: clean (seeds: 72/0/0/0; no spawn/blocking/guard-across-await; resumable state machine)
+- unsafe: N/A (seeds: 0/0/0/1; forbid attribute only)
+- ffi: N/A (seeds: 0/0/0/0)
+- macro: N/A (seeds: 0/0/0/0)
+- test: 2 findings | clean (seeds: 25/106/0/0; deterministic, variant-matched, redaction canaries)
