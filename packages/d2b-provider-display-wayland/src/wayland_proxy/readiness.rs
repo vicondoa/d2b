@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use wayland_proxy::identity::ProxyIdentity;
+use crate::wayland_proxy::identity::ProxyIdentity;
 pub use d2b_contracts_control::proxy_readiness::{
     ProxyReadinessEvent, ProxyReadinessFailure, ProxyReadinessStage,
 };

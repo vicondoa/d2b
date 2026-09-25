@@ -21,7 +21,7 @@ use wl_proxy::protocols::{
     wayland::{wl_buffer::WlBuffer, wl_surface::WlSurface},
 };
 
-use wayland_proxy::{
+use crate::wayland_proxy::{
     decoration::{SharedDecorationManager, tracking_buffer_handler},
     diag::DiagRateLimiter,
 };

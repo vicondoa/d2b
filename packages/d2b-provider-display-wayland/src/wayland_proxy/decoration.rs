@@ -40,7 +40,7 @@ use wl_proxy::{
     },
 };
 
-use wayland_proxy::diag::{DiagRateLimiter, bounded_error_detail};
+use crate::wayland_proxy::diag::{DiagRateLimiter, bounded_error_detail};
 
 pub const DEFAULT_BORDER_THICKNESS: u32 = 4;
 pub const WRAPPER_RAIL_WIDTH: u32 = 9;
@@ -138,9 +138,6 @@ impl SanitizedLabel {
         &self.0
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 pub fn sanitize_label(input: &str) -> Option<SanitizedLabel> {
@@ -1690,13 +1687,6 @@ impl DecorationManager {
     pub fn toplevel_fullscreen_request(&mut self, surface_id: u64, fullscreen: bool) {
         if let Some(state) = self.surfaces.get_mut(&surface_id) {
             state.visual.fullscreen = fullscreen;
-        }
-    }
-
-    #[cfg(test)]
-    pub fn set_urgent_for_tests(&mut self, surface_id: u64, urgent: bool) {
-        if let Some(state) = self.surfaces.get_mut(&surface_id) {
-            state.visual.urgent = urgent;
         }
     }
 
