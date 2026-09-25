@@ -575,11 +575,6 @@ impl OwnerReconcilePlan {
         &self.creation_order
     }
 
-    /// Alias for callers that name the operation a create order.
-    pub fn create_order(&self) -> &[ResourceRef] {
-        self.creation_order()
-    }
-
     /// Borrow deterministic dependent-first deletion order.
     pub fn deletion_order(&self) -> &[ResourceRef] {
         &self.deletion_order
@@ -593,12 +588,6 @@ impl OwnerReconcilePlan {
     /// Borrow the bounded UID-free create batch, when creates are pending.
     pub const fn create_batch(&self) -> Option<&OwnerChildBatch> {
         self.create_batch.as_ref()
-    }
-
-    /// Alias for callers that refer to the related-resource operation as a
-    /// CommitBatch.
-    pub const fn batch(&self) -> Option<&OwnerChildBatch> {
-        self.create_batch()
     }
 
     /// Borrow the teardown projection for this plan.
@@ -693,11 +682,6 @@ impl OwnerChildBatch {
         &self.refs
     }
 
-    /// Borrow the batch addresses under Resource API terminology.
-    pub fn resource_refs(&self) -> &[ResourceRef] {
-        &self.refs
-    }
-
     /// Return whether the batch has no children.
     pub const fn is_empty(&self) -> bool {
         self.children.is_empty()
@@ -747,11 +731,6 @@ impl OwnerChildIdentity {
 
     /// Borrow the returned child ResourceRef.
     pub const fn target(&self) -> &ResourceRef {
-        &self.target
-    }
-
-    /// Borrow the returned child ResourceRef under its API name.
-    pub const fn resource_ref(&self) -> &ResourceRef {
         &self.target
     }
 
@@ -931,16 +910,6 @@ pub struct TeardownPlan {
 impl TeardownPlan {
     /// Borrow the dependent-first deletion order.
     pub fn order(&self) -> &[ResourceRef] {
-        &self.order
-    }
-
-    /// Borrow the order under its ResourceRef terminology.
-    pub fn refs(&self) -> &[ResourceRef] {
-        &self.order
-    }
-
-    /// Borrow the resources in child-first order.
-    pub fn resources(&self) -> &[ResourceRef] {
         &self.order
     }
 
