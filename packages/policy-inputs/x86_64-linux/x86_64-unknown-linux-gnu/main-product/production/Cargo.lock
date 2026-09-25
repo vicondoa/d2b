@@ -907,6 +907,7 @@ dependencies = [
  "d2b-broker",
  "d2b-broker-fixture-handlers",
  "regex",
+ "serde",
  "serde_json",
  "tokio",
  "tracing-subscriber",
@@ -1059,6 +1060,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 
@@ -1199,6 +1201,7 @@ dependencies = [
 name = "d2b-provider-clipboard-wayland"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "anyhow",
  "command-fds",
  "d2b-contracts",
  "d2b-contracts-resource",
@@ -1214,6 +1217,7 @@ dependencies = [
  "sha2",
  "thiserror 2.0.20",
  "tracing",
+ "tracing-subscriber",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-misc",
@@ -1895,6 +1899,7 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-resource-runtime",
  "d2b-resource-types",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -1910,6 +1915,7 @@ dependencies = [
  "d2b-session-unix",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 
@@ -2116,6 +2122,7 @@ dependencies = [
  "d2b-resource-runtime",
  "d2b-resource-types",
  "serde_json",
+ "tracing",
 ]
 
 

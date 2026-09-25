@@ -3030,7 +3030,7 @@ _d2b() {
             fi
             case "${prev}" in
                 --endpoint-class)
-                    COMPREPLY=($(compgen -f "${cur}"))
+                    COMPREPLY=($(compgen -W "service device transport control data" -- "${cur}"))
                     return 0
                     ;;
                 --zone)
@@ -3100,7 +3100,7 @@ _d2b() {
             fi
             case "${prev}" in
                 --endpoint-class)
-                    COMPREPLY=($(compgen -f "${cur}"))
+                    COMPREPLY=($(compgen -W "service device transport control data" -- "${cur}"))
                     return 0
                     ;;
                 --zone)
@@ -3170,7 +3170,7 @@ _d2b() {
             fi
             case "${prev}" in
                 --signal)
-                    COMPREPLY=($(compgen -f "${cur}"))
+                    COMPREPLY=($(compgen -W "term kill int hup" -- "${cur}"))
                     return 0
                     ;;
                 --zone)

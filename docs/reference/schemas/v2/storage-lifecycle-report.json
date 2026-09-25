@@ -87,11 +87,11 @@
         {
           "type": "object",
           "required": [
-            "bundleVersion",
+            "bundle_version",
             "kind"
           ],
           "properties": {
-            "bundleVersion": {
+            "bundle_version": {
               "type": "integer",
               "format": "uint32",
               "minimum": 0.0
@@ -121,12 +121,12 @@
         {
           "type": "object",
           "required": [
-            "contractId",
+            "contract_id",
             "kind",
             "reason"
           ],
           "properties": {
-            "contractId": {
+            "contract_id": {
               "type": "string"
             },
             "kind": {
@@ -135,7 +135,7 @@
                 "storage-contract-invalid"
               ]
             },
-            "offendingId": {
+            "offending_id": {
               "type": [
                 "string",
                 "null"
@@ -149,12 +149,12 @@
         {
           "type": "object",
           "required": [
-            "contractId",
+            "contract_id",
             "kind",
             "reason"
           ],
           "properties": {
-            "contractId": {
+            "contract_id": {
               "type": "string"
             },
             "kind": {
@@ -163,7 +163,7 @@
                 "sync-contract-invalid"
               ]
             },
-            "offendingId": {
+            "offending_id": {
               "type": [
                 "string",
                 "null"
@@ -178,7 +178,7 @@
           "type": "object",
           "required": [
             "kind",
-            "roleId",
+            "role_id",
             "vm"
           ],
           "properties": {
@@ -188,7 +188,7 @@
                 "missing-restart-policy"
               ]
             },
-            "roleId": {
+            "role_id": {
               "type": "string"
             },
             "vm": {
@@ -200,7 +200,7 @@
           "type": "object",
           "required": [
             "kind",
-            "roleId",
+            "role_id",
             "vm"
           ],
           "properties": {
@@ -210,7 +210,7 @@
                 "adoptable-missing-cgroup-leaf"
               ]
             },
-            "roleId": {
+            "role_id": {
               "type": "string"
             },
             "vm": {
