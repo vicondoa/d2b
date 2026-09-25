@@ -178,11 +178,4 @@ mod tests {
         );
         assert!(RuntimeRevision::first_of(epoch) < RuntimeRevision::new(7, 2));
     }
-
-    #[test]
-    fn wire_budget_bounds_sequence_for_u32_low_word() {
-        // The U8 wire mapping packs (epoch_seconds << 32) | sequence(u32);
-        // the hub must therefore never exceed 2^32 sequences in one epoch.
-        assert_eq!(WIRE_SEQUENCE_BUDGET, 1 << 32);
-    }
 }

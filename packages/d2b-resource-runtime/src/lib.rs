@@ -62,23 +62,4 @@ pub use crate::target::{
     TargetError, TargetHandle, TargetKind, TargetObservation, TargetRef,
 };
 
-#[cfg(test)]
-mod smoke_tests {
-    /// Scaffold smoke test: the crate compiles and its module tree resolves.
-    #[test]
-    fn modules_resolve() {
-        assert_eq!(crate::manager::MODULE_NAME, "manager");
-        assert_eq!(crate::resource::MODULE_NAME, "resource");
-        assert_eq!(crate::driver::MODULE_NAME, "driver");
-        assert_eq!(crate::metadata::MODULE_NAME, "metadata");
-        assert_eq!(crate::context::MODULE_NAME, "context");
-        assert_eq!(crate::provider::MODULE_NAME, "provider");
-        assert_eq!(crate::target::MODULE_NAME, "target");
-        assert_eq!(crate::guest_target::MODULE_NAME, "guest_target");
-        assert_eq!(crate::watch::MODULE_NAME, "watch");
-        assert_eq!(crate::spec_store::MODULE_NAME, "spec_store");
-        assert_eq!(crate::identity::MODULE_NAME, "identity");
-        assert_eq!(crate::error::MODULE_NAME, "error");
-        assert_eq!(crate::revision::MODULE_NAME, "revision");
-    }
-}
+

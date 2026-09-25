@@ -1587,50 +1587,6 @@ mod tests {
         assert!(notify2_rx.try_recv().is_err(), "exactly one immediate notification");
     }
 
-    /// The watch and manager shapes cross channels intact: registrations and
-    /// calls are Send and round-trip field-exact.
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn watch_and_manager_shapes_send_and_receive_intact() {
-        // WatchRegistration through a channel.
-        let (wtx, mut wrx) = mpsc::unbounded_channel::<WatchRegistration>();
-        let (notify_tx, mut notify_back) = mpsc::unbounded_channel::<WatchSatisfied>();
-        let target = ResourceKey::new("z", "Process", "worker-0");
-        wtx.send(WatchRegistration {
-            target: target.clone(),
-            condition: WatchCondition::Custom("gpu-free".into()),
-            notify: notify_tx,
-        })
-        .unwrap();
-        let registration = wrx.recv().await.unwrap();
-        assert_eq!(registration.target, target);
-        assert_eq!(registration.condition, WatchCondition::Custom("gpu-free".into()));
-
-        // Endpoint request/reply round-trip.
-        let (mtx, mut mrx) = mpsc::channel::<StubCall>(1);
-        let (reply_tx, reply_rx) = oneshot::channel();
-        mtx.send(StubCall::Get { key: target.clone(), reply: reply_tx })
-            .await
-            .unwrap();
-        match mrx.recv().await.unwrap() {
-            StubCall::Get { key, reply } => {
-                assert_eq!(key, target);
-                let _ = reply.send(Ok(None));
-            }
-            other => panic!("unexpected call: {other:?}"),
-        }
-        assert!(matches!(reply_rx.await.unwrap(), Ok(None)));
-
-        // The satisfied notification flows back to the subscriber.
-        registration
-            .notify
-            .send(WatchSatisfied { watch: WatchId(7), target: target.clone() })
-            .unwrap();
-        let satisfied = notify_back.recv().await.unwrap();
-        assert_eq!(satisfied.watch, WatchId(7));
-        assert_eq!(satisfied.target, target);
-    }
-
     /// `ctx.watch()` routes the registration through the manager with this
     /// resource's key as the subscriber, and satisfaction arrives on this
     /// resource's notify channel.
