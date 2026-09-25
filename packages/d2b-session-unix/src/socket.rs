@@ -173,6 +173,15 @@ impl fmt::Debug for SentPacket {
 }
 
 impl SentPacket {
+    /// Consume this sent packet, releasing everything it held.
+    ///
+    /// The body is intentionally empty: acknowledging a packet means
+    /// dropping it. Consuming the packet releases the credit
+    /// reservations made when the packet was built back to their
+    /// scopes (see [`CreditBundle`]) and drops the retained attachment
+    /// file descriptors. Every sent packet must be acknowledged once
+    /// its burst has been handed to the socket, so the credits it
+    /// reserved become available again.
     pub fn acknowledge(self) {}
 
     pub fn credits_mut(&mut self) -> &mut CreditBundle {
