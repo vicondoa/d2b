@@ -61,7 +61,9 @@ Use this index, then open the focused document instead of expanding this file.
 ## Codegraph (MCP code intelligence)
 
 [`.omp/mcp.json`](./.omp/mcp.json) wires the codegraph MCP server (pinned
-`@colbymchenry/codegraph@1.6.0`) into omp sessions. Every checkout - including
+`@colbymchenry/codegraph@1.6.0`) into omp sessions. The committed
+[`codegraph.json`](./codegraph.json) excludes `third_party/` from the index.
+Every checkout - including
 every `git worktree` - builds its own gitignored `.codegraph/` index: run
 `nix develop -c codegraph init` once per fresh clone or worktree, and re-run it
 if graph tools return empty or stale results. The first launch downloads the
