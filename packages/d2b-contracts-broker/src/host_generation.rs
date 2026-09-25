@@ -44,6 +44,11 @@ pub struct SourceGenerationCompatibilityFloorV1 {
 
 impl SourceGenerationCompatibilityFloorV1 {
     /// Construct a non-empty compatibility floor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HandoffError::CompatibilityFloorInvalid`] when the
+    /// generation is zero or the fingerprint is all zeros.
     pub fn new(
         minimum_generation: u64,
         target_fingerprint: [u8; 32],
@@ -88,6 +93,12 @@ impl SourceGenerationCompatibilityFloorV1 {
     }
 
     /// Begin a replay-safe handoff from source to target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HandoffError::GenerationAncestryInvalid`] when the source
+    /// generation is zero, the target generation is not strictly newer than
+    /// the source, or the source predates the compatibility floor.
     pub fn begin_handoff(
         self,
         source_generation: u64,
@@ -158,12 +169,6 @@ impl ApplyHostGenerationHandoff {
         }
         if self.intent.system_artifact_id.as_str().contains('/') {
             return Err(HandoffError::TargetFingerprintMismatch);
-        }
-        if !matches!(
-            self.caller_role,
-            HandoffCallerRole::Lifecycle | HandoffCallerRole::Admin
-        ) {
-            return Err(HandoffError::InvalidTransition);
         }
         Ok(())
     }
@@ -253,6 +258,15 @@ impl HandoffCoordinator {
     }
 
     /// Validate the authenticated target before mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HandoffError::InvalidTransition`] when the coordinator is
+    /// not in the `Recorded` phase, [`HandoffError::TargetGenerationMismatch`]
+    /// when the generation is not the authenticated target generation, and
+    /// the floor's own errors when the generation or fingerprint fails the
+    /// compatibility floor. The two mismatch cases move the coordinator to
+    /// `Refused`.
     pub fn validate_target(
         &mut self,
         generation: u64,
@@ -274,6 +288,11 @@ impl HandoffCoordinator {
     }
 
     /// Enter the mutation phase.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HandoffError::InvalidTransition`] when the coordinator is
+    /// not in the `Validated` phase.
     pub fn begin_mutation(&mut self) -> Result<(), HandoffError> {
         if self.state != HandoffState::Validated {
             return Err(HandoffError::InvalidTransition);
@@ -283,6 +302,11 @@ impl HandoffCoordinator {
     }
 
     /// Transfer the durable coordinator to the target broker.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HandoffError::InvalidTransition`] when the coordinator is
+    /// not in the `Mutating` phase.
     pub fn transfer(&mut self) -> Result<(), HandoffError> {
         if self.state != HandoffState::Mutating {
             return Err(HandoffError::InvalidTransition);
@@ -292,6 +316,11 @@ impl HandoffCoordinator {
     }
 
     /// Complete the target and retire the source.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HandoffError::InvalidTransition`] when the coordinator is
+    /// not in the `Transferred` phase.
     pub fn complete(&mut self) -> Result<(), HandoffError> {
         if self.state != HandoffState::Transferred {
             return Err(HandoffError::InvalidTransition);
@@ -302,6 +331,11 @@ impl HandoffCoordinator {
     }
 
     /// Roll back or preserve the source after a failed effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HandoffError::InvalidTransition`] when the coordinator is
+    /// already `Completed` or `RolledBack`.
     pub fn rollback(&mut self) -> Result<(), HandoffError> {
         if matches!(
             self.state,

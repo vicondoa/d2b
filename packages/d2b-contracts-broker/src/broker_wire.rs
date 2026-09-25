@@ -243,21 +243,21 @@ pub const FD_LEG: &str = "fd-leg";
 /// refused with [`FD_LEG`], never delivered as a transport truncation.
 pub const MAX_FRAME_FDS: usize = 8;
 
-/// The kernel kind one forwarded descriptor must present.from
+/// The kernel kind one forwarded descriptor must present. From
 ///
-/// The kind is declared per descriptor on the wire,index-aligned with the
-/// fd-index declarations,and validated against the received descriptor's
-/// fstat mode on the receiving leg;a mismatch is the [`FD_LEG`] refusal。
+/// The kind is declared per descriptor on the wire, index-aligned with the
+/// fd-index declarations, and validated against the received descriptor's
+/// fstat mode on the receiving leg; a mismatch is the [`FD_LEG`] refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum FdKind {
-    /// A FIFO (pipe) end。
+    /// A FIFO (pipe) end.
     Fifo,
-    /// A socket。
+    /// A socket.
     Socket,
-    /// A character device。
+    /// A character device.
     CharDevice,
-    /// A block device。
+    /// A block device.
     BlockDevice,
     /// Any descriptor kind.
     ///
@@ -268,9 +268,9 @@ pub enum FdKind {
     /// fstat kind - including anon-inodes such as pidfds, whose
     /// fstat mode carries no file type (U10 fd leg).
     Any,
-    /// A regular file。
+    /// A regular file.
     Regular,
-    /// A directory。
+    /// A directory.
     Directory,
 }
 
@@ -418,13 +418,13 @@ pub struct ForwardOperationRequest {
     /// rather than a second root record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain_identities: Option<Vec<String>>,
-    /// The positions,in the frame's SCM_RIGHTS attachment list,of the
+    /// The positions, in the frame's SCM_RIGHTS attachment list, of the
     /// descriptors this request carries. Empty when the request carries none.
 
     #[serde(default)]
     pub fd_indexes: Vec<u32>,
-    /// The kernel kind each declared descriptor must present,index-aligned
-    /// with [`Self::fd_indexes`]。
+    /// The kernel kind each declared descriptor must present, index-aligned
+    /// with [`Self::fd_indexes`].
 
     #[serde(default)]
     pub fd_kinds: Vec<FdKind>,
@@ -2492,6 +2492,15 @@ impl RunnerLaunchArgs {
     pub const MAX_TOTAL_BYTES: usize = 16 * 1024;
 
     /// Validate and construct one bounded argument vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunnerLaunchArgsError::Empty`] when the vector carries no
+    /// arguments, [`RunnerLaunchArgsError::TooMany`] when it exceeds
+    /// [`RunnerLaunchArgs::MAX_ARGS`], and the per-argument variants
+    /// (`EmptyArgument`, `ArgumentWithNul`, `ArgumentTooLong`) or
+    /// [`RunnerLaunchArgsError::TotalTooLong`] when an argument or the
+    /// combined size exceeds the launch bounds.
     pub fn new(args: Vec<String>) -> Result<Self, RunnerLaunchArgsError> {
         if args.is_empty() {
             return Err(RunnerLaunchArgsError::Empty);
@@ -2905,7 +2914,7 @@ impl BrokerCallerRole {
         match self {
             Self::AdminUid { .. } => "d2b-admin",
             Self::LauncherUid { .. } => "d2b-launcher",
-            Self::RootUid { .. } => "RootUid",
+            Self::RootUid { .. } => "d2b-root",
             Self::HostShutdownUid { .. } => "d2b-host-shutdown",
             Self::NotAuthorized => "d2b-not-authorized",
         }
@@ -3159,6 +3168,14 @@ mod tests {
         assert_eq!(
             BrokerCallerRole::NotAuthorized.for_display(),
             "d2b-not-authorized"
+        );
+        assert_eq!(
+            BrokerCallerRole::RootUid { uid: 0 }.for_display(),
+            "d2b-root"
+        );
+        assert_eq!(
+            BrokerCallerRole::HostShutdownUid { uid: 0 }.for_display(),
+            "d2b-host-shutdown"
         );
     }
 
