@@ -23,7 +23,7 @@ pub struct ConfigSyncRequest {
     /// Owning Guest resource.
     pub guest_ref: ResourceRef,
     /// Closed document identifier.
-    pub identifier: String,
+    pub(crate) identifier: String,
 }
 
 impl ConfigSyncRequest {
@@ -34,9 +34,7 @@ impl ConfigSyncRequest {
     /// Returns [`ConfigError::InvalidRequest`] when the reference does not
     /// name a Guest.
     pub fn new(guest_ref: ResourceRef) -> Result<Self, ConfigError> {
-        if guest_ref.resource_type().as_str() != "Guest" {
-            return Err(ConfigError::InvalidRequest);
-        }
+        validate_guest_ref(&guest_ref)?;
         Ok(Self {
             guest_ref,
             identifier: GUEST_CONFIG_IDENTIFIER.to_owned(),
@@ -114,7 +112,7 @@ pub struct ConfigStageRequest {
     /// Owning Guest resource.
     pub guest_ref: ResourceRef,
     /// Closed document identifier.
-    pub identifier: String,
+    pub(crate) identifier: String,
     /// Base64-encoded document to validate and stage.
     pub content_base64: String,
 }
@@ -183,9 +181,9 @@ pub struct ConfigDiffRequest {
     /// Owning Guest resource.
     pub guest_ref: ResourceRef,
     /// Closed staging document identifier.
-    pub identifier: String,
+    pub(crate) identifier: String,
     /// Stable local view identifier, not a file path.
-    pub against: String,
+    pub(crate) against: String,
 }
 
 impl ConfigDiffRequest {
@@ -225,9 +223,9 @@ pub struct ConfigApproveRequest {
     /// Owning Guest resource.
     pub guest_ref: ResourceRef,
     /// Closed staging document identifier.
-    pub identifier: String,
+    pub(crate) identifier: String,
     /// Stable host configuration target identifier.
-    pub destination: String,
+    pub(crate) destination: String,
 }
 
 impl ConfigApproveRequest {
@@ -273,7 +271,7 @@ pub struct ConfigRejectRequest {
     /// Owning Guest resource.
     pub guest_ref: ResourceRef,
     /// Closed staging document identifier.
-    pub identifier: String,
+    pub(crate) identifier: String,
 }
 
 impl ConfigRejectRequest {
@@ -309,7 +307,7 @@ pub struct ConfigStatusRequest {
     /// Owning Guest resource.
     pub guest_ref: ResourceRef,
     /// Closed staging document identifier.
-    pub identifier: String,
+    pub(crate) identifier: String,
 }
 
 impl ConfigStatusRequest {

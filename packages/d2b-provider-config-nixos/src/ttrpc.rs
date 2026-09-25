@@ -377,8 +377,10 @@ fn rpc_error(error: ConfigError) -> ttrpc::Error {
 }
 
 fn invalid_status() -> ttrpc::Status {
+    // Client-side encode/decode failures are implementation faults, not
+    // caller input errors, so report INTERNAL to match the code.
     ttrpc::get_status(
-        ttrpc::Code::INVALID_ARGUMENT,
+        ttrpc::Code::INTERNAL,
         ConfigError::EncodingFailed.code(),
     )
 }
