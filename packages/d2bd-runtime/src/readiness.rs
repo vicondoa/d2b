@@ -350,8 +350,10 @@ pub async fn wait_for_one_shot_exit(
                     Ok(ProcState::ParseFailed) => {
                         if !parse_fail_warned {
                             tracing::warn!(
-                                "wait_for_one_shot_exit: /proc/<pid>/stat unparseable; \
-                                 continuing to poll (will surface as oneshot-timeout if persistent)"
+                                pid = %pid,
+                                path = %format_args!("/proc/{pid}/stat"),
+                                "wait_for_one_shot_exit: proc stat unparseable; \
+                                 continuing to poll (will surface as oneshot-timeout if persistent)",
                             );
                             parse_fail_warned = true;
                         }
