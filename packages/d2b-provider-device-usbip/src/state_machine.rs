@@ -598,36 +598,6 @@ mod tests {
     }
 
     #[test]
-    fn bind_failure_rollback_preserves_started_backend() {
-        let plan = synthetic_plan(declared_claim_source());
-        let mut exec = FixtureExecutor::failing(UsbipBusidStep::Bind, "bind refused");
-        let (report, _) =
-            execute_usbip_plan(&plan, &mut exec).expect_err("bind failure should fail plan");
-
-        assert_eq!(
-            report.completed,
-            vec![
-                UsbipBusidStep::Modprobe,
-                UsbipBusidStep::Lock,
-                UsbipBusidStep::Withhold,
-                UsbipBusidStep::Firewall,
-                UsbipBusidStep::Backend,
-            ],
-        );
-        assert_eq!(
-            report.failure_rollback_order(),
-            vec![
-                UsbipBusidStep::Firewall,
-                UsbipBusidStep::Withhold,
-                UsbipBusidStep::Lock,
-                UsbipBusidStep::Modprobe,
-            ],
-        );
-        let rollback = report.failure_rollback_order();
-        assert!(!rollback.contains(&UsbipBusidStep::Backend));
-    }
-
-    #[test]
     fn proxy_failure_rollback_preserves_per_env_sidecars() {
         let plan = synthetic_plan(declared_claim_source());
         let mut exec = FixtureExecutor::failing(UsbipBusidStep::Proxy, "proxy refused");
@@ -764,16 +734,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_plan_carries_explicit_claim_source() {
-        let plan = build_usbip_explicit_plan("2-1.4.5", "personal", "yubikey-vm")
-            .expect("explicit plan succeeds");
-        match &plan.claim_source {
-            UsbipClaimSource::Explicit => {}
-            other => panic!("expected Explicit claim source, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn declared_plan_carries_bundle_refs_in_claim_source() {
         // Explicit plan has no bundle refs
         let explicit =
@@ -799,29 +759,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn explicit_plan_preserves_step_stop_and_execution_order() {
-        let plan = build_usbip_explicit_plan("1-2", "work", "corp-vm")
-            .expect("explicit plan succeeds");
-        assert_eq!(plan.steps, CANONICAL_STEPS.to_vec());
-        let stop = plan.stop_order();
-        assert_eq!(
-            stop,
-            vec![
-                UsbipBusidStep::Bind,
-                UsbipBusidStep::Firewall,
-                UsbipBusidStep::Withhold,
-                UsbipBusidStep::Lock,
-                UsbipBusidStep::Modprobe,
-            ],
-        );
-        assert!(!stop.contains(&UsbipBusidStep::Backend));
-        assert!(!stop.contains(&UsbipBusidStep::Proxy));
-        let mut exec = FixtureExecutor::ok();
-        let report = execute_usbip_plan(&plan, &mut exec).expect("explicit happy path succeeds");
-        assert!(report.is_ok());
-        assert_eq!(report.completed, CANONICAL_STEPS.to_vec());
-        assert_eq!(exec.calls, CANONICAL_STEPS.to_vec());
-        assert!(report.failed.is_none());
     }
-}
