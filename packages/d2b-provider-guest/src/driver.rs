@@ -2169,31 +2169,7 @@ mod tests {
         assert_eq!(effects.call_order(), vec!["reconcile:runtime-qemu-media-guest".to_owned()]);
     }
 
-    /// A qemu Guest whose Provider row the manager does not hold refuses
-    /// closed (the old fence) and never reaches the effect.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn reconcile_refuses_a_qemu_guest_without_its_provider_row() {
-        let effects = ScriptedEffects::new();
-        let manager = RecordingManager::new();
-        let mut ctx = context(
-            guest_row("work-vm", qemu_guest_spec()),
-            Arc::clone(&manager),
-            RecordingRequeue::new(),
-        );
-        let mut driver = driver(Arc::clone(&effects));
-
-        let failure = driver
-            .reconcile(&mut ctx)
-            .await
-            .expect_err("unfenced provider row");
-        assert_eq!(failure.class(), FailureClass::Retryable);
-        assert_eq!(format!("{failure}"), "guest-provider-unavailable");
-        assert!(effects.call_order().is_empty());
-        assert!(manager.ensure_order().is_empty());
-    }
-
-    /// Issue #511 at the migrated provider-row read
+/// Issue #511 at the migrated provider-row read
     /// ([`GuestDriver::provider_spec`], classified): an absent row and
     /// an unanswerable manager both defer (retryable - the actor requeues),
     /// while a present row that cannot be decoded names its terminal evidence
