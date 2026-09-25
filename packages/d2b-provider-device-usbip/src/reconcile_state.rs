@@ -502,3 +502,60 @@ pub struct UsbipPublicDegradedReason {
     /// Bounded remediation guidance.
     pub remediation: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_source_round_trips_a_vm_source_payload() {
+        let payload = r#"{"kind":"vm","vm":"workload-a"}"#;
+        let source: UsbipEventSource = serde_json::from_str(payload).unwrap();
+        assert_eq!(source, UsbipEventSource::vm("workload-a"));
+        assert_eq!(serde_json::to_string(&source).unwrap(), payload);
+    }
+
+    #[test]
+    fn event_source_round_trips_a_component_source_payload_without_vm() {
+        let payload = r#"{"kind":"host"}"#;
+        let source: UsbipEventSource = serde_json::from_str(payload).unwrap();
+        assert_eq!(source, UsbipEventSource::component(UsbipEventSourceKind::Host));
+        assert_eq!(serde_json::to_string(&source).unwrap(), payload);
+    }
+
+    #[test]
+    fn reconcile_attempt_context_round_trips_a_correlation_id_payload() {
+        let payload = r#"{"correlationId":"reconcile-2026-09-25-01"}"#;
+        let context: UsbipReconcileAttemptContext = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            context,
+            UsbipReconcileAttemptContext {
+                correlation_id: UsbipReconcileCorrelationId::new("reconcile-2026-09-25-01").unwrap(),
+            }
+        );
+        assert_eq!(serde_json::to_string(&context).unwrap(), payload);
+    }
+
+    #[test]
+    fn public_degraded_reason_round_trips_a_policy_failure_payload() {
+        let payload = r#"{"code":"policy-failed","policyFailure":"feature-disabled","summary":"USB policy does not allow this claim","remediation":"fix the USBIP declaration or caller authorization, rebuild the bundle, and retry the USB lifecycle verb"}"#;
+        let reason: UsbipPublicDegradedReason = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            reason,
+            UsbipDegradedReason::PolicyFailed(UsbipPolicyFailure::FeatureDisabled)
+                .to_public_reason()
+        );
+        assert_eq!(serde_json::to_string(&reason).unwrap(), payload);
+    }
+
+    #[test]
+    fn public_degraded_reason_round_trips_a_non_policy_payload_without_policy_failure() {
+        let payload = r#"{"code":"probe-incomplete","summary":"USB probing did not produce a reconciliation-safe identity","remediation":"retry the USB probe; if it repeats, verify the declaration has a stable physical selector"}"#;
+        let reason: UsbipPublicDegradedReason = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            reason,
+            UsbipDegradedReason::ProbeIncomplete.to_public_reason()
+        );
+        assert_eq!(serde_json::to_string(&reason).unwrap(), payload);
+    }
+}

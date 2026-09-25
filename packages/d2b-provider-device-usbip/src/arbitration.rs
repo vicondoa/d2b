@@ -147,3 +147,112 @@ impl fmt::Debug for UsbipArbitrator {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn uid(value: &str) -> ResourceUid {
+        ResourceUid::parse(value).unwrap()
+    }
+
+    fn backing() -> PhysicalUsbBackingToken {
+        PhysicalUsbBackingToken::from_core([7; 32])
+    }
+
+    #[test]
+    fn constructor_rejects_ceilings_outside_one_to_sixteen() {
+        let rejected = [
+            (DeviceArbitration::Shared, 0u32),
+            (DeviceArbitration::Shared, 17),
+            (DeviceArbitration::Exclusive, 0),
+            (DeviceArbitration::Exclusive, 2),
+        ];
+        for (arbitration, max_claims) in rejected {
+            assert_eq!(
+                UsbipArbitrator::new(arbitration, max_claims, backing()).unwrap_err(),
+                UsbipClaimError::ArbitrationViolation,
+                "ceiling {max_claims} under {arbitration:?} must be rejected",
+            );
+        }
+        for (arbitration, max_claims) in [
+            (DeviceArbitration::Shared, 1u32),
+            (DeviceArbitration::Shared, 16),
+            (DeviceArbitration::Exclusive, 1),
+        ] {
+            assert!(
+                UsbipArbitrator::new(arbitration, max_claims, backing()).is_ok(),
+                "ceiling {max_claims} under {arbitration:?} must be accepted",
+            );
+        }
+    }
+
+    #[test]
+    fn claim_paths_follow_the_arbitration_mode_and_ceiling() {
+        let table = [
+            (
+                DeviceArbitration::Exclusive,
+                1u32,
+                Ok(()),
+                Err(UsbipClaimError::ClaimConflict),
+                Err(UsbipClaimError::ClaimConflict),
+            ),
+            (
+                DeviceArbitration::Shared,
+                1u32,
+                Ok(()),
+                Err(UsbipClaimError::MaxClaimsExceeded),
+                Err(UsbipClaimError::MaxClaimsExceeded),
+            ),
+            (
+                DeviceArbitration::Shared,
+                2u32,
+                Ok(()),
+                Ok(()),
+                Err(UsbipClaimError::MaxClaimsExceeded),
+            ),
+        ];
+        for (arbitration, ceiling, first, second, third) in table {
+            let mut arbiter = UsbipArbitrator::new(arbitration, ceiling, backing()).unwrap();
+            assert_eq!(arbiter.claim(uid("123e4567-e89b-42d3-a456-426614174000"), backing()), first);
+            assert_eq!(arbiter.claim(uid("223e4567-e89b-42d3-a456-426614174001"), backing()), second);
+            assert_eq!(arbiter.claim(uid("323e4567-e89b-42d3-a456-426614174002"), backing()), third);
+        }
+    }
+
+    #[test]
+    fn same_holder_reclaim_is_idempotent() {
+        let mut arbiter = UsbipArbitrator::new(DeviceArbitration::Shared, 2, backing()).unwrap();
+        let holder = uid("123e4567-e89b-42d3-a456-426614174000");
+        assert_eq!(arbiter.claim(holder.clone(), backing()), Ok(()));
+        assert_eq!(arbiter.claim(holder, backing()), Ok(()));
+        assert_eq!(arbiter.claim_count(), 1);
+    }
+
+    #[test]
+    fn release_removes_exactly_the_named_claimant_and_frees_the_slot() {
+        let mut arbiter = UsbipArbitrator::new(DeviceArbitration::Shared, 2, backing()).unwrap();
+        let first = uid("123e4567-e89b-42d3-a456-426614174000");
+        let second = uid("223e4567-e89b-42d3-a456-426614174001");
+        arbiter.claim(first.clone(), backing()).unwrap();
+        arbiter.claim(second.clone(), backing()).unwrap();
+        assert!(arbiter.release(&first));
+        assert_eq!(arbiter.claim_count(), 1);
+        assert!(!arbiter.release(&first));
+        assert_eq!(arbiter.claim(first, backing()), Ok(()));
+        assert_eq!(arbiter.claim_count(), 2);
+    }
+
+    #[test]
+    fn claim_rejects_a_mismatched_backing_token() {
+        let mut arbiter = UsbipArbitrator::new(DeviceArbitration::Shared, 1, backing()).unwrap();
+        assert_eq!(
+            arbiter.claim(
+                uid("123e4567-e89b-42d3-a456-426614174000"),
+                PhysicalUsbBackingToken::from_core([9; 32]),
+            ),
+            Err(UsbipClaimError::PhysicalBackingConflict)
+        );
+        assert_eq!(arbiter.claim_count(), 0);
+    }
+}
