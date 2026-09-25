@@ -329,7 +329,7 @@ impl ForwardRendezvous {
     /// pre-restart context stops validating regardless of generation
     /// equality.
     pub(crate) fn set_broker_epoch(&self, epoch: u64) {
-        self.broker_epoch.store(epoch, Ordering::SeqCst);
+        self.broker_epoch.store(epoch, Ordering::Relaxed);
     }
 
     /// Wire one Zone's U10 family seam (the kernel socket, the caller
@@ -411,7 +411,7 @@ impl ForwardRendezvous {
     /// ceiling. The broker is the sole minter, so any mismatch is a stale
     /// or mutated attestation.
     async fn context_admitted(&self, context: &ForwardContext, request_zone: &str) -> bool {
-        let observed_epoch = self.broker_epoch.load(Ordering::SeqCst);
+        let observed_epoch = self.broker_epoch.load(Ordering::Relaxed);
         if observed_epoch == 0 {
             // No epoch observed yet: the attestation cannot be verified, so
             // no context is admitted - the fail-closed half of the rule that
