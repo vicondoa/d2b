@@ -61,6 +61,11 @@ pub struct LaunchRow<'a> {
 ///
 /// A row whose launch cannot be named completely fails here, once, naming the
 /// missing input ([`LaunchIdentityError`]).
+///
+/// # Errors
+///
+/// Returns the [`LaunchIdentityError`] naming the missing or invalid
+/// input when the row's launch identity cannot be resolved completely.
 pub fn resolve_launch_identity(row: &LaunchRow<'_>) -> Result<LaunchIdentity, LaunchIdentityError> {
     let owner = row.owner_ref;
     let declared_target = match row.declared_target {
