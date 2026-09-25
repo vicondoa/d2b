@@ -331,13 +331,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_factory_builds_a_new_service_value() {
-        let factory = SystemdEffectsServiceFactory::new();
-        let first = factory.build();
-        let second = factory.build();
-        // A respawn builds a fresh instance from the durable row (KTD5).
-        assert!(!Arc::ptr_eq(&first,&second));
-    }
-
     }

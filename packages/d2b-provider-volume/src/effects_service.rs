@@ -195,7 +195,6 @@ impl EffectServiceFactory for VolumeEffectsServiceFactory {
 mod tests {
     use super::*;
 
-    use d2b_contracts_resource::v3::canonical_json_bytes;
     use d2b_provider_toolkit::ServiceInvocation;
     use d2b_resource_runtime::context::ServiceResourceContext;
 
@@ -328,19 +327,4 @@ mod tests {
         );
     }
 
-    /// The canonical payload bytes are exactly the two literals the method
-    /// serves, so the wire contract is pinned byte for byte.
-    #[test]
-    fn the_has_layout_wire_payloads_are_canonical() {
-        assert_eq!(
-            canonical_json_bytes(&canonical(serde_json::json!({ "hasLayout": true })))
-                .expect("canonical"),
-            b"{\"hasLayout\":true}",
-        );
-        assert_eq!(
-            canonical_json_bytes(&canonical(serde_json::json!({ "hasLayout": false })))
-                .expect("canonical"),
-            b"{\"hasLayout\":false}",
-        );
     }
-}

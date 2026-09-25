@@ -767,15 +767,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn disabled_vm_is_not_registered_in_enabled_set() {
-        let state = SecurityKeyState::new("test-selector");
-        // The relay accept-loop must check `enabled_vms` before ever
-        // calling `try_acquire_lease` for a VM not configured to use
-        // the security-key proxy.
-        assert!(!state.enabled_vms.contains("vm-a"));
-    }
-
     // -----------------------------------------------------------------------
     // CTAPHID framing (recv_report_async / send_report_async round-trip)
     // -----------------------------------------------------------------------

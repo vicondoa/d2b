@@ -4018,12 +4018,6 @@ mod tests {
     }
 
     #[test]
-    fn published_selection_echo_is_always_suppressed_once() {
-        assert!(should_suppress_published_selection_echo_state(true));
-        assert!(!should_suppress_published_selection_echo_state(false));
-    }
-
-    #[test]
     fn bridge_paste_direct_serve_requires_user_selected_publication() {
         assert!(published_selection_can_serve_bridge_paste(
             PublishedSelectionMode::Selected

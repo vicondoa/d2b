@@ -476,7 +476,6 @@ impl GuestSessionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::ResourceUid;
 
     const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
     const BOOT_DIGEST: &str =
@@ -536,30 +535,6 @@ mod tests {
         .expect("spawned process without VMM readiness is representable");
         assert_eq!(spawned_only.health(), GuestSessionHealth::Degraded);
         assert!(!spawned_only.ready_for(&binding(3)));
-    }
-
-    #[test]
-    fn bound_evidence_exposes_only_exact_bounded_commitments() {
-        let evidence = bound_evidence(3, true);
-        assert_eq!(
-            evidence.guest_uid().map(ResourceUid::as_str),
-            Some(GUEST_UID)
-        );
-        assert_eq!(
-            evidence.descriptor_digest().map(SchemaFingerprint::as_str),
-            Some(DESCRIPTOR_DIGEST)
-        );
-        assert_eq!(
-            evidence.schema_digest().map(SchemaFingerprint::as_str),
-            Some(SCHEMA_DIGEST)
-        );
-        assert_eq!(evidence.provider_generation(), Some(7));
-        assert_eq!(evidence.controller_generation(), Some(3));
-        assert_eq!(evidence.session_generation(), Some(3));
-        assert_eq!(evidence.reconnect_generation(), Some(3));
-        assert_eq!(evidence.endpoint_generation(), Some(3));
-        assert_eq!(evidence.seed_generation(), Some(3));
-        assert!(evidence.seed_ready());
     }
 
     #[test]

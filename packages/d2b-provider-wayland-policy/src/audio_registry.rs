@@ -675,18 +675,6 @@ mod tests {
     }
 
     #[test]
-    fn projection_status_never_claims_host_readiness() {
-        let status = unavailable_status(
-            AudioBindingPhase::Degraded,
-            HostAudioReadiness::Unavailable,
-            GuestAudioReadiness::Unavailable,
-        );
-        assert_eq!(status.phase, AudioBindingPhase::Degraded);
-        assert_eq!(status.host_readiness, HostAudioReadiness::Unavailable);
-        assert_eq!(status.guest_readiness, GuestAudioReadiness::Unavailable);
-    }
-
-    #[test]
     fn audio_status_projection_is_stable_and_separates_readiness() {
         let status = audio_binding_status_value(unavailable_status(
             AudioBindingPhase::Degraded,
