@@ -880,10 +880,11 @@ impl ZoneLinkRouteWithdrawal {
         if withdrawn_route_ids.len() > MAX_ADVERTISED_ZONE_ROUTES {
             return Err(PrimitiveSpecError::TooManyEntries);
         }
-        let mut unique = withdrawn_route_ids.clone();
-        unique.sort_unstable();
-        unique.dedup();
-        if unique.len() != withdrawn_route_ids.len() {
+        if withdrawn_route_ids
+            .iter()
+            .enumerate()
+            .any(|(index, route_id)| withdrawn_route_ids[..index].contains(route_id))
+        {
             return Err(PrimitiveSpecError::DuplicateEntry);
         }
         Ok(Self {
