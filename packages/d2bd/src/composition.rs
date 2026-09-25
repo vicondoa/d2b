@@ -435,6 +435,15 @@ pub struct StaticProviderComposition {
 }
 
 impl StaticProviderComposition {
+    /// Compose the static Provider deployment and fixed effect adapter for one
+    /// daemon mode; the deployment's admission validation runs first, so
+    /// an over-budget or otherwise refused deployment surfaces before any
+    /// socket is bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AdmissionError` when the provider deployment admission
+    /// (budget, limits,or mode constraints) validation fails.
     pub fn new(
         mode: d2bd_runtime::target_runtime::DaemonMode,
         broker_socket: PathBuf,
@@ -3452,6 +3461,19 @@ fn admission_config(state: &ServerState) -> AdmissionConfig {
     }
 }
 
+/// Load the daemon config, apply CLI overrides, bind the operator socket,
+/// and run the accept loop until a shutdown signal lands. The daemon's
+/// startup contracts (pidfs support, state-lock parent, operator socket
+/// posture) are enforced before any socket is served. Operator tooling
+/// uses `lock_only` to hold the state lock without starting the daemon.
+
+/// # Errors
+///
+/// Returns [`TypedError`] for config-load and override failures, invalid
+/// startup-contract state (pidfs, state lock, socket path), IO failures
+/// (socket bind, helper socket, pidfd-table restore), and caller
+/// authorization refusals during the accept loop.
+
 pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     apply_overrides(&mut config, &options);
@@ -4825,6 +4847,14 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
     })
 }
 
+/// Acquire the daemon's state lock and hold it for the requested duration,
+/// then release it. Operator tooling uses this to serialize exclusive
+/// state access without starting the daemon.
+///
+/// # Errors
+///
+/// Returns [`TypedError`] for config-load, state-lock-parent validation,and
+/// lock-acquisition failures.
 pub async fn lock_only(options: LockOnlyOptions) -> Result<(), TypedError> {
     let mut config = load_config(&options.config_path)?;
     if let Some(path) = options.state_lock_path.clone() {
@@ -14693,10 +14723,11 @@ async fn open_resource_plane(
         // plane - the resources are committed, the reader is just early.
         let mut controller_session_startup =
             Err(resource_runtime::ResourceRuntimeError::HandlerNotReady);
-        // 30 x 2s: with fast fixture IO the reader outruns the broker's
-        // publication by a wide margin, and 10 attempts (20s) exhausted
-        // before the rows landed. Give the publication a full minute.
-        for attempt in 0..30 {
+        // The committed rows are published above; with fast fixture IO the
+        // reader can outrun the broker's publication, so retry the
+        // documented 30 x 2s window (PROVIDER_IDENTITY_SEED_*) instead of
+        // failing the plane.
+        for attempt in 0..PROVIDER_IDENTITY_SEED_ATTEMPTS {
             controller_session_startup = runtime
                 .reconcile_controller_sessions(Arc::new(state.clone()))
                 .await;
@@ -14707,7 +14738,7 @@ async fn open_resource_plane(
                         attempt,
                         "controller session startup raced publication; retrying",
                     );
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    tokio::time::sleep(PROVIDER_IDENTITY_SEED_INTERVAL).await;
                 }
                 _ => break,
             }
@@ -20401,7 +20432,7 @@ fn dispatch_live_guest_activation_resource(
         Ok(guard) => guard,
         Err(frame) => return Ok(frame),
     };
-    let zone = guard.zone().clone();
+    let zone = guard.zone();
     let plane = state
         .resource_plane
         .try_lock()
@@ -20436,23 +20467,23 @@ fn dispatch_live_guest_activation_resource(
             detail: "activation Guest resource unavailable".to_owned(),
         });
     }
-    let (ordinal, artifact) = if mode == DaemonActivationMode::Rollback {
+    let list = json!({
+        "zoneRef": format!("Zone/{}", zone.as_str()),
+        "service": "d2b.resource.v3",
+        "method": "List",
+        "resourceType": NIXOS_GENERATION_RESOURCE_TYPE,
+        "executionRef": guest_ref.to_canonical_string(),
+        "limit": 256,
+    });
+    let resources = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&list, peer_uid))
+        .map_err(|_| TypedError::InternalConfig {
+            detail: "activation generations unavailable".to_owned(),
+        })?;
+    let (ordinal, artifact) = if mode == DaemonActivationMode::Rollback{
         let target_ordinal = request
             .to_generation
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "rollback target generation unavailable".to_owned(),
-            })?;
-        let list = json!({
-            "zoneRef": format!("Zone/{}", zone.as_str()),
-            "service": "d2b.resource.v3",
-            "method": "List",
-            "resourceType": NIXOS_GENERATION_RESOURCE_TYPE,
-            "executionRef": guest_ref.to_canonical_string(),
-            "limit": 256,
-        });
-        let resources = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&list, peer_uid))
-            .map_err(|_| TypedError::InternalConfig {
-                detail: "rollback generations unavailable".to_owned(),
             })?;
         let artifact = resources
             .get("resources")
@@ -20486,18 +20517,7 @@ fn dispatch_live_guest_activation_resource(
         // its retained NixosGeneration resources (the same List used by the
         // rollback branch). The next activation is one past the max
         // committed ordinal; `1` when the Guest has no committed generation.
-        let list = json!({
-            "zoneRef": format!("Zone/{}", zone.as_str()),
-            "service": "d2b.resource.v3",
-            "method": "List",
-            "resourceType": NIXOS_GENERATION_RESOURCE_TYPE,
-            "executionRef": guest_ref.to_canonical_string(),
-            "limit": 256,
-        });
-        let resources = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&list, peer_uid))
-            .map_err(|_| TypedError::InternalConfig {
-                detail: "activation generations unavailable".to_owned(),
-            })?;
+
         let ordinal = resources
             .get("resources")
             .and_then(Value::as_array)
@@ -20635,7 +20655,7 @@ fn activation_generation_name(vm: &str, ordinal: u64, mode: DaemonActivationMode
         DaemonActivationMode::Rollback => "rollback",
     };
     let readable = format!("{vm}--{suffix}-{ordinal}");
-    if ResourceName::parse(readable.clone()).is_ok() {
+    if ResourceName::parse(&readable).is_ok() {
         return readable;
     }
     let mut digest = Sha256::new();
@@ -21088,7 +21108,7 @@ fn typed_error_from_resolution_error(
             workload_id,
             candidates,
         } => TypedError::WorkloadAliasConflict {
-            workload_id: workload_id.clone(),
+            workload_id,
             detail: format!("matches workloads [{}]", candidates.join(", ")),
         },
     }
@@ -21257,7 +21277,7 @@ fn public_qemu_media_status(
                 .sources
                 .iter()
                 .filter(|source| source.vm == vm)
-                .map(|source| qemu_media_source_status(contract.registry_dir.as_str(), source))
+                .map(|source| qemu_media_source_status(source))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -21287,8 +21307,8 @@ fn public_qemu_media_status(
     }))
 }
 
-fn qemu_media_source_status(registry_dir: &str, source: &QemuMediaSourceIntent) -> Value {
-    let (state, remediation) = qemu_media_registry_state(registry_dir, source);
+fn qemu_media_source_status(source: &QemuMediaSourceIntent) -> Value {
+    let (state, remediation) = qemu_media_registry_state(source);
     let status = json!({
         "mediaRef": source.media_ref,
         "slot": source.slot,
@@ -21303,10 +21323,7 @@ fn qemu_media_source_status(registry_dir: &str, source: &QemuMediaSourceIntent) 
     status
 }
 
-fn qemu_media_registry_state(
-    _registry_dir: &str,
-    source: &QemuMediaSourceIntent,
-) -> (String, Option<String>) {
+fn qemu_media_registry_state(source: &QemuMediaSourceIntent) -> (String, Option<String>) {
     if serde_kebab_string(&source.source_kind) != "physical-usb" {
         return ("direct-config".to_owned(), None);
     }
@@ -22060,7 +22077,6 @@ mod public_status_tests {
 
     #[test]
     fn qemu_media_status_reports_manual_runtime_and_missing_registry() {
-        let root = tempfile::tempdir().expect("registry root");
         let (state, _dir) = test_state();
         let manifest_entry = qemu_media_manifest_entry();
         let dag = qemu_media_process_dag();
@@ -22093,7 +22109,7 @@ mod public_status_tests {
             None
         );
         let source_status =
-            qemu_media_source_status(&root.path().display().to_string(), &qemu_media_source());
+            qemu_media_source_status(&qemu_media_source());
         assert_eq!(
             source_status.pointer("/slot").and_then(Value::as_str),
             Some("boot")
@@ -22121,7 +22137,7 @@ mod public_status_tests {
     #[test]
     fn qemu_media_status_reports_direct_image_without_enrollment_remediation() {
         let source_status =
-            qemu_media_source_status("/var/lib/d2b/media-registry", &qemu_media_image_source());
+            qemu_media_source_status(&qemu_media_image_source());
 
         assert_eq!(
             source_status.pointer("/sourceKind").and_then(Value::as_str),
