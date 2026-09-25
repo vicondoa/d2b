@@ -468,7 +468,56 @@ impl<T: InteractionType> ResourceDriverFactory for InteractionDriverFactory<T> {
     }
 
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
-        Box::new(InteractionDriver::new(self.args.clone()))
+        match InteractionDriver::new(self.args.clone()) {
+            Ok(driver) => Box::new(driver),
+            Err(error) => Box::new(RefusedInteractionDriver { error }),
+        }
+    }
+}
+
+/// One driver that refuses every verb with a construction-time refusal.
+///
+/// The daemon validates the zone at plane construction, so `create` never
+/// sees a malformed zone in production; this arm keeps the factory
+/// infallible (R3) while the typed refusal surfaces through the actor's
+/// first verb instead of panicking.
+struct RefusedInteractionDriver {
+    error: InteractionDriverError,
+}
+
+#[async_trait]
+impl ResourceDriver for RefusedInteractionDriver {
+    type Error = InteractionDriverError;
+
+    fn classify_error(&self, error: &InteractionDriverError) -> DriverFailure {
+        classify_interaction_error(error)
+    }
+
+    async fn validate(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        Err(self.error)
+    }
+
+    async fn recover(&mut self, _ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
+        Err(self.error)
+    }
+
+    async fn reconcile(
+        &mut self,
+        _ctx: &mut ResourceContext,
+    ) -> Result<ReconcileOutcome, Self::Error> {
+        Err(self.error)
+    }
+
+    async fn delete(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
+        Err(self.error)
+    }
+}
+
+/// Classify one family-engine refusal onto the structured failure surface.
+fn classify_interaction_error(error: &InteractionDriverError) -> DriverFailure {
+    match error.kind.class() {
+        FailureClass::Retryable => DriverFailure::retryable(error.op),
+        FailureClass::Terminal => DriverFailure::terminal(error.op),
     }
 }
 
@@ -484,15 +533,25 @@ pub struct InteractionDriver<T: InteractionType> {
 
 impl<T: InteractionType> InteractionDriver<T> {
     /// Build the driver for its declared type.
-    pub fn new(args: InteractionDriverArgs<T>) -> Self {
-        let zone = ZoneId::parse(args.zone).expect("driver zone was validated at construction");
-        Self {
+    ///
+    /// The zone token is parsed once at this boundary; a malformed token is
+    /// refused as a terminal [`InteractionDriverError`] instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `SpecInvalid` refusal when `args.zone` is not a valid
+    /// [`ZoneId`].
+    pub fn new(args: InteractionDriverArgs<T>) -> Result<Self, InteractionDriverError> {
+        let zone = ZoneId::parse(args.zone).map_err(|_| {
+            InteractionDriverError::new(InteractionDriverErrorKind::SpecInvalid, DriverOp::Validate)
+        })?;
+        Ok(Self {
             zone,
             controller_generation: args.controller_generation,
             effects: args.effects,
             behavior: args.behavior,
             watched: Vec::new(),
-        }
+        })
     }
 
     fn error(&self, kind: InteractionDriverErrorKind, op: DriverOp) -> InteractionDriverError {
@@ -689,10 +748,7 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
     type Error = InteractionDriverError;
 
     fn classify_error(&self, error: &InteractionDriverError) -> DriverFailure {
-        match error.kind.class() {
-            FailureClass::Retryable => DriverFailure::retryable(error.op),
-            FailureClass::Terminal => DriverFailure::terminal(error.op),
-        }
+        classify_interaction_error(error)
     }
 
     /// Structural validation: the stored spec decodes, names a Provider this

@@ -269,7 +269,8 @@ fn build_fixture(
         controller_generation: ControllerGeneration::new(3).unwrap(),
         effects: Arc::clone(&effects) as Arc<dyn InteractionDriverEffects>,
         behavior: TestType { valid },
-    });
+    })
+    .expect("driver");
     (
         Fixture {
             ctx,
@@ -335,6 +336,21 @@ fn the_factory_serves_only_its_declared_type() {
         .map(|resource_type| resource_type.as_str().to_owned())
         .collect::<Vec<_>>();
     assert_eq!(served, vec!["test.d2bus.org.Row".to_owned()]);
+}
+
+/// A malformed zone token is refused at the driver boundary instead of
+/// panicking.
+#[test]
+fn the_driver_refuses_a_malformed_zone_token() {
+    let effects = ScriptedEffects::shared(Arc::new(tokio::sync::Mutex::new(Vec::new())));
+    let refusal = InteractionDriver::new(InteractionDriverArgs {
+        zone: "not a zone token".to_owned(),
+        controller_generation: ControllerGeneration::new(3).unwrap(),
+        effects: Arc::clone(&effects) as Arc<dyn InteractionDriverEffects>,
+        behavior: TestType { valid: true },
+    })
+    .expect_err("a malformed zone token is a typed refusal, not a panic");
+    assert_eq!(refusal.to_string(), "interaction-spec-invalid");
 }
 
 // -- validate ---------------------------------------------------------------
