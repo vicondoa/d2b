@@ -546,6 +546,11 @@ impl FdPermitPool {
     }
 
     /// Reserve ownership for one accepted descriptor batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FdSafetyError::ConcurrentLimitExceeded`] when the batch
+    /// would push the retained descriptor count past the pool limit.
     pub fn acquire(&self, requested: usize) -> Result<FdPermit, FdSafetyError> {
         let mut active = self.active.load(Ordering::Acquire);
         loop {

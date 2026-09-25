@@ -197,6 +197,11 @@ impl ClipboardAuditQueue {
     }
 
     /// Append an event, refusing the operation when the queue is full.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClipboardReason::AuditQueueFull`] when the queue already
+    /// holds its fixed capacity of events.
     pub fn push(&mut self, event: ClipboardAuditEvent) -> Result<(), ClipboardReason> {
         if self.entries.len() >= self.capacity {
             return Err(ClipboardReason::AuditQueueFull);
