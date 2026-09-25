@@ -444,13 +444,10 @@ mod tests {
     use std::sync::Arc;
 
     use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
-    use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueScheduler, ResourceContext, WatchId,
-        WatchRegistration,
-    };
-    use d2b_resource_runtime::error::{FailureClass, ResourceError};
+    use d2b_resource_runtime::context::{ManagerEndpoint, RequeueScheduler, ResourceContext};
+    use d2b_resource_runtime::error::FailureClass;
     use d2b_resource_runtime::identity::ResourceProvenance;
-    use d2b_resource_runtime::spec_store::{EnsureOutcome, StoredDesiredResource};
+    use d2b_resource_runtime::spec_store::StoredDesiredResource;
     use d2b_resource_runtime::target::TargetHandle;
     use tokio::sync::mpsc;
 
@@ -579,7 +576,7 @@ mod tests {
             RecoveryOutcome::Adopted,
             "a Service realizes nothing on a target: the ingest rows carry the evidence"
         );
-        assert!(fixture.manager.log().is_empty());
+        assert!(fixture.manager.call_order().is_empty());
     }
 
     // -- reconcile -----------------------------------------------------------
@@ -648,7 +645,7 @@ mod tests {
         assert_eq!(status.phase, PHASE_READY);
         assert_eq!(status.projection["serviceRole"], "projection");
         assert_eq!(status.projection["serviceReadiness"], PHASE_READY);
-        assert!(fixture.manager.log().is_empty());
+        assert!(fixture.manager.call_order().is_empty());
         assert!(fixture.requeue.scheduled().is_empty());
     }
 
@@ -709,10 +706,10 @@ mod tests {
         let mut driver = driver(&fixture).await;
 
         driver.reconcile(&mut fixture.ctx).await.expect("reconcile");
-        let before = fixture.manager.log().len();
+        let before = fixture.manager.call_order().len();
         driver.delete(&mut fixture.ctx).await.expect("delete");
         assert_eq!(
-            fixture.manager.log().len(),
+            fixture.manager.call_order().len(),
             before,
             "a Service owns no child and realizes nothing to remove"
         );
@@ -746,60 +743,7 @@ mod tests {
         assert_eq!(failure.class(), FailureClass::Retryable);
     }
 
-    /// A manager endpoint whose row reads fail: the recording fixture never
-    /// errors, so the driver's explicit `Reconcile`-class error path was
-    /// unpinned anywhere in the crate.
-    struct FailingManager;
-
-    #[async_trait::async_trait]
-    impl ManagerEndpoint for FailingManager {
-        async fn ensure_child(
-            &self,
-            _parent: &ResourceKey,
-            _child: ChildEnsure,
-        ) -> Result<EnsureOutcome, ResourceError> {
-            unreachable!("no ensure runs in this test")
-        }
-
-        async fn get(
-            &self,
-            _key: &ResourceKey,
-        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("fixture failure".to_owned()))
-        }
-
-        async fn view(
-            &self,
-            _key: &ResourceKey,
-        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            Ok(None)
-        }
-
-        async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
-            Ok(())
-        }
-
-        async fn list_owned(
-            &self,
-            _owner_uid: [u8; 16],
-        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(Vec::new())
-        }
-
-        async fn register_watch(
-            &self,
-            _subscriber: &ResourceKey,
-            _registration: WatchRegistration,
-        ) -> Result<WatchId, ResourceError> {
-            Ok(WatchId(1))
-        }
-
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Ok(())
-        }
-    }
-
-    /// A manager row-read failure during reconcile surfaces as the
+/// A manager row-read failure during reconcile surfaces as the
     /// `Reconcile`-class retryable error, never as a silent partial
     /// projection.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -809,11 +753,13 @@ mod tests {
         let requeue = Arc::new(RecordingRequeue::default());
         let (effects_tx, _effects_rx) = mpsc::unbounded_channel();
         let (watch_tx, _watch_rx) = mpsc::unbounded_channel();
+        let fail_reads = RecordingManagerEndpoint::new();
+        fail_reads.set_fail_reads(true);
         let mut ctx = ResourceContext::new(
             row,
             TargetHandle::Host,
             telemetry_service_spec_decoder(),
-            Arc::new(FailingManager) as Arc<dyn ManagerEndpoint>,
+            Arc::new(fail_reads) as Arc<dyn ManagerEndpoint>,
             Arc::clone(&requeue) as Arc<dyn RequeueScheduler>,
             effects_tx,
             watch_tx,

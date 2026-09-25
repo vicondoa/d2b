@@ -606,7 +606,16 @@ impl RecordingManagerEndpoint {
 
     /// Seed one row together with its live view at the given status.
     pub fn add(&self, row: StoredDesiredResource, status: ResourceStatus) {
-        let view = ResourceView {
+        let view = Self::project(&row, status);
+        self.rows.lock().push(row);
+        self.views.lock().push((view.key.clone(), view));
+    }
+
+    /// Project one committed row to the live view a driver's read sees.
+    /// The `deleting` flag follows the row: a seeded row carries its caller's
+    /// flag, and an `ensure_child`-committed row is never deleting.
+    fn project(row: &StoredDesiredResource, status: ResourceStatus) -> ResourceView {
+        ResourceView {
             key: row.key.clone(),
             uid: row.uid,
             generation: row.generation,
@@ -618,9 +627,7 @@ impl RecordingManagerEndpoint {
             status: Some(status),
             status_generation: Some(row.generation),
             status_projection: None,
-        };
-        self.rows.lock().push(row);
-        self.views.lock().push((view.key.clone(), view));
+        }
     }
 
     /// Seed one owned row together with its published view.
@@ -675,16 +682,6 @@ impl RecordingManagerEndpoint {
     }
 
     /// The recorded calls in order.
-    pub fn order(&self) -> Vec<String> {
-        self.log.lock().clone()
-    }
-
-    /// The recorded calls in order (alias of [`Self::order`]).
-    pub fn log(&self) -> Vec<String> {
-        self.log.lock().clone()
-    }
-
-    /// The recorded calls in order (alias of [`Self::order`]).
     pub fn call_order(&self) -> Vec<String> {
         self.log.lock().clone()
     }
@@ -771,19 +768,7 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
             self.views.lock().retain(|(view_key, _)| view_key != &row.key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             self.views.lock().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 row.key.clone(),
-                ResourceView {
-                    key: row.key.clone(),
-                    uid: row.uid,
-                    generation: row.generation,
-                    deleting: false,
-                    provenance: row.provenance,
-                    spec: row.spec.clone(),
-                    metadata: row.metadata.clone(),
-                    owner_key: None,
-                    status: Some(status),
-                    status_generation: Some(row.generation),
-                    status_projection: None,
-                },
+                Self::project(&row, status),
             ));
         }
         // Spawn notification only after the commit (F1, AE1).
@@ -908,26 +893,6 @@ impl RecordingRequeue {
         )
     }
 
-    /// The scheduled `(key, delay)` pairs, in arrival order.
-    pub fn recorded(&self) -> Vec<(ResourceKey, Duration)> {
-        self.inner.lock().calls.clone()
-    }
-
-    /// The number of schedules recorded.
-    pub fn call_count(&self) -> usize {
-        self.inner.lock().calls.len()
-    }
-
-    /// The scheduled delays in milliseconds, in arrival order.
-    pub fn calls(&self) -> Vec<u64> {
-        self.inner
-            .lock()
-            .calls
-            .iter()
-            .map(|(_, after)| after.as_millis() as u64)
-            .collect()
-    }
-
     /// The scheduled delays, in arrival order.
     pub fn scheduled(&self) -> Vec<Duration> {
         self.inner
@@ -1040,6 +1005,7 @@ mod tests {
         assert_eq!(port.recorder().count_of("apply-effect"), 1);
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn the_manager_endpoint_commits_before_spawn_and_retires_on_delete() {
         let manager = RecordingManagerEndpoint::new();
@@ -1060,7 +1026,7 @@ mod tests {
             .await
             .expect("re-ensure");
         assert!(matches!(unchanged, EnsureOutcome::Unchanged(_)));
-        let order = manager.order();
+        let order = manager.call_order();
         let ensure_at = order.iter().position(|entry| entry == "ensure:Process/worker-0");
         let spawned_at = order.iter().position(|entry| entry == "spawned:Process/worker-0");
         assert!(ensure_at < spawned_at, "commit-before-spawn (F1): {order:?}");
@@ -1070,7 +1036,7 @@ mod tests {
         manager.delete(&key).await.expect("delete");
         assert!(manager.row(&key).is_none(), "delete removes the committed row");
         assert_eq!(
-            manager.order(),
+            manager.call_order(),
             vec![
                 "ensure:Process/worker-0".to_owned(),
                 "spawned:Process/worker-0".to_owned(),

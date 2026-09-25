@@ -199,16 +199,11 @@ mod tests {
         );
     }
 
-    /// Remove one test socket path, ignoring absence.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn remove_socket(socket: &std::path::Path) {
-        let _ = std::fs::remove_file(socket);
-    }
-
     /// Serve one `vm.info` HTTP-over-unix exchange for the given wire state,
-    /// and return the socket path the poll reads.
+    ///and return the socket path the poll reads,plus the serving dir the caller
+    /// removes when the exchange is complete.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn serve_vm_info(state: &str) -> PathBuf {
+    fn serve_vm_info(state: &str) -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "d2b-provider-guest-shutdown-{}",
             std::process::id()
@@ -229,7 +224,7 @@ mod tests {
             );
             stream.write_all(response.as_bytes()).expect("write response");
         });
-        socket
+        (socket, dir)
     }
 
     /// The wire-state classification of [`CloudHypervisorShutdown::poll_state`]:
@@ -251,14 +246,14 @@ mod tests {
                 },
             ),
         ] {
-            let socket = serve_vm_info(state);
+            let (socket, dir) = serve_vm_info(state);
             let target = ProviderShutdownTarget {
                 vm: "work".to_owned(),
                 kind: ProviderKind::CloudHypervisor,
                 api_socket: Some(socket.clone()),
             };
             assert_eq!(provider.poll_state(&target).await, expected, "state {state}");
-            remove_socket(&socket);
+            let _ = std::fs::remove_dir_all(&dir);
         }
 
         // An unreachable socket is an error, and errors answer Unknown.

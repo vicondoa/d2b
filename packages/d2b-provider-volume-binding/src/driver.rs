@@ -1238,7 +1238,7 @@ mod tests {
              reports `ready: false` with `BindingNotReady` until the worker's socket listens"
         );
 
-        let order = manager.order();
+        let order = manager.call_order();
         // F1: each child row is ensured (committed) BEFORE its spawn
         // notification; the endpoint depends on the worker, so the worker
         // row is committed first.
@@ -1289,7 +1289,7 @@ mod tests {
         d.reconcile(&mut f.ctx).await.expect("reconcile again");
         let ensures = f
             .manager
-            .order()
+            .call_order()
             .iter()
             .filter(|entry| entry.starts_with("ensure:"))
             .count();
@@ -1555,7 +1555,7 @@ mod tests {
         let failure = d.finalize(&mut f.ctx).await.expect_err("owned child still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert_eq!(
-            manager.order(),
+            manager.call_order(),
             vec!["delete:Process/worker-0".to_owned()],
             "the owned child is nudged through its own finalize-before-delete pass"
         );
@@ -1575,10 +1575,10 @@ mod tests {
         let mut d = driver(fake.clone()).await;
 
         d.reconcile(&mut f.ctx).await.expect("reconcile");
-        let before = manager.order().len();
+        let before = manager.call_order().len();
         d.delete(&mut f.ctx).await.expect("delete");
 
-        let order: Vec<String> = manager.order().into_iter().skip(before).collect();
+        let order: Vec<String> = manager.call_order().into_iter().skip(before).collect();
         let position = |needle: &str| {
             order
                 .iter()
@@ -1610,7 +1610,7 @@ mod tests {
         let failure = d.delete(&mut f.ctx).await.expect_err("drain must block");
         assert_eq!(failure.class(), FailureClass::Retryable);
         let teardown: Vec<String> = manager
-            .order()
+            .call_order()
             .into_iter()
             .filter(|entry| entry.starts_with("delete:") || entry == "remove-socket")
             .collect();
@@ -1634,7 +1634,7 @@ mod tests {
 
         d.reconcile(&mut f.ctx).await.expect("reconcile");
 
-        let order = manager.order();
+        let order = manager.call_order();
         let stale_endpoint = order
             .iter()
             .position(|entry| entry == "delete:Endpoint/stale-endpoint")
@@ -1712,7 +1712,7 @@ mod tests {
             })
         ));
         assert!(
-            manager.order().iter().all(|entry| !entry.starts_with("ensure:")),
+            manager.call_order().iter().all(|entry| !entry.starts_with("ensure:")),
             "a rejected binding mints no children"
         );
     }
@@ -1741,7 +1741,7 @@ mod tests {
             "a parent row that simply does not exist yet must defer, not fail terminal"
         );
         assert!(
-            manager.order().iter().all(|entry| !entry.starts_with("ensure:")),
+            manager.call_order().iter().all(|entry| !entry.starts_with("ensure:")),
             "no child is minted before the parent row is observable"
         );
 
@@ -1778,7 +1778,7 @@ mod tests {
         let mut d = driver(fake).await;
         d.reconcile(&mut f.ctx).await.expect("reconcile one");
         d.reconcile(&mut f.ctx).await.expect("reconcile two");
-        let order = manager.order();
+        let order = manager.call_order();
         let ensures: Vec<&String> = order
             .iter()
             .filter(|entry| entry.starts_with("ensure:Process/") || entry.starts_with("ensure:Endpoint/"))
@@ -1868,7 +1868,7 @@ let failure = d.validate(&mut f.ctx).await.expect_err("undecodable spec refused"
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert_eq!(failure.kind(), FailureKinds::BINDING_CHILD_MUTATION_FAILED);
         assert!(
-            manager.order().iter().any(|entry| entry.starts_with("ensure:Process/")),
+            manager.call_order().iter().any(|entry| entry.starts_with("ensure:Process/")),
             "the refused ensure was attempted"
         );
     }
@@ -1888,7 +1888,7 @@ let failure = d.validate(&mut f.ctx).await.expect_err("undecodable spec refused"
         let failure = d.delete(&mut f.ctx).await.expect_err("socket removal failed");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert_eq!(failure.kind(), FailureKinds::BINDING_SERVING_EFFECT_FAILED);
-        let order = manager.order();
+        let order = manager.call_order();
         assert!(
             order.iter().any(|entry| entry.starts_with("delete:Endpoint/")),
             "the endpoint child delete was attempted: {order:?}"

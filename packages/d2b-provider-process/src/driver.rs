@@ -2511,11 +2511,7 @@ mod tests {
 
     impl Fixture {
         fn requeue_calls(&self) -> Vec<Duration> {
-            self.requeue
-                .recorded()
-                .into_iter()
-                .map(|(_, after)| after)
-                .collect()
+            self.requeue.scheduled()
         }
     }
 

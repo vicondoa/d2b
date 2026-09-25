@@ -896,7 +896,7 @@ mod tests {
 
         let outcome = reconcile_to_children(&mut d, &mut f).await;
         assert_eq!(outcome, ReconcileOutcome::Satisfied);
-        let order = manager.order();
+        let order = manager.call_order();
         assert_eq!(
             fake.call_order(),
             vec!["has-layout", "ensure-layout"],
@@ -979,7 +979,7 @@ mod tests {
             "the adoption pass re-validates the layout through the idempotent ensure"
         );
         let binding_ensures = manager
-            .order()
+            .call_order()
             .iter()
             .filter(|entry| entry.starts_with("ensure:VolumeBinding/"))
             .count();
@@ -1023,7 +1023,7 @@ mod tests {
         );
         assert!(
             !manager
-                .order()
+                .call_order()
                 .iter()
                 .any(|entry| entry.starts_with("ensure:VolumeBinding/")),
             "a degraded layout derives no binding children"
@@ -1058,7 +1058,7 @@ mod tests {
             let mut d = driver(RecordingRuntime::new()).await;
             reconcile_to_children(&mut d, &mut f).await;
         }
-        let first = manager.order();
+        let first = manager.call_order();
         // Same parent + attachment -> exactly one child key, ensured again
         // as Unchanged (no duplicate identity, no churn).
         {
@@ -1067,7 +1067,7 @@ mod tests {
             d.recover(&mut f.ctx).await.expect("recover");
             reconcile_to_children(&mut d, &mut f).await;
         }
-        let second = manager.order();
+        let second = manager.call_order();
         let ensure_count = first
             .iter()
             .filter(|entry| entry.starts_with("ensure:VolumeBinding/"))
@@ -1103,7 +1103,7 @@ mod tests {
         d.recover(&mut f.ctx).await.expect("recover");
         reconcile_to_children(&mut d, &mut f).await;
         let first_child = manager
-            .order()
+            .call_order()
             .iter()
             .find_map(|entry| entry.strip_prefix("ensure:VolumeBinding/"))
             .expect("first binding name")
@@ -1125,14 +1125,14 @@ mod tests {
         );
         d.reconcile(&mut ctx2).await.expect("reconcile grown");
         let ensured = manager
-            .order()
+            .call_order()
             .iter()
             .filter(|entry| entry.starts_with("ensure:VolumeBinding/"))
             .count();
         assert_eq!(ensured, 3, "first retained + two passes over two children");
         assert!(
             !manager
-                .order()
+                .call_order()
                 .iter()
                 .any(|entry| entry.starts_with("delete:")),
             "matching child retained, no delete on growth"
@@ -1154,7 +1154,7 @@ mod tests {
         );
         d.reconcile(&mut ctx3).await.expect("reconcile shrunk");
         let deletes = manager
-            .order()
+            .call_order()
             .iter()
             .filter(|entry| entry.starts_with("delete:VolumeBinding/"))
             .cloned()
@@ -1163,7 +1163,7 @@ mod tests {
         assert!(
             !deletes[0].contains(&first_child),
             "matching child never retired, order: {:?}",
-            manager.order()
+            manager.call_order()
         );
     }
 
@@ -1183,7 +1183,7 @@ mod tests {
         let failure = d.finalize(&mut f.ctx).await.expect_err("owned child still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert_eq!(
-            manager.order(),
+            manager.call_order(),
             vec!["delete:VolumeBinding/vol-binding-0".to_owned()],
             "the owned child is nudged through its own finalize-before-delete pass"
         );

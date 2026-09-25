@@ -1373,7 +1373,7 @@ mod tests {
             .expect("effect ran");
         assert!(child_at < effect_at, "{entries:?}");
         assert_eq!(
-            fixture.requeue.recorded().len(),
+            fixture.requeue.scheduled().len(),
             1,
             "pending reconcile self-resyncs"
         );

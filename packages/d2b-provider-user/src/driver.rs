@@ -729,7 +729,7 @@ mod tests {
             "one discovery per desired generation"
         );
         assert_eq!(
-            requeue.call_count(),
+            requeue.scheduled().len(),
             0,
             "a realized discovery re-checks nothing"
         );
@@ -756,7 +756,7 @@ mod tests {
             assert_eq!(status.report().phase, phase);
             assert_eq!(status.report().discovery, UserDiscoveryCondition::Discovered);
             assert_eq!(
-                requeue.calls(),
+                requeue.scheduled().iter().map(|d| d.as_millis() as u64).collect::<Vec<_>>(),
                 vec![USER_REDISCOVER.as_millis() as u64],
                 "exactly one re-check, on the discovery cadence"
             );
@@ -859,7 +859,7 @@ mod tests {
             manager.call_order()
         );
         assert_eq!(
-            requeue.call_count(),
+            requeue.scheduled().len(),
             0,
             "no self-requeue: the observed identity was realized"
         );

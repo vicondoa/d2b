@@ -519,7 +519,7 @@ mod tests {
         let uid = d2b_provider_toolkit::resource_uid(&[0x42; 16]).expect("uid");
         let vm = crate::ifname::derive_network_child_name(&uid, "vm");
         let agent = crate::ifname::derive_network_child_name(&uid, "agent");
-        let entries = manager.log();
+        let entries = manager.call_order();
         assert_eq!(
             entries
                 .iter()

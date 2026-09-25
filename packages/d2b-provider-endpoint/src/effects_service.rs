@@ -352,7 +352,7 @@ mod tests {
     /// An evidence purpose whose row never reports Ready exhausts the bounded
     /// realize budget and fails retryably (R13), never hanging the caller.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn evidence_ensure_times_out_within_the_realize_budget() {
         let fake = FakeSocketEffects::new();
         let service = EndpointEffectsService::new(fake.facet_set());

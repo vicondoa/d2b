@@ -817,7 +817,7 @@ mod tests {
              and wake every watcher on this Host's readiness"
         );
         assert_eq!(
-            requeue.call_count(),
+            requeue.scheduled().len(),
             1,
             "the degraded observation re-probes instead of pinning itself for the generation"
         );
@@ -895,7 +895,7 @@ mod tests {
             manager.call_order()
         );
         assert_eq!(
-            requeue.call_count(),
+            requeue.scheduled().len(),
             0,
             "no self-requeue: the old runner's 5s relist never re-observed a current status"
         );

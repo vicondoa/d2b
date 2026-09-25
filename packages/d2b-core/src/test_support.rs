@@ -446,13 +446,16 @@ impl Default for ResolvedRunnerIntentBuilder {
 
 /// Resolve a writable scratch root for a unit test.
 ///
-/// `TEST_TMPDIR` (the Bazel test-sandbox var) wins when set; otherwise a
-/// per-crate directory under the system temp dir is used. The base is created
-/// on demand, and the returned path is a unique per-call subdirectory
-/// (`{test_name}-{pid}-{nanos}`) so parallel tests never collide. This is the
-/// sanctioned home for the `test_scratch_root` / `test_root` /
-/// `writable_manifest_dir` helpers that broker, daemon, runtime and audit
-/// crates used to carry as private copies.
+/// The base is `TEST_TMPDIR` (the Bazel test-sandbox var) when set, else
+/// `CARGO_TARGET_TMPDIR`, else the crate's gitignored `target/` dir, else the
+/// system temp dir; the returned path is the stable
+/// `<base>/d2b-test-scratch/<test_name>` directory, created on demand. The
+/// path is deliberately stable across calls with the same name so a test that
+/// writes through one call and reads through another resolves the same
+/// directory; callers that need a fresh private directory join their own
+/// unique suffix onto it. This is the sanctioned home for the
+/// `test_scratch_root` / `test_root` / `writable_manifest_dir` helpers that
+/// broker, daemon, runtime and audit crates used to carry as private copies.
 pub fn scratch_root(test_name: &str) -> PathBuf {
     let base = std::env::var_os("TEST_TMPDIR")
         .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))

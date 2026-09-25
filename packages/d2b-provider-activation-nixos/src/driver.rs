@@ -1163,7 +1163,7 @@ mod tests {
         assert_eq!(projected.detail(), ActivationDetail::Applied);
         assert_eq!(projected.outcome(), Some(ActivationOutcomeCode::Succeeded));
         // A Host target realizes through the broker: no runner child.
-        assert!(f.manager.order().is_empty());
+        assert!(f.manager.call_order().is_empty());
     }
 
     /// The facets -> factory -> driver -> handoff seam the refactor
@@ -1302,7 +1302,7 @@ mod tests {
             projected.outcome(),
             Some(ActivationOutcomeCode::HelperRefused)
         );
-        assert!(f.manager.order().is_empty());
+        assert!(f.manager.call_order().is_empty());
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -1377,7 +1377,7 @@ mod tests {
         // KTD13: the launch is a Process-resource mint through the manager,
         // never a spawn from this controller, and the child row is committed
         // before its spawn notification (F1).
-        let log = manager.order();
+        let log = manager.call_order();
         let ensure = log
             .iter()
             .position(|entry| entry.starts_with("ensure:EphemeralProcess/"))
@@ -1439,7 +1439,7 @@ mod tests {
         d.reconcile(&mut f.ctx).await.expect("first reconcile");
         d.reconcile(&mut f.ctx).await.expect("rejoin reconcile");
 
-        let log = manager.order();
+        let log = manager.call_order();
         assert_eq!(
             log.iter().filter(|entry| entry.starts_with("ensure:")).count(),
             1,
@@ -1532,7 +1532,7 @@ mod tests {
             f.ctx.status::<ActivationDriverStatus>().is_none(),
             "no runner to rejoin: recovery projects nothing"
         );
-        assert!(manager.order().is_empty());
+        assert!(manager.call_order().is_empty());
 
         // The Host target realizes through the broker authority.
         let mut host = fixture(
@@ -1597,11 +1597,11 @@ mod tests {
         assert_eq!(projected.detail(), ActivationDetail::Staged);
         assert!(
             manager
-                .order()
+                .call_order()
                 .iter()
                 .all(|call| call.starts_with("watch:")),
             "adoption must not re-mint or dispatch: {:?}",
-            manager.order()
+            manager.call_order()
         );
     }
 
@@ -1640,7 +1640,7 @@ mod tests {
         let failure = d.finalize(&mut ctx).await.expect_err("owned runner still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert!(
-            manager.order().iter().any(|call| call.starts_with("delete:")),
+            manager.call_order().iter().any(|call| call.starts_with("delete:")),
             "the owned runner is nudged through its own finalize-before-delete pass"
         );
 
@@ -1678,7 +1678,7 @@ mod tests {
         .as_str()
         .to_owned();
         let deletions = manager
-            .order()
+            .call_order()
             .into_iter()
             .filter(|entry| entry.starts_with("delete:"))
             .collect::<BTreeSet<_>>();
