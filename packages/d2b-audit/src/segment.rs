@@ -154,6 +154,28 @@ impl core::fmt::Debug for SegmentWriter {
 
 impl SegmentWriter {
     /// Open the current segment in a directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidInput` ("audit-directory-not-absolute") when the
+    /// directory is not absolute, and the stable codes "audit-lock-ownership-
+    /// invalid", "audit-lock-held", "audit-directory-ownership-invalid", and
+    /// "audit-segment-identity-invalid" for the corresponding lock, ownership,
+    /// and metadata failures. Filesystem and retention errors propagate
+    /// unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use d2b_audit::SegmentWriter;
+    ///
+    /// let directory = std::env::temp_dir().join(format!(
+    ///     "d2b-audit-segment-writer-doc-{}",
+    ///     std::process::id()
+    /// ));
+    /// let writer = SegmentWriter::open(&directory, 1024, 1).expect("open succeeds");
+    /// # std::fs::remove_dir_all(directory).ok();
+    /// ```
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn open(
         directory: impl AsRef<Path>,
@@ -227,6 +249,11 @@ impl SegmentWriter {
     }
 
     /// Append a record and rotate before crossing a size or UTC-day boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` when the record cannot be serialized or when
+    /// the segment write, rotation, or directory sync fails.
     pub fn append(&mut self, record: &AuditRecord) -> io::Result<PathBuf> {
         self.append_at(record, now_ms())
     }
@@ -962,7 +989,11 @@ fn segment_tail_hash(
         .open(path)?;
     let mut reader = BufReader::new(file);
     let mut current = previous.clone();
-    while let Some(line) = read_bounded_line(&mut reader)? {
+    while let Some(line) = read_bounded_line(
+        &mut reader,
+        "audit-segment-line-truncated",
+        "audit-segment-line-limit",
+    )? {
         budget.consume_line(line.len())?;
         if line.is_empty() {
             continue;
@@ -977,7 +1008,16 @@ fn segment_tail_hash(
     Ok(current)
 }
 
-fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {
+/// Read one bounded JSONL line, refusing lines that exceed the shared
+/// [`MAX_EXPORT_LINE_BYTES`](crate::export::MAX_EXPORT_LINE_BYTES) limit.
+///
+/// The two error codes are supplied by the caller so each reading surface
+/// keeps its own stable wire code for truncated and over-limit lines.
+pub(crate) fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    truncated_code: &'static str,
+    limit_code: &'static str,
+) -> io::Result<Option<Vec<u8>>> {
     let mut bytes = Vec::new();
     loop {
         let chunk = reader.fill_buf()?;
@@ -985,13 +1025,16 @@ fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<u8>>> 
             return if bytes.is_empty() {
                 Ok(None)
             } else {
-                Err(io::Error::other("audit-segment-line-truncated"))
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    truncated_code,
+                ))
             };
         }
         let newline = chunk.iter().position(|byte| *byte == b'\n');
         let take = newline.map_or(chunk.len(), |index| index + 1);
         if bytes.len().saturating_add(take) > crate::export::MAX_EXPORT_LINE_BYTES {
-            return Err(io::Error::other("audit-segment-line-limit"));
+            return Err(io::Error::other(limit_code));
         }
         bytes.extend_from_slice(&chunk[..take]);
         reader.consume(take);

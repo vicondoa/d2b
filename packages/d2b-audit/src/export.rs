@@ -2,7 +2,7 @@
 
 use std::{
     fs,
-    io::{self, BufRead},
+    io,
     os::unix::fs::OpenOptionsExt,
     path::Path,
 };
@@ -70,6 +70,16 @@ pub fn export_segments(directory: impl AsRef<Path>) -> io::Result<Vec<ExportLine
 /// the basename shape produced by [`SegmentWriter`](crate::SegmentWriter);
 /// accepting a path here would turn an export filter into a filesystem
 /// traversal surface.
+///
+/// # Errors
+///
+/// Returns `InvalidInput` ("audit-segment-boundary-invalid") when a boundary
+/// is not a segment basename, and the stable codes "audit-export-directory-
+/// limit", "audit-retention-checkpoint-pending", "audit-export-scan-limit",
+/// "audit-export-limit", "audit-export-record-invalid", "audit-export-record-
+/// encode-failed", "audit-export-line-truncated", and "audit-export-line-
+/// limit" for the corresponding bounded-read and export failures. Filesystem
+/// errors propagate unchanged.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn export_segments_range(
     directory: impl AsRef<Path>,
@@ -102,12 +112,6 @@ pub fn export_segments_range(
     if checkpoint_pending(directory.as_ref())? {
         return Err(io::Error::other("audit-retention-checkpoint-pending"));
     }
-    paths.retain(|path| {
-        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            return false;
-        };
-        is_segment_name(name)
-    });
     paths.sort();
     let mut lines = Vec::new();
     let mut previous = checkpoint_anchor(directory.as_ref())?;
@@ -131,7 +135,11 @@ pub fn export_segments_range(
             .open(path)?;
         let mut reader = io::BufReader::new(file);
         loop {
-            let bytes = match read_bounded_line(&mut reader) {
+            let bytes = match crate::segment::read_bounded_line(
+                &mut reader,
+                "audit-export-line-truncated",
+                "audit-export-line-limit",
+            ) {
                 Ok(Some(bytes)) => bytes,
                 Ok(None) => break,
                 Err(_) => {
@@ -250,34 +258,6 @@ pub fn export_segments_range(
         }
     }
     Ok(lines)
-}
-
-fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {
-    let mut bytes = Vec::new();
-    loop {
-        let chunk = reader.fill_buf()?;
-        if chunk.is_empty() {
-            return if bytes.is_empty() {
-                Ok(None)
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "audit-export-line-truncated",
-                ))
-            };
-        }
-        let newline = chunk.iter().position(|byte| *byte == b'\n');
-        let take = newline.map_or(chunk.len(), |index| index + 1);
-        if bytes.len().saturating_add(take) > MAX_EXPORT_LINE_BYTES {
-            return Err(io::Error::other("audit-export-line-limit"));
-        }
-        bytes.extend_from_slice(&chunk[..take]);
-        reader.consume(take);
-        if newline.is_some() {
-            bytes.pop();
-            return Ok(Some(bytes));
-        }
-    }
 }
 
 /// Return whether a value is an owned audit segment basename.
