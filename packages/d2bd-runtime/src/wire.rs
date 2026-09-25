@@ -527,13 +527,31 @@ fn hello_rejected_reason(error: &TypedError) -> HelloRejectedReason {
 }
 
 fn map_parse_error(error: serde_json::Error) -> TypedError {
-    let detail = error.to_string();
-    if detail.contains("unknown field") {
-        TypedError::WireUnknownField { detail }
-    } else if detail.contains("interface name") {
-        TypedError::WireIfNameInvalid { detail }
-    } else {
-        TypedError::WireInvalidFrame { detail }
+    match error.classify() {
+        serde_json::error::Category::Data => {
+            // Payload-level rejection. Every request payload type denies
+            // unknown fields, so an extra field arrives as serde's
+            // deterministic deny_unknown_fields rejection; the IfName
+            // deserializer produces the interface-name rejection. Both are
+            // pinned by serde's stable unknown-field helper and the IfName
+            // messages, not by serde_json's parser wording.
+            let detail = error.to_string();
+            if detail.contains("unknown field") {
+                TypedError::WireUnknownField { detail }
+            } else if detail.contains("interface name") {
+                TypedError::WireIfNameInvalid { detail }
+            } else {
+                TypedError::WireInvalidFrame { detail }
+            }
+        }
+        _ => TypedError::WireInvalidFrame {
+            detail: format!(
+                "{} at line {} column {}",
+                error,
+                error.line(),
+                error.column()
+            ),
+        },
     }
 }
 
