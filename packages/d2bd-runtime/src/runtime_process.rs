@@ -439,7 +439,7 @@ pub fn drop_privileges_if_root(identity: &RuntimeIdentity) -> Result<(), TypedEr
 /// listeners write beside their redirected public socket.
 /// This lets the CLI's `crate::daemon_version::compute_restart_status` compute the
 /// `[pending restart]` signal post-restart. Failures are logged
-/// to stderr and non-fatal - the absence of the version file
+/// via tracing and non-fatal - the absence of the version file
 /// surfaces in the CLI as `DaemonRestartStatus::DaemonNotRunning`,
 /// which is a reasonable degraded shape.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
@@ -447,7 +447,7 @@ pub fn write_daemon_version_file(config: &DaemonConfig) {
     let binary_path = match std::env::current_exe().and_then(std::fs::canonicalize) {
         Ok(p) => p.to_string_lossy().into_owned(),
         Err(err) => {
-            eprintln!("d2bd: could not canonicalize daemon binary path: {err}");
+            tracing::warn!(error = %err, "d2bd: could not canonicalize daemon binary path");
             return;
         }
     };
@@ -461,7 +461,7 @@ pub fn write_daemon_version_file(config: &DaemonConfig) {
     let json = match serde_json::to_vec_pretty(&payload) {
         Ok(v) => v,
         Err(err) => {
-            eprintln!("d2bd: could not serialize daemon version: {err}");
+            tracing::warn!(error = %err, "d2bd: could not serialize daemon version");
             return;
         }
     };
@@ -469,19 +469,28 @@ pub fn write_daemon_version_file(config: &DaemonConfig) {
     if let Some(parent) = path.parent()
         && let Err(err) = std::fs::create_dir_all(parent)
     {
-        eprintln!(
-            "d2bd: could not create {} for version file: {err}",
-            parent.display()
+        tracing::warn!(
+            error = %err,
+            path = %parent.display(),
+            "d2bd: could not create version-file parent directory"
         );
         return;
     }
     let tmp = path.with_extension("version.tmp");
     if let Err(err) = std::fs::write(&tmp, &json) {
-        eprintln!("d2bd: could not write {}: {err}", tmp.display());
+        tracing::warn!(
+            error = %err,
+            path = %tmp.display(),
+            "d2bd: could not write version file"
+        );
         return;
     }
-    if let Err(err) = std::fs::rename(&tmp, path) {
-        eprintln!("d2bd: could not rename version file into place: {err}");
+    if let Err(err) = std::fs::rename(&tmp, &path) {
+        tracing::warn!(
+            error = %err,
+            path = %path.display(),
+            "d2bd: could not rename version file into place"
+        );
     }
 }
 
