@@ -25,8 +25,6 @@ use crate::broker::{
     BrokerLaunchIntent, BrokerLaunchResolver, BundleBackedLaunchResolver, wait_pidfd_observer,
 };
 
-const MAX_PENDING_OBSERVATIONS: usize = 1024;
-
 /// Atomic identity read from one active non-forking transient unit or scope.
 ///
 /// The effect owner must obtain the invocation identifier, cgroup identity,
@@ -235,47 +233,21 @@ impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
         }
     }
 
-    // Sync by construction:this ledger sits behind the sync `ProcessEffectBackend`
-// trait surface, invoked only from the dedicated blocking workers (or sync
-// test harnesses); critical section short, no suspension inside the guard.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn record(&self, identity: SystemdInvocationIdentity) -> Result<(), ProcessEffectError> {
-        let mut observations = self.observations.lock().map_err(|_| {
-            error!(
-                provider = "supervisor",
-                "systemd observation ledger lock poisoned; observe failed"
-            );
-            ProcessEffectError::ObserveFailed
-        })?;
-        let digest = identity.digest();
-        if observations.len() >= MAX_PENDING_OBSERVATIONS
-            && !observations.contains_key(&digest)
-            && let Some(oldest) = observations.keys().next().copied()
-        {
-            observations.remove(&oldest);
-        }
-        observations.insert(digest, identity);
-        Ok(())
+    // Sync by construction:the ledger sits behind the sync trait surface;the
+    // shared helper's critical section is short and never held across a suspension
+    // point.
+    fn record(&self, identity: SystemdInvocationIdentity) -> Result<(), ProcessEffectError> {
+        crate::observations::record(&self.observations, identity.digest(), identity)
     }
 
     // Sync by construction: backend ledger behind the sync trait surface (see
-// `record`); critical section short, no suspension inside.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn take_observation(
+    // `record`); critical section short, no suspension inside the guard.
+
+    fn take_observation(
         &self,
         identity: &ProcessIdentityDigest,
     ) -> Result<SystemdInvocationIdentity, ProcessEffectError> {
-        self.observations
-            .lock()
-            .map_err(|_| {
-                error!(
-                    provider = "supervisor",
-                    "systemd observation ledger lock poisoned; observation lookup failed"
-                );
-                ProcessEffectError::ObserveFailed
-            })?
-            .remove(identity)
-            .ok_or(ProcessEffectError::IdentityChanged)
+        crate::observations::take(&self.observations, identity)
     }
 }
 
@@ -283,6 +255,8 @@ fn take_observation(
 // Keep focused observation tests beside the state helpers they exercise.
 #[allow(clippy::items_after_test_module)]
 mod tests {
+    use crate::observations::MAX_PENDING_OBSERVATIONS;
+
     use super::*;
 
     struct Owner;
@@ -837,7 +811,6 @@ impl SystemdEffectOwner for BrokerSystemdEffectOwner {
             );
             return Err(ProcessEffectError::StopFailed);
         }
-        let _ = &handle.pidfd;
         if class == ProcessStopClass::Terminate {
             let _ = self.take_request(&handle.identity)?;
         }

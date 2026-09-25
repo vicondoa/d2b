@@ -9,6 +9,7 @@
 
 mod adapter;
 mod broker;
+mod observations;
 mod systemd;
 
 pub use adapter::{DEFAULT_BLOCKING_LIMIT, ProviderSupervisor};
