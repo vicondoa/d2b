@@ -173,4 +173,14 @@ mod tests {
         assert_eq!(plan.user_namespace_mapping_class, USER_NAMESPACE_MAPPING_CLASS);
         assert!(WorkerSandbox::conformant().assert_conformant().is_ok());
     }
+
+    #[test]
+    fn zero_vcpu_count_is_rejected() {
+        let binding = fixtures::binding("read-only");
+        let view = fixtures::read_only_view();
+        assert_eq!(
+            VirtiofsdWorkerPlan::for_binding(&binding, &view, 0, fixtures::principal()).unwrap_err(),
+            VirtiofsBindingError::InvalidBinding
+        );
+    }
 }
