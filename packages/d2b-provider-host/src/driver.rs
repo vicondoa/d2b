@@ -56,7 +56,7 @@ use d2b_contracts_resource::v3::{
     ResourcePhase, ResourceRef, ResourceSpec,
     host::{HOST_PROVIDER_REF, HOST_RESOURCE_TYPE, HostSpec},
 };
-use d2b_provider_system_core::HostObservationReport;
+use d2b_provider_system_core::{HostObservationReport, SystemCoreError};
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
 use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
@@ -81,7 +81,7 @@ use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 /// recover: an observation is a local probe, and the states it reports as not
 /// ready resolve on their own. The re-probe is one probe per interval, not a
 /// poll on the ready path, which the generation short-circuit still pins.
-pub const HOST_REOBSERVE: Duration = Duration::from_secs(5);
+pub(crate) const HOST_REOBSERVE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HostDriverErrorKind {
@@ -108,7 +108,7 @@ impl HostDriverErrorKind {
 /// Typed driver failure; mapped onto the structured failure surface at the
 /// erased boundary through [`ResourceDriver::classify_error`].
 #[derive(Debug, Clone)]
-pub struct HostDriverError {
+pub(crate) struct HostDriverError {
     kind: HostDriverErrorKind,
     op: DriverOp,
     detail: FailureDetail,
@@ -128,11 +128,7 @@ impl HostDriverError {
 
 impl core::fmt::Display for HostDriverError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str(match self.kind {
-            HostDriverErrorKind::SpecInvalid => "system-core-spec-invalid",
-            HostDriverErrorKind::HostObservation => "system-core-host-observation-failed",
-            HostDriverErrorKind::DrainPending => "system-core-drain-pending",
-        })
+        formatter.write_str(self.kind.failure_kind().code())
     }
 }
 
@@ -144,7 +140,7 @@ impl std::error::Error for HostDriverError {}
 /// runtime-only successor of the old durable `status.observedGeneration`
 /// plan short-circuit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostDriverStatus {
+pub(crate) struct HostDriverStatus {
     observed_generation: u64,
     report: HostObservationReport,
 }
@@ -171,13 +167,41 @@ impl HostDriverStatus {
 /// keeps exactly the typed Host contract fields, so the decoder hands the
 /// driver the complete desired state (`ResourceSpec::base()` is what the old
 /// handler decoded into `HostSpec`).
-pub fn host_spec_decoder() -> Arc<dyn SpecDecoder> {
+pub(crate) fn host_spec_decoder() -> Arc<dyn SpecDecoder> {
     typed_spec_decoder(|bytes| serde_json::from_slice::<ResourceSpec>(bytes))
 }
 
 // ---------------------------------------------------------------------------
 // Provider effect port
 // ---------------------------------------------------------------------------
+
+/// The host-observation seam's failure, carrying the underlying error in
+/// the chain instead of a flattened message.
+#[derive(Debug)]
+pub(crate) struct ObserveError {
+    /// The live host probe's failure.
+    pub(crate) probe: SystemCoreError,
+    /// The spec-decision fallback's failure, when the fallback also failed.
+    pub(crate) fallback: Option<SystemCoreError>,
+}
+
+impl core::fmt::Display for ObserveError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match &self.fallback {
+            Some(fallback) => write!(formatter, "{}; {fallback}", self.probe),
+            None => write!(formatter, "{}", self.probe),
+        }
+    }
+}
+
+impl std::error::Error for ObserveError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.fallback
+            .as_ref()
+            .map(|error| error as &(dyn std::error::Error + 'static))
+            .or_else(|| Some(&self.probe as &(dyn std::error::Error + 'static)))
+    }
+}
 
 /// The host-observation surface the Host driver needs: the preserved
 /// `system-core` Provider behavior (bounded capability/platform/metadata
@@ -186,7 +210,7 @@ pub fn host_spec_decoder() -> Arc<dyn SpecDecoder> {
 /// [`crate::effects_service::HostEffectsService`] (U5), built from the
 /// daemon-supplied facet set.
 #[async_trait]
-pub trait HostDriverEffects: Send + Sync + 'static {
+pub(crate) trait HostDriverEffects: Send + Sync + 'static {
     /// Observe one Host and compute its public status, or report why the
     /// observation could not be taken.
     async fn observe_host(
@@ -194,7 +218,7 @@ pub trait HostDriverEffects: Send + Sync + 'static {
         host_ref: &ResourceRef,
         provider_ref: &ResourceRef,
         spec: &HostSpec,
-    ) -> Result<HostObservationReport, String>;
+    ) -> Result<HostObservationReport, ObserveError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +227,7 @@ pub trait HostDriverEffects: Send + Sync + 'static {
 
 /// [`ResourceDriverFactory`] for the `Host` resource type. Construction is
 /// infallible by contract: the effects carry no fallible setup.
-pub struct HostDriverFactory {
+pub(crate) struct HostDriverFactory {
     types: [ResourceTypeName; 1],
     effects: Arc<dyn HostDriverEffects>,
 }
@@ -236,7 +260,7 @@ impl ResourceDriverFactory for HostDriverFactory {
 // ---------------------------------------------------------------------------
 
 /// One Host resource's driver.
-pub struct HostDriver {
+pub(crate) struct HostDriver {
     effects: Arc<dyn HostDriverEffects>,
 }
 
@@ -381,7 +405,7 @@ impl ResourceDriver for HostDriver {
                                 "completed",
                                 "failed",
                             ))
-                            .with_note(error),
+                            .with_note(error.to_string()),
                     )
             })?;
         let ready = report.status.phase == ResourcePhase::Ready;
