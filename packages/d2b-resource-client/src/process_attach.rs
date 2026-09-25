@@ -21,8 +21,8 @@ use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use crate::{
     AttemptDisposition, CallOptions, CancellationToken, ClientError, MethodProfile,
     ResourceClient, ServiceOwner, SystemClock, TargetInput, TargetResolver,
-    TransportKind, TransportSelection, WallClock, ZoneClient, ZoneServiceKind,
-    ZoneSessionConnector, call::REQUEST_ID_BYTES, zone_client::ConnectedZoneSession,
+    TransportSelection, WallClock, ZoneClient, ZoneServiceKind, ZoneSessionConnector,
+    call::REQUEST_ID_BYTES, zone_client::ConnectedZoneSession,
 };
 
 /// The maximum logical message accepted by one attach stream.
@@ -119,20 +119,6 @@ impl ProcessAttachTarget {
             execution_ref,
             force,
         })
-    }
-
-    /// Interpret a resource-shaped target as an EphemeralProcess target.
-    pub fn from_target(target: TargetInput) -> Result<Self, ClientError> {
-        let zone = target.owner().zone().clone();
-        let resource = target.resource_ref().ok_or(ClientError::InvalidTarget)?;
-        Self::ephemeral_process(zone, resource)
-    }
-
-    /// Interpret a resource-shaped target as a configured launcher target.
-    pub fn configured_launcher_from_target(target: TargetInput) -> Result<Self, ClientError> {
-        let zone = target.owner().zone().clone();
-        let resource = target.resource_ref().ok_or(ClientError::InvalidTarget)?;
-        Self::configured_launcher(zone, resource)
     }
 
     /// Return the attach kind.
@@ -727,24 +713,6 @@ where
         }
     }
 
-    /// Attach using the local Unix carriage.
-    pub async fn attach_local(
-        &self,
-        target: ProcessAttachTarget,
-        attach_options: ProcessAttachOptions,
-        call_options: CallOptions,
-        cancellation: &CancellationToken,
-    ) -> Result<ProcessAttachStream<<C::Session as ConnectedSession>::Stream>, ClientError> {
-        self.attach(
-            target,
-            attach_options,
-            call_options,
-            TransportSelection::exact(TransportKind::LocalUnix),
-            cancellation,
-        )
-        .await
-    }
-
     /// Establish and close one attachment without exposing the stream handle.
     ///
     /// This is useful for operator surfaces whose current command contract
@@ -786,8 +754,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        MetadataInput, RetryPolicy, RouteRecord, RouteTable, ServiceOwner, ZonePeerIdentity,
-        ZoneSessionPin,
+        MetadataInput, RetryPolicy, RouteRecord, RouteTable, ServiceOwner, TransportKind,
+        ZonePeerIdentity, ZoneSessionPin,
     };
 
     const ISSUED: u64 = 10_000;
