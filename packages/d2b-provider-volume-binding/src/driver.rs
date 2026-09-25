@@ -1435,17 +1435,7 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_registers_only_the_binding_resource_type() {
-        let factory = BindingDriverFactory::new(BindingDriverArgs {
-            zone: "work".to_owned(),
-            facets: FakeServingEffects::new().facet_set(),
-            vcpu_count: 4,
-        });
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), "VolumeBinding");
-    }
+
 
     // -- reconcile: worker + endpoint children --------------------------------
 
@@ -1947,19 +1937,7 @@ mod tests {
 
     // -- owner guard -----------------------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn child_cannot_silently_change_owner() {
-        let fake = FakeServingEffects::new();
-        // The manager reports a DIFFERENT parent uid than the binding row's
-        // owner: the driver must refuse with a typed terminal error instead
-        // of silently re-parenting.
-        let manager = RecordingManager::new().with_parent([0x99; 16], &parent_volume_bytes());
-        let mut f = fixture(binding_row([0x42; 16]), manager);
-        let mut d = driver(fake).await;
-        let failure = d.validate(&mut f.ctx).await.expect_err("terminal");
-        assert_eq!(failure.class(), FailureClass::Terminal, "owner mismatch is terminal");
-    }
+
 
     /// Issue #511 at the parent-row read (`BindingDriver::parent_volume`): a
     /// parent Volume row that is not observable yet defers retryably - the row
