@@ -149,6 +149,7 @@ mod tests {
         ZoneId::parse("work").unwrap()
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn verify_rejects_zero_expected_uid() {
         // A zero expected UID is never a valid bootstrap admission target:
@@ -164,6 +165,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn verify_rejects_mismatched_peer_uid() {
         // The kernel-observed peer UID must equal the fixed expected UID;
@@ -183,6 +185,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn verify_accepts_matching_peer_uid() {
         // The happy path is only exercisable when the test process is not

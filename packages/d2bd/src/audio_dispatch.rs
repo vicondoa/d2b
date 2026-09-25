@@ -1025,8 +1025,9 @@ mod tests {
         crate::load_json(&state.config.artifacts.public_manifest_path).expect("load manifest")
     }
 
-    #[test]
-    fn resolve_vm_audio_status_reports_every_closed_error_kind() {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn resolve_vm_audio_status_reports_every_closed_error_kind() {
         let state_dir = std::env::temp_dir().join(format!(
             "d2b-audio-status-{}",
             std::process::id()
@@ -1056,9 +1057,12 @@ mod tests {
 
         // A malformed state file is an internal error, not a silent default.
         let state_file = std::path::PathBuf::from(&state_dir).join("state/audio-state.json");
-        std::fs::create_dir_all(state_file.parent().expect("state dir"))
+        tokio::fs::create_dir_all(state_file.parent().expect("state dir"))
+            .await
             .expect("create state dir");
-        std::fs::write(&state_file, b"not json").expect("write malformed state");
+        tokio::fs::write(&state_file, b"not json")
+            .await
+            .expect("write malformed state");
         let internal = resolve_vm_audio_status(&state, "vm-a", &manifest, caller)
             .expect_err("malformed state file");
         assert_eq!(internal.kind, AudioErrorKind::InternalError);

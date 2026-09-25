@@ -26,7 +26,7 @@ libc = "0.2"
 # readiness loops (the d2b-session-unix pattern); already a workspace
 # dependency, so no new supply-chain edge.
 rustix = { workspace = true }
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-vsock = "0.7"
 
 # U33: this crate does not inherit `[workspace.lints]` (it carries its own lint

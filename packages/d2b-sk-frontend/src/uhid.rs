@@ -473,13 +473,11 @@ mod tests {
         assert_eq!(report[63], 0xee);
     }
 
-    fn open_uhid_pair() -> (UhidDevice, std::os::unix::net::UnixStream) {
+    fn open_uhid_pair() -> (UhidDevice, tokio::net::UnixStream) {
         use std::os::fd::OwnedFd;
-        use std::os::unix::net::UnixStream;
 
-        let (read, write) = UnixStream::pair().expect("uhid test socketpair");
-        read.set_nonblocking(true)
-            .expect("nonblocking uhid read end");
+        let (read, write) = tokio::net::UnixStream::pair().expect("uhid test socketpair");
+        let read = read.into_std().expect("uhid test read end");
         let read_file: std::fs::File = OwnedFd::from(read).into();
         (
             UhidDevice {
@@ -489,9 +487,10 @@ mod tests {
         )
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn read_event_dispatches_by_type_and_returns_none_on_clean_eof() {
-        use std::io::Write as _;
+        use tokio::io::AsyncWriteExt as _;
 
         let (mut dev, mut write) = open_uhid_pair();
 
@@ -500,7 +499,7 @@ mod tests {
         output[..4].copy_from_slice(&UHID_OUTPUT.to_le_bytes());
         output[4] = 0x5a;
         output[4 + 4096..4 + 4098].copy_from_slice(&(CTAPHID_REPORT_LEN as u16).to_le_bytes());
-        write.write_all(&output).expect("write output event");
+        write.write_all(&output).await.expect("write output event");
         match dev.read_event().await.expect("output event") {
             Some(UhidEvent::Output { data }) => {
                 assert_eq!(data[0], 0x5a);
@@ -513,7 +512,7 @@ mod tests {
         let mut get_report = vec![0u8; 8];
         get_report[..4].copy_from_slice(&UHID_GET_REPORT.to_le_bytes());
         get_report[4..8].copy_from_slice(&0x1234_5678u32.to_le_bytes());
-        write.write_all(&get_report).expect("write get-report event");
+        write.write_all(&get_report).await.expect("write get-report event");
         match dev.read_event().await.expect("get-report event") {
             Some(UhidEvent::GetReport { id }) => assert_eq!(id, 0x1234_5678),
             other => panic!("expected GetReport, got {other:?}"),
@@ -522,6 +521,7 @@ mod tests {
         // Lifecycle: start/stop/open/close all map to Lifecycle
         write
             .write_all(&UHID_START.to_le_bytes())
+            .await
             .expect("write lifecycle event");
         assert!(matches!(
             dev.read_event().await.expect("lifecycle event"),
@@ -531,6 +531,7 @@ mod tests {
         // Unknown types are surfaced verbatim
         write
             .write_all(&999u32.to_le_bytes())
+            .await
             .expect("write unknown event");
         assert!(matches!(
             dev.read_event().await.expect("unknown event"),
@@ -542,12 +543,13 @@ mod tests {
         assert!(dev.read_event().await.expect("clean eof").is_none());
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn read_event_rejects_a_short_header_as_unexpected_eof() {
-        use std::io::Write as _;
+        use tokio::io::AsyncWriteExt as _;
 
         let (mut dev, mut write) = open_uhid_pair();
-        write.write_all(&[1u8, 2]).expect("write short header");
+        write.write_all(&[1u8, 2]).await.expect("write short header");
         let error = dev.read_event().await.expect_err("short header");
         assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
     }
