@@ -1391,9 +1391,44 @@ mod tests {
 
     #[test]
     fn exact_consumer_guard_is_independent_of_request_fields() {
-        let expected = ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap();
-        let other = ResourceRef::parse("Provider/other").unwrap();
-        assert_ne!(expected, other);
+        struct StubClient;
+        impl EntraCredentialClient for StubClient {
+            fn state(&self) -> EntraFuture<'_, EntraClientState> {
+                unreachable!("guard test never drives the client")
+            }
+            fn issue_lease(&self, _: &EntraLeaseRequest) -> EntraFuture<'_, EntraLeaseGrant> {
+                unreachable!("guard test never drives the client")
+            }
+            fn inspect_lease(&self, _: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseInspection> {
+                unreachable!("guard test never drives the client")
+            }
+            fn refresh_lease(&self, _: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRenewal> {
+                unreachable!("guard test never drives the client")
+            }
+            fn revoke_lease(&self, _: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRevocation> {
+                unreachable!("guard test never drives the client")
+            }
+        }
+        let provider = EntraCredentialProviderFactory::new(
+            EntraConfig::new("tenant-1234", 64).unwrap(),
+            EntraPlacement::new_in_zone(
+                ResourceRef::parse("Zone/work").unwrap(),
+                PlacementBinding::GuestAgent,
+                ResourceRef::parse("Guest/consumer").unwrap(),
+                ResourceRef::parse("Guest/identity").unwrap(),
+                ResourceRef::parse("Endpoint/entra-login").unwrap(),
+                7,
+            )
+            .unwrap(),
+            ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
+            Arc::new(StubClient),
+        )
+        .unwrap()
+        .construct();
+        assert!(provider.authorizes_consumer(
+            &ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap()
+        ));
+        assert!(!provider.authorizes_consumer(&ResourceRef::parse("Provider/other").unwrap()));
     }
 
     #[test]

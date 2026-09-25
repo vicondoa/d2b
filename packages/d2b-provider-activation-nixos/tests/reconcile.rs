@@ -436,17 +436,18 @@ fn activation_verification_requires_all_trust_and_digest_fences() {
         vec![0; 64],
     ));
 
-    for (trust, expected_error) in cases.into_iter().zip([
+    for (i, (trust, expected_error)) in cases.into_iter().zip([
         d2b_provider_activation_nixos::ActivationVerificationError::TrustEpochMismatch,
         d2b_provider_activation_nixos::ActivationVerificationError::RevocationRefMismatch,
         d2b_provider_activation_nixos::ActivationVerificationError::TrustDenied,
         d2b_provider_activation_nixos::ActivationVerificationError::TrustDenied,
         d2b_provider_activation_nixos::ActivationVerificationError::PublisherRootMismatch,
         d2b_provider_activation_nixos::ActivationVerificationError::SignatureIdMismatch,
-    ]) {
+    ]).enumerate() {
         assert_eq!(
             trust.verify(&expected, &artifact, &catalog_digest),
-            Err(expected_error)
+            Err(expected_error),
+            "case {i}: expected {expected_error:?}",
         );
     }
 }
