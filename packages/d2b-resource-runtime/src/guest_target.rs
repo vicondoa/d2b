@@ -464,8 +464,8 @@ impl GuestTargetRuntime {
     }
 
     /// The Guest this runtime realizes for.
-    pub fn reference(&self) -> TargetRef {
-        self.inner.reference.clone()
+    pub fn reference(&self) -> &TargetRef {
+        &self.inner.reference
     }
 
     /// The authenticated ComponentSession generation currently bound.
