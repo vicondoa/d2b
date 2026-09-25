@@ -3214,28 +3214,32 @@ mod tests {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
         let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
 
-        handler.advertised_globals.insert(
-            7,
-            AdvertisedGlobal {
+        let (synthetic, decision) = handler.prepare_global(7, ObjectInterface::WlCompositor, 6);
+
+        // The host's global keeps its original registry name; the synthetic
+        // clipboard global is advertised alongside it at the reserved name.
+        assert_eq!(
+            decision,
+            IncomingGlobalDecision::Advertise(GlobalAdvertisement {
+                name: 7,
                 interface: ObjectInterface::WlCompositor,
                 version: 6,
-                synthetic_clipboard: false,
-            },
+            })
         );
-        handler.hidden_globals.insert(42);
-        handler.advertised_globals.insert(
-            99,
-            AdvertisedGlobal {
-                interface: ObjectInterface::WlShm,
-                version: 2,
-                synthetic_clipboard: false,
-            },
+        assert_eq!(
+            synthetic,
+            Some(GlobalAdvertisement {
+                name: u32::MAX,
+                interface: ObjectInterface::WlDataDeviceManager,
+                version: 3,
+            })
         );
-
-        assert!(handler.advertised_globals.contains_key(&7));
-        assert!(handler.advertised_globals.contains_key(&99));
-        assert!(handler.hidden_globals.contains(&42));
-        assert!(!handler.advertised_globals.contains_key(&42));
+        let advertised = handler
+            .advertised_globals
+            .get(&7)
+            .expect("the original name stays advertised");
+        assert_eq!(advertised.interface, ObjectInterface::WlCompositor);
+        assert!(!advertised.synthetic_clipboard);
     }
 
     #[test]
@@ -3264,21 +3268,30 @@ mod tests {
     fn standard_clipboard_global_is_advertised_as_synthetic() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
         let mut handler = FilterRegistryHandler::new(policy(), diag, clipboard(), None);
-        // The generated WlRegistry send path needs a real object/client, so assert
-        // the policy decision helper that handle_global uses for the synthetic path.
-        let interface = ObjectInterface::WlDataDeviceManager;
-        assert_eq!(interface.name(), "wl_data_device_manager");
-        handler.advertised_globals.insert(
-            11,
-            AdvertisedGlobal {
-                interface,
+
+        // The host's wl_data_device_manager is virtualized locally: the
+        // handler hides the host global and advertises the synthetic
+        // clipboard global in its place (the decision prepare_global makes
+        // for the real WlRegistry send path).
+        let (synthetic, decision) =
+            handler.prepare_global(11, ObjectInterface::WlDataDeviceManager, 3);
+
+        assert_eq!(decision, IncomingGlobalDecision::Hide);
+        assert_eq!(
+            synthetic,
+            Some(GlobalAdvertisement {
+                name: u32::MAX,
+                interface: ObjectInterface::WlDataDeviceManager,
                 version: 3,
-                synthetic_clipboard: true,
-            },
+            })
         );
-        let advertised = handler.advertised_globals.get(&11).expect("synthetic");
+        let advertised = handler
+            .advertised_globals
+            .get(&u32::MAX)
+            .expect("the synthetic clipboard global is advertised");
         assert!(advertised.synthetic_clipboard);
         assert_eq!(advertised.interface, ObjectInterface::WlDataDeviceManager);
+        assert!(handler.hidden_globals.contains(&11));
     }
 
     #[test]
