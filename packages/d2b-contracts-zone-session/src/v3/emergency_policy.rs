@@ -1,7 +1,7 @@
 //! Zone-wide EmergencyPolicy contract.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use d2b_contracts_resource::v3::execution_policy::redacted_debug;
 
@@ -168,30 +168,28 @@ impl Default for EmergencyPolicySpec {
     }
 }
 
-impl<'de> Deserialize<'de> for EmergencyPolicySpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            enabled: bool,
-            #[serde(default)]
-            scope: EmergencyScope,
-            #[serde(default = "default_deadline")]
-            drain_deadline_seconds: u32,
-            #[serde(default)]
-            reason: String,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.enabled,
-            wire.scope,
-            wire.drain_deadline_seconds,
-            wire.reason,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    EmergencyPolicySpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        enabled: bool,
+        #[serde(default)]
+        scope: EmergencyScope,
+        #[serde(default = "default_deadline")]
+        drain_deadline_seconds: u32,
+        #[serde(default)]
+        reason: String,
+    },
+    wire,
+    Self::new(
+        wire.enabled,
+        wire.scope,
+        wire.drain_deadline_seconds,
+        wire.reason,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 const fn default_deadline() -> u32 {
     30

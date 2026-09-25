@@ -453,7 +453,7 @@ impl ComponentSessionDescriptor {
         policy: &EndpointPolicy,
         boundary: ComponentSessionBoundary,
     ) -> Result<Self, ContractError> {
-        HandshakeOffer::from(policy.clone()).validate()?;
+        HandshakeOffer::from(policy).validate()?;
         Self::new(
             boundary,
             policy.service,
@@ -470,7 +470,7 @@ impl ComponentSessionDescriptor {
         {
             return Err(ContractError::IdentityEvidenceMismatch);
         }
-        HandshakeOffer::from(policy.clone()).validate()?;
+        HandshakeOffer::from(policy).validate()?;
         Ok(())
     }
 
@@ -1011,7 +1011,7 @@ impl EndpointPolicyIdentity {
             reconnect_generation,
             attachment_policy: self.attachment_policy,
         };
-        HandshakeOffer::from(policy.clone()).validate()?;
+        HandshakeOffer::from(&policy).validate()?;
         Ok(policy)
     }
 
@@ -1171,6 +1171,24 @@ impl EndpointPolicy {
 
 impl From<EndpointPolicy> for HandshakeOffer {
     fn from(value: EndpointPolicy) -> Self {
+        Self {
+            purpose: value.purpose,
+            purpose_class: value.purpose_class,
+            initiator_role: value.initiator_role,
+            responder_role: value.responder_role,
+            service: value.service,
+            schema_fingerprint: value.schema_fingerprint,
+            noise_profile: value.noise_profile,
+            limits: value.limits,
+            transport_binding: value.transport_binding,
+            reconnect_generation: value.reconnect_generation,
+            attachment_policy: value.attachment_policy,
+        }
+    }
+}
+
+impl From<&EndpointPolicy> for HandshakeOffer {
+    fn from(value: &EndpointPolicy) -> Self {
         Self {
             purpose: value.purpose,
             purpose_class: value.purpose_class,
