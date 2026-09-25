@@ -420,17 +420,12 @@ impl AcaProviderConfig {
         sandbox_transport_alias: AcaProfileId,
         defaults: AcaRuntimeConfig,
     ) -> Result<Self, AcaTypeError> {
-        if gateway_execution_ref.resource_type().as_str() != "Guest"
-            || control_credential_ref.resource_type().as_str() != "Credential"
-            || pull_credential_ref
-                .as_ref()
-                .is_some_and(|reference| reference.resource_type().as_str() != "Credential")
-            || network_ref
-                .as_ref()
-                .is_some_and(|reference| reference.resource_type().as_str() != "Network")
-        {
-            return Err(AcaTypeError::InvalidExecutionBoundary);
-        }
+        Self::validate_refs(
+            &gateway_execution_ref,
+            &control_credential_ref,
+            &pull_credential_ref,
+            &network_ref,
+        )?;
         Ok(Self {
             gateway_execution_ref,
             tenant_id,
@@ -448,20 +443,32 @@ impl AcaProviderConfig {
 
     /// Revalidate a Provider configuration at the admission boundary.
     pub fn validate(&self) -> Result<(), AcaTypeError> {
-        Self::new(
-            self.gateway_execution_ref.clone(),
-            self.tenant_id.clone(),
-            self.client_id.clone(),
-            self.subscription_id.clone(),
-            self.control_credential_ref.clone(),
-            self.pull_credential_ref.clone(),
-            self.environment_id.clone(),
-            self.resource_group_id.clone(),
-            self.network_ref.clone(),
-            self.sandbox_transport_alias.clone(),
-            self.defaults.clone(),
+        Self::validate_refs(
+            &self.gateway_execution_ref,
+            &self.control_credential_ref,
+            &self.pull_credential_ref,
+            &self.network_ref,
         )
-        .map(|_| ())
+    }
+
+    fn validate_refs(
+        gateway_execution_ref: &ResourceRef,
+        control_credential_ref: &ResourceRef,
+        pull_credential_ref: &Option<ResourceRef>,
+        network_ref: &Option<ResourceRef>,
+    ) -> Result<(), AcaTypeError> {
+        if gateway_execution_ref.resource_type().as_str() != "Guest"
+            || control_credential_ref.resource_type().as_str() != "Credential"
+            || pull_credential_ref
+                .as_ref()
+                .is_some_and(|reference| reference.resource_type().as_str() != "Credential")
+            || network_ref
+                .as_ref()
+                .is_some_and(|reference| reference.resource_type().as_str() != "Network")
+        {
+            return Err(AcaTypeError::InvalidExecutionBoundary);
+        }
+        Ok(())
     }
 }
 
