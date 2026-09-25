@@ -1,8 +1,17 @@
+use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_guest_qemu_media::{ProviderConfig, WorkerConfigProjection};
 
 #[test]
 fn provider_config_requires_host_and_projects_controller_only() {
-    let config = ProviderConfig::default();
+    let mut config = ProviderConfig::new(
+        "Host/host-system",
+        "qemu-system-x86-64",
+        "Provider/network-local",
+        "Provider/volume-local",
+        None,
+    )
+    .unwrap();
+    config.controller_execution_ref = ResourceRef::parse("Guest/dev-vm").unwrap();
     assert!(config.validate().is_err());
 
     let config = ProviderConfig::new(

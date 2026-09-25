@@ -341,6 +341,7 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
     /// Returns [`QemuMediaError::InvalidState`] when the controller is not
     /// reconcilable, and the dependency, process identity, and QMP readiness
     /// errors the phases surface.
+    #[tracing::instrument(skip(self, effect), fields(resource = %self.guest_ref, provider = "runtime-qemu-media"))]
     pub fn reconcile(
         &mut self,
         dependencies: &QemuMediaDependencies,
@@ -356,8 +357,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
         }
         let Some(device) = dependencies.device.as_ref() else {
             tracing::debug!(
-                resource = %self.guest_ref,
-                provider = "runtime-qemu-media",
                 "reconcile deferred: Device dependency not observed yet"
             );
             self.phase = QemuMediaPhase::Pending;
@@ -369,8 +368,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             || (self.settings.display_window && !dependencies.display_ready)
         {
             tracing::debug!(
-                resource = %self.guest_ref,
-                provider = "runtime-qemu-media",
                 network_ready = dependencies.network_ready,
                 media_ready = dependencies.media_ready,
                 runtime_volume_ready = dependencies.runtime_volume_ready,
@@ -384,8 +381,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
         DeviceAdmission::validate(&self.guest_ref, device, expected_process, MEDIA_CONTRACT_ID)
             .map_err(|error| {
                 tracing::warn!(
-                    resource = %self.guest_ref,
-                    provider = "runtime-qemu-media",
                     code = error.code(),
                     "device admission rejected for guest"
                 );
@@ -398,8 +393,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
 
         let observed = effect.observe().inspect_err(|error| {
             tracing::warn!(
-                resource = %self.guest_ref,
-                provider = "runtime-qemu-media",
                 code = error.code(),
                 "process observation effect failed during reconcile"
             );
@@ -408,8 +401,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             Some(candidate) => {
                 let Some(expected) = self.expected_identity.as_ref() else {
                     tracing::warn!(
-                        resource = %self.guest_ref,
-                        provider = "runtime-qemu-media",
                         "adoption refused: observed process without durable expected identity"
                     );
                     self.phase = QemuMediaPhase::Degraded;
@@ -417,8 +408,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 };
                 if verify_identity(expected, &candidate) != AdoptionOutcome::Adopted {
                     tracing::warn!(
-                        resource = %self.guest_ref,
-                        provider = "runtime-qemu-media",
                         "adoption refused: observed process identity does not match expected identity"
                     );
                     self.phase = QemuMediaPhase::Degraded;
@@ -428,8 +417,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 if !self.pidfd_opened {
                     effect.open_pidfd(&candidate).inspect_err(|error| {
                         tracing::warn!(
-                            resource = %self.guest_ref,
-                            provider = "runtime-qemu-media",
                             code = error.code(),
                             "pidfd open failed for adopted process"
                         );
@@ -441,8 +428,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             None => {
                 if self.expected_identity.is_some() {
                     tracing::warn!(
-                        resource = %self.guest_ref,
-                        provider = "runtime-qemu-media",
                         "adoption refused: expected process vanished before identity verification"
                     );
                     self.phase = QemuMediaPhase::Failed;
@@ -456,8 +441,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 )?;
                 let candidate = effect.launch(&ticket).inspect_err(|error| {
                     tracing::warn!(
-                        resource = %self.guest_ref,
-                        provider = "runtime-qemu-media",
                         code = error.code(),
                         "process launch failed for guest"
                     );
@@ -465,15 +448,11 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 if !candidate.matches_process_token(expected_process) {
                     if let Err(stop_error) = effect.stop(&candidate) {
                         tracing::warn!(
-                            resource = %self.guest_ref,
-                            provider = "runtime-qemu-media",
                             code = stop_error.code(),
                             "stop failed while quarantining launched process with wrong template token"
                         );
                     }
                     tracing::warn!(
-                        resource = %self.guest_ref,
-                        provider = "runtime-qemu-media",
                         "launched process rejected: process template token mismatch"
                     );
                     self.phase = QemuMediaPhase::Failed;
@@ -482,15 +461,11 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 if let Err(error) = effect.open_pidfd(&candidate) {
                     if let Err(stop_error) = effect.stop(&candidate) {
                         tracing::warn!(
-                            resource = %self.guest_ref,
-                            provider = "runtime-qemu-media",
                             code = stop_error.code(),
                             "stop failed while cleaning up process after pidfd failure"
                         );
                     }
                     tracing::warn!(
-                        resource = %self.guest_ref,
-                        provider = "runtime-qemu-media",
                         code = error.code(),
                         "pidfd open failed for freshly launched process"
                     );
@@ -509,8 +484,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 && dependencies.qmp_elapsed_seconds >= self.config.qmp_ready_timeout_seconds
             {
                 tracing::warn!(
-                    resource = %self.guest_ref,
-                    provider = "runtime-qemu-media",
                     elapsed_seconds = dependencies.qmp_elapsed_seconds,
                     "QMP readiness timeout elapsed; stopping guest process"
                 );
@@ -526,8 +499,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                     }
                 } else if let Err(error) = stopped {
                     tracing::warn!(
-                        resource = %self.guest_ref,
-                        provider = "runtime-qemu-media",
                         code = error.code(),
                         "process stop failed after QMP readiness timeout"
                     );
@@ -549,8 +520,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
         match qmp_status {
             QmpVmStatus::Stopped => {
                 tracing::warn!(
-                    resource = %self.guest_ref,
-                    provider = "runtime-qemu-media",
                     "guest QMP status is Stopped; marking generation failed"
                 );
                 self.phase = QemuMediaPhase::Failed;
@@ -559,8 +528,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             QmpVmStatus::Paused if !self.settings.pause_at_boot => {
                 effect.continue_guest().inspect_err(|error| {
                     tracing::warn!(
-                        resource = %self.guest_ref,
-                        provider = "runtime-qemu-media",
                         code = error.code(),
                         "failed to resume unexpectedly paused guest"
                     );
@@ -571,8 +538,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             }
             QmpVmStatus::Running if self.settings.pause_at_boot && !self.initial_pause_observed => {
                 tracing::warn!(
-                    resource = %self.guest_ref,
-                    provider = "runtime-qemu-media",
                     "guest running before boot pause observed; QMP readiness rejected"
                 );
                 self.phase = QemuMediaPhase::Degraded;
@@ -590,6 +555,7 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
     }
 
     /// Finalize QMP/media effects, then stop the Process and release authority.
+    #[tracing::instrument(skip(self, effect), fields(resource = %self.guest_ref, provider = "runtime-qemu-media"))]
     pub fn finalize(&mut self, effect: &mut E) -> Result<(), QemuMediaError> {
         if !self.finalizer_installed {
             return Ok(());
@@ -601,16 +567,12 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
         }
         let observed = effect.observe().inspect_err(|error| {
             tracing::warn!(
-                resource = %self.guest_ref,
-                provider = "runtime-qemu-media",
                 code = error.code(),
                 "process observation effect failed during finalization"
             );
         })?;
         if self.expected_identity.is_none() && observed.is_some() {
             tracing::warn!(
-                resource = %self.guest_ref,
-                provider = "runtime-qemu-media",
                 "finalization refused: unexpected process without durable expected identity"
             );
             self.phase = QemuMediaPhase::Degraded;
@@ -620,8 +582,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
             if let Some(candidate) = observed {
                 if verify_identity(identity, &candidate) != AdoptionOutcome::Adopted {
                     tracing::warn!(
-                        resource = %self.guest_ref,
-                        provider = "runtime-qemu-media",
                         "finalization refused: observed process identity does not match expected identity"
                     );
                     self.phase = QemuMediaPhase::Degraded;
@@ -634,8 +594,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 if !self.process_stopped {
                     effect.stop(identity).inspect_err(|error| {
                         tracing::warn!(
-                            resource = %self.guest_ref,
-                            provider = "runtime-qemu-media",
                             code = error.code(),
                             "process stop failed during finalization"
                         );
@@ -644,8 +602,6 @@ impl<E: QemuMediaEffectPort> QemuMediaController<E> {
                 }
                 if effect.observe()?.is_some() {
                     tracing::warn!(
-                        resource = %self.guest_ref,
-                        provider = "runtime-qemu-media",
                         "finalization incomplete: process still observed after stop"
                     );
                     self.phase = QemuMediaPhase::Degraded;

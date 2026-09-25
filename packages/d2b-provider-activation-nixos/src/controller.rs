@@ -2,7 +2,7 @@
 
 use d2b_contracts_resource::v3::{
     ActivationMode, ActivationOutcomeCode, ActivationRunnerInput, ArtifactId, EnvironmentClass,
-    ExecutionDomain, NixosGenerationSpec, ResourceName, ResourcePhase, ResourceRef,
+    ExecutionDomain, IdentityError, NixosGenerationSpec, ResourceName, ResourcePhase, ResourceRef,
     process::{EphemeralProcessSpec, ExecutionSpec, NamespaceClass, ProcessClass, SandboxSpec},
 };
 use ring::signature;
@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 /// The target-local Process template used for activation effects.
 pub const ACTIVATION_RUNNER_TEMPLATE: &str = "activation-nixos-runner";
 /// The generic one-shot process resource type used for activation effects.
-pub const ACTIVATION_RUNNER_RESOURCE_TYPE: &str = "EphemeralProcess";
+const ACTIVATION_RUNNER_RESOURCE_TYPE: &str = "EphemeralProcess";
 
 /// Caller role derived from the authenticated daemon request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,23 +104,28 @@ pub struct GenerationObservation {
 }
 
 impl GenerationObservation {
-    /// Construct a bounded observation.
-    pub fn new(name: impl Into<String>, phase: GenerationPhase) -> Self {
+    /// Construct a bounded observation from a generation row name.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IdentityError` when `name` is empty, contains '/', or
+    /// exceeds the `ResourceName` bound (63-byte lowercase label).
+    pub fn new(name: impl Into<String>, phase: GenerationPhase) -> Result<Self, IdentityError> {
         let name = name.into();
         let ordinal = name
             .rsplit('-')
             .next()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(0);
-        Self::terminal(name, phase, ordinal)
+        Ok(Self::terminal(ResourceName::parse(name)?, phase, ordinal))
     }
 
     /// Construct a bounded terminal observation.
-    pub fn terminal(name: impl Into<String>, phase: GenerationPhase, ordinal: u64) -> Self {
-        let name = name.into();
-        assert!(!name.is_empty() && !name.contains('/') && name.len() <= 128);
+    ///
+    /// Never panics: `name` is already validated by `ResourceName`.
+    pub fn terminal(name: ResourceName, phase: GenerationPhase, ordinal: u64) -> Self {
         Self {
-            name,
+            name: name.to_canonical_string(),
             phase,
             ordinal,
         }
@@ -575,30 +580,35 @@ impl ActivationTrust {
     ) -> Result<(), ActivationVerificationError> {
         if self.trust_epoch == 0 || self.trust_epoch != expected.trust_epoch {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::TrustEpochMismatch,
                 "activation verification refused: trust epoch mismatch",
             );
             return Err(ActivationVerificationError::TrustEpochMismatch);
         }
         if self.revocation_ref != expected.revocation_ref {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::RevocationRefMismatch,
                 "activation verification refused: revocation reference mismatch",
             );
             return Err(ActivationVerificationError::RevocationRefMismatch);
         }
         if self.revocation_status != TrustStatus::Clear || self.deny_status != TrustStatus::Clear {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::TrustDenied,
                 "activation verification refused: trust or deny status not clear",
             );
             return Err(ActivationVerificationError::TrustDenied);
         }
         if self.publisher_root.is_empty() || self.publisher_root != expected.publisher_root {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::PublisherRootMismatch,
                 "activation verification refused: publisher root mismatch",
             );
             return Err(ActivationVerificationError::PublisherRootMismatch);
         }
         if self.signature_id.is_empty() || self.signature_id != expected.signature_id {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::SignatureIdMismatch,
                 "activation verification refused: signature identifier mismatch",
             );
             return Err(ActivationVerificationError::SignatureIdMismatch);
@@ -608,6 +618,7 @@ impl ActivationTrust {
             || activation_catalog_digest != expected.artifact_catalog_digest
         {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::ArtifactCatalogDigestMismatch,
                 "activation verification refused: artifact catalog digest mismatch",
             );
             return Err(ActivationVerificationError::ArtifactCatalogDigestMismatch);
@@ -615,12 +626,14 @@ impl ActivationTrust {
         let actual_artifact_digest = sha256_digest(artifact_bytes);
         if actual_artifact_digest != expected.artifact_digest {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::ArtifactDigestMismatch,
                 "activation verification refused: artifact digest mismatch",
             );
             return Err(ActivationVerificationError::ArtifactDigestMismatch);
         }
         if self.public_key.len() != 32 || self.signature.len() != 64 {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::InvalidEvidence,
                 "activation verification refused: trust evidence malformed",
             );
             return Err(ActivationVerificationError::InvalidEvidence);
@@ -629,6 +642,7 @@ impl ActivationTrust {
             .verify(&expected.signed_payload, &self.signature)
             .map_err(|_| {
                 tracing::warn!(
+                    refusal = ?ActivationVerificationError::SignatureInvalid,
                     "activation verification refused: Ed25519 signature invalid",
                 );
                 ActivationVerificationError::SignatureInvalid

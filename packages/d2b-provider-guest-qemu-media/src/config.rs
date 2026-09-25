@@ -1,10 +1,8 @@
 //! Bounded Provider configuration and controller-only projection.
 
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{BoundedToken, ResourceRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
-
-use crate::types::validate_token;
 
 /// Default QMP greeting timeout in seconds.
 pub const DEFAULT_QMP_READY_TIMEOUT_SECONDS: u32 = 30;
@@ -86,25 +84,6 @@ impl<'de> Deserialize<'de> for ProviderConfig {
     }
 }
 
-impl Default for ProviderConfig {
-    fn default() -> Self {
-        Self {
-            controller_execution_ref: ResourceRef::parse("Guest/invalid").expect("valid reference"),
-            qemu_binary_artifact_id: default_qemu_artifact(),
-            qmp_ready_timeout_seconds: DEFAULT_QMP_READY_TIMEOUT_SECONDS,
-            qmp_operation_timeout_seconds: DEFAULT_QMP_OPERATION_TIMEOUT_SECONDS,
-            paused_at_boot_default: true,
-            display_provider_ref: None,
-            network_provider_ref: ResourceRef::parse("Provider/network-local")
-                .expect("valid reference"),
-            volume_provider_ref: ResourceRef::parse("Provider/volume-local")
-                .expect("valid reference"),
-            runtime_tmpfs_quota_bytes: DEFAULT_RUNTIME_TMPFS_QUOTA_BYTES,
-            runtime_tmpfs_quota_inodes: DEFAULT_RUNTIME_TMPFS_QUOTA_INODES,
-        }
-    }
-}
-
 impl ProviderConfig {
     /// Construct a Provider configuration with defaults for bounded values.
     pub fn new(
@@ -139,7 +118,7 @@ impl ProviderConfig {
                 .display_provider_ref
                 .as_ref()
                 .is_some_and(|reference| reference.resource_type().as_str() != "Provider")
-            || !validate_token(&self.qemu_binary_artifact_id)
+            || BoundedToken::parse(self.qemu_binary_artifact_id.as_str()).is_err()
             || !(5..=300).contains(&self.qmp_ready_timeout_seconds)
             || !(5..=300).contains(&self.qmp_operation_timeout_seconds)
             || !(1024 * 1024..=256 * 1024 * 1024).contains(&self.runtime_tmpfs_quota_bytes)

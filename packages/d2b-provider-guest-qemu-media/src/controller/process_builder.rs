@@ -13,8 +13,6 @@ use d2b_contracts_resource::v3::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::types::validate_token;
-
 /// Process template id.
 pub const PROCESS_TEMPLATE: &str = "qemu-media-runner";
 
@@ -291,7 +289,7 @@ impl LaunchTicket {
         validate_process_spec(&self.process)?;
         let mut slots = std::collections::BTreeSet::new();
         for attachment in &self.attachments {
-            if !validate_token(&attachment.slot) || !slots.insert(&attachment.slot) {
+            if BoundedToken::parse(attachment.slot.as_str()).is_err() || !slots.insert(&attachment.slot) {
                 return Err(ProcessSpecError::DuplicateAttachmentSlot);
             }
             let expected = match attachment.kind {

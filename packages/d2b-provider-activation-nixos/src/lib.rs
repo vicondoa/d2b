@@ -35,7 +35,7 @@ pub use controller::{
 };
 pub use driver::{
     ACTIVATION_CREATIONS, ACTIVATION_RUNNER_CREATION, ACTIVATION_TYPE_NAME,
-    ActivationDriver, ActivationDriverArgs, ActivationDriverEffects, ActivationDriverError,
+    ActivationDriverArgs, ActivationDriverEffects, ActivationDriverError,
     ActivationDriverFactory, ActivationDriverStatus, HostHandoffResult, RUNNER_PROVIDER_REF,
     RUNNER_TYPE_NAME, activation_descriptor, activation_spec_decoder,
 };

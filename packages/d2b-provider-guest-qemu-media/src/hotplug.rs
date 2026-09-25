@@ -6,7 +6,7 @@
 //! broker's privileged media kernel keeps its own committed view of this
 //! scaffold because the broker is pinned provider-free.
 
-use crate::types::validate_token;
+use d2b_contracts_resource::v3::BoundedToken;
 
 /// The hotplug action one scaffold plans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +59,7 @@ pub fn qemu_media_hotplug_scaffold(
     slot: &str,
     action: QemuMediaHotplugAction,
 ) -> Result<QemuMediaHotplugScaffold, QemuMediaHotplugScaffoldError> {
-    if !validate_token(media_ref) {
+    if BoundedToken::parse(media_ref).is_err() {
         return Err(QemuMediaHotplugScaffoldError::InvalidMediaRef);
     }
     if slot.is_empty() {

@@ -55,7 +55,7 @@ use d2b_contracts_broker::host_generation::{
 };
 use d2b_contracts_resource::v3::{
     ActivationDetail, ActivationMode, ActivationOutcomeCode, NIXOS_GENERATION_RESOURCE_TYPE,
-    NixosGenerationSpec, ResourcePhase, ResourceRef,
+    NixosGenerationSpec, ResourceName, ResourcePhase, ResourceRef,
 };
 use d2b_resource_runtime::context::{
     ChildEnsure, ResourceContext, SpecDecoder, WatchCondition, typed_spec_decoder,
@@ -423,7 +423,7 @@ impl ResourceDriverFactory for ActivationDriverFactory {
 // ---------------------------------------------------------------------------
 
 /// One `NixosGeneration` resource's driver.
-pub struct ActivationDriver {
+pub(crate) struct ActivationDriver {
     zone: String,
     effects: Arc<dyn ActivationDriverEffects>,
     verifier: Arc<dyn ActivationApplicationVerifier>,
@@ -552,8 +552,10 @@ impl ActivationDriver {
             return Err(self.error(ActivationDriverErrorKind::Policy, op));
         }
         let ordinal = ordinal_from_name(&row.key.name).unwrap_or(row.generation);
+        let name = ResourceName::parse(&row.key.name)
+            .map_err(|_| self.error(ActivationDriverErrorKind::Policy, op))?;
         Ok(vec![GenerationObservation::terminal(
-            row.key.name.as_str(),
+            name,
             GenerationPhase::Pending,
             ordinal,
         )])
@@ -762,8 +764,10 @@ impl ResourceDriver for ActivationDriver {
         // Old `ordinal_from_resource`: the trailing bounded generation
         // number, else the durable row generation.
         let ordinal = ordinal_from_name(ctx.key().name.as_str()).unwrap_or(ctx.generation());
+        let name = ResourceName::parse(ctx.key().name.as_str())
+            .map_err(|_| self.error(ActivationDriverErrorKind::Policy, DriverOp::Reconcile))?;
         let observed = GenerationObservation::terminal(
-            ctx.key().name.as_str(),
+            name,
             generation_phase(self.observed_phase(ctx)),
             ordinal,
         );

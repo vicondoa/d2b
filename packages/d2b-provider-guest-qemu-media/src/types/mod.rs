@@ -8,4 +8,4 @@ pub use guest::{
     NetworkAttachment, RemovableVolumeRef, RtcBase, audio_capability,
     build_guest_resource_spec, runtime_volume_name,
 };
-pub(crate) use guest::validate_token;
+
