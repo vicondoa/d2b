@@ -1772,6 +1772,7 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-resource-runtime",
  "d2b-resource-types",
+ "serde",
  "serde_json",
  "tokio",
 ]
