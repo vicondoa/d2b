@@ -117,7 +117,7 @@ pub trait UsbipDriverEffects: Send + Sync + 'static {
 /// factory for one zone.
 pub struct UsbipDriverArgs {
     /// The zone the driver serves.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
     /// The daemon-supplied facet set the family's own effects
@@ -151,7 +151,8 @@ impl SharedProviderFamily for UsbipFamily {
             // it declares no manager child of its own.
             UsbipComponent::Service => Ok(None),
             UsbipComponent::Binding => {
-                let owner = key_ref(ctx.key());
+                let owner = key_ref(ctx.key())
+                    .map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
                 let zone = ZoneId::parse(ctx.key().zone.clone())
                     .map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
                 let service_ref = spec_ref(spec, "/spec/serviceRef")?;
@@ -337,7 +338,7 @@ mod tests {
 
     fn descriptors() -> [d2b_resource_types::DriverDescriptor; 2] {
         usbip_descriptors(UsbipDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").expect("valid test zone"),
             controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
                 .expect("generation"),
             facets: crate::test_support::recording_facets(Arc::new(

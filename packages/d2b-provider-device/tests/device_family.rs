@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::ControllerGeneration;
+use d2b_contracts_resource::v3::{ControllerGeneration, ZoneId};
 use d2b_provider_device::{
     DEVICE_REGISTRATIONS, DEVICE_RESYNC, DEVICE_TYPE_NAME, DeviceComponent, DeviceDriverArgs,
     device_descriptor,
@@ -85,7 +85,7 @@ impl RequeueScheduler for RecordingRequeue {
 
 fn descriptor(runtime: Arc<RecordingRuntime>) -> d2b_resource_types::DriverDescriptor {
     device_descriptor(DeviceDriverArgs {
-        zone: "dev".to_owned(),
+        zone: ZoneId::parse("dev").expect("valid test zone"),
         controller_generation: ControllerGeneration::new(1).expect("generation"),
         facets: d2b_provider_device::test_support::recording_facets(runtime),
     })

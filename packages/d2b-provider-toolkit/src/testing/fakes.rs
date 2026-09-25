@@ -272,9 +272,9 @@ impl FakeCoreClient {
         artifact_id: &ArtifactId,
     ) -> Result<&ProviderManifest, FakePortError> {
         self.faults.take_next()?;
-        let _ = self
-            .recorder
-            .record("resolve-artifact", BoundedToken::parse("catalog").unwrap());
+        self.recorder
+            .record("resolve-artifact", BoundedToken::parse("catalog").unwrap())
+            .map_err(|_| FakePortError::RecorderFull)?;
         self.catalog
             .get(artifact_id.as_str())
             .ok_or(FakePortError::ArtifactNotFound)
@@ -286,9 +286,9 @@ impl FakeCoreClient {
         provider_ref: &ResourceRef,
     ) -> Result<(), FakePortError> {
         self.faults.take_next()?;
-        let _ = self
-            .recorder
-            .record("resolve-provider-ref", BoundedToken::parse("row").unwrap());
+        self.recorder
+            .record("resolve-provider-ref", BoundedToken::parse("row").unwrap())
+            .map_err(|_| FakePortError::RecorderFull)?;
         let _ = provider_ref;
         if self.ready {
             Ok(())
@@ -334,9 +334,9 @@ impl FakeResourceStore {
     /// Write status for one resource, refusing an unowned ResourceType.
     pub fn write_status(&mut self, resource_ref: &ResourceRef) -> Result<(), FakePortError> {
         self.faults.take_next()?;
-        let _ = self
-            .recorder
-            .record("write-status", BoundedToken::parse("status").unwrap());
+        self.recorder
+            .record("write-status", BoundedToken::parse("status").unwrap())
+            .map_err(|_| FakePortError::RecorderFull)?;
         if self
             .owned
             .iter()
@@ -388,10 +388,12 @@ impl FakeBus {
     /// Resolve one declared alias.
     pub fn resolve_alias(&mut self, alias: DependencyAlias) -> Result<ResourceRef, FakePortError> {
         self.faults.take_next()?;
-        let _ = self.recorder.record(
-            "resolve-alias",
-            BoundedToken::parse(alias.as_str()).expect("an alias token is a compiled constant"),
-        );
+        self.recorder
+            .record(
+                "resolve-alias",
+                BoundedToken::parse(alias.as_str()).expect("an alias token is a compiled constant"),
+            )
+            .map_err(|_| FakePortError::RecorderFull)?;
         self.bindings
             .get(&alias)
             .cloned()

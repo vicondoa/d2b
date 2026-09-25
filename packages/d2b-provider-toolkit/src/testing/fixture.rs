@@ -127,16 +127,20 @@ impl Fixture {
         } else {
             let methods = fixture_methods()
                 .into_iter()
-                .map(Self::method)
+                .map(|method| {
+                    Self::method(method)
+                        .map_err(|_| d2b_provider::RegistryBuildError::InvalidDescriptor)
+                })
                 .chain(
                     ["health", "inspect", "observability"]
                         .into_iter()
                         .map(|method| {
-                            ProviderMethodName::parse(method)
-                                .expect("fixture observation methods are valid tokens")
+                            ProviderMethodName::parse(method).map_err(|_| {
+                                d2b_provider::RegistryBuildError::InvalidDescriptor
+                            })
                         }),
                 )
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, _>>()?;
             ProviderCapabilitySet::new(methods)?
         };
         let descriptor = ProviderDescriptor::new(
@@ -178,17 +182,19 @@ impl Fixture {
     }
 
     /// Return the canonical lower-kebab name for a closed v3 method.
-    pub fn method(method: SpecifiedProviderMethod) -> ProviderMethodName {
-        ProviderMethodName::parse(match method {
+    pub fn method(
+        method: SpecifiedProviderMethod,
+    ) -> Result<ProviderMethodName, ProviderToolkitError> {
+        let name = match method {
             SpecifiedProviderMethod::OpenTransport => "open-transport",
             SpecifiedProviderMethod::CloseTransport => "close-transport",
             SpecifiedProviderMethod::ObserveTransport => "observe-transport",
             SpecifiedProviderMethod::AssessUpdate => "assess-update",
             SpecifiedProviderMethod::PlanUpgrade => "plan-upgrade",
             SpecifiedProviderMethod::ExecuteUpgrade => "execute-upgrade",
-            _ => unreachable!("specified Provider method is closed"),
-        })
-        .expect("closed Provider methods are valid bounded tokens")
+            _ => return Err(ProviderToolkitError::WireInvalid),
+        };
+        ProviderMethodName::parse(name).map_err(|_| ProviderToolkitError::WireInvalid)
     }
 
     /// Derive authenticated session evidence for this fixture.
@@ -383,11 +389,13 @@ impl ProviderAgentService for FakeProvider {
         request: ProviderAgentRequest,
     ) -> impl std::future::Future<Output = Result<ProviderAgentResponse, ProviderAgentError>> + Send
     {
-        let method = Fixture::method(request.method());
-        let result = self
-            .dispatch_method(&method, request.payload())
-            .map(ProviderAgentResponse::new)
-            .map_err(|_| ProviderAgentError::HandlerFailed);
+        let result = Fixture::method(request.method())
+            .map_err(|_| ProviderAgentError::HandlerFailed)
+            .and_then(|method| {
+                self.dispatch_method(&method, request.payload())
+                    .map(ProviderAgentResponse::new)
+                    .map_err(|_| ProviderAgentError::HandlerFailed)
+            });
         ready(result)
     }
 }

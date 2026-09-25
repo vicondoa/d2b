@@ -402,9 +402,9 @@ pub fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, SharedProviderEffec
 }
 
 /// The resource reference of one manager key.
-pub fn key_ref(key: &ResourceKey) -> ResourceRef {
+pub fn key_ref(key: &ResourceKey) -> Result<ResourceRef, SharedProviderEffectError> {
     ResourceRef::parse(&format!("{}/{}", key.type_name, key.name))
-        .expect("manager keys carry canonical resource references")
+        .map_err(|_| SharedProviderEffectError::InvalidResource)
 }
 
 // ---------------------------------------------------------------------------
@@ -521,14 +521,6 @@ impl SharedProviderEffectRequest<'_> {
     pub fn owner_ref(&self) -> Result<ResourceRef, SharedProviderEffectError> {
         owner_ref(&self.metadata)
     }
-
-    /// The old-shape owner-envelope document of one effect request.
-    pub fn envelope(&self) -> Value {
-        json!({
-            "spec": self.spec.clone(),
-            "metadata": self.metadata.clone(),
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -538,7 +530,7 @@ impl SharedProviderEffectRequest<'_> {
 /// Construction arguments shared by every driver of one shared family.
 pub struct SharedProviderDriverArgs<C: 'static, S: 'static> {
     /// The zone the family's rows live in.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
     /// The family's declarations and typed Provider effect.
@@ -612,9 +604,8 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
     SharedProviderDriver<C, S>
 {
     fn new(args: SharedProviderDriverArgs<C, S>) -> Self {
-        let zone = ZoneId::parse(args.zone).expect("driver zone was validated at construction");
         Self {
-            zone,
+            zone: args.zone,
             controller_generation: args.controller_generation,
             family: args.family,
             state: Arc::new(S::default()),
@@ -1064,7 +1055,7 @@ mod tests {
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, SpecDecoder,
         WatchId, WatchRegistration,
@@ -1391,7 +1382,7 @@ mod tests {
         let family: Arc<dyn SharedProviderFamily<Component = Component, State = ()>> =
             fixture.family.clone();
         let factory = SharedProviderDriverFactory::new(SharedProviderDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").expect("valid test zone"),
             controller_generation: ControllerGeneration::new(1).expect("generation"),
             family,
         });
@@ -1403,7 +1394,7 @@ mod tests {
     #[test]
     fn factory_serves_the_declared_rows() {
         let factory = SharedProviderDriverFactory::new(SharedProviderDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").expect("valid test zone"),
             controller_generation: ControllerGeneration::new(1).expect("generation"),
             family: RecordingFamily::new(
                 Arc::new(tokio::sync::Mutex::new(Vec::new())),

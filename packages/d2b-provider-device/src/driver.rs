@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid};
+use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
 use d2b_provider_toolkit::{
     ProviderRow, SharedProviderDeclarationError, SharedProviderDriverArgs,
     SharedProviderDriverFactory, SharedProviderEffectError, SharedProviderEffectOutcome,
@@ -173,7 +173,7 @@ pub trait DeviceDriverEffects: Send + Sync + 'static {
 /// factory for one zone.
 pub struct DeviceDriverArgs {
     /// The zone the driver serves.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
     /// The daemon-supplied facet set the family's own effects
