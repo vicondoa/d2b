@@ -137,7 +137,7 @@ impl MinijailPlatformGate {
 
 /// A hermetic result returned by the injected Host probe adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostProbeSnapshot {
+pub(crate) struct HostProbeSnapshot {
     capabilities: BTreeSet<HostCapabilityClass>,
     kernel_release: String,
     os_name: String,
@@ -196,36 +196,6 @@ impl HostProbeSnapshot {
             minijail_gate,
             active_process_count,
         })
-    }
-
-    /// Borrow observed capabilities.
-    pub fn capabilities(&self) -> &BTreeSet<HostCapabilityClass> {
-        &self.capabilities
-    }
-
-    /// Borrow the bounded kernel release observation.
-    pub fn kernel_release(&self) -> &str {
-        &self.kernel_release
-    }
-
-    /// Borrow the bounded OS name observation.
-    pub fn os_name(&self) -> &str {
-        &self.os_name
-    }
-
-    /// Whether the user manager is reachable.
-    pub const fn user_manager_available(&self) -> bool {
-        self.user_manager_available
-    }
-
-    /// Return the minijail platform gate.
-    pub const fn minijail_gate(&self) -> MinijailPlatformGate {
-        self.minijail_gate
-    }
-
-    /// Number of non-terminal child processes observed.
-    pub const fn active_process_count(&self) -> u32 {
-        self.active_process_count
     }
 }
 
@@ -451,7 +421,7 @@ impl HostReconciler {
     /// The snapshot is the seam a real system-core effect adapter fills from
     /// bounded OS probes.  This method performs no host I/O and can therefore
     /// be used by both conformance and fault-injection tests.
-    pub fn reconcile_observed(
+    pub(crate) fn reconcile_observed(
         &self,
         host_ref: &ResourceRef,
         provider_ref: &ResourceRef,
@@ -540,7 +510,7 @@ impl HostReconciler {
     ) -> Result<HostObservationReport, SystemCoreError> {
         // # Errors
         //
-        // Returns the errors of [`Self::reconcile_observed`], plus
+        // Returns the errors of `reconcile_observed`, plus
         // [`SystemCoreError::HostProbeFailed`] when the injected probe port
         // reports an invalid observation.
         let mut capabilities = BTreeSet::new();
