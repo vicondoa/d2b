@@ -324,17 +324,17 @@ impl VolumeDriver {
     }
 
     /// Decode the stored envelope and the typed spec in one step.
-    fn decoded_spec(
+    fn decoded_spec<'a>(
         &self,
-        ctx: &ResourceContext,
+        ctx: &'a ResourceContext,
         op: DriverOp,
-    ) -> Result<(VolumeSpecEnvelope, VolumeSpec), VolumeDriverError> {
+    ) -> Result<(&'a VolumeSpecEnvelope, VolumeSpec), VolumeDriverError> {
         let envelope = ctx
             .spec::<VolumeSpecEnvelope>()
             .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, op))?;
         let spec = serde_json::from_slice::<VolumeSpec>(&envelope.base.to_canonical_bytes())
             .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, op))?;
-        Ok((envelope.clone(), spec))
+        Ok((envelope, spec))
     }
 
     /// Provider check (old `validate_spec`): the Volume must select the
@@ -564,7 +564,7 @@ impl ResourceDriver for VolumeDriver {
     /// Spec decode plus provider reference check (old `validate_spec`).
     async fn validate(&mut self, ctx: &mut ResourceContext) -> Result<(), Self::Error> {
         let (envelope, _) = self.decoded_spec(ctx, DriverOp::Validate)?;
-        self.check_provider(&envelope, DriverOp::Validate)?;
+        self.check_provider(envelope, DriverOp::Validate)?;
         Ok(())
     }
 
@@ -573,7 +573,7 @@ impl ResourceDriver for VolumeDriver {
     /// reconcile.
     async fn recover(&mut self, ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
         let (envelope, _) = self.decoded_spec(ctx, DriverOp::Recover)?;
-        self.check_provider(&envelope, DriverOp::Recover)?;
+        self.check_provider(envelope, DriverOp::Recover)?;
         let uid = resource_uid(ctx.uid())
             .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, DriverOp::Recover))?;
         if self.effects.has_layout(&uid) {
@@ -598,15 +598,16 @@ impl ResourceDriver for VolumeDriver {
     /// converged.
     async fn reconcile(&mut self, ctx: &mut ResourceContext) -> Result<ReconcileOutcome, Self::Error> {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
-        self.check_provider(&envelope, DriverOp::Reconcile)?;
+        self.check_provider(envelope, DriverOp::Reconcile)?;
         let uid = resource_uid(ctx.uid())
             .map_err(|_| self.error(VolumeDriverErrorKind::SpecInvalid, DriverOp::Reconcile))?;
         let volume_ref = self.volume_ref(ctx, DriverOp::Reconcile)?;
 
         if !self.layout_ready.load(std::sync::atomic::Ordering::SeqCst) {
-            return self.spawn_layout(ctx, uid, spec, envelope.base.get("provider").map(|value| {
-                serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
-            }));
+            let provider = envelope.base.get("provider").map(|value| {
+                serde_json::to_value(value).expect("canonical JSON values always serialize")
+            });
+            return self.spawn_layout(ctx, uid, spec, provider);
         }
 
         let desired = self.desired_children(&volume_ref, &spec, DriverOp::Reconcile)?;
