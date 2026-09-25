@@ -819,7 +819,7 @@ impl CredentialSingleFlight {
         &self,
         credential_uid: ResourceUid,
     ) -> Result<CredentialSingleFlightGuard<'_>, CredentialControllerError> {
-        let mut running = self.lock()?;
+        let mut running = self.lock();
         if !running.insert(credential_uid.clone()) {
             return Err(CredentialControllerError::AlreadyRunning);
         }
@@ -831,10 +831,10 @@ impl CredentialSingleFlight {
     }
 
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-    fn lock(&self) -> Result<MutexGuard<'_, BTreeSet<ResourceUid>>, CredentialControllerError> {
+    fn lock(&self) -> MutexGuard<'_, BTreeSet<ResourceUid>> {
         self.running
             .lock()
-            .map_err(|_| CredentialControllerError::InvalidInput)
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -853,10 +853,12 @@ pub struct CredentialSingleFlightGuard<'registry> {
 impl Drop for CredentialSingleFlightGuard<'_> {
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn drop(&mut self) {
-        if let Some(credential_uid) = self.credential_uid.take()
-            && let Ok(mut running) = self.registry.running.lock()
-        {
-            running.remove(&credential_uid);
+        if let Some(credential_uid) = self.credential_uid.take() {
+            self.registry
+                .running
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&credential_uid);
         }
     }
 }
