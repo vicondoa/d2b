@@ -1015,18 +1015,25 @@ impl ProcessDriver {
         let declared_target = match ctx.owner_key().cloned() {
             Some(owner) if owner.type_name == "VolumeBinding" => match ctx.get(&owner).await {
                 Ok(Some(row)) => {
-                    let binding = serde_json::from_slice::<ResourceSpec>(&row.spec)
-                        .ok()
-                        .and_then(|envelope| {
-                            serde_json::from_slice::<
-                                d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
-                            >(&envelope.base().to_canonical_bytes())
-                            .ok()
-                        });
-                    if let Some(binding) = binding.as_ref() {
-                        worker_launch = self.serving_worker_launch(ctx, binding, op).await;
-                    }
-                    binding.map(|binding| binding.execution_ref().clone())
+                    let binding = match serde_json::from_slice::<ResourceSpec>(&row.spec) {
+                        Ok(envelope) => serde_json::from_slice::<
+                            d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
+                        >(&envelope.base().to_canonical_bytes())
+                        .map_err(|error| {
+                            self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
+                                FailureDetail::at("spec/decode").with_note(error.to_string()),
+                            )
+                        })?,
+                        Err(error) => {
+                            return Err(self
+                                .error(ProcessDriverErrorKind::SpecInvalid, op)
+                                .with_detail(
+                                    FailureDetail::at("spec/decode").with_note(error.to_string()),
+                                ))
+                        }
+                    };
+                    worker_launch = self.serving_worker_launch(ctx, &binding, op).await?;
+                    Some(binding.execution_ref().clone())
                 }
                 _ => None,
             },
@@ -1110,35 +1117,54 @@ impl ProcessDriver {
         ctx: &mut ResourceContext,
         binding: &d2b_contracts_resource::v3::volume_binding::VolumeBindingSpec,
         op: DriverOp,
-    ) -> Option<ServingWorkerLaunch> {
-        let (_, spec) = self.decoded_spec(ctx, op).ok()?;
+    ) -> Result<Option<ServingWorkerLaunch>, ProcessDriverError> {
+        let (_, spec) = self.decoded_spec(ctx, op)?;
         if spec.execution().template().as_str() != d2b_provider_volume_virtiofs::WORKER_TEMPLATE {
-            return None;
+            return Ok(None);
         }
         let volume_key = ResourceKey::new(
             self.zone.as_str(),
             "Volume",
             binding.volume_ref().name().as_str(),
         );
-        let row = ctx.get(&volume_key).await.ok().flatten()?;
-        let volume = serde_json::from_slice::<ResourceSpec>(&row.spec)
-            .ok()
-            .and_then(|envelope| {
-                serde_json::from_slice::<d2b_contracts_resource::v3::volume::VolumeSpec>(
-                    &envelope.base().to_canonical_bytes(),
+        let Some(row) = ctx.get(&volume_key).await.ok().flatten() else {
+            return Ok(None);
+        };
+        let volume = match serde_json::from_slice::<ResourceSpec>(&row.spec) {
+            Ok(envelope) => serde_json::from_slice::<
+                d2b_contracts_resource::v3::volume::VolumeSpec,
+            >(&envelope.base().to_canonical_bytes())
+            .map_err(|error| {
+                self.error(ProcessDriverErrorKind::SpecInvalid, op).with_detail(
+                    FailureDetail::at("spec/decode").with_note(error.to_string()),
                 )
-                .ok()
-            })?;
-        let view = volume.views().get(binding.view().as_str())?;
-        let attachment = volume
+            })?,
+            Err(error) => {
+                return Err(self
+                    .error(ProcessDriverErrorKind::SpecInvalid, op)
+                    .with_detail(
+                        FailureDetail::at("spec/decode").with_note(error.to_string()),
+                    ))
+            }
+        };
+        let Some(view) = volume.views().get(binding.view().as_str()) else {
+            return Ok(None);
+        };
+        let Some(attachment) = volume
             .attachments()
             .iter()
-            .find(|attachment| attachment.execution_ref() == binding.execution_ref())?;
+            .find(|attachment| attachment.execution_ref() == binding.execution_ref())
+        else {
+            return Ok(None);
+        };
         let settings = attachment.settings();
         let source = volume.source();
         let root = match source.settings().kind() {
             d2b_contracts_resource::v3::volume::SourceKind::LocalPath => {
-                let policy = source.settings().source_policy_id()?.as_str().to_owned();
+                let Some(policy) = source.settings().source_policy_id() else {
+                    return Ok(None);
+                };
+                let policy = policy.as_str().to_owned();
                 Some(ServingWorkerRoot::StoragePath(
                     if policy == "state-root" || policy == "default-state" {
                         "path:state-root".to_owned()
@@ -1157,7 +1183,7 @@ impl ProcessDriver {
             }
             _ => None,
         };
-        Some(ServingWorkerLaunch {
+        Ok(Some(ServingWorkerLaunch {
             volume_ref: binding.volume_ref().clone(),
             view: binding.view().clone(),
             guest_ref: binding.execution_ref().clone(),
@@ -1171,7 +1197,7 @@ impl ProcessDriver {
             socket_group: settings
                 .socket_group()
                 .map(|group| group.as_str().to_owned()),
-        })
+        }))
     }
 
     async fn stop_and_finalize(
