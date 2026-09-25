@@ -13,7 +13,7 @@ pub mod effects_service;
 pub mod facets;
 mod lease;
 mod process;
-pub mod relay;
+mod relay;
 mod relay_service;
 pub mod vocabulary;
 
