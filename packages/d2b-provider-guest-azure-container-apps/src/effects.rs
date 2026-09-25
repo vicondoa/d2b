@@ -5,8 +5,8 @@ use std::fmt;
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub use d2b_contracts_provider::v3::credential::{CredentialLeaseHandle, OpaqueAzureRef};
-pub use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+use d2b_contracts_provider::v3::credential::{CredentialLeaseHandle, OpaqueAzureRef};
+use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 
 /// Maximum length of an ACA resource identifier.
 pub const MAX_ACA_RESOURCE_ID_LEN: usize = 60;
@@ -471,27 +471,27 @@ impl fmt::Debug for AcaRuntimeConfig {
 /// Validated Provider configuration for the runtime-azure-container-apps provider.
 pub struct AcaProviderConfig {
     /// Reference to the Guest execution boundary this provider serves.
-    pub gateway_execution_ref: ResourceRef,
+    gateway_execution_ref: ResourceRef,
     /// Azure tenant id.
-    pub tenant_id: OpaqueAzureRef,
+    tenant_id: OpaqueAzureRef,
     /// Azure client id.
-    pub client_id: OpaqueAzureRef,
+    client_id: OpaqueAzureRef,
     /// Azure subscription id.
-    pub subscription_id: OpaqueAzureRef,
+    subscription_id: OpaqueAzureRef,
     /// Reference to the credential used to acquire control-plane leases.
-    pub control_credential_ref: ResourceRef,
+    control_credential_ref: ResourceRef,
     /// Reference to the credential used to pull sandbox images, when configured.
-    pub pull_credential_ref: Option<ResourceRef>,
+    pull_credential_ref: Option<ResourceRef>,
     /// Configured container-apps environment id.
-    pub environment_id: AcaConfiguredImageId,
+    environment_id: AcaConfiguredImageId,
     /// Configured resource group id.
-    pub resource_group_id: AcaConfiguredImageId,
+    resource_group_id: AcaConfiguredImageId,
     /// Reference to the network the sandbox joins, when configured.
-    pub network_ref: Option<ResourceRef>,
+    network_ref: Option<ResourceRef>,
     /// Profile alias used for the sandbox transport.
-    pub sandbox_transport_alias: AcaProfileId,
+    sandbox_transport_alias: AcaProfileId,
     /// Runtime defaults applied to every controller created from this config.
-    pub defaults: AcaRuntimeConfig,
+    defaults: AcaRuntimeConfig,
 }
 
 impl AcaProviderConfig {
@@ -550,6 +550,61 @@ impl AcaProviderConfig {
             &self.pull_credential_ref,
             &self.network_ref,
         )
+    }
+
+    /// Borrow the Guest execution boundary reference.
+    pub fn gateway_execution_ref(&self) -> &ResourceRef {
+        &self.gateway_execution_ref
+    }
+
+    /// Borrow the Azure tenant id.
+    pub fn tenant_id(&self) -> &OpaqueAzureRef {
+        &self.tenant_id
+    }
+
+    /// Borrow the Azure client id.
+    pub fn client_id(&self) -> &OpaqueAzureRef {
+        &self.client_id
+    }
+
+    /// Borrow the Azure subscription id.
+    pub fn subscription_id(&self) -> &OpaqueAzureRef {
+        &self.subscription_id
+    }
+
+    /// Borrow the control credential reference.
+    pub fn control_credential_ref(&self) -> &ResourceRef {
+        &self.control_credential_ref
+    }
+
+    /// Borrow the pull credential reference, when configured.
+    pub fn pull_credential_ref(&self) -> Option<&ResourceRef> {
+        self.pull_credential_ref.as_ref()
+    }
+
+    /// Borrow the container-apps environment id.
+    pub fn environment_id(&self) -> &AcaConfiguredImageId {
+        &self.environment_id
+    }
+
+    /// Borrow the resource group id.
+    pub fn resource_group_id(&self) -> &AcaConfiguredImageId {
+        &self.resource_group_id
+    }
+
+    /// Borrow the network reference, when configured.
+    pub fn network_ref(&self) -> Option<&ResourceRef> {
+        self.network_ref.as_ref()
+    }
+
+    /// Borrow the sandbox transport profile alias.
+    pub fn sandbox_transport_alias(&self) -> &AcaProfileId {
+        &self.sandbox_transport_alias
+    }
+
+    /// Borrow the runtime defaults applied to every controller created from this config.
+    pub fn defaults(&self) -> &AcaRuntimeConfig {
+        &self.defaults
     }
 
     fn validate_refs(

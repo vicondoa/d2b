@@ -86,7 +86,8 @@ pub const ZONE_LINK_ROUTE_ADMISSION_DEDUP_VERSION: u32 = 1;
 /// The set deliberately excludes `vm`, `zone`, `zone_id`, `zone_uid`, and
 /// `link_name_hash`, and every admitted value is drawn from a closed enum, so
 /// no ZoneLink, Zone, or resource identity can enter a label value.
-pub const ZONE_LINK_METRIC_LABEL_KEYS: &[&str] = &["phase", "reason", "outcome"];
+#[cfg(test)]
+pub(crate) const ZONE_LINK_METRIC_LABEL_KEYS: &[&str] = &["phase", "reason", "outcome"];
 
 /// Child-local ZoneLink enrollment-and-session state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1822,13 +1823,15 @@ impl core::fmt::Debug for ZoneLinkHandler {
 ///
 /// Every field is a closed enum, so no ZoneLink, Zone, or resource identity
 /// can reach a label value.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ZoneLinkMetricSample {
+pub(crate) struct ZoneLinkMetricSample {
     phase: ZoneLinkPhase,
     reason: Option<ZoneLinkError>,
     succeeded: bool,
 }
 
+#[cfg(test)]
 impl ZoneLinkMetricSample {
     /// Build one sample from closed semantic inputs.
     pub const fn new(phase: ZoneLinkPhase, reason: Option<ZoneLinkError>, succeeded: bool) -> Self {

@@ -10,9 +10,9 @@ use crate::zone_links::{ZoneLinkCursor, ZoneLinkError};
 use d2b_contracts_resource::v3::SchemaFingerprint;
 
 pub use crate::zone_links::{
-    BootstrapPsk, SealedEnrollment, ZONE_LINK_METRIC_LABEL_KEYS, ZoneLinkEffect, ZoneLinkEvent,
-    ZoneLinkHandler, ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkMetricSample, ZoneLinkPhase,
-    ZoneLinkRecord, ZoneLinkRouteBinding, ZoneLinkSessionState, ZoneLinkStatus,
+    BootstrapPsk, SealedEnrollment, ZoneLinkEffect, ZoneLinkEvent, ZoneLinkHandler,
+    ZoneLinkKeyPolicy, ZoneLinkLimits, ZoneLinkPhase, ZoneLinkRecord, ZoneLinkRouteBinding,
+    ZoneLinkSessionState, ZoneLinkStatus,
 };
 pub use d2b_contracts_zone_session::v3::zone_routing::{
     ZoneLinkControllerGeneration, ZoneLinkRouteAdmissionRequest,
@@ -349,15 +349,6 @@ impl ZoneLinkController {
     pub const fn cursor_authority(&self) -> &ZoneLinkCursorAuthority {
         &self.cursor_authority
     }
-}
-
-/// Map the existing ZoneLink state machine's transport refusal into the
-/// authority-owned quarantine vocabulary where appropriate.
-pub const fn transport_error_is_quarantine(error: ZoneLinkError) -> bool {
-    matches!(
-        error,
-        ZoneLinkError::StaleCommitProof | ZoneLinkError::ReconcileInFlight
-    )
 }
 
 #[cfg(test)]
