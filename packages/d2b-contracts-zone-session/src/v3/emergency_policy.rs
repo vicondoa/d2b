@@ -242,4 +242,105 @@ mod tests {
         assert!(scope.stop_provider_processes());
         assert_eq!(deadline, 5);
     }
+
+    #[test]
+    fn new_rejects_invalid_deadlines() {
+        for deadline in [0, MAX_EMERGENCY_DRAIN_DEADLINE_SECONDS + 1, u32::MAX] {
+            assert_eq!(
+                EmergencyPolicySpec::new(false, EmergencyScope::default(), deadline, ""),
+                Err(EmergencyPolicyContractError::InvalidDeadline),
+                "deadline {deadline} must be rejected"
+            );
+        }
+        assert!(
+            EmergencyPolicySpec::new(
+                false,
+                EmergencyScope::default(),
+                MAX_EMERGENCY_DRAIN_DEADLINE_SECONDS,
+                ""
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn new_rejects_oversized_reason() {
+        let reason = "x".repeat(MAX_EMERGENCY_REASON_BYTES + 1);
+        assert_eq!(
+            EmergencyPolicySpec::new(false, EmergencyScope::default(), 30, reason),
+            Err(EmergencyPolicyContractError::ReasonTooLong)
+        );
+        assert!(
+            EmergencyPolicySpec::new(
+                false,
+                EmergencyScope::default(),
+                30,
+                "x".repeat(MAX_EMERGENCY_REASON_BYTES)
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn new_rejects_control_characters_in_reason() {
+        for character in ['\0', '\t', '\n', '\r', '\u{000b}', '\u{001b}', '\u{007f}'] {
+            let reason = format!("drain{character}now");
+            assert_eq!(
+                EmergencyPolicySpec::new(false, EmergencyScope::default(), 30, reason),
+                Err(EmergencyPolicyContractError::ReasonContainsControl),
+                "control character {character:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn new_accepts_plain_reason_and_retains_fields() {
+        let spec =
+            EmergencyPolicySpec::new(true, EmergencyScope::new(true, false, true, false), 45, "drain")
+                .unwrap();
+        assert!(spec.enabled());
+        assert!(spec.scope().stop_new_admissions());
+        assert!(!spec.scope().disconnect_zone_links());
+        assert!(spec.scope().stop_provider_processes());
+        assert_eq!(spec.drain_deadline_seconds(), 45);
+        assert_eq!(spec.reason(), "drain");
+    }
+
+    #[test]
+    fn effective_scope_is_none_without_enabled_policies() {
+        assert_eq!(effective_scope([] as [&EmergencyPolicySpec; 0]), None);
+        let disabled = EmergencyPolicySpec::new(false, EmergencyScope::new(true, false, false, false), 30, "")
+            .unwrap();
+        assert_eq!(effective_scope([&disabled]), None);
+    }
+
+    #[test]
+    fn serde_default_round_trips_and_minimal_wire_deserializes() {
+        let default = EmergencyPolicySpec::default();
+        let wire = serde_json::to_string(&default).unwrap();
+        assert_eq!(
+            serde_json::from_str::<EmergencyPolicySpec>(&wire).unwrap(),
+            default
+        );
+        assert_eq!(
+            serde_json::from_str::<EmergencyPolicySpec>("{}").unwrap(),
+            default
+        );
+    }
+
+    #[test]
+    fn serde_wire_applies_explicit_fields_and_rejects_invalid_deadline() {
+        let spec = serde_json::from_str::<EmergencyPolicySpec>(
+            "{\"enabled\":true,\"scope\":{\"stopNewAdmissions\":true},\"drainDeadlineSeconds\":45,\"reason\":\"drain\"}",
+        )
+        .unwrap();
+        assert!(spec.enabled());
+        assert!(spec.scope().stop_new_admissions());
+        assert_eq!(spec.drain_deadline_seconds(), 45);
+        assert_eq!(spec.reason(), "drain");
+        assert!(serde_json::from_str::<EmergencyPolicySpec>(
+            "{\"drainDeadlineSeconds\":0}"
+        )
+        .is_err());
+    }
 }
