@@ -1955,7 +1955,10 @@ impl ConstructionInputs {
                         state.pidfd_table.clone(),
                     ),
                 );
-                let _ = state.provider_runtime.attach_process_providers(Arc::clone(&providers));
+                state
+                    .provider_runtime
+                    .attach_process_providers(Arc::clone(&providers))
+                    .map_err(|error| PlaneError::Authority(error.into()))?;
                 providers
             }
         };
