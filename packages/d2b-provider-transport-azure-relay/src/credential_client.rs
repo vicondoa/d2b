@@ -187,15 +187,10 @@ impl ScopedCredentialRequest {
     }
 
     /// Rebind only the attempt deadline without widening scope.
-    pub fn with_deadline(&self, deadline_ms: u32) -> Result<Self, RelayCredentialError> {
-        Self::new(
-            self.zone.clone(),
-            self.credential_ref.clone(),
-            self.execution_ref.clone(),
-            self.role,
-            self.binding.clone(),
-            deadline_ms,
-        )
+    pub fn with_deadline(self, deadline_ms: u32) -> Result<Self, RelayCredentialError> {
+        let request = Self { deadline_ms, ..self };
+        request.validate()?;
+        Ok(request)
     }
 }
 
@@ -214,6 +209,7 @@ impl fmt::Debug for ScopedCredentialRequest {
 }
 
 /// Bounded zeroizing secret.
+#[derive(Clone)]
 pub struct RelaySecret(Zeroizing<Vec<u8>>);
 
 impl RelaySecret {
@@ -230,12 +226,6 @@ impl RelaySecret {
     /// Borrow bytes only inside the gateway effect adapter.
     pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.0
-    }
-}
-
-impl Clone for RelaySecret {
-    fn clone(&self) -> Self {
-        Self(Zeroizing::new(self.0.to_vec()))
     }
 }
 
