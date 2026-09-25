@@ -174,8 +174,7 @@ impl CredentialSession for RecordingSession {
 /// settable, so the plane can assert both event ordering and the scripted
 /// answers. The defaults match [`FakeEffects::new`]'s: provider and
 /// execution ready, no lease facts, agent ready, and a live session bound
-/// to generation 7.
-#[derive(Default)]
+/// generation 7.
 pub struct RecordingRuntime {
     log: Log,
     facts: Mutex<Option<CredentialDependencyFacts>>,
