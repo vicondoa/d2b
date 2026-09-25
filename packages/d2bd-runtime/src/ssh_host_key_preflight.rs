@@ -301,7 +301,7 @@ pub fn check_sshd_host_keys(vm: &str, keys_dir: &Path) -> Result<(), SshdHostKey
             outcome = "key-entry-ok",
             uid,
             gid,
-            mode = format!("{mode:o}"),
+            mode = tracing::field::debug(format_args!("{mode:o}")),
             "ssh-host-key-preflight: key entry OK",
         );
     }
