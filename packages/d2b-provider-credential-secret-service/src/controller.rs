@@ -70,6 +70,11 @@ impl SecretServiceController {
     }
 
     /// Project current lease metadata and port state without credential bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialServiceError`] when the lease or status projection
+    /// cannot be constructed from the supplied metadata.
     pub fn reconcile(
         &self,
         state: SecretServiceState,
