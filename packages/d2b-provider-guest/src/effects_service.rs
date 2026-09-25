@@ -1806,9 +1806,9 @@ mod tests {
         .unwrap();
         let config = aca_runtime::AcaProviderConfig::new(
             ResourceRef::parse("Guest/gateway").unwrap(),
-            aca_runtime::OpaqueAzureRef::parse("tenant").unwrap(),
-            aca_runtime::OpaqueAzureRef::parse("client").unwrap(),
-            aca_runtime::OpaqueAzureRef::parse("subscription").unwrap(),
+            d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("tenant").unwrap(),
+            d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("client").unwrap(),
+            d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("subscription").unwrap(),
             ResourceRef::parse("Credential/control").unwrap(),
             None,
             aca_runtime::AcaConfiguredImageId::parse("environment").unwrap(),
