@@ -2529,14 +2529,15 @@ async fn retry_acl_grant(
             Ok(Err(err)) => {
                 tracing::debug!(
                     error = %err,
-                    "{label} ACL refresh not ready yet",
+                    label = %label,
+                    "ACL refresh not ready yet",
                 );
             }
             // The pool is gone, so the broker is shutting down.
             Err(_) => return,
         }
         if tokio::time::Instant::now() >= deadline {
-            tracing::warn!("{label} ACL refresh timed out");
+            tracing::warn!(label = %label, "ACL refresh timed out");
             return;
         }
         tokio::time::sleep(interval).await;
