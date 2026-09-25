@@ -612,24 +612,165 @@ mod tests {
     fn emitter_records_only_closed_bus_labels() {
         let emitter = BoundedEmitter::new("/nonexistent", 16 * 1024).unwrap();
         let metrics = BusMetrics::new(emitter);
-        metrics.route(
-            &ServiceName::parse("d2b.resource.v3").unwrap(),
-            BusDirection::Host,
-            BusRouteOutcome::Ok,
-            0.005,
-        );
-        metrics.session_active(BusTransport::Unix, 1);
-        metrics.registration(BusDirection::Local, BusRegistrationOutcome::Accepted);
-        metrics.stream_active(BusDirection::Guest, 1);
-        metrics.stream_result(BusDirection::Guest, BusStreamOutcome::Accepted);
-        metrics.credits(BusDirection::Guest, 64);
-        metrics.backpressure(
-            BusDirection::Guest,
-            BusStreamKind::Stream,
-            BusBackpressureReason::Credit,
-        );
-        metrics.rejection(BusDirection::Local, BusRejectionOutcome::Denied);
-        metrics.disconnect(BusDirection::ZoneLink, BusDisconnectOutcome::Abandoned);
+
+        // Every label value the closed bus enums can produce must be
+        // admitted by the metric descriptors. A label that escapes the
+        // closed set (a new variant, a typo in `as_str`) fails the emit
+        // here instead of passing silently.
+        let service = "d2b.resource.v3";
+        for direction in BusDirection::ALL {
+            let direction = direction.as_str();
+            for outcome in [
+                BusRouteOutcome::Ok,
+                BusRouteOutcome::Denied,
+                BusRouteOutcome::NotFound,
+                BusRouteOutcome::Error,
+            ] {
+                metrics
+                    .emit(
+                        BusMetric::RouteTotal,
+                        BTreeMap::from([
+                            ("service".to_owned(), service.to_owned()),
+                            ("direction".to_owned(), direction.to_owned()),
+                            ("outcome".to_owned(), outcome.as_str().to_owned()),
+                        ]),
+                        1.0,
+                    )
+                    .expect("route labels stay in the closed set");
+            }
+            metrics
+                .emit(
+                    BusMetric::RouteDuration,
+                    BTreeMap::from([
+                        ("service".to_owned(), service.to_owned()),
+                        ("direction".to_owned(), direction.to_owned()),
+                    ]),
+                    0.005,
+                )
+                .expect("route duration labels stay in the closed set");
+            for outcome in [
+                BusRegistrationOutcome::Accepted,
+                BusRegistrationOutcome::Rejected,
+            ] {
+                metrics
+                    .emit(
+                        BusMetric::RegistrationTotal,
+                        BTreeMap::from([
+                            ("direction".to_owned(), direction.to_owned()),
+                            ("outcome".to_owned(), outcome.as_str().to_owned()),
+                        ]),
+                        1.0,
+                    )
+                    .expect("registration labels stay in the closed set");
+            }
+            metrics
+                .emit(
+                    BusMetric::StreamActive,
+                    BTreeMap::from([("direction".to_owned(), direction.to_owned())]),
+                    1.0,
+                )
+                .expect("stream active labels stay in the closed set");
+            for outcome in [
+                BusStreamOutcome::Accepted,
+                BusStreamOutcome::Rejected,
+                BusStreamOutcome::Closed,
+            ] {
+                metrics
+                    .emit(
+                        BusMetric::StreamTotal,
+                        BTreeMap::from([
+                            ("direction".to_owned(), direction.to_owned()),
+                            ("outcome".to_owned(), outcome.as_str().to_owned()),
+                        ]),
+                        1.0,
+                    )
+                    .expect("stream result labels stay in the closed set");
+            }
+            metrics
+                .emit(
+                    BusMetric::CreditBytes,
+                    BTreeMap::from([("direction".to_owned(), direction.to_owned())]),
+                    64.0,
+                )
+                .expect("credit labels stay in the closed set");
+            for kind in [BusStreamKind::Control, BusStreamKind::Stream] {
+                for reason in [
+                    BusBackpressureReason::Credit,
+                    BusBackpressureReason::BufferFull,
+                    BusBackpressureReason::Capacity,
+                ] {
+                    metrics
+                        .emit(
+                            BusMetric::BackpressureTotal,
+                            BTreeMap::from([
+                                ("direction".to_owned(), direction.to_owned()),
+                                ("kind".to_owned(), kind.as_str().to_owned()),
+                                ("reason".to_owned(), reason.as_str().to_owned()),
+                            ]),
+                            1.0,
+                        )
+                        .expect("backpressure labels stay in the closed set");
+                }
+            }
+            for outcome in [
+                BusRejectionOutcome::Denied,
+                BusRejectionOutcome::NotFound,
+                BusRejectionOutcome::Error,
+                BusRejectionOutcome::Quota,
+            ] {
+                metrics
+                    .emit(
+                        BusMetric::RejectionTotal,
+                        BTreeMap::from([
+                            ("direction".to_owned(), direction.to_owned()),
+                            ("outcome".to_owned(), outcome.as_str().to_owned()),
+                        ]),
+                        1.0,
+                    )
+                    .expect("rejection labels stay in the closed set");
+            }
+            for outcome in [
+                BusDisconnectOutcome::Abandoned,
+                BusDisconnectOutcome::Cancel,
+                BusDisconnectOutcome::Revoked,
+                BusDisconnectOutcome::Error,
+            ] {
+                metrics
+                    .emit(
+                        BusMetric::DisconnectTotal,
+                        BTreeMap::from([
+                            ("direction".to_owned(), direction.to_owned()),
+                            ("outcome".to_owned(), outcome.as_str().to_owned()),
+                        ]),
+                        1.0,
+                    )
+                    .expect("disconnect labels stay in the closed set");
+            }
+        }
+
+        // The active-session transport label is a separate closed domain.
+        for transport in BusTransport::ALL {
+            metrics
+                .emit(
+                    BusMetric::SessionActive,
+                    BTreeMap::from([("transport".to_owned(), transport.as_str().to_owned())]),
+                    1.0,
+                )
+                .expect("session transport labels stay in the closed set");
+        }
+
+        // Unknown services collapse to the catalog bucket, which is closed.
+        metrics
+            .emit(
+                BusMetric::RouteTotal,
+                BTreeMap::from([
+                    ("service".to_owned(), "bus".to_owned()),
+                    ("direction".to_owned(), "local".to_owned()),
+                    ("outcome".to_owned(), "ok".to_owned()),
+                ]),
+                1.0,
+            )
+            .expect("the collapsed service bucket stays in the closed set");
     }
 
     #[test]
