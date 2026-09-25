@@ -1,5 +1,6 @@
 //! Provider registry producing drivers per resource type (U4, KTD3).
 
+/// The module declared name, asserted by the crate smoke test.
 pub const MODULE_NAME: &str = "provider";
 
 use std::collections::{HashMap, HashSet};

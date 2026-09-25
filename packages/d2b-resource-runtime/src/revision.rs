@@ -34,6 +34,7 @@
 //! count must fit in 32 bits (satisfied until year 2106). The full mapping
 //! lands with U8; this module only pins the budget.
 
+/// The module declared name, asserted by the crate smoke test.
 pub const MODULE_NAME: &str = "revision";
 
 /// Maximum revisions per daemon epoch under the U8 wire mapping: the
