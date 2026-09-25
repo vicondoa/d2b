@@ -103,7 +103,7 @@ impl ConsoleSession {
 
 /// Opaque per-client session token (UUID string).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ConsoleClientHandle(pub String);
+pub struct ConsoleClientHandle(String);
 
 impl ConsoleClientHandle {
     pub fn new() -> Result<Self, getrandom::Error> {
@@ -114,6 +114,33 @@ impl ConsoleClientHandle {
     }
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// Error returned when a console client handle string is malformed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsoleClientHandleParseError;
+
+impl std::fmt::Display for ConsoleClientHandleParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("malformed console client handle")
+    }
+}
+
+impl std::error::Error for ConsoleClientHandleParseError {}
+
+impl std::str::FromStr for ConsoleClientHandle {
+    type Err = ConsoleClientHandleParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let Some(hex) = s.strip_prefix("console-") else {
+            return Err(ConsoleClientHandleParseError);
+        };
+        if hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(ConsoleClientHandleParseError)
+        }
     }
 }
 
@@ -531,6 +558,15 @@ mod tests {
         assert_eq!(kind, ConsoleProviderKind::LocalHypervisor);
         assert_eq!(offset, 0);
         assert_eq!(table.client_owner_uid(handle.as_str()), Some(1000));
+    }
+
+    #[test]
+    fn handle_from_str_round_trips() {
+        let handle = ConsoleClientHandle::new().unwrap();
+        let parsed: ConsoleClientHandle = handle.as_str().parse().unwrap();
+        assert_eq!(parsed, handle);
+        assert!("not-a-handle".parse::<ConsoleClientHandle>().is_err());
+        assert!("console-zzzz".parse::<ConsoleClientHandle>().is_err());
     }
 
     #[test]
