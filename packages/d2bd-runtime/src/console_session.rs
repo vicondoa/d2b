@@ -348,7 +348,6 @@ pub struct ConsoleReadOutput {
 /// bytes into the ring, and reconnects if CH closes the connection (e.g. after
 /// a VM reboot). The ring's `notify` is triggered on each new chunk.
 pub fn spawn_ch_serial_drainer(
-    _vm: String,
     socket_path: String,
     ring: Arc<tokio::sync::Mutex<ConsoleRing>>,
 ) -> tokio::task::JoinHandle<()> {
@@ -428,7 +427,7 @@ pub fn spawn_fd_drainer(
 /// socket path.
 pub fn create_ch_session(socket_path: String) -> ConsoleSession {
     let ring = Arc::new(tokio::sync::Mutex::new(ConsoleRing::new()));
-    let drainer = spawn_ch_serial_drainer("ch-console".to_owned(), socket_path, Arc::clone(&ring));
+    let drainer = spawn_ch_serial_drainer(socket_path, Arc::clone(&ring));
     ConsoleSession::new(
         ConsoleProviderKind::LocalHypervisor,
         ring,
