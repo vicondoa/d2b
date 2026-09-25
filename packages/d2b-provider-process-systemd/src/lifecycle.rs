@@ -57,11 +57,6 @@ impl SystemdProviderConfig {
             max_concurrent_launches,
         })
     }
-
-    /// Systemd units are transient and never Provider-owned persistent units.
-    pub const fn no_persistent_unit(self) -> bool {
-        true
-    }
 }
 
 /// Invalid systemd Provider configuration.
