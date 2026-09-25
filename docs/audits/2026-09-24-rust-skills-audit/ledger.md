@@ -19,6 +19,13 @@ Measured at `147a536a0` in a dedicated gates worktree before any wave-0 fix land
 | Layer-1 aggregate | `make check` | pass (988 of 988 tests) | none |
 | host integration | `make test-host-integration` | pass (11 of 11 vmChecks) | Attic closure-upload warning only, non-fatal |
 
+### Pre-existing findings observed at apply time
+
+Defects the audited surfaces carry at HEAD that no corpus row claims and no wave fixes. They are recorded here so a later reader does not mistake them for wave regressions, and they route to an ordinary review pass or the owning package owner rather than to a leaf row.
+
+- `cargo clippy -p d2b-broker --locked --all-targets` trips the disallowed `nix::sys::socket::connect` in `packages/d2b-broker/tests/common/mod.rs` with no inline allow, so the broker's integration test binaries fail the clippy lint gate under plain cargo while the Bazel clippy action stays green. Observed at the wave-2 base. A test-only allow is the broker package owner's policy call.
+- `cargo check -p d2b-broker --locked --all-targets --features layer1-bootstrap` fails at the same base: `packages/d2b-broker/src/lib.rs` cfg-excludes `kernel_ops` for that feature while the lib test and `tests/broker_protocol_compatibility.rs` reference it.
+
 ## Wave gates
 
 Each wave closes on the same gate set, run on the wave's integrated head in the gates worktree. `base` is the commit the scan measures changed lines against.
