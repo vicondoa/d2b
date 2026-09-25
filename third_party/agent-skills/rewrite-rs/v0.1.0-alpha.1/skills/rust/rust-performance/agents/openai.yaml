@@ -1,0 +1,3 @@
+interface:
+  display_name: "Rust Performance"
+  short_description: "Profile first, cut allocation, and treat codegen flags as the last five percent"

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Rust Supply Chain"
+  short_description: "Advisory, licence, and dependency-tree audit for a Rust project"

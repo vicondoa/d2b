@@ -1,0 +1,5 @@
+interface:
+  display_name: "Setup Rust Pre-commit"
+  short_description: "Fast format and lint hooks for a Rust repo, with CI left as the gate"
+policy:
+  allow_implicit_invocation: false

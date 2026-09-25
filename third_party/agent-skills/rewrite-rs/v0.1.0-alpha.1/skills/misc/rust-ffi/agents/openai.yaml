@@ -1,0 +1,3 @@
+interface:
+  display_name: "Rust FFI"
+  short_description: "A thin translating boundary with explicit ownership and no panics crossing"

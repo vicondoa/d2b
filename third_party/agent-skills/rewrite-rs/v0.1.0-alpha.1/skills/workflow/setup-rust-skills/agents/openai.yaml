@@ -1,0 +1,5 @@
+interface:
+  display_name: "Setup Rust Skills"
+  short_description: "Lint, format, and recorded project posture for a Rust repo"
+policy:
+  allow_implicit_invocation: false

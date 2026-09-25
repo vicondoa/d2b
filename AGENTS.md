@@ -61,7 +61,11 @@ Use this index, then open the focused document instead of expanding this file.
 ## Codegraph (MCP code intelligence)
 
 [`.omp/mcp.json`](./.omp/mcp.json) wires the codegraph MCP server (pinned
-`@colbymchenry/codegraph@1.6.0`) into omp sessions. Every checkout - including
+`@colbymchenry/codegraph@1.6.0`) into omp sessions. The committed
+[`codegraph.json`](./codegraph.json) excludes `third_party/` from the index.
+Excluded trees are invisible to graph queries: an empty result for a
+`third_party/` symbol means excluded, not absent - read those files directly.
+Every checkout - including
 every `git worktree` - builds its own gitignored `.codegraph/` index: run
 `nix develop -c codegraph init` once per fresh clone or worktree, and re-run it
 if graph tools return empty or stale results. The first launch downloads the
@@ -124,6 +128,15 @@ documentation.
 - No model, tool, or agent is mandated for any role. Choose whatever is
   available and effective. Do not put model, tool, or agent attribution in
   shipped artifacts.
+
+The full agent-skill surface is vendored and committed: the
+`.agents/skills` and `.claude/skills` links into
+`third_party/agent-skills/` (the Compound Engineering plugin's complete
+`ce-*` set, the caveman suite, ponytail, and the rewrite-rs Rust suite),
+so a fresh clone is fully configured when omp opens - no install step.
+Refresh upstream content with `make update-agent-skills` and commit the
+result; each vendored tree carries an `UPSTREAM.json` provenance
+manifest.
 
 ### Review and PR contract
 

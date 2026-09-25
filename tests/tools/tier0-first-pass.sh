@@ -41,19 +41,19 @@ ok() {
 ROOT=${ROOT:-$(find_repo_root)} || fail "cannot discover repository root"
 
 is_dash_exempt() {
-  case "$1" in
+  local path=$1 root
+  case $path in
     AGENTS.md|tests/AGENTS.md|labs/venus-vulkan-video/AGENTS.md|CLAUDE.md)
       return 0
       ;;
-    third_party/agent-skills/ponytail/v4.9.0/skills/*|\
-    third_party/agent-skills/caveman/v2.0.0/skills/*|\
-    third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills/*|\
-    third_party/agent-skills/ponytail/v4.9.0/LICENSE|\
-    third_party/agent-skills/caveman/v2.0.0/LICENSE|\
-    third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/LICENSE)
-      return 0
-      ;;
   esac
+  for root in "${dash_exempt_roots[@]}"; do
+    case $path in
+      "$root"/skills/*|"$root"/LICENSE|"$root"/UPSTREAM.json)
+        return 0
+        ;;
+    esac
+  done
   return 1
 }
 
@@ -133,6 +133,36 @@ if [ -z "$shellcheck_bin" ] || [ ! -x "$shellcheck_bin" ]; then
 fi
 "$shellcheck_bin" --severity=warning -x "${shell_files[@]}"
 ok "shellcheck --severity=warning on ${#shell_files[@]} shell scripts"
+
+# Admitted vendored roots derive from the committed .agents/skills links: the
+# canonical tree each link points into. The link target is read textually and
+# normalized to a repository-relative path, never resolved through the
+# filesystem: Bazel's execroot mirror exposes .agents as a symlink into the
+# checkout, so resolving a link lands outside the scan root and would drop
+# every admitted root. make update-agent-skills refreshes the trees, the
+# adapter links, and this admission set together, so no version path is
+# hard-coded here. The environment check above runs first so a runner without
+# the required tools reports that, not a repo-state failure.
+declare -a dash_exempt_roots=()
+declare -A dash_exempt_root_seen=()
+for _adapter_link in "$ROOT"/.agents/skills/*; do
+  [[ -L $_adapter_link ]] || continue
+  _adapter_target=$(readlink "$_adapter_link") || continue
+  case $_adapter_target in
+    *third_party/agent-skills/*/skills/*) ;;
+    *) continue ;;
+  esac
+  _adapter_root=third_party/${_adapter_target#*third_party/}
+  _adapter_root=${_adapter_root%/skills/*}
+  if [[ -n $_adapter_root && -z ${dash_exempt_root_seen[$_adapter_root]:-} ]]; then
+    dash_exempt_root_seen[$_adapter_root]=1
+    dash_exempt_roots+=("$_adapter_root")
+  fi
+done
+unset _adapter_link _adapter_target _adapter_root
+if [ "${#dash_exempt_roots[@]}" -eq 0 ]; then
+  fail "no admitted vendored roots derived from .agents/skills links"
+fi
 
 scan_dashes "$ROOT"
 ok "source-hygiene gate complete"

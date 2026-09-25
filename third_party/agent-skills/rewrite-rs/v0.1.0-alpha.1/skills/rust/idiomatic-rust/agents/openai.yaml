@@ -1,0 +1,3 @@
+interface:
+  display_name: "Idiomatic Rust"
+  short_description: "Rust that reads like Rust, without boilerplate"

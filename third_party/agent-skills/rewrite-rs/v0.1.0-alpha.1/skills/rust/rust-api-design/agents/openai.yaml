@@ -1,0 +1,3 @@
+interface:
+  display_name: "Rust API Design"
+  short_description: "Public surface, trait design, and semver discipline"

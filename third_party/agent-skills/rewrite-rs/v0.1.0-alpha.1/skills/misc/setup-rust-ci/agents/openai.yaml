@@ -1,0 +1,5 @@
+interface:
+  display_name: "Setup Rust CI"
+  short_description: "GitHub Actions workflow for a Rust repo, derived from its recorded posture"
+policy:
+  allow_implicit_invocation: false

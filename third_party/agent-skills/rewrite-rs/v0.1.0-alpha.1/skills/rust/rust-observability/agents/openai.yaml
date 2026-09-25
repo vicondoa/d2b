@@ -1,0 +1,3 @@
+interface:
+  display_name: "Rust Observability"
+  short_description: "Structured events with named fields, spans, and no secrets in logs"

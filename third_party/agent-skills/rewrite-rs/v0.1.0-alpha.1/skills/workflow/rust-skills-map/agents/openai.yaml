@@ -1,0 +1,5 @@
+interface:
+  display_name: "Rust Skills Map"
+  short_description: "Router over the skill set — which skill owns which decision"
+policy:
+  allow_implicit_invocation: false

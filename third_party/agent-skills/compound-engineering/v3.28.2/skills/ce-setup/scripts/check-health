@@ -1,0 +1,812 @@
+#!/usr/bin/env bash
+# Compound Engineering environment health check.
+# Reports optional tool capabilities and repo-local config safety in one pass.
+
+set -o pipefail
+
+# =====================================================
+#  Optional capability config
+# =====================================================
+# Format: name|install_cmd|url|capability
+
+deps=(
+  "agent-browser|CI=true npm install -g agent-browser --no-audit --no-fund --loglevel=error && agent-browser install|https://github.com/vercel-labs/agent-browser|browser testing and dogfood QA"
+  "gh|NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 brew install -q gh|https://cli.github.com|GitHub PR, issue, and review workflows"
+  "jq|NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 brew install -q jq|https://jqlang.github.io/jq/|JSON inspection in shell-based workflows"
+  "ast-grep|NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 brew install -q ast-grep|https://ast-grep.github.io|syntax-aware structural code search"
+  "ffmpeg|NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 brew install -q ffmpeg|https://ffmpeg.org/download.html|media chunking and screenshot extraction for Riffrec analysis"
+)
+
+# =====================================================
+#  Args
+# =====================================================
+
+plugin_version=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --version) [ -n "$2" ] && plugin_version="$2" && shift 2 || shift ;;
+    *) shift ;;
+  esac
+done
+
+# =====================================================
+#  Helpers
+# =====================================================
+
+ok()      { echo "  🟢  $1"; }
+warn()    { echo "  🟡  $1"; }
+skip()    { echo "  ➖  $1"; }
+detail()  { echo "       $1"; }
+section() { echo ""; echo " $1"; }
+
+# Read one top-level scalar from the repo's flat local-config convention. This is
+# intentionally not a general YAML parser: comments and absent/empty keys are
+# ignored, surrounding quotes are removed, and values are never evaluated.
+read_flat_config_value() {
+  local config_file="$1"
+  local config_key="$2"
+  local value
+  value=$(awk -v key="$config_key" '
+    $0 ~ "^" key "[[:space:]]*:" {
+      sub("^" key "[[:space:]]*:[[:space:]]*", "")
+      sub(/[[:space:]]+#.*$/, "")
+      sub(/^[[:space:]]+/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+      exit
+    }
+  ' "$config_file")
+
+  case "$value" in
+    \"*\") value=${value#\"}; value=${value%\"} ;;
+    \'*\') value=${value#\'}; value=${value%\'} ;;
+  esac
+  printf '%s' "$value"
+}
+
+# Resolve the symlink-followed absolute path of $1 without relying on `realpath -m`
+# (absent on stock macOS/BSD). Resolves the existing prefix with `cd`/`pwd -P`,
+# then re-appends any not-yet-created tail — enough to catch a symlink in the
+# existing portion escaping the repository, which is the only way a relative
+# value can escape.
+resolve_real_best_effort() {
+  local target="$1" tail="" existing base
+  existing="$target"
+  while [ ! -e "$existing" ] && [ "$existing" != "/" ] && [ "$existing" != "." ] && [ "$existing" != "$(dirname "$existing")" ]; do
+    tail="/$(basename "$existing")$tail"
+    existing="$(dirname "$existing")"
+  done
+  if [ -d "$existing" ]; then
+    base="$(cd "$existing" 2>/dev/null && pwd -P)" || return 1
+  elif [ -e "$existing" ]; then
+    base="$(cd "$(dirname "$existing")" 2>/dev/null && pwd -P)/$(basename "$existing")" || return 1
+  else
+    return 1
+  fi
+  printf '%s' "${base}${tail}"
+}
+
+# Resolve docs_root from tracked config.yaml only. A docs_root in
+# config.local.yaml is ignored. Unset -> default root `docs`. A configured
+# value is validated and rejected (never silently defaulted) when it is
+# absolute, escapes the repository via path or symlink, resolves to the repo
+# root or inside .git/, or names an existing non-directory. Sets
+# docs_root_status (default|configured|invalid), docs_root_value,
+# docs_root_source, docs_root_error, and docs_root_local_ignored.
+resolve_docs_root() {
+  local repo_root="$1"
+  local local_cfg="$repo_root/.compound-engineering/config.local.yaml"
+  local tracked_cfg="$repo_root/.compound-engineering/config.yaml"
+  local value="" source="" repo_real real local_docs probe
+
+  docs_root_error=""
+  docs_root_local_ignored=""
+  if [ -f "$local_cfg" ]; then
+    local_docs=$(read_flat_config_value "$local_cfg" "docs_root")
+    [ -n "$local_docs" ] && docs_root_local_ignored="$local_docs"
+  fi
+  if [ -f "$tracked_cfg" ]; then
+    value=$(read_flat_config_value "$tracked_cfg" "docs_root")
+    [ -n "$value" ] && source="config.yaml"
+  fi
+
+  if [ -z "$value" ]; then
+    docs_root_status="default"; docs_root_value="docs"; docs_root_source="default"; return
+  fi
+
+  docs_root_value="$value"; docs_root_source="$source"; docs_root_status="invalid"
+  case "$value" in
+    /*) docs_root_error="absolute paths are not allowed; use a repo-relative path"; return ;;
+  esac
+  # Reject any `..` path component up front. resolve_real_best_effort only
+  # collapses `..` within the existing prefix (via cd/pwd -P); a `..` that
+  # traverses a not-yet-created segment would otherwise survive literally and
+  # escape the repo, hit the repo root, or reach .git/ while still string-prefix
+  # matching. A legitimate repo-relative artifact root never needs `..`.
+  case "/$value/" in
+    */../*) docs_root_error="path traversal ('..') is not allowed; use a plain repo-relative path"; return ;;
+  esac
+  repo_real="$(cd "$repo_root" 2>/dev/null && pwd -P)" || { docs_root_error="could not resolve the repository root"; return; }
+  real="$(resolve_real_best_effort "$repo_root/$value")" || { docs_root_error="could not resolve the path"; return; }
+  case "$real/" in
+    "$repo_real/"*) ;;
+    *) docs_root_error="resolves outside the repository ($real)"; return ;;
+  esac
+  [ "$real" = "$repo_real" ] && { docs_root_error="resolves to the repository root itself"; return; }
+  case "$real/" in
+    "$repo_real/.git/"*) docs_root_error="resolves inside .git/"; return ;;
+  esac
+  if [ -e "$real" ] && [ ! -d "$real" ]; then
+    docs_root_error="names an existing non-directory"; return
+  fi
+  # Reject when an intermediate component is an existing non-directory (e.g.
+  # `afile/nested` where `afile` is a file): the leaf-only check above passes
+  # because `$real` itself does not exist, but `mkdir -p` would fail. Walk up to
+  # the deepest existing ancestor and require it be a directory.
+  probe="$real"
+  while [ ! -e "$probe" ] && [ "$probe" != "/" ] && [ "$probe" != "$(dirname "$probe")" ]; do
+    probe="$(dirname "$probe")"
+  done
+  if [ -e "$probe" ] && [ ! -d "$probe" ]; then
+    docs_root_error="an intermediate path component is not a directory"; return
+  fi
+  docs_root_status="configured"
+}
+
+# Report whether a retired top-level key is still present without interpreting
+# its value. Detection is intentionally separate from routing so legacy scalar
+# settings can receive a migration diagnostic without remaining supported.
+has_flat_config_key() {
+  local config_file="$1"
+  local config_key="$2"
+  awk -v key="$config_key" '
+    $0 ~ "^" key "[[:space:]]*:" { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$config_file"
+}
+
+# First non-empty ordinary scalar across local then tracked. Empty/commented
+# local continues to tracked. Sets ordinary_value and ordinary_source.
+resolve_ordinary_scalar() {
+  local local_file="$1"
+  local tracked_file="$2"
+  local config_key="$3"
+  local value=""
+  ordinary_value=""
+  ordinary_source=""
+  if [ -f "$local_file" ]; then
+    value=$(read_flat_config_value "$local_file" "$config_key")
+    if [ -n "$value" ]; then
+      ordinary_value="$value"
+      ordinary_source="config.local.yaml"
+      return
+    fi
+  fi
+  if [ -f "$tracked_file" ]; then
+    value=$(read_flat_config_value "$tracked_file" "$config_key")
+    if [ -n "$value" ]; then
+      ordinary_value="$value"
+      ordinary_source="config.yaml"
+    fi
+  fi
+}
+
+# Present list/map key (including `[]`) wins that layer. Sets
+# structured_file, or empty when neither layer sets the key.
+resolve_structured_layer() {
+  local local_file="$1"
+  local tracked_file="$2"
+  local config_key="$3"
+  structured_file=""
+  if [ -f "$local_file" ] && has_flat_config_key "$local_file" "$config_key"; then
+    structured_file="$local_file"
+    return
+  fi
+  if [ -f "$tracked_file" ] && has_flat_config_key "$tracked_file" "$config_key"; then
+    structured_file="$tracked_file"
+  fi
+}
+
+# Read the narrow YAML sequence used by work_engine_preferences. The local
+# config remains human-authored YAML, but setup health needs only this one
+# deterministic shape rather than a general parser.
+read_work_engine_preferences() {
+  local config_file="$1"
+  awk '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    function scalar(value) {
+      sub(/[[:space:]]+#.*$/, "", value)
+      value = trim(value)
+      if (value ~ /^".*"$/ || value ~ /^\047.*\047$/) {
+        value = substr(value, 2, length(value) - 2)
+      }
+      return value
+    }
+    function emit_item() {
+      if (!have_item) return
+      if (harness == "" && model != "") {
+        print "ERROR\tmodel \047" model "\047 has no harness in work_engine_preferences"
+      } else if (harness == "") {
+        print "ERROR\tempty item in work_engine_preferences"
+      } else {
+        print "ITEM\t" harness "\t" (model == "" ? "default" : model)
+      }
+      have_item = 0
+      harness = ""
+      model = ""
+    }
+    /^[^[:space:]#-][^:]*[[:space:]]*:/ {
+      if (active) {
+        emit_item()
+        active = 0
+      }
+    }
+    /^work_engine_preferences[[:space:]]*:/ {
+      active = 1
+      next
+    }
+    active {
+      line = $0
+      if (line ~ /^[[:space:]]*($|#)/) next
+      if (line ~ /^[[:space:]]*-[[:space:]]*harness[[:space:]]*:/) {
+        emit_item()
+        sub(/^[[:space:]]*-[[:space:]]*harness[[:space:]]*:[[:space:]]*/, "", line)
+        harness = scalar(line)
+        have_item = 1
+        next
+      }
+      if (line ~ /^[[:space:]]*-[[:space:]]*model[[:space:]]*:/) {
+        emit_item()
+        sub(/^[[:space:]]*-[[:space:]]*model[[:space:]]*:[[:space:]]*/, "", line)
+        model = scalar(line)
+        have_item = 1
+        next
+      }
+      if (line ~ /^[[:space:]]+model[[:space:]]*:/) {
+        sub(/^[[:space:]]+model[[:space:]]*:[[:space:]]*/, "", line)
+        model = scalar(line)
+        if (!have_item) have_item = 1
+        next
+      }
+      if (line ~ /^[[:space:]]+harness[[:space:]]*:/) {
+        sub(/^[[:space:]]+harness[[:space:]]*:[[:space:]]*/, "", line)
+        harness = scalar(line)
+        if (!have_item) have_item = 1
+        next
+      }
+      print "ERROR\tunsupported work_engine_preferences entry: " trim(line)
+    }
+    END {
+      if (active) emit_item()
+    }
+  ' "$config_file"
+}
+
+# Emits KEY<TAB>harness per map entry, or ERROR when the value is not a map.
+# An entry is exactly `harness: token`, optionally quoted, because an effort must
+# be a plain token; this is the data contract, not a YAML parser. Effort levels
+# are not checked: they belong to the ce-work adapter, which this skill cannot call.
+read_work_engine_effort_keys() {
+  local config_file="$1"
+  awk '
+    function emit_entry(entry) {
+      sub(/[[:space:]]+#.*$/, "", entry)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", entry)
+      # A key or value is a bare token or one wrapped in a matching quote pair.
+      token = "[A-Za-z0-9][A-Za-z0-9_-]*"
+      quoted = "(" token "|\"" token "\"|\047" token "\047)"
+      if (entry !~ ("^" quoted "[[:space:]]*:[[:space:]]*" quoted "$")) not_a_map()
+      sub(/[[:space:]]*:.*$/, "", entry)
+      gsub(/["\047]/, "", entry)
+      print "KEY\t" entry
+      entries++
+    }
+    function not_a_map() {
+      print "ERROR"
+      reported = 1
+      exit
+    }
+    # A block that ends with no entries is a null value, not the explicit empty map {}.
+    function close_block() {
+      if (active && !entries) not_a_map()
+      active = 0
+    }
+    /^[^[:space:]#-][^:]*[[:space:]]*:/ { close_block() }
+    /^work_engine_effort[[:space:]]*:/ {
+      active = 1
+      entries = 0
+      line = $0
+      sub(/^work_engine_effort[[:space:]]*:/, "", line)
+      sub(/[[:space:]]+#.*$/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line == "") next
+      if (line !~ /^\{.*\}$/) not_a_map()
+      line = substr(line, 2, length(line) - 2)
+      count = split(line, pairs, ",")
+      for (i = 1; i <= count; i++) {
+        if (pairs[i] ~ /^[[:space:]]*$/) {
+          if (i < count) not_a_map()
+          continue
+        }
+        emit_entry(pairs[i])
+      }
+      active = 0
+      next
+    }
+    active {
+      line = $0
+      if (line ~ /^[[:space:]]*($|#)/) next
+      if (line !~ /^[[:space:]]/) not_a_map()
+      emit_entry(line)
+    }
+    END { if (!reported) close_block() }
+  ' "$config_file"
+}
+
+has_brew=$(command -v brew >/dev/null 2>&1 && echo "yes" || echo "no")
+in_repo=$(git rev-parse --is-inside-work-tree >/dev/null 2>&1 && echo "yes" || echo "no")
+
+# Retired Bun-era Codex tool map (#1099). The block is present only when a
+# standalone BEGIN line is followed by a standalone END line.
+has_codex_tool_map() {
+  awk '
+    { sub(/\r$/, "") }
+    $0 == "<!-- BEGIN COMPOUND CODEX TOOL MAP -->" { seen = 1 }
+    seen && $0 == "<!-- END COMPOUND CODEX TOOL MAP -->" { found = 1; exit }
+    END { exit found ? 0 : 1 }
+  ' "$1"
+}
+
+codex_agents_file="${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
+legacy_codex_map="no"
+if [ -f "$codex_agents_file" ] && has_codex_tool_map "$codex_agents_file"; then
+  legacy_codex_map="yes"
+fi
+
+# =====================================================
+#  Check optional capabilities
+# =====================================================
+
+capability_ok=0
+capability_total=0
+capability_missing=0
+results=()
+
+for entry in "${deps[@]}"; do
+  IFS='|' read -r name install_cmd url capability < <(printf '%s\n' "$entry")
+  capability_total=$((capability_total + 1))
+  if command -v "$name" >/dev/null 2>&1; then
+    capability_ok=$((capability_ok + 1))
+    results+=("$name|ok|$install_cmd|$url|$capability")
+  else
+    capability_missing=$((capability_missing + 1))
+    results+=("$name|missing|$install_cmd|$url|$capability")
+  fi
+done
+
+# =====================================================
+#  Project checks (repo only)
+# =====================================================
+
+legacy_cfg="skip"
+repo_cfg_gitignore="skip"
+scratch_gitignore="skip"
+local_cfg="skip"
+example_cfg="skip"
+retired_keys=()
+work_engine_cfg="skip"
+work_engine_detail=""
+work_engine_preferences_note=""
+work_engine_preferences_note_level="detail"
+work_engine_migration_note=""
+docs_root_status="skip"
+docs_root_value=""
+docs_root_source=""
+docs_root_error=""
+docs_root_local_ignored=""
+tracked_cfg="skip"
+project_issues=0
+
+if [ "$in_repo" = "yes" ]; then
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
+  local_config_path="$repo_root/.compound-engineering/config.local.yaml"
+  tracked_config_path="$repo_root/.compound-engineering/config.yaml"
+  resolve_docs_root "$repo_root"
+  [ "$docs_root_status" = "invalid" ] && project_issues=$((project_issues + 1))
+  legacy_cfg="missing"
+  [ -f "$repo_root/compound-engineering.local.md" ] && legacy_cfg="present"
+
+  local_cfg="missing"
+  if [ -e "$local_config_path" ]; then
+    local_cfg="present"
+    if git check-ignore -q "$local_config_path" 2>/dev/null; then
+      repo_cfg_gitignore="ok"
+    else
+      repo_cfg_gitignore="missing"
+    fi
+  fi
+
+  # Trailing slash is load-bearing: without it an existing directory-only rule
+  # is missed before the directory exists, and a configured repo reads as bare.
+  scratch_gitignore="missing"
+  if git -C "$repo_root" check-ignore -q .context/compound-engineering/ 2>/dev/null; then
+    scratch_gitignore="ok"
+  fi
+
+  tracked_cfg="missing"
+  [ -f "$tracked_config_path" ] && tracked_cfg="present"
+
+  resolve_ordinary_scalar "$local_config_path" "$tracked_config_path" "work_engine_mode"
+  work_engine_mode="$ordinary_value"
+  case "$work_engine_mode" in
+    ""|off|prefer|require) ;;
+    *)
+      if [ "$ordinary_source" = "config.local.yaml" ]; then
+        if [ -f "$tracked_config_path" ]; then
+          work_engine_mode=$(read_flat_config_value "$tracked_config_path" "work_engine_mode")
+        else
+          work_engine_mode=""
+        fi
+      fi
+      ;;
+  esac
+
+  resolve_structured_layer "$local_config_path" "$tracked_config_path" "work_engine_preferences"
+  work_engine_preferences_count=0
+  work_engine_preferences_detail=""
+  work_engine_preferences_error=""
+  retired_work_engine_keys=""
+  for retired_key in work_engine_target work_engine_model; do
+    if { [ -f "$local_config_path" ] && has_flat_config_key "$local_config_path" "$retired_key"; } || \
+       { [ -f "$tracked_config_path" ] && has_flat_config_key "$tracked_config_path" "$retired_key"; }; then
+      if [ -n "$retired_work_engine_keys" ]; then
+        retired_work_engine_keys="${retired_work_engine_keys}, ${retired_key}"
+      else
+        retired_work_engine_keys="$retired_key"
+      fi
+    fi
+  done
+  if [ -n "$retired_work_engine_keys" ]; then
+    work_engine_migration_note="retired config key(s) ${retired_work_engine_keys} detected; migrate routing to work_engine_preferences entries with harness and optional model fields, then remove the retired keys"
+    project_issues=$((project_issues + 1))
+  fi
+  if [ -n "$structured_file" ]; then
+    while IFS=$'\t' read -r preference_kind preference_harness preference_model; do
+      case "$preference_kind" in
+        ITEM)
+          work_engine_preferences_count=$((work_engine_preferences_count + 1))
+          case "$preference_harness" in
+            codex|claude|grok|cursor|opencode) ;;
+            *)
+              [ -z "$work_engine_preferences_error" ] && work_engine_preferences_error="invalid harness '$preference_harness' in work_engine_preferences"
+              ;;
+          esac
+          if [ "$preference_model" != "default" ]; then
+            case "$preference_model" in
+              [A-Za-z0-9]*)
+                case "$preference_model" in
+                  *[!A-Za-z0-9._:/-]*)
+                    [ -z "$work_engine_preferences_error" ] && work_engine_preferences_error="invalid model '$preference_model' in work_engine_preferences"
+                    ;;
+                esac
+                ;;
+              *)
+                [ -z "$work_engine_preferences_error" ] && work_engine_preferences_error="invalid model '$preference_model' in work_engine_preferences"
+                ;;
+            esac
+          fi
+          preference_display="${preference_harness}@${preference_model}"
+          if [ -n "$work_engine_preferences_detail" ]; then
+            work_engine_preferences_detail="${work_engine_preferences_detail}, ${preference_display}"
+          else
+            work_engine_preferences_detail="$preference_display"
+          fi
+          ;;
+        ERROR)
+          [ -z "$work_engine_preferences_error" ] && work_engine_preferences_error="$preference_harness"
+          ;;
+      esac
+    done < <(read_work_engine_preferences "$structured_file")
+  fi
+
+  work_engine_effort_notes=()
+  resolve_structured_layer "$local_config_path" "$tracked_config_path" "work_engine_effort"
+  if [ -n "$structured_file" ]; then
+    while IFS=$'\t' read -r effort_kind effort_harness; do
+      case "$effort_kind:$effort_harness" in
+        ERROR:*) effort_problem="is not a map of harness to effort; ce-work ignores the value and keeps each harness default" ;;
+        KEY:cursor) effort_problem="names 'cursor', which takes no effort; ce-work treats Cursor entries as unavailable while it is set" ;;
+        KEY:codex|KEY:claude|KEY:grok|KEY:opencode) continue ;;
+        KEY:*) effort_problem="names unknown harness '${effort_harness}'; ce-work ignores that entry" ;;
+        *) continue ;;
+      esac
+      work_engine_effort_notes+=("work_engine_effort in $(basename "$structured_file") ${effort_problem}")
+    done < <(read_work_engine_effort_keys "$structured_file")
+  fi
+
+  case "$work_engine_mode" in
+    ""|off)
+      work_engine_cfg="native"
+      if [ -n "$work_engine_mode" ]; then
+        work_engine_detail="standing preference is off"
+      else
+        work_engine_detail="setting is commented or missing"
+      fi
+      if [ -n "$work_engine_preferences_error" ]; then
+        work_engine_preferences_note="invalid dormant work_engine_preferences: ${work_engine_preferences_error}"
+        work_engine_preferences_note_level="warn"
+        project_issues=$((project_issues + 1))
+      elif [ "$work_engine_preferences_count" -gt 0 ]; then
+        work_engine_preferences_note="ordered preferences ignored while standing mode is off"
+      fi
+      ;;
+    prefer|require)
+      if [ -n "$work_engine_preferences_error" ]; then
+        work_engine_cfg="unavailable"
+        work_engine_detail="$work_engine_preferences_error"
+        project_issues=$((project_issues + 1))
+      elif [ "$work_engine_preferences_count" -eq 0 ] && [ -n "$retired_work_engine_keys" ]; then
+        work_engine_cfg="unavailable"
+        work_engine_detail="$work_engine_mode cannot use retired scalar routing; migrate ${retired_work_engine_keys} to work_engine_preferences"
+      elif [ "$work_engine_preferences_count" -eq 0 ]; then
+        work_engine_cfg="unavailable"
+        work_engine_detail="$work_engine_mode requires work_engine_preferences"
+        project_issues=$((project_issues + 1))
+      else
+        work_engine_cfg="$work_engine_mode"
+        work_engine_detail="$work_engine_preferences_detail"
+      fi
+      ;;
+    *)
+      work_engine_cfg="invalid"
+      work_engine_detail="invalid mode '$work_engine_mode' ignored; native is the default"
+      project_issues=$((project_issues + 1))
+      ;;
+  esac
+
+  script_dir="$(cd "$(dirname "$0")" && pwd)"
+  template="$script_dir/../references/config-template.yaml"
+  example="$repo_root/.compound-engineering/config.example.yaml"
+  if [ ! -f "$example" ]; then
+    example_cfg="missing"
+  elif [ -f "$template" ] && ! diff -q "$template" "$example" >/dev/null 2>&1; then
+    example_cfg="outdated"
+  else
+    example_cfg="ok"
+  fi
+
+  # Retired keys set as ACTIVE (non-commented) in either layer. A
+  # commented `# plan_use_fable:` line does not match `^[[:space:]]*<key>:`.
+  for cfg_file in "$local_config_path" "$tracked_config_path"; do
+    [ -f "$cfg_file" ] || continue
+    for key in plan_use_fable brainstorm_use_fable fable_nudge; do
+      if grep -Eq "^[[:space:]]*${key}[[:space:]]*:" "$cfg_file" 2>/dev/null; then
+        already=""
+        for seen in "${retired_keys[@]}"; do
+          [ "$seen" = "$key" ] && already=1
+        done
+        [ -z "$already" ] && retired_keys+=("$key")
+      fi
+    done
+  done
+fi
+
+# =====================================================
+#  Output
+# =====================================================
+
+echo ""
+if [ -n "$plugin_version" ]; then
+  ok "Plugin version v${plugin_version}"
+fi
+
+section "Optional capabilities  ${capability_ok}/${capability_total}"
+
+for result in "${results[@]}"; do
+  IFS='|' read -r name status install_cmd url capability < <(printf '%s\n' "$result")
+  if [ "$status" = "ok" ]; then
+    ok "$name -- $capability"
+  else
+    warn "$name -- unavailable: $capability"
+    if [[ "$install_cmd" == *"brew install"* ]] && [ "$has_brew" != "yes" ]; then
+      detail "$url"
+    else
+      detail "$install_cmd"
+      detail "$url"
+    fi
+  fi
+done
+
+if [ "$legacy_codex_map" = "yes" ]; then
+  section "Codex instructions"
+  warn "Legacy Compound Codex tool map in ${codex_agents_file}"
+  detail "Retired block from a pre-native Bun install; one line tells Codex to collapse subagent dispatch."
+  detail "Remove it -- see this skill's references/legacy-codex-tool-map.md"
+fi
+
+if [ "$in_repo" = "yes" ]; then
+  section "Project config"
+
+  if [ "$legacy_cfg" = "present" ]; then
+    warn "Obsolete compound-engineering.local.md exists"
+    project_issues=$((project_issues + 1))
+  else
+    ok "No obsolete compound-engineering.local.md"
+  fi
+
+  if [ "$tracked_cfg" = "present" ]; then
+    ok ".compound-engineering/config.yaml exists"
+  else
+    skip "No repo config yet (.compound-engineering/config.yaml)"
+  fi
+
+  if [ "$local_cfg" = "present" ]; then
+    ok ".compound-engineering/config.local.yaml exists"
+    if [ "$repo_cfg_gitignore" = "ok" ]; then
+      ok "Local config is gitignored"
+    else
+      warn "Local config is not safely gitignored"
+      project_issues=$((project_issues + 1))
+    fi
+  else
+    skip "No local override yet (.compound-engineering/config.local.yaml)"
+  fi
+
+  if [ "$scratch_gitignore" = "ok" ]; then
+    ok "CE scratch space is gitignored"
+  else
+    skip "CE scratch space is not gitignored"
+    detail "Skills that keep local scratch write it under .context/compound-engineering/"
+  fi
+
+  if [ "$docs_root_status" = "default" ]; then
+    ok "Artifact root: docs/ (default — docs_root not set)"
+  elif [ "$docs_root_status" = "configured" ]; then
+    ok "Artifact root: ${docs_root_value}/ (from ${docs_root_source})"
+  elif [ "$docs_root_status" = "invalid" ]; then
+    warn "Invalid docs_root '${docs_root_value}' in ${docs_root_source}: ${docs_root_error}"
+    detail "CE artifacts will not be written until docs_root is corrected or removed."
+  fi
+  if [ -n "$docs_root_local_ignored" ]; then
+    skip "Local docs_root '${docs_root_local_ignored}' is ignored; set docs_root only in config.yaml"
+  fi
+
+  if [ "$work_engine_cfg" = "native" ]; then
+    ok "CE Work implementation engine: native (${work_engine_detail})"
+    if [ -n "$work_engine_preferences_note" ]; then
+      if [ "$work_engine_preferences_note_level" = "warn" ]; then
+        warn "$work_engine_preferences_note"
+      else
+        detail "$work_engine_preferences_note"
+      fi
+    fi
+  elif [ "$work_engine_cfg" = "prefer" ] || [ "$work_engine_cfg" = "require" ]; then
+    ok "CE Work implementation engine: ${work_engine_cfg} -> ${work_engine_detail}"
+  elif [ "$work_engine_cfg" = "unavailable" ]; then
+    warn "CE Work implementation engine unavailable: ${work_engine_detail}"
+  elif [ "$work_engine_cfg" = "invalid" ]; then
+    warn "CE Work implementation engine: ${work_engine_detail}"
+  fi
+  [ -n "$work_engine_migration_note" ] && warn "$work_engine_migration_note"
+  for effort_note in ${work_engine_effort_notes[@]+"${work_engine_effort_notes[@]}"}; do
+    warn "$effort_note"
+    project_issues=$((project_issues + 1))
+  done
+
+  if [ "$example_cfg" = "ok" ]; then
+    ok "Example config is current"
+  elif [ "$example_cfg" = "missing" ]; then
+    warn "Example config missing (.compound-engineering/config.example.yaml)"
+    project_issues=$((project_issues + 1))
+  elif [ "$example_cfg" = "outdated" ]; then
+    warn "Example config outdated (new settings available)"
+    project_issues=$((project_issues + 1))
+  fi
+
+  for key in "${retired_keys[@]}"; do
+    case "$key" in
+      plan_use_fable)       warn "Retired config key '$key' — removed; use 'plan_model' instead" ;;
+      brainstorm_use_fable) warn "Retired config key '$key' — removed; use 'brainstorm_model' instead" ;;
+      fable_nudge)          warn "Retired config key '$key' — removed; model elevation is always available" ;;
+    esac
+    project_issues=$((project_issues + 1))
+  done
+  # --- Compound Packs (packs: config key) -------------------------------------
+  section "Compound Packs"
+  packs_python="$(for c in python3 python py; do command -v "$c" >/dev/null 2>&1 && "$c" -c '' >/dev/null 2>&1 && { echo "$c"; break; }; done)"
+  packs_resolver="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/packs-resolve.py"
+  if [ -z "$packs_python" ]; then
+    skip "No Python interpreter found; pack health not checked"
+  elif [ ! -f "$packs_resolver" ]; then
+    skip "packs-resolve.py not found beside check-health; pack health not checked"
+  else
+    packs_json="$("$packs_python" "$packs_resolver" 2>/dev/null)"
+    if [ -z "$packs_json" ]; then
+      warn "packs-resolve.py failed to run"
+      project_issues=$((project_issues + 1))
+    else
+      packs_report="$(printf '%s' "$packs_json" | "$packs_python" -c '
+import json, os, re, subprocess, sys
+data = json.load(sys.stdin)
+roots, errors, warns = data.get("roots", []), data.get("errors", []), data.get("warnings", [])
+if not roots and not errors and not warns:
+    print("SKIP\tNo packs configured")
+for r in roots:
+    line = "OK\tpack " + r["id"]
+    url, ref = r.get("url"), r.get("ref")
+    if url and ref:
+        line += " (" + ref + ")"
+        # Only a full commit id is immutable. A branch tip advances and a tag can
+        # be force-moved upstream, so for either compare the cached HEAD with the
+        # remote target of that name -- the peeled commit for an annotated tag,
+        # which is why the ls-remote asks for `<tag>^{}` too.
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", ref):
+            try:
+                genv = dict(os.environ)
+                genv["GIT_TERMINAL_PROMPT"] = "0"
+                genv.setdefault("GIT_ASKPASS", "true")
+                _ssh = genv.get("GIT_SSH_COMMAND") or "ssh"
+                if "BatchMode" not in _ssh:
+                    genv["GIT_SSH_COMMAND"] = _ssh + " -o BatchMode=yes"
+                names = ["refs/tags/" + ref + "^{}", "refs/tags/" + ref, "refs/heads/" + ref]
+                remote = subprocess.run(["git", "ls-remote", "--end-of-options", url, *names],
+                                        capture_output=True, text=True, timeout=10, env=genv)
+                targets = {}
+                for row in remote.stdout.splitlines() if remote.returncode == 0 else []:
+                    sha, _, name = row.partition("\t")
+                    if name:
+                        targets[name] = sha
+                rsha = next((targets[n] for n in names if n in targets), "")
+                local = subprocess.run(["git", "-C", r["dir"], "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10)
+                lsha = local.stdout.strip() if local.returncode == 0 else ""
+                if rsha and lsha and rsha != lsha:
+                    line += " -- cached resolution is behind upstream"
+            except Exception:
+                pass  # offline or slow remote: silently skip the drift note
+    # Subdirectories are storage, so rule-shaped files there are a note on the
+    # OK line, never a warning: the author may keep drafts and evidence with frontmatter.
+    nested = r.get("nested_rule_shaped", 0)
+    if nested:
+        line += " -- " + str(nested) + " rule-shaped file(s) in subfolders kept as storage"
+    print(line)
+for w in warns:
+    print("WARN\t" + w)
+for e in errors:
+    print("ERROR\t" + e)
+')"
+      while IFS=$'\t' read -r kind msg; do
+        [ -z "$kind" ] && continue
+        case "$kind" in
+          OK)    ok "$msg" ;;
+          SKIP)  skip "$msg" ;;
+          WARN)  warn "$msg" ;;
+          ERROR) warn "Pack config error: $msg"; project_issues=$((project_issues + 1)) ;;
+        esac
+      done < <(printf '%s\n' "$packs_report")
+    fi
+  fi
+else
+  section "Project config"
+  skip "Not inside a git repository"
+fi
+
+echo ""
+if [ "$project_issues" -eq 0 ]; then
+  echo " ✅  Project config healthy. Optional capabilities available: ${capability_ok}/${capability_total}"
+else
+  echo " ⚠️   ${project_issues} project issue(s) found. Optional capabilities available: ${capability_ok}/${capability_total}"
+fi
+
+if [ "$legacy_codex_map" = "yes" ]; then
+  echo "     Environment: the legacy Codex tool map above still needs attention."
+fi
+
+if [ "$capability_missing" -gt 0 ]; then
+  echo "     Missing optional tools do not block setup; install them only for the workflows you use."
+fi
+
+echo ""

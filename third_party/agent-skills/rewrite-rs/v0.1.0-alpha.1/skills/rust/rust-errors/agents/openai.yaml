@@ -1,0 +1,3 @@
+interface:
+  display_name: "Rust Errors"
+  short_description: "Result over unwrap, and error types callers can act on"

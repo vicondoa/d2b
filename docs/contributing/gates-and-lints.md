@@ -19,30 +19,31 @@ directory exemption.
 
 The exact instruction files are `AGENTS.md`, `tests/AGENTS.md`,
 `labs/venus-vulkan-video/AGENTS.md`, and `CLAUDE.md`. Canonical skill payloads
-are exempt only below these exact pinned roots, and only for the approved skill
-directories:
-
-- `third_party/agent-skills/ponytail/v4.9.0/skills`
-- `third_party/agent-skills/caveman/v2.0.0/skills`
-- `third_party/agent-skills/compound-engineering/compound-engineering-v3.21.4/skills`
-
-The matching root `LICENSE` file under each of those three pinned version
-directories is also exempt so its upstream bytes and legal notice stay exact.
-No other notice file, source, version, or sibling path is admitted.
-
-The admitted child directory names are `ponytail`, `ponytail-audit`,
-`ponytail-debt`, `ponytail-gain`, `ponytail-help`, `ponytail-review`,
-`caveman`, `ce-babysit-pr`, `ce-brainstorm`, `ce-code-review`,
-`ce-commit-push-pr`, `ce-debug`, `ce-doc-review`, `ce-plan`,
-`ce-resolve-pr-feedback`, `ce-simplify-code`, `ce-work`, and `ce-worktree`.
+are exempt only below the canonical version directory that each committed
+`.agents/skills/<skill>` link resolves into - one vendored tree per upstream
+source (`third_party/agent-skills/compound-engineering`,
+`third_party/agent-skills/caveman`, `third_party/agent-skills/ponytail`,
+`third_party/agent-skills/rewrite-rs`; currently v3.28.2, v2.7.0, v4.9.0,
+and v0.1.0-alpha.1) - and only for the skill directories
+those links admit. The matching root `LICENSE` and `UPSTREAM.json` provenance
+manifest under each of those version directories is also exempt so upstream
+bytes, legal notice, and provenance stay exact. No other notice file, source,
+version, or sibling path is admitted. The gate carries no hard-coded version
+or child-name list: `make update-agent-skills` refreshes the vendored trees,
+both adapter directories, and the exemption set together, because admission
+derives from the committed links.
 
 The `.agents/skills/<skill>` and `.claude/skills/<skill>` adapter entries are
-admitted only when they are relative symlinks to the matching canonical skill.
-The static Claude fallback additionally admits only relative symlinks for
-components that resolve to the matching canonical component. Regular files in
-adapter trees, lookalike names, other versions, and links to other targets
-remain in the scanned set. Product documentation, plans, changelog entries,
-configuration, and ordinary source files have no exemption.
+committed relative symlinks into the canonical skill directories, and the
+exemption admits the canonical tree each link points into. The links
+themselves are never scanned as content: the scan reads regular files only, so
+an entry that resolves to a directory is skipped. The gate does not validate
+adapter targets - `make update-agent-skills` is what keeps both adapter
+directories pointing at the vendored trees, and tier0 consumes the committed
+targets as its admission set. Regular files placed in adapter trees, lookalike
+names, and other versions remain in the scanned set. Product documentation,
+plans, changelog entries, configuration, and ordinary source files have no
+exemption.
 
 Enumeration happens before filtering and must still be non-empty and
 successful. The gate then removes only these validated paths before invoking
