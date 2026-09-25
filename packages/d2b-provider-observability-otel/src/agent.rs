@@ -57,11 +57,11 @@ pub struct ProviderAgentAuditEvent {
     zone: String,
     source: String,
     record_class: &'static str,
-    event: String,
+    event: BoundedToken,
     transport_class: &'static str,
-    authz_decision: Option<String>,
-    provider: Option<String>,
-    domain: Option<String>,
+    authz_decision: Option<BoundedToken>,
+    provider: Option<BoundedToken>,
+    domain: Option<BoundedToken>,
     outcome: ProviderAgentAuditOutcome,
 }
 
@@ -112,8 +112,8 @@ impl ProviderAgentAuditEvent {
     fn session_connect(
         zone: &str,
         source: &str,
-        event: String,
-        authz_decision: String,
+        event: BoundedToken,
+        authz_decision: BoundedToken,
         outcome: ProviderAgentAuditOutcome,
     ) -> Self {
         Self {
@@ -132,9 +132,9 @@ impl ProviderAgentAuditEvent {
     fn process_effect(
         zone: &str,
         source: &str,
-        event: String,
-        provider: String,
-        domain: String,
+        event: BoundedToken,
+        provider: BoundedToken,
+        domain: BoundedToken,
         outcome: ProviderAgentAuditOutcome,
     ) -> Self {
         Self {
@@ -162,7 +162,7 @@ impl ProviderAgentAuditEvent {
 
     /// Borrow the event token.
     pub fn event(&self) -> &str {
-        &self.event
+        self.event.as_str()
     }
 
     /// Borrow the event token through the Provider-agent terminology.
@@ -268,13 +268,13 @@ impl ProviderAgentProcess {
         let authz_decision = parse_closed_token(&authz_decision, &["allowed", "denied"])?;
         let outcome = parse_outcome(outcome)?;
         self.push(
-            method,
+            method.clone(),
             outcome,
             ProviderAgentAuditEvent::session_connect(
                 &self.zone_name,
                 &self.source_name,
-                event,
-                authz_decision.as_str().to_owned(),
+                method.clone(),
+                authz_decision,
                 outcome,
             ),
         )
@@ -306,14 +306,14 @@ impl ProviderAgentProcess {
         let domain = parse_closed_token(&domain, &["system", "user"])?;
         let outcome = parse_outcome(outcome)?;
         self.push(
-            method,
+            method.clone(),
             outcome,
             ProviderAgentAuditEvent::process_effect(
                 &self.zone_name,
                 &self.source_name,
-                event,
-                provider.as_str().to_owned(),
-                domain.as_str().to_owned(),
+                method.clone(),
+                provider,
+                domain,
                 outcome,
             ),
         )

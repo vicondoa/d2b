@@ -649,7 +649,7 @@ impl IngressPolicyGate {
                 ingress = ?ingress,
                 "ingress connection tracking table full; new connection rejected"
             );
-            return (IngressOutcome::Rejected, IngressErrorClass::Malformed);
+            return (IngressOutcome::Rejected, IngressErrorClass::None);
         }
         let state = self
             .connections
