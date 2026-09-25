@@ -13,20 +13,10 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 #[derive(Debug, Clone)]
-pub struct ApplySysctlRequest {
+pub(crate) struct ApplySysctlRequest {
     pub intents: Vec<SysctlIntent>,
     /// Override the `/proc/sys` root for tests.
     pub proc_sys_root: PathBuf,
-}
-
-impl ApplySysctlRequest {
-    /// Build a request writing under the default `/proc/sys` root.
-    pub fn with_default_root(intents: Vec<SysctlIntent>) -> Self {
-        Self {
-            intents,
-            proc_sys_root: PathBuf::from("/proc/sys"),
-        }
-    }
 }
 
 /// One applied sysctl write with its before/after values and drift verdict.
@@ -77,7 +67,7 @@ impl From<io::Error> for ApplySysctlError {
 /// Converts `net.ipv6.conf.<ifname>.disable_ipv6` to
 /// `<root>/net/ipv6/conf/<ifname>/disable_ipv6` for safe per-link
 /// writes.
-pub fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf {
+pub(crate) fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf {
     let mut path = root.to_path_buf();
     for component in intent.key.split('.') {
         path.push(component);
@@ -85,7 +75,7 @@ pub fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf {
     path
 }
 
-pub async fn apply_sysctl_intents(
+pub(crate) async fn apply_sysctl_intents(
     req: &ApplySysctlRequest,
 ) -> Result<Vec<ApplySysctlOutcome>, ApplySysctlError> {
     let mut out = Vec::with_capacity(req.intents.len());
