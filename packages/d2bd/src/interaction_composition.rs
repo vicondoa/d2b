@@ -4338,25 +4338,23 @@ where
             let supervisor = self._supervisor.clone();
             let adoption_ticket = process_ticket.clone();
             let adopted = run_effect(move || {
-                let supervisor = supervisor.clone();
-                let process_ticket = adoption_ticket.clone();
                 async move {
                     if let Some(candidate) = supervisor
-                        .observe(&process_ticket)
+                        .observe(&adoption_ticket)
                         .await
                         .map_err(|_| WorkerEffectError::WorkerUnavailable)?
                     {
                         match supervisor.open_pidfd(&candidate).await {
                             Ok(_) => Ok(candidate.identity),
                             Err(_) => Ok(supervisor
-                                .launch(&process_ticket)
+                                .launch(&adoption_ticket)
                                 .await
                                 .map_err(|_| WorkerEffectError::LaunchRejected)?
                                 .identity),
                         }
                     } else {
                         Ok(supervisor
-                            .launch(&process_ticket)
+                            .launch(&adoption_ticket)
                             .await
                             .map_err(|_| WorkerEffectError::LaunchRejected)?
                             .identity)

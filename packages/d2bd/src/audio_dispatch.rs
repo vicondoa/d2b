@@ -369,7 +369,16 @@ pub(crate) fn combined_audio_applied(
 
 // ── dispatch_audio ────────────────────────────────────────────────────────────
 
-pub fn dispatch_audio(
+/// Dispatch one audio op (Status, SetVolume, Mute) through the
+    /// capability-resolved audio provider for the target VMs.
+    ///
+    /// Status collects a per-VM result (entries and per-VM errors) from
+    /// the provider's state; SetVolume and Mute apply a state transition under
+    /// the audio serialization lock,and return [`TypedError::InternalIo`]
+    /// for manifest, capability, lock, read, write, or enforcement
+    /// failures.
+
+    pub fn dispatch_audio(
     state: &ServerState,
     caller_role: BrokerCallerRole,
     op: AudioOp,

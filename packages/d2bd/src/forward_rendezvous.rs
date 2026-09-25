@@ -453,10 +453,9 @@ impl ForwardRendezvous {
         fds: &[RawFd],
         chain: &EvidenceChain,
     ) -> (ForwardOperationResponse, Vec<OwnedFd>) {
-        let zone = request.zone.clone();
         let (providers, kernel, resources) = {
             let zones = self.zones.lock().await;
-            match zones.get(&zone) {
+            match zones.get(&request.zone) {
                 Some(binding) => (
                     Some(Arc::clone(&binding.providers)),
                     binding.kernel.clone(),
@@ -645,7 +644,7 @@ impl ForwardRendezvous {
         // root leg.
         let chain = match &request.chain_identities {
             Some(identities) => {
-                let mut chain = match identities.split_first() {
+                let chain = match identities.split_first() {
                     Some((head, tail)) => {
                         let mut chain = EvidenceChain::root(
                             request.invocation_id.clone(),
@@ -665,11 +664,11 @@ impl ForwardRendezvous {
                             .unwrap_or_else(|| "daemon".to_owned()),
                     ),
                 };
-                // The handler-side legs append the invoking handler's own
-                // identity; the daemon-side record of a forwarded nested leg
+// The handler-side legs append the invoking handler's own
+                // identity;the daemon-side record of a forwarded nested leg
                 // keys on the root id and the chain's depth exactly as the
                 // broker-side record of the in-broker leg does.
-                let _ = &mut chain;
+
                 chain
             }
             None => EvidenceChain::root(
@@ -1043,7 +1042,7 @@ impl ScmFds {
         Self(fds)
     }
 
-    /// The received descriptors,borrowed across the invocation..
+    /// The received descriptors, borrowed across the invocation.
     fn as_slice(&self) -> &[RawFd] {
         &self.0
     }
@@ -1057,8 +1056,8 @@ impl Drop for ScmFds {
 }
 
 /// Whether one request's declared fd leg is admitted by the descriptors the
-/// frame actually attached:count equal (never truncated), indexes in frame
-/// order, kinds against the kernel stat of each received descriptor,and the
+/// frame actually attached: count equal (never truncated), indexes in frame
+/// order, kinds against the kernel stat of each received descriptor,andthe
 /// whole leg within the carrier's frame ceiling.
 fn request_fds_admitted(request: &ForwardOperationRequest, fds: &[RawFd]) -> bool {
     if request.fd_indexes.len() != request.fd_kinds.len() {
@@ -1087,8 +1086,8 @@ fn request_fds_admitted(request: &ForwardOperationRequest, fds: &[RawFd]) -> boo
         })
 }
 
-/// The kernel kind one descriptor presents,or None when its fstat reports
-/// a kind the carrier vocabulary does not carry..
+/// The kernel kind one descriptor presents, or None when its fstat reports
+/// a kind the carrier vocabulary does not carry.
 fn fd_kind_of(fd: RawFd) -> Option<FdKind> {
     let stat = nix::sys::stat::fstat(fd).ok()?;
     match stat.st_mode & nix::libc::S_IFMT {
@@ -1428,7 +1427,7 @@ impl AsyncSeqpacket {
             .await
     }
 
-    /// One datagram write with its attachments,awaited for readiness..
+    /// One datagram write with its attachments, awaited for readiness.
     async fn send_datagram_with_fds(&self, frame: &[u8], fds: &[RawFd]) -> io::Result<()> {
         self.io
             .async_io(Interest::WRITABLE, |socket| {

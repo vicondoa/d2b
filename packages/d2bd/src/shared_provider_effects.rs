@@ -47,6 +47,7 @@ use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_runtime::manager::ResourceView;
 use d2b_resource_runtime::ResourceStatus;
 use d2b_contracts_resource::v3::{ResourceAssignmentFence, ResourceAssignmentScope};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -662,7 +663,7 @@ fn network_config_projection_present(value: &Value, volume_uid: &ResourceUid) ->
     let Some(spec) = value.get("spec") else {
         return false;
     };
-    if validate_network_config_volume_spec(spec).is_err() {
+    if validate_network_config_volume_spec(&mut spec.clone()).is_err() {
         return false;
     }
     provider.get("schemaId").and_then(Value::as_str) == Some(NETWORK_CONFIG_VOLUME_SCHEMA_ID)
@@ -679,7 +680,7 @@ fn network_config_projection_present(value: &Value, volume_uid: &ResourceUid) ->
             .is_some_and(|content| content.volume_uid() == volume_uid)
 }
 
-fn validate_network_config_volume_spec(spec: &Value) -> Result<(), NetworkEffectError> {
+fn validate_network_config_volume_spec(spec: &mut Value) -> Result<(), NetworkEffectError> {
     let provider_ref = spec
         .get("providerRef")
         .and_then(Value::as_str)
@@ -687,14 +688,17 @@ fn validate_network_config_volume_spec(spec: &Value) -> Result<(), NetworkEffect
     if provider_ref != "Provider/volume-local" {
         return Err(NetworkEffectError::NetworkAdmissionMismatch);
     }
-    let mut base = spec.clone();
-    if let Some(base) = base.as_object_mut() {
-        base.remove("providerRef");
-        base.remove("updatePolicy");
-        base.remove("provider");
+    // Strip the wire-only fields in place (the `VolumeSpec` wire shape
+    // denies unknown fields), parse the rest directly from the borrow, and
+    // restore them so the caller's document is unchanged by validation.
+    let mut removed = [None, None, None];
+    if let Some(base) = spec.as_object_mut() {
+        removed[0] = base.remove("providerRef");
+        removed[1] = base.remove("updatePolicy");
+        removed[2] = base.remove("provider");
     }
     let volume: VolumeSpec =
-        serde_json::from_value(base).map_err(|_| NetworkEffectError::ConfigVolume)?;
+        VolumeSpec::deserialize(&*spec).map_err(|_| NetworkEffectError::ConfigVolume)?;
     let required = [
         d2b_provider_network_local::controller::NETWORK_CONFIG_FILE_DNSMASQ,
         d2b_provider_network_local::controller::NETWORK_CONFIG_FILE_NFTABLES,
@@ -711,6 +715,17 @@ fn validate_network_config_volume_spec(spec: &Value) -> Result<(), NetworkEffect
         })
     }) {
         return Err(NetworkEffectError::ConfigVolume);
+    }
+    if let Some(base) = spec.as_object_mut() {
+        if let Some(value) = std::mem::take(&mut removed[0]) {
+            base.insert("providerRef".to_owned(), value);
+        }
+        if let Some(value) = std::mem::take(&mut removed[1]) {
+            base.insert("updatePolicy".to_owned(), value);
+        }
+        if let Some(value) = std::mem::take(&mut removed[2]) {
+            base.insert("provider".to_owned(), value);
+        }
     }
     Ok(())
 }
@@ -779,7 +794,10 @@ fn network_config_spec_with_content(
     fence: &NetworkContentFence,
     owner_ref: &ResourceRef,
 ) -> Result<Value, NetworkEffectError> {
-    validate_network_config_volume_spec(&spec)?;
+    // The caller validates the document before handing it over; the only flow
+    // into this helper validates the document, unchanged, immediately
+    // before the call, so re-validating here would double the parse per
+    // reconcile.
     let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
         &fence.provenance,
         "network-config",
@@ -886,7 +904,7 @@ impl NetworkResourcePort for NetworkChildPort<'_> {
             .get("spec")
             .cloned()
             .ok_or(NetworkEffectError::ConfigVolume)?;
-        validate_network_config_volume_spec(&spec)?;
+        validate_network_config_volume_spec(&mut spec)?;
         let volume_uid = current
             .pointer("/uid")
             .and_then(Value::as_str)
@@ -1153,7 +1171,6 @@ impl ProductionSharedProviderEffects {
             admission.key().attachment_generation(),
             admission.key().bundle_generation().clone(),
         );
-        let _ = kind;
         Ok(NetworkContentFence {
             provenance,
             assignment,

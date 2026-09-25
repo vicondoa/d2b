@@ -289,6 +289,7 @@ struct RegistryInner {
 }
 
 impl PlaneResourceRegistry {
+    /// Construct an empty registry (equivalent to `Default`).
     pub fn new() -> Self {
         Self::default()
     }
@@ -1767,6 +1768,8 @@ pub struct ZoneAuthorityInputs {
     pub policy_revision: Option<u64>,
     /// Provider assignment generation for guest execution sessions.
     pub provider_assignment_generation: Option<d2b_contracts_resource::v3::ResourceGeneration>,
+    /// The controller generation for the zone authority's process rows
+    /// (KTD7: from the bundle resolver, never the spec store).
     pub controller_generation: ControllerGeneration,
     pub guest_execution: Option<d2b_process_conformance::GuestExecutionBinding>,
     pub mode: DaemonMode,
@@ -2242,60 +2245,39 @@ fn registered_service_factories(
     let mut factories = BTreeMap::new();
     for registration in PROVIDER_REGISTRATIONS {
         for &service in registration.services {
-            let factory = if service == PROCESS_EFFECTS_SERVICE.id {
-                Arc::new(ProcessEffectsServiceFactory::new(process_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == NETWORK_EFFECTS_SERVICE.id {
-                Arc::new(NetworkEffectsServiceFactory::new(network_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-} else if service == HOST_EFFECTS_SERVICE.id {
-                Arc::new(HostEffectsServiceFactory::new(host_facets.clone()))
-as Arc<dyn EffectServiceFactory>
-            } else if service == ACTIVATION_EFFECTS_SERVICE.id {
-                Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone()))
-            } else if service == USER_EFFECTS_SERVICE.id {
-                Arc::new(UserEffectsServiceFactory::new(user_facets.clone()))
-            } else if service == USBIP_EFFECTS_SERVICE.id {
-                Arc::new(d2b_provider_device_usbip::effects_service::
-                    UsbipEffectsServiceFactory::new(usbip_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == SECURITY_KEY_EFFECTS_SERVICE.id {
-                Arc::new(d2b_provider_device_security_key::effects_service::
-                    SecurityKeyEffectsServiceFactory::new(security_key_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == DEVICE_EFFECTS_SERVICE.id {
-                Arc::new(d2b_provider_device::effects_service::
-                    DeviceEffectsServiceFactory::new(device_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == CREDENTIAL_EFFECTS_SERVICE.id {
-                Arc::new(CredentialEffectsServiceFactory::new(credential_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == VOLUME_EFFECTS_SERVICE.id {
-                Arc::new(VolumeEffectsServiceFactory::new(volume_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id {
-                Arc::new(
+            let Some(factory) = (match service {
+                x if x == PROCESS_EFFECTS_SERVICE.id => Some(Arc::new(ProcessEffectsServiceFactory::new(process_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == NETWORK_EFFECTS_SERVICE.id => Some(Arc::new(NetworkEffectsServiceFactory::new(network_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == HOST_EFFECTS_SERVICE.id => Some(Arc::new(HostEffectsServiceFactory::new(host_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == ACTIVATION_EFFECTS_SERVICE.id => Some(Arc::new(ActivationEffectsServiceFactory::new(activation_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == USER_EFFECTS_SERVICE.id => Some(Arc::new(UserEffectsServiceFactory::new(user_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == USBIP_EFFECTS_SERVICE.id => Some(Arc::new(d2b_provider_device_usbip::effects_service::
+                    UsbipEffectsServiceFactory::new(usbip_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == SECURITY_KEY_EFFECTS_SERVICE.id => Some(Arc::new(d2b_provider_device_security_key::effects_service::
+                    SecurityKeyEffectsServiceFactory::new(security_key_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == DEVICE_EFFECTS_SERVICE.id => Some(Arc::new(d2b_provider_device::effects_service::
+                    DeviceEffectsServiceFactory::new(device_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == CREDENTIAL_EFFECTS_SERVICE.id => Some(Arc::new(CredentialEffectsServiceFactory::new(credential_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == VOLUME_EFFECTS_SERVICE.id => Some(Arc::new(VolumeEffectsServiceFactory::new(volume_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == d2b_provider_wayland_policy::INTERACTION_EFFECTS_SERVICE.id => Some(Arc::new(
                     d2b_provider_wayland_policy::InteractionEffectsServiceFactory::new(
                         interaction_facets.clone(),
                     ),
-                ) as Arc<dyn EffectServiceFactory>
-            } else if service == PROCESS_SYSTEMD_EFFECTS_SERVICE.id {
-                // U15:the family's service carries no facet set (R2), so
-                // the composition root hosts its factory from crate-owned
-                // constants alone, over the registered service identity - the
-                // family itself is never named here.
+                ) as Arc<dyn EffectServiceFactory>),
+                x if x == PROCESS_SYSTEMD_EFFECTS_SERVICE.id => {
+                    // U15:the family's service carries no facet set (R2), so
+                    // the composition root hosts its factory from crate-owned
+                    // constants alone, over the registered service identity - the
+                    // family itself is never named here.
 
-                Arc::new(SystemdEffectsServiceFactory::new()) as Arc<dyn EffectServiceFactory>
-            } else if service == GUEST_EFFECTS_SERVICE.id {
-                Arc::new(GuestEffectsServiceFactory::new(guest_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == BINDING_EFFECTS_SERVICE.id {
-                Arc::new(BindingEffectsServiceFactory::new(binding_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else if service == ENDPOINT_EFFECTS_SERVICE.id {
-                Arc::new(EndpointEffectsServiceFactory::new(endpoint_facets.clone()))
-                    as Arc<dyn EffectServiceFactory>
-            } else {
+
+                    Some(Arc::new(SystemdEffectsServiceFactory::new()) as Arc<dyn EffectServiceFactory>)
+                },
+                x if x == GUEST_EFFECTS_SERVICE.id => Some(Arc::new(GuestEffectsServiceFactory::new(guest_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == BINDING_EFFECTS_SERVICE.id => Some(Arc::new(BindingEffectsServiceFactory::new(binding_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                x if x == ENDPOINT_EFFECTS_SERVICE.id => Some(Arc::new(EndpointEffectsServiceFactory::new(endpoint_facets.clone())) as Arc<dyn EffectServiceFactory>),
+                _ => None,
+            }) else {
                 continue;
             };
             factories.insert(service, factory);
@@ -3430,8 +3412,14 @@ fn bundle_desired(zone: &ZoneId, row: &BundleResource) -> DesiredResource {
 /// What one bundle ingestion did (U10 report).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BundleIngestReport {
+    /// The rows this ingestion applied.
+
     pub applied: Vec<ResourceKey>,
+    /// The rows this ingestion removed.
+
     pub removed: Vec<ResourceKey>,
+    /// The rows this ingestion protected from management-plane mutation.
+
     pub api_protected: Vec<ResourceKey>,
 }
 

@@ -76,38 +76,23 @@ use crate::plane_port::{PlaneRefusal, ProductionPlanePort};
 /// service through the U15 pass. The families with no registration row
 /// declare their services only through their drivers and never appear here.
 fn registered_service_decl(service: &str) -> Option<&'static ServiceDecl> {
-    if service == PROCESS_EFFECTS_SERVICE.id {
-        Some(&PROCESS_EFFECTS_SERVICE)
-    } else if service == NETWORK_EFFECTS_SERVICE.id {
-        Some(&NETWORK_EFFECTS_SERVICE)
-    } else if service == HOST_EFFECTS_SERVICE.id {
-        Some(&HOST_EFFECTS_SERVICE)
-    } else if service == PROCESS_SYSTEMD_EFFECTS_SERVICE.id {
-        Some(&PROCESS_SYSTEMD_EFFECTS_SERVICE)
-    } else if service == ACTIVATION_EFFECTS_SERVICE.id {
-        Some(&ACTIVATION_EFFECTS_SERVICE)
-    } else if service == CREDENTIAL_EFFECTS_SERVICE.id {
-        Some(&CREDENTIAL_EFFECTS_SERVICE)
-    } else if service == DEVICE_EFFECTS_SERVICE.id {
-        Some(&DEVICE_EFFECTS_SERVICE)
-    } else if service == SECURITY_KEY_EFFECTS_SERVICE.id {
-        Some(&SECURITY_KEY_EFFECTS_SERVICE)
-    } else if service == USBIP_EFFECTS_SERVICE.id {
-        Some(&USBIP_EFFECTS_SERVICE)
-    } else if service == ENDPOINT_EFFECTS_SERVICE.id {
-        Some(&ENDPOINT_EFFECTS_SERVICE)
-    } else if service == GUEST_EFFECTS_SERVICE.id {
-        Some(&GUEST_EFFECTS_SERVICE)
-    } else if service == USER_EFFECTS_SERVICE.id {
-        Some(&USER_EFFECTS_SERVICE)
-    } else if service == VOLUME_EFFECTS_SERVICE.id {
-        Some(&VOLUME_EFFECTS_SERVICE)
-    } else if service == BINDING_EFFECTS_SERVICE.id {
-        Some(&BINDING_EFFECTS_SERVICE)
-    } else if service == INTERACTION_EFFECTS_SERVICE.id {
-        Some(&INTERACTION_EFFECTS_SERVICE)
-    } else {
-        None
+    match service {
+        x if x ==PROCESS_EFFECTS_SERVICE.id => Some(&PROCESS_EFFECTS_SERVICE),
+        x if x ==NETWORK_EFFECTS_SERVICE.id => Some(&NETWORK_EFFECTS_SERVICE),
+        x if x ==HOST_EFFECTS_SERVICE.id => Some(&HOST_EFFECTS_SERVICE),
+        x if x ==PROCESS_SYSTEMD_EFFECTS_SERVICE.id => Some(&PROCESS_SYSTEMD_EFFECTS_SERVICE),
+        x if x ==ACTIVATION_EFFECTS_SERVICE.id => Some(&ACTIVATION_EFFECTS_SERVICE),
+        x if x ==CREDENTIAL_EFFECTS_SERVICE.id => Some(&CREDENTIAL_EFFECTS_SERVICE),
+        x if x ==DEVICE_EFFECTS_SERVICE.id => Some(&DEVICE_EFFECTS_SERVICE),
+        x if x ==SECURITY_KEY_EFFECTS_SERVICE.id => Some(&SECURITY_KEY_EFFECTS_SERVICE),
+        x if x ==USBIP_EFFECTS_SERVICE.id => Some(&USBIP_EFFECTS_SERVICE),
+        x if x ==ENDPOINT_EFFECTS_SERVICE.id => Some(&ENDPOINT_EFFECTS_SERVICE),
+        x if x ==GUEST_EFFECTS_SERVICE.id => Some(&GUEST_EFFECTS_SERVICE),
+        x if x ==USER_EFFECTS_SERVICE.id => Some(&USER_EFFECTS_SERVICE),
+        x if x ==VOLUME_EFFECTS_SERVICE.id => Some(&VOLUME_EFFECTS_SERVICE),
+        x if x ==BINDING_EFFECTS_SERVICE.id => Some(&BINDING_EFFECTS_SERVICE),
+        x if x ==INTERACTION_EFFECTS_SERVICE.id => Some(&INTERACTION_EFFECTS_SERVICE),
+        _ => None,
     }
 }
 
