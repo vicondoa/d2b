@@ -1,8 +1,10 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_config_nixos::{
     ConfigApproveRequest, ConfigCaller, ConfigDiffRequest, ConfigRejectRequest, ConfigService,
     ConfigServiceBackend, ConfigStageRequest, ConfigStagingStore, ConfigStatusRequest,
-    ConfigSyncRequest, GuestConfigDocument, GuestConfigReader, GuestSessionEvidence,
+    ConfigSyncRequest, ConfigSyncResponse, GuestConfigDocument, GuestConfigReader,
+    GuestSessionEvidence, MAX_CONFIG_BYTES,
 };
 
 #[test]
@@ -16,6 +18,52 @@ fn guest_read_requires_current_matching_session() {
     assert_eq!(result.identifier, "guest-config");
     assert_eq!(result.bytes, 2);
     assert!(result.document().is_ok());
+}
+
+#[test]
+fn sync_response_integrity_mismatches_fail_closed() {
+    let guest = ResourceRef::parse("Guest/work").expect("guest ref");
+    let document =
+        GuestConfigDocument::new(b"services.foo.enable = true;\n".to_vec()).expect("document");
+    let valid = ConfigSyncResponse {
+        guest_ref: guest.clone(),
+        identifier: "guest-config".to_owned(),
+        content_base64: STANDARD.encode(document.bytes()),
+        bytes: document.len(),
+        sha256: document.sha256(),
+    };
+    assert!(valid.document().is_ok());
+
+    let mut forged_digest = valid.clone();
+    forged_digest.sha256 =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned();
+    assert_eq!(
+        forged_digest
+            .document()
+            .expect_err("forged digest must fail")
+            .code(),
+        "config-document-encoding-failed"
+    );
+
+    let mut forged_bytes = valid.clone();
+    forged_bytes.bytes += 1;
+    assert_eq!(
+        forged_bytes
+            .document()
+            .expect_err("wrong byte count must fail")
+            .code(),
+        "config-document-encoding-failed"
+    );
+
+    let mut over_bound = valid;
+    over_bound.content_base64 = "A".repeat(MAX_CONFIG_BYTES.div_ceil(3) * 4 + 1);
+    assert_eq!(
+        over_bound
+            .document()
+            .expect_err("over-bound payload must fail")
+            .code(),
+        "config-request-invalid"
+    );
 }
 
 fn zone() -> ZoneId {

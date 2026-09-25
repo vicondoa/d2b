@@ -16,8 +16,9 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::{
-    ConfigCaller, ConfigError, ConfigOperation, ConfigService, ConfigSyncRequest,
-    GuestConfigDocument, GuestSessionEvidence, SERVICE_NAME, SERVICE_PACKAGE,
+    ConfigApproveRequest, ConfigCaller, ConfigDiffRequest, ConfigError, ConfigOperation,
+    ConfigRejectRequest, ConfigService, ConfigStageRequest, ConfigStatusRequest,
+    ConfigSyncRequest, GuestConfigDocument, GuestSessionEvidence, SERVICE_NAME, SERVICE_PACKAGE,
 };
 use d2b_contracts_resource::v3::ResourceRef;
 
@@ -318,6 +319,14 @@ async fn dispatch_on_blocking_worker(
     }
 }
 
+/// Decode one typed request payload without copying the JSON tree.
+fn decode_typed_request<T>(payload: &Value) -> Result<T, ConfigError>
+where
+    T: DeserializeOwned,
+{
+    T::deserialize(payload).map_err(|_| ConfigError::InvalidRequest)
+}
+
 struct ConfigMethod {
     backend: Arc<dyn ConfigServiceBackend>,
     operation: ConfigOperation,
@@ -339,7 +348,24 @@ impl ttrpc::r#async::MethodHandler for ConfigMethod {
                 );
                 rpc_error(ConfigError::InvalidRequest)
             })?;
-        if let Err(error) = ConfigService.validate_operation(self.operation, &payload) {
+        // Decode the typed request once and validate the typed value, so the
+        // admission path neither re-parses the JSON nor decodes a Stage
+        // document; the backend hop re-checks the original Value.
+        let validation = match self.operation {
+            ConfigOperation::ReadGuestConfig => decode_typed_request::<ConfigSyncRequest>(&payload)
+                .and_then(|request| ConfigService.validate_read_guest_config(&request)),
+            ConfigOperation::Stage => decode_typed_request::<ConfigStageRequest>(&payload)
+                .and_then(|request| ConfigService.validate_stage(&request)),
+            ConfigOperation::Diff => decode_typed_request::<ConfigDiffRequest>(&payload)
+                .and_then(|request| ConfigService.validate_diff(&request)),
+            ConfigOperation::Approve => decode_typed_request::<ConfigApproveRequest>(&payload)
+                .and_then(|request| ConfigService.validate_approve(&request)),
+            ConfigOperation::Reject => decode_typed_request::<ConfigRejectRequest>(&payload)
+                .and_then(|request| ConfigService.validate_reject(&request)),
+            ConfigOperation::Status => decode_typed_request::<ConfigStatusRequest>(&payload)
+                .and_then(|request| ConfigService.validate_status(&request)),
+        };
+        if let Err(error) = validation {
             tracing::debug!(
                 operation = self.operation.as_str(),
                 %error,
