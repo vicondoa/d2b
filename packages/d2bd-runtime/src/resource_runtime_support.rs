@@ -644,43 +644,44 @@ pub fn compile_committed_policy_with_subjects(
                     // grant those subjects would receive. Name each subject and
                     // what the evidence said so a compile that dropped them is
                     // diagnosable from the journal.
-                    let subjects = binding_spec
-                        .subjects()
-                        .iter()
-                        .map(|subject_ref| {
-                            let row = resources
-                                .iter()
-                                .find(|candidate| candidate.resource_ref == *subject_ref);
-                            let observed = row
-                                .and_then(|candidate| {
-                                    ResourceEnvelope::from_json(&candidate.canonical_json).ok()
-                                })
-                                .map(|envelope| {
-                                    format!(
-                                        "phase={:?} observedGeneration={} rowGeneration={}",
-                                        envelope.status().phase(),
-                                        envelope.status().observed_generation().get(),
-                                        row.map(|row| row.generation.get()).unwrap_or_default(),
-                                    )
-                                })
-                                .unwrap_or_else(|| "undecodable".to_owned());
-                            format!(
-                                "{}={} [{}]",
-                                subject_ref.to_canonical_string(),
-                                match subject_evidence.get(subject_ref) {
-                                    Some((_, true)) => "bindable",
-                                    Some((_, false)) => "tombstoned",
-                                    None => "no-row",
-                                },
-                                observed,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(",");
                     tracing::warn!(
                         zone = zone.as_str(),
                         resource = resource.resource_ref.to_canonical_string(),
-                        subjects = %subjects,
+                        subjects = tracing::field::display(
+                            binding_spec
+                                .subjects()
+                                .iter()
+                                .map(|subject_ref| {
+                                    let row = resources
+                                        .iter()
+                                        .find(|candidate| candidate.resource_ref == *subject_ref);
+                                    let observed = row
+                                        .and_then(|candidate| {
+                                            ResourceEnvelope::from_json(&candidate.canonical_json).ok()
+                                        })
+                                        .map(|envelope| {
+                                            format!(
+                                                "phase={:?} observedGeneration={} rowGeneration={}",
+                                                envelope.status().phase(),
+                                                envelope.status().observed_generation().get(),
+                                                row.map(|row| row.generation.get()).unwrap_or_default(),
+                                            )
+                                        })
+                                        .unwrap_or_else(|| "undecodable".to_owned());
+                                    format!(
+                                        "{}={} [{}]",
+                                        subject_ref.to_canonical_string(),
+                                        match subject_evidence.get(subject_ref) {
+                                            Some((_, true)) => "bindable",
+                                            Some((_, false)) => "tombstoned",
+                                            None => "no-row",
+                                        },
+                                        observed,
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(","),
+                        ),
                         "committed RoleBinding dropped: no subject satisfied the readiness gate",
                     );
                     continue;

@@ -48,9 +48,9 @@ pub struct FileFingerprint {
 }
 
 #[derive(Debug)]
-pub struct CachedPublicFrame {
-    pub fingerprint: PublicArtifactFingerprint,
-    pub value: Value,
+struct CachedPublicFrame {
+    fingerprint: PublicArtifactFingerprint,
+    value: Value,
 }
 
 #[derive(Debug)]
