@@ -79,7 +79,6 @@ fn binding_spec() -> AudioBindingSpec {
         ResourceRef::parse("Guest/workstation").expect("target"),
         "work",
     )
-    .expect("binding spec")
 }
 
 fn envelope() -> InteractionSpecEnvelope {

@@ -68,7 +68,6 @@ fn binding() -> d2b_provider_audio_pipewire::AudioBindingSpec {
         ResourceRef::parse("Guest/dev-vm").unwrap(),
         "zone-a",
     )
-    .unwrap()
 }
 
 #[test]
@@ -460,8 +459,7 @@ fn ready_audio_service_without_an_authored_binding_has_no_children() {
     let target_ref = ResourceRef::parse("Guest/dev-vm").expect("canonical Guest");
     let service_only_ref = service_ref.clone();
     let service_only =
-        d2b_provider_audio_pipewire::AudioBindingSpec::new(service_ref, target_ref, "zone-a")
-            .unwrap();
+        d2b_provider_audio_pipewire::AudioBindingSpec::new(service_ref, target_ref, "zone-a");
 
     assert_eq!(
         AudioBindingController::<FakeAudioMediator>::child_resources(

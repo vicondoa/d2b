@@ -710,8 +710,7 @@ mod tests {
             ResourceRef::parse("audio.d2bus.org.AudioService/owner").unwrap(),
             ResourceRef::parse("Guest/work").unwrap(),
             "dev",
-        )
-        .unwrap();
+        );
         let mut status = unavailable_status(
             AudioBindingPhase::Degraded,
             HostAudioReadiness::Unavailable,
@@ -752,10 +751,9 @@ mod tests {
         let guest_ref = ResourceRef::parse("Guest/vm").unwrap();
         let binding_ref = ResourceRef::parse("audio.d2bus.org.AudioBinding/mic").unwrap();
         let service =
-            AudioServiceSpec::owner(ResourceRef::parse("Endpoint/audio").unwrap(), zone.as_str())
-                .unwrap();
+            AudioServiceSpec::owner(ResourceRef::parse("Endpoint/audio").unwrap(), zone.as_str());
         let binding =
-            AudioBindingSpec::new(service_ref.clone(), guest_ref.clone(), zone.as_str()).unwrap();
+            AudioBindingSpec::new(service_ref.clone(), guest_ref.clone(), zone.as_str());
         let resource = StoredResource {
             resource_ref: binding_ref.clone(),
             zone: zone.clone(),
@@ -805,8 +803,7 @@ mod tests {
     fn audio_decoder_reads_reserved_provider_ref_from_resource_spec() {
         let zone = ZoneId::parse("dev").unwrap();
         let spec =
-            AudioServiceSpec::owner(ResourceRef::parse("Endpoint/audio").unwrap(), zone.as_str())
-                .unwrap();
+            AudioServiceSpec::owner(ResourceRef::parse("Endpoint/audio").unwrap(), zone.as_str());
         let resource = stored_audio_resource(
             "audio.d2bus.org.AudioService/owner",
             serde_json::to_value(spec).unwrap(),
