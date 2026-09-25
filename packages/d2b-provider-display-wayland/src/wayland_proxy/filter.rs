@@ -3056,6 +3056,50 @@ mod tests {
         assert!(clipboard.bridge_retry_deadline().is_some());
     }
 
+    #[test]
+    fn enqueue_bridge_handoff_drops_the_overflow_when_the_queue_is_full() {
+        let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
+        let mut clipboard = VirtualClipboardState::new(
+            local_identity(),
+            diag,
+            disabled_bridge_config(),
+        );
+        for source_id in 0..MAX_PENDING_BRIDGE_HANDOFFS {
+            clipboard.pending_bridge_handoffs.push_back(PendingBridgeHandoff {
+                fd: UnixStream::pair().expect("transfer pair").0.into(),
+                metadata: BridgeTransferMetadata {
+                    identity: local_identity(),
+                    mime_type: "text/plain".to_owned(),
+                    source_id: source_id as u64,
+                    kind: BridgeTransferKind::PasteRequest,
+                },
+            });
+        }
+        assert_eq!(
+            clipboard.pending_handoff_count_for_tests(),
+            MAX_PENDING_BRIDGE_HANDOFFS
+        );
+
+        let (fd, _fd_peer) = UnixStream::pair().expect("transfer pair");
+        clipboard.enqueue_bridge_handoff(
+            fd.into(),
+            &BridgeTransferMetadata {
+                identity: local_identity(),
+                mime_type: "text/plain".to_owned(),
+                source_id: 7,
+                kind: BridgeTransferKind::PasteRequest,
+            },
+        );
+
+        // The 64-capacity queue stays capped:the overflow handoff is dropped,
+        // never queued.
+
+        assert_eq!(
+            clipboard.pending_handoff_count_for_tests(),
+            MAX_PENDING_BRIDGE_HANDOFFS
+        );
+    }
+
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn flush_pending_bridge_handoffs_delivers_and_removes_queue_item() {
