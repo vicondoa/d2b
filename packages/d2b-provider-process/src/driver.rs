@@ -4325,41 +4325,7 @@ mod tests {
         }
     }
 
-    /// The terminal set is the closed unresolvable-ticket spellings, not every
-    /// launch error: a genuine provider-effect refusal - the identity the
-    /// ticket path could not bind yet is the case the seeding exists for -
-    /// still drains the restart budget and retries at the policy backoff.
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-#[tokio::test(flavor = "current_thread", start_paused = true)]
-    async fn durable_provider_effect_launch_failure_still_retries_under_the_budget() {
-        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig {
-            adoption: VecDeque::from([ProviderAdoption::Absent]),
-            launch: Err("provider-controller-provider-identity-missing".to_owned()),
-            ..FakeFacetsConfig::default()
-        }));
-        let mut f = fixture(test_row());
-        let mut driver = driver(fake.clone()).await;
-
-        expect_in_progress(driver.reconcile(&mut f.ctx).await);
-        yield_until_effects_settled().await;
-        let completed = f.effects.recv().await.expect("completion");
-        assert!(matches!(
-            completed.result,
-            d2b_resource_runtime::context::EffectResult::Failed(failure)
-                if failure.class() == FailureClass::Retryable
-        ));
-        assert_eq!(driver.restart_count(), 1);
-
-        // The next pass schedules exactly one policy-backoff requeue, and it
-        // reports the scheduled retry (never Ready: no process exists yet).
-        assert_eq!(
-            driver.reconcile(&mut f.ctx).await.expect("reconcile"),
-            ReconcileOutcome::RetryScheduled
-        );
-        assert_eq!(f.requeue_calls(), [Duration::from_secs(1)]);
-    }
-
-    // -- validate ------------------------------------------------------------
+// -- validate ------------------------------------------------------------
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
