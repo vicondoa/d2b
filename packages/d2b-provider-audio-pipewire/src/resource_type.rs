@@ -61,21 +61,18 @@ pub struct AudioServiceSpec {
 
 impl AudioServiceSpec {
     /// Construct an owner Service with one local authority Endpoint.
-    pub fn owner(
-        endpoint_ref: ResourceRef,
-        zone: impl Into<String>,
-    ) -> Result<Self, AudioAdmissionError> {
-        if endpoint_ref.resource_type().as_str() != "Endpoint" {
-            return Err(AudioAdmissionError::EndpointType);
-        }
-        Ok(Self {
+    ///
+    /// The Endpoint type invariant is enforced once at admission by
+    /// [`validate_audio_service`]; construction does not re-check it.
+    pub fn owner(endpoint_ref: ResourceRef, zone: impl Into<String>) -> Self {
+        Self {
             provider_ref: PROVIDER_REF.to_owned(),
             service_role: AudioServiceRole::Owner,
             implementation_endpoint_refs: vec![endpoint_ref],
             operations: vec!["playback".to_owned(), "capture".to_owned()],
             zone: zone.into(),
             provider_extension: None,
-        })
+        }
     }
 
     /// Construct a Core-generated projection Service.
@@ -114,24 +111,22 @@ pub struct AudioBindingSpec {
 
 impl AudioBindingSpec {
     /// Construct a binding for one Guest and same-Zone Service.
+    ///
+    /// The reference type invariant is enforced once at admission by
+    /// [`validate_audio_binding`]; construction does not re-check it.
     pub fn new(
         service_ref: ResourceRef,
         target_ref: ResourceRef,
         zone: impl Into<String>,
-    ) -> Result<Self, AudioAdmissionError> {
-        if service_ref.resource_type().as_str() != AUDIO_SERVICE_TYPE
-            || target_ref.resource_type().as_str() != "Guest"
-        {
-            return Err(AudioAdmissionError::ReferenceType);
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             provider_ref: PROVIDER_REF.to_owned(),
             service_ref,
             target_ref,
             zone: zone.into(),
             grants: AudioGrants::default(),
             provider_extension: None,
-        })
+        }
     }
 
     /// Attach a provider extension for negative admission tests.

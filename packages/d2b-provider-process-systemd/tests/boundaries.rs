@@ -1,5 +1,5 @@
 use d2b_provider_process_systemd::drain::{DrainError, DrainProof, DrainStage, validate};
-use d2b_provider_process_systemd::metrics::validate_labels;
+use d2b_provider_process_systemd::metrics::{MetricLabelKey, validate_labels};
 
 #[test]
 fn drain_requires_exact_stop_manager_terminal_and_empty_leaf() {
@@ -26,21 +26,17 @@ fn drain_requires_exact_stop_manager_terminal_and_empty_leaf() {
 }
 
 #[test]
-fn metrics_reject_unknown_high_cardinality_or_path_labels() {
+fn metrics_reject_high_cardinality_or_path_labels() {
     assert!(validate_labels(&[
-        ("operation".to_owned(), "start".to_owned()),
-        ("domain".to_owned(), "system".to_owned()),
+        (MetricLabelKey::Operation, "start".to_owned()),
+        (MetricLabelKey::Domain, "system".to_owned()),
     ]));
     assert!(!validate_labels(&[(
-        "resource".to_owned(),
-        "host".to_owned()
-    )]));
-    assert!(!validate_labels(&[(
-        "operation".to_owned(),
+        MetricLabelKey::Operation,
         "Process/host".to_owned()
     )]));
     assert!(!validate_labels(&[(
-        "operation".to_owned(),
+        MetricLabelKey::Operation,
         "x".repeat(33)
     )]));
 }

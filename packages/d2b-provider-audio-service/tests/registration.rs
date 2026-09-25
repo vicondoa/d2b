@@ -55,8 +55,7 @@ fn service_value() -> Value {
     let spec = AudioServiceSpec::owner(
         ResourceRef::parse("Endpoint/audio-host").expect("endpoint"),
         "work",
-    )
-    .expect("service spec");
+    );
     serde_json::to_value(&spec).expect("spec json")
 }
 

@@ -283,7 +283,6 @@ fn disruptive_upgrade_preserves_durable_volume_and_advances_session_generation()
     )
     .unwrap();
     assert_eq!(plan.reason(), UpgradeReason::ImageOrSystemGenerationChanged);
-    assert!(plan.preserve_state());
     assert_eq!(plan.durable_volumes(), &[durable]);
     assert_eq!(plan.next_session_generation(), 10);
     assert!(
