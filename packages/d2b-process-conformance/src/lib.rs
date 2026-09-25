@@ -49,9 +49,7 @@ pub use status::{
     AdoptionCondition, ExitClass, ExitObservation, ProcessPhaseClass, ProcessStatusReport,
 };
 pub use terminal::ExitClass as ProcessExitClass;
-pub use terminal::{
-    BrokerTerminalResult, ExitClass as BrokerExitClass, ParentWaitEvidence, ProcessOutcome,
-};
+pub use terminal::{BrokerTerminalResult, ParentWaitEvidence, ProcessOutcome};
 pub use ticket::{
     CancellationBinding, CompiledDigests, GuestExecutionBinding, InheritedFdTable, LaunchTicket,
     MAX_INHERITED_FDS, MAX_LAUNCH_DEADLINE_MS, OperationBinding, ReadinessExpectation,
