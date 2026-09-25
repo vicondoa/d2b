@@ -9,10 +9,7 @@
 use core::future::Future;
 use std::{
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicU8, Ordering},
 };
 
 use d2b_contracts_resource::v3::{
@@ -471,6 +468,12 @@ impl<'a> ResourceCallOptions<'a> {
     }
 }
 
+/// The single-atomic stream state machine shared by every caller-side named
+/// stream wrapper in this crate.
+pub(crate) const STREAM_OPEN: u8 = 0;
+pub(crate) const STREAM_CLOSING: u8 = 1;
+pub(crate) const STREAM_CLOSED: u8 = 2;
+
 /// A named Resource Watch stream supplied by the authenticated session.
 pub trait ResourceWatchTransport: Send + Sync {
     /// Receive one bounded canonical event, or `None` after terminal close.
@@ -488,8 +491,7 @@ pub trait ResourceWatchTransport: Send + Sync {
 /// callers must call [`ResourceWatch::close`] when they stop consuming.
 pub struct ResourceWatch<S> {
     transport: S,
-    state: Arc<AtomicBool>,
-    closing: Arc<AtomicBool>,
+    state: AtomicU8,
 }
 
 impl<S> ResourceWatch<S> {
@@ -497,8 +499,7 @@ impl<S> ResourceWatch<S> {
     pub fn new(transport: S) -> Self {
         Self {
             transport,
-            state: Arc::new(AtomicBool::new(false)),
-            closing: Arc::new(AtomicBool::new(false)),
+            state: AtomicU8::new(STREAM_OPEN),
         }
     }
 
@@ -509,11 +510,11 @@ impl<S> ResourceWatch<S> {
 
     /// Whether close has completed or the peer has ended the stream.
     pub fn is_closed(&self) -> bool {
-        self.state.load(Ordering::Acquire)
+        self.state.load(Ordering::Acquire) == STREAM_CLOSED
     }
 
     fn is_open(&self) -> bool {
-        !self.state.load(Ordering::Acquire) && !self.closing.load(Ordering::Acquire)
+        self.state.load(Ordering::Acquire) == STREAM_OPEN
     }
 }
 
@@ -537,30 +538,32 @@ where
         }
         let event = self.transport.receive_watch_event().await?;
         if event.is_none() {
-            self.state.store(true, Ordering::Release);
+            self.state.store(STREAM_CLOSED, Ordering::Release);
         }
         Ok(event)
     }
 
     /// Close the Watch stream exactly once after a successful remote close.
     pub async fn close(&self) -> Result<(), ClientError> {
-        if self.state.load(Ordering::Acquire) {
-            return Ok(());
-        }
         if self
-            .closing
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .state
+            .compare_exchange(
+                STREAM_OPEN,
+                STREAM_CLOSING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_err()
         {
             return Ok(());
         }
         match self.transport.close_watch().await {
             Ok(()) => {
-                self.state.store(true, Ordering::Release);
+                self.state.store(STREAM_CLOSED, Ordering::Release);
                 Ok(())
             }
             Err(error) => {
-                self.closing.store(false, Ordering::Release);
+                self.state.store(STREAM_OPEN, Ordering::Release);
                 Err(error)
             }
         }
@@ -892,9 +895,46 @@ impl<S> fmt::Debug for LocalZoneSession<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::VecDeque,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
     use crate::ServiceOwner;
     use crate::target::fixtures::zone;
+
+    #[derive(Default)]
+    struct FakeWatchTransport {
+        events: tokio::sync::Mutex<VecDeque<Result<Option<CanonicalJsonObject>, ClientError>>>,
+        closes: AtomicUsize,
+        close_results: tokio::sync::Mutex<VecDeque<Result<(), ClientError>>>,
+    }
+
+    impl ResourceWatchTransport for FakeWatchTransport {
+        fn receive_watch_event(
+            &self,
+        ) -> impl Future<Output = Result<Option<CanonicalJsonObject>, ClientError>> + Send {
+            let result = self
+                .events
+                .try_lock()
+                .expect("events lock")
+                .pop_front()
+                .unwrap_or(Ok(None));
+            core::future::ready(result)
+        }
+
+        fn close_watch(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
+            self.closes.fetch_add(1, Ordering::AcqRel);
+            let result = self
+                .close_results
+                .try_lock()
+                .expect("close results lock")
+                .pop_front()
+                .unwrap_or(Ok(()));
+            core::future::ready(result)
+        }
+    }
 
     fn peer(zone: &str, key: u8) -> ZonePeerIdentity {
         ZonePeerIdentity::from_observed_static_key(
@@ -975,5 +1015,31 @@ mod tests {
         assert_eq!(endpoint.zone().as_str(), "work");
         assert!(!format!("{endpoint:?}").contains("gateway"));
         assert!(!format!("{endpoint:?}").contains("123e4567"));
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_watch_close_rolls_back_to_open_and_a_second_close_retries() {
+        let transport = FakeWatchTransport {
+            events: tokio::sync::Mutex::new(VecDeque::from([Ok(Some(
+                CanonicalJsonObject::parse(br#"{"marker":"event"}"#).unwrap(),
+            ))])),
+            close_results: tokio::sync::Mutex::new(VecDeque::from([
+                Err(ClientError::TransportFailed),
+                Ok(()),
+            ])),
+            ..Default::default()
+        };
+        let watch = ResourceWatch::new(transport);
+        assert_eq!(
+            watch.close().await.unwrap_err(),
+            ClientError::TransportFailed
+        );
+        // The failed close rolls the state back to open: the watch still
+        // consumes events and a second close retries the transport.
+        assert!(watch.next().await.unwrap().is_some());
+        watch.close().await.unwrap();
+        assert_eq!(watch.transport().closes.load(Ordering::Acquire), 2);
+        assert!(watch.is_closed());
     }
 }
