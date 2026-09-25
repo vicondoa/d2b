@@ -4,7 +4,6 @@
 #![forbid(unsafe_code)]
 
 mod controller;
-#[allow(missing_docs)]
 mod effects;
 
 pub use controller::{
