@@ -18,6 +18,7 @@ impl MutationOrdinal {
         Ok(Self(u8::try_from(value).map_err(|_| MutationOrdinalError)?))
     }
 
+    /// Read the zero-based batch index.
     pub const fn get(self) -> u32 {
         self.0 as u32
     }
@@ -47,6 +48,7 @@ impl StoreSlot {
         Ok(Self(u8::try_from(index).map_err(|_| StoreSlotError)?))
     }
 
+    /// Read the zero-based store position.
     pub const fn get(self) -> u32 {
         self.0 as u32
     }
@@ -259,35 +261,43 @@ impl StoreError {
         }
     }
 
+    /// Read the error kind.
     pub const fn kind(&self) -> StoreErrorKind {
         self.kind
     }
 
+    /// Read the revision that caused the conflict, when present.
     pub const fn current_revision(&self) -> Option<ZoneRevision> {
         self.current_revision
     }
 
+    /// Read the batch ordinal that caused the conflict, when present.
     pub const fn mutation_ordinal(&self) -> Option<MutationOrdinal> {
         self.mutation_ordinal
     }
 
+    /// Read the store slot the error refers to, when present.
     pub const fn store_slot(&self) -> Option<StoreSlot> {
         self.store_slot
     }
 
+    /// Bind the error to the store slot being operated on.
     pub const fn with_store_slot(mut self, store_slot: StoreSlot) -> Self {
         self.store_slot = Some(store_slot);
         self
     }
 
+    /// Read the suggested retry delay, when the error is retryable.
     pub const fn retry_after_ms(&self) -> Option<u32> {
         self.retry_after_ms
     }
 
+    /// Read the retry class.
     pub const fn retry_class(&self) -> RetryClass {
         self.retry_class
     }
 
+    /// Read the stable reason code.
     pub const fn reason_code(&self) -> &'static str {
         self.reason_code
     }
