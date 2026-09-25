@@ -27,6 +27,7 @@
 //! was handed.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use d2b_contracts_provider::v3::{DependencyAlias, ProviderManifest};
 use d2b_contracts_resource::v3::ArtifactId;
@@ -224,6 +225,52 @@ impl CallRecorder {
     /// Whether nothing has been recorded.
     pub fn is_empty(&self) -> bool {
         self.calls.is_empty()
+    }
+}
+
+/// A shared ordered call log for recording doubles.
+///
+/// The provider family crates' scripted effect doubles previously carried
+/// private copies of this shape (a fresh `Arc<Mutex<Vec<String>>>` plus a
+/// snapshot accessor) in each `test_support` module; this is that log, once.
+/// The log is deliberately unbounded and free-form: a recording double
+/// appends the labels its own tests assert on - including formatted values -
+/// which the bounded [`CallRecorder`] refuses by design. The log is shared
+/// by `Arc`, so a manager endpoint and an effect double can append to one
+/// sequence.
+#[derive(Debug, Clone, Default)]
+pub struct SharedLog(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl SharedLog {
+    /// A fresh, empty shared log.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append one entry.
+    ///
+    /// Every double holding a clone of this log observes the entry.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn record(&self, entry: String) {
+        self.0
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .push(entry);
+    }
+
+    /// Snapshot the entries in arrival order.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn entries(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .expect("a test-support recorder lock is never poisoned")
+            .clone()
+    }
+}
+
+impl From<Arc<std::sync::Mutex<Vec<String>>>> for SharedLog {
+    fn from(log: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+        Self(log)
     }
 }
 
@@ -554,5 +601,23 @@ mod tests {
         assert!(port.recorder().is_empty());
         assert!(port.apply(&effect).is_ok());
         assert_eq!(port.recorder().count_of("apply-effect"), 1);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn a_shared_log_records_in_order_and_shares_a_wrapped_manager_log() {
+        let log = SharedLog::new();
+        log.record("first".to_owned());
+        log.record("second".to_owned());
+        assert_eq!(log.entries(), ["first".to_owned(), "second".to_owned()]);
+
+        let raw: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let wrapped = SharedLog::from(Arc::clone(&raw));
+        wrapped.record("shared".to_owned());
+        assert_eq!(wrapped.entries(), ["shared".to_owned()]);
+        assert_eq!(
+            *raw.lock().expect("the test holds the only reference"),
+            ["shared".to_owned()]
+        );
     }
 }

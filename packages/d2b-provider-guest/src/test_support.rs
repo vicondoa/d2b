@@ -19,6 +19,10 @@
 //! automatically under `cargo test`), so production consumers never pull
 //! them in. The plane tests in `d2bd` reach them through the same public
 //! surface.
+//!
+//! The doubles' ordered call recorders are the toolkit's `SharedLog`
+//! (`d2b_provider_toolkit::testing`), the canonical recorder shape every
+//! family crate's test-support module shares.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -27,6 +31,7 @@ use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid, ZoneId,
 };
+use d2b_provider_toolkit::testing::SharedLog;
 use d2b_resource_runtime::identity::ResourceKey;
 use d2b_resource_runtime::manager::ResourceView;
 use d2b_resource_runtime::ResourceStatus;
@@ -56,7 +61,7 @@ pub struct EffectObservation {
 /// Scripted [`GuestDriverEffects`] double: records every call and answers
 /// with the configured outcome.
 pub struct ScriptedEffects {
-    calls: parking_lot::Mutex<Vec<String>>,
+    calls: SharedLog,
     /// Optional shared order log (the recording manager's), so tests can
     /// compare the provider stage against the child mutations.
     shared: Option<Arc<parking_lot::Mutex<Vec<String>>>>,
@@ -71,7 +76,7 @@ impl ScriptedEffects {
     /// and a Complete finalize stage.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            calls: parking_lot::Mutex::new(Vec::new()),
+            calls: SharedLog::new(),
             shared: None,
             observations: parking_lot::Mutex::new(Vec::new()),
             phase: parking_lot::Mutex::new(GuestEffectPhase::Ready),
@@ -93,7 +98,7 @@ impl ScriptedEffects {
         if let Some(shared) = &self.shared {
             shared.lock().push(entry.clone());
         }
-        self.calls.lock().push(entry);
+        self.calls.record(entry);
     }
 
     /// Script the phase the next `reconcile` reports.
@@ -113,7 +118,7 @@ impl ScriptedEffects {
 
     /// The observed call labels in arrival order.
     pub fn call_order(&self) -> Vec<String> {
-        self.calls.lock().clone()
+        self.calls.entries()
     }
 
     /// The recorded `reconcile` observations in arrival order.
@@ -174,7 +179,7 @@ pub struct ScriptedFacets {
     session_generation: parking_lot::Mutex<Option<ReconnectGeneration>>,
     cloud_hypervisor_outcome: parking_lot::Mutex<GuestCloudHypervisorOutcome>,
     fail_reads: parking_lot::Mutex<bool>,
-    calls: parking_lot::Mutex<Vec<String>>,
+    calls: SharedLog,
 }
 
 impl ScriptedFacets {
@@ -190,7 +195,7 @@ impl ScriptedFacets {
             session_generation: parking_lot::Mutex::new(None),
             cloud_hypervisor_outcome: parking_lot::Mutex::new(GuestCloudHypervisorOutcome::Ready),
             fail_reads: parking_lot::Mutex::new(false),
-            calls: parking_lot::Mutex::new(Vec::new()),
+            calls: SharedLog::new(),
         })
     }
 
@@ -239,14 +244,14 @@ impl ScriptedFacets {
 
     /// The observed read labels in arrival order.
     pub fn call_order(&self) -> Vec<String> {
-        self.calls.lock().clone()
+        self.calls.entries()
     }
 }
 
 #[async_trait::async_trait]
 impl GuestManagerView for ScriptedFacets {
     async fn row_view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ()> {
-        self.calls.lock().push(format!("row:{key}")); // async-gate-allow: test-support recorder lock
+        self.calls.record(format!("row:{key}"));
         if *self.fail_reads.lock() { // async-gate-allow: test-support recorder lock
             return Err(());
         }
@@ -258,8 +263,7 @@ impl GuestManagerView for ScriptedFacets {
         provider_ref: &ResourceRef,
     ) -> Result<Option<(ResourceUid, ResourceGeneration)>, ()> {
         self.calls
-            .lock()
-            .push(format!("committed:{}", provider_ref.to_canonical_string()));
+            .record(format!("committed:{}", provider_ref.to_canonical_string()));
         if *self.fail_reads.lock() {
             return Err(());
         }
@@ -267,7 +271,7 @@ impl GuestManagerView for ScriptedFacets {
     }
 
     fn controller_session_generation(&self) -> Result<Option<ReconnectGeneration>, ()> {
-        self.calls.lock().push("session-generation".to_owned());
+        self.calls.record("session-generation".to_owned());
         if *self.fail_reads.lock() {
             return Err(());
         }
@@ -279,8 +283,7 @@ impl GuestManagerView for ScriptedFacets {
 impl CloudHypervisorGuestRuntime for ScriptedFacets {
     async fn ensure_target_session(&self, guest_ref: &ResourceRef) -> Result<(), String> {
         self.calls
-            .lock() // async-gate-allow: test-support recorder lock
-            .push(format!("ensure-session:{}", guest_ref.to_canonical_string()));
+            .record(format!("ensure-session:{}", guest_ref.to_canonical_string()));
         Ok(())
     }
 
@@ -290,8 +293,7 @@ impl CloudHypervisorGuestRuntime for ScriptedFacets {
         _status_sink: Option<crate::driver::GuestStatusSink>,
     ) -> Result<GuestCloudHypervisorOutcome, String> {
         self.calls
-            .lock() // async-gate-allow: test-support recorder lock
-            .push(format!("reconcile-ch:{}", guest_ref.to_canonical_string()));
+            .record(format!("reconcile-ch:{}", guest_ref.to_canonical_string()));
         Ok(*self.cloud_hypervisor_outcome.lock()) // async-gate-allow: test-support recorder lock
     }
 }
