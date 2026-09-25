@@ -91,6 +91,8 @@ pub enum EmitterError {
     FrameTooLarge,
     /// The emitter lock was poisoned.
     StatePoisoned,
+    /// A constructor bound was zero or otherwise invalid.
+    InvalidLimits,
     /// A metric frame did not satisfy the closed label policy.
     MetricPolicy(MetricPolicyError),
     /// A non-metric frame was not a bounded structured observation.
@@ -104,6 +106,7 @@ impl core::fmt::Display for EmitterError {
         formatter.write_str(match self {
             Self::FrameTooLarge => "telemetry-frame-too-large",
             Self::StatePoisoned => "telemetry-emitter-state-poisoned",
+            Self::InvalidLimits => "telemetry-emitter-limits-invalid",
             Self::MetricPolicy(_) => "telemetry-metric-policy-rejected",
             Self::FrameRedaction => "telemetry-frame-redaction-rejected",
             Self::SocketPathInvalid => "telemetry-socket-path-invalid",
@@ -184,7 +187,7 @@ impl BoundedEmitter {
     /// # Errors
     ///
     /// Returns `EmitterError::SocketPathInvalid` for a non-absolute
-    /// path, and `StatePoisoned` for a zero byte capacity.
+    /// path, and `InvalidLimits` for a zero byte capacity.
     pub fn new(path: impl Into<PathBuf>, capacity_bytes: usize) -> Result<Self, EmitterError> {
         Self::new_with_limits(
             path,
@@ -200,7 +203,7 @@ impl BoundedEmitter {
     /// # Errors
     ///
     /// Returns `EmitterError::SocketPathInvalid` for a non-absolute
-    /// path, and `StatePoisoned` when any bound is zero.
+    /// path, and `InvalidLimits` when any bound is zero.
     pub fn new_with_limits(
         path: impl Into<PathBuf>,
         capacity_bytes: usize,
@@ -209,10 +212,10 @@ impl BoundedEmitter {
         max_retry_attempts: u8,
     ) -> Result<Self, EmitterError> {
         if capacity_bytes == 0 {
-            return Err(EmitterError::StatePoisoned);
+            return Err(EmitterError::InvalidLimits);
         }
         if capacity_frames == 0 || max_age.is_zero() || max_retry_attempts == 0 {
-            return Err(EmitterError::StatePoisoned);
+            return Err(EmitterError::InvalidLimits);
         }
         let path = path.into();
         if !path.is_absolute() {
