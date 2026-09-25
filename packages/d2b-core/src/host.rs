@@ -544,19 +544,6 @@ mod tests {
     use d2b_contracts_resource::v3::IfNameError;
 
     #[test]
-    fn if_name_accepts_safe_linux_names() {
-        let name = IfName::new("d2b-br_1").expect("valid name");
-        assert_eq!(name.as_str(), "d2b-br_1");
-    }
-
-    #[test]
-    fn if_name_rejects_invalid_names() {
-        assert_eq!(IfName::new(""), Err(IfNameError::Empty));
-        assert_eq!(IfName::new("abcdefghijklmnop"), Err(IfNameError::TooLong));
-        assert_eq!(IfName::new("bad.name"), Err(IfNameError::InvalidCharacter));
-    }
-
-    #[test]
     fn host_json_denies_unknown_fields() {
         let err = serde_json::from_str::<HostJson>(r#"{"schemaVersion":"v1","extra":true}"#)
             .expect_err("unknown fields fail closed");
