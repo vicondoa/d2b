@@ -271,6 +271,12 @@ where
     }
 
     /// Restore non-secret state after the controller has been reconstructed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::InvalidConfiguration`] when the recovery
+    /// record is internally inconsistent (operation/phase pairing,
+    /// finalizer, or identifier bounds).
     pub fn restore_recovery_state(
         mut self,
         recovery: AzureVmRecoveryState,
@@ -330,6 +336,16 @@ where
     }
 
     /// Reconcile without blocking on ARM polling.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::InvalidConfiguration`] when the finalizer is
+    /// missing, [`AzureVmError::Ambiguous`] when the owned VM identity is
+    /// absent or ambiguous, the transient ARM variants
+    /// ([`AzureVmError::Transient`], throttling, quota, and network
+    /// variants) for retryable effect failures, and the fatal variants
+    /// (`BootstrapFailed`, `ArmProvisioningFailed`, `ArmCredentialDenied`)
+    /// when an effect cannot be retried.
     pub async fn reconcile(
         &mut self,
         zone_uid: &str,
@@ -415,6 +431,13 @@ where
     }
 
     /// Adopt a running VM only when its d2b tag digest matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::InvalidConfiguration`] when the finalizer is
+    /// missing, [`AzureVmError::Ambiguous`] when the observed VM identity
+    /// does not match the tag digest, and the ARM effect variants for
+    /// retryable and fatal effect failures.
     pub async fn adopt(&mut self) -> Result<AzureVmReconcileOutcome, AzureVmError> {
         if !self.finalizer {
             return Err(AzureVmError::InvalidConfiguration);
@@ -443,6 +466,12 @@ where
     }
 
     /// Advance the current opaque long-running operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::InvalidOperationHandle`] when the supplied
+    /// handle is not the current operation, and the ARM effect variants for
+    /// retryable and fatal polling failures.
     pub async fn poll_operation(
         &mut self,
         operation: crate::effect::AzureOperationHandle,
@@ -601,6 +630,14 @@ where
     }
 
     /// Start one typed mutable update without blocking on ARM.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::InvalidConfiguration`] when an update is
+    /// already pending or the finalizer is missing, the validation error
+    /// when the update contradicts the current VM shape,
+    /// [`AzureVmError::Ambiguous`] when the owned VM identity is absent,
+    /// and the ARM effect variants for retryable and fatal failures.
     pub async fn update(
         &mut self,
         zone_uid: &str,
@@ -637,7 +674,7 @@ where
             );
             return Err(error);
         }
-        let handle = self.vm_handle.clone().ok_or(AzureVmError::Ambiguous)?;
+        let handle = self.vm_handle.as_ref().ok_or(AzureVmError::Ambiguous)?;
         let operation_id =
             operation_id(zone_uid, guest_uid, generation, update.operation_class());
         let token = self.arm_token().await?;
@@ -670,6 +707,12 @@ where
     }
 
     /// Begin deletion. The finalizer is retained until the LRO succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::Ambiguous`] when the owned VM identity or
+    /// pending delete operation is absent, and the ARM effect variants for
+    /// retryable and fatal deletion failures.
     pub async fn finalize(
         &mut self,
         zone_uid: &str,
@@ -745,6 +788,13 @@ where
     }
 
     /// Complete one authenticated bootstrap enrollment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::BootstrapFailed`] when the enrollment
+    /// deadline elapsed, and the bootstrap admission variants
+    /// (`BootstrapPskExpired`, `BootstrapPskReplayed`,
+    /// `BootstrapEnrollmentFailed`) when the presented PSK is refused.
     pub fn complete_enrollment(
         &mut self,
         admission: &mut crate::bootstrap::BootstrapAdmission,
@@ -761,7 +811,7 @@ where
     }
 
     async fn start_psk_delivery(&mut self) -> Result<AzureVmReconcileOutcome, AzureVmError> {
-        let handle = self.vm_handle.clone().ok_or(AzureVmError::Ambiguous)?;
+        let handle = self.vm_handle.as_ref().ok_or(AzureVmError::Ambiguous)?;
         let started = *self
             .bootstrap_started_at_unix_ms
             .get_or_insert_with(|| self.clock.now_unix_ms());
@@ -788,7 +838,8 @@ where
             .bootstrap_psk
             .as_ref()
             .ok_or(AzureVmError::BootstrapFailed)?;
-        let payload = PskExtensionPayload::from_secret(psk.copy_for_delivery().to_vec())?;
+        let mut delivery = psk.copy_for_delivery();
+        let payload = PskExtensionPayload::from_secret(std::mem::take(&mut *delivery))?;
         let token = self.arm_token().await?;
         let operation = self
             .effect
@@ -849,7 +900,7 @@ where
                 let (handle, _) = self.verify_owned_vm(handle, tags, "pending-delete")?;
                 let operation_id = self
                     .pending_delete_operation_id
-                    .clone()
+                    .as_deref()
                     .ok_or(AzureVmError::Ambiguous)?;
                 let token = self.arm_token().await?;
                 let operation = self
@@ -1043,7 +1094,9 @@ fn operation_id(zone_uid: &str, guest_uid: &str, generation: u64, operation_clas
     digest.update(generation.to_be_bytes());
     digest.update([0]);
     digest.update(operation_class.as_bytes());
-    base32(&digest.finalize())[..20].to_owned()
+    let mut id = base32(&digest.finalize());
+    id.truncate(20);
+    id
 }
 
 fn base32(bytes: &[u8]) -> String {
