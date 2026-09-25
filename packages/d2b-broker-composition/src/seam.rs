@@ -597,6 +597,25 @@ mod tests {
     }
 
     #[test]
+    fn production_registration_refuses_a_copy_of_a_committed_row() {
+        // The row-identity guarantee: only the catalog's own row instance
+        // may register a committed operation. A same-operation copy that
+        // resolves through find() but is not the catalog's row is refused
+        // by the ptr::eq check, so a handler can never be injected for a
+        // row the committed JSON does not declare.
+        let committed = BrokerOperationRow::find("inspect-process-family")
+            .expect("the committed pilot row resolves");
+        let copy = *committed;
+        let declaration = HandlerDeclaration {
+            row: &copy,
+            ..fixture_declaration()
+        };
+        let refusal = register_production_handlers(&[declaration])
+            .expect_err("a row copy is not the catalog's own row");
+        assert!(matches!(refusal, RoutingRefusal::Uncommitted { .. }));
+    }
+
+    #[test]
     fn a_handler_crate_that_is_not_the_declaring_provider_is_refused() {
         let declaration = HandlerDeclaration {
             source_crate: "d2b-broker-fixture-syscall-surface",
