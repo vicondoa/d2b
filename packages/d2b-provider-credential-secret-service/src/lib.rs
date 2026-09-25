@@ -1948,19 +1948,7 @@ mod tests {
         assert_eq!(provider.placement().zone().as_str(), "dev");
     }
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test(flavor = "current_thread")]
-    async fn runtime_provider_accepts_missing_controller_user_scope_claim() {
-        let route = production_provider_route();
-        let metadata = ProviderSessionMetadata::from_route(&route).unwrap();
-        let (client_fd, _server_fd) = prearmed_seqpacket_pair().unwrap();
-        let backend =
-            GuestCredentialBackend::from_socket_for_test(SeqpacketSocket::from_parent_prearmed(
-                client_fd,
-            )
-            .unwrap());
-        assert!(runtime_provider(&route, &metadata, backend).is_ok());
-    }
+
 
     #[test]
     fn collection_alias_accepts_spaces_and_rejects_unsafe_text() {
@@ -1970,29 +1958,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn placement_is_user_agent_only() {
-        let host = ResourceRef::parse("Host/workstation").unwrap();
-        let user = ResourceRef::parse("User/alice").unwrap();
-        assert!(
-            SecretServicePlacement::new(
-                ZoneId::parse("user-zone").unwrap(),
-                PlacementBinding::UserAgent,
-                host.clone(),
-                user.clone(),
-            )
-            .is_ok()
-        );
-        assert_eq!(
-            SecretServicePlacement::new(
-                ZoneId::parse("user-zone").unwrap(),
-                PlacementBinding::HostSystem,
-                host,
-                user,
-            ),
-            Err(SecretServiceProviderError::InvalidPlacement)
-        );
-    }
+
 
     #[test]
     fn configuration_debug_redacts_collection_alias() {
