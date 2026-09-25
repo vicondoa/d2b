@@ -247,6 +247,12 @@ pub struct BinaryRef(String);
 
 impl BinaryRef {
     /// Parse a `^[a-z][a-z0-9-]*$` binary reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderContractError::InvalidPrimitive`] when the value is
+    /// empty, longer than [`MAX_BINARY_REF_BYTES`], or does not match the
+    /// grammar.
     pub fn parse(value: impl Into<String>) -> Result<Self, ProviderContractError> {
         let value = value.into();
         if value.is_empty() || value.len() > MAX_BINARY_REF_BYTES {
@@ -478,6 +484,11 @@ redacted_debug!(TrustEvidence);
 
 impl TrustEvidence {
     /// Decide production admission, fail-closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderContractError::TrustNotEstablished`] when any
+    /// trust, signature, revocation, or policy evaluation does not admit.
     pub fn admit(&self) -> Result<(), ProviderContractError> {
         let admitted = self.publisher_trusted
             && self.signature == SignatureState::Valid
@@ -1454,9 +1465,9 @@ impl ComponentDescriptor {
         if state_namespaces.is_empty() && self.declares_state_volume {
             return Err(ProviderContractError::MissingRequiredField);
         }
-        let mut ids = BTreeSet::new();
+        let mut ids: BTreeSet<&BoundedToken> = BTreeSet::new();
         for namespace in &state_namespaces {
-            if !ids.insert(namespace.id().clone()) {
+            if !ids.insert(namespace.id()) {
                 return Err(ProviderContractError::DuplicateDeclaration);
             }
         }
@@ -2357,7 +2368,7 @@ pub enum UpgradeDisposition {
 }
 
 /// The upgrade, drain, and restart policy a Provider manifest declares.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpgradePolicy {
     /// Whether components are drained before an upgrade recycles them.
@@ -2369,16 +2380,6 @@ pub struct UpgradePolicy {
     /// TPM identity, recycling only realization and owned ephemeral
     /// Processes.
     pub preserves_durable_state: bool,
-}
-
-impl core::fmt::Debug for UpgradePolicy {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("UpgradePolicy")
-            .field("drain_before_upgrade", &self.drain_before_upgrade)
-            .field("max_automatic_disposition", &self.max_automatic_disposition)
-            .field("preserves_durable_state", &self.preserves_durable_state)
-            .finish()
-    }
 }
 
 /// The signed manifest and catalog entry one `artifactId` selects.
@@ -2429,30 +2430,30 @@ impl ProviderManifest {
         {
             return Err(ProviderContractError::BoundExceeded);
         }
-        let mut component_ids = BTreeSet::new();
-        let mut owned_types = BTreeSet::new();
+        let mut component_ids: BTreeSet<&BoundedToken> = BTreeSet::new();
+        let mut owned_types: BTreeSet<&ResourceTypeName> = BTreeSet::new();
         for component in &components {
             if component.declares_state_volume() == component.state_namespaces().is_empty() {
                 return Err(ProviderContractError::MissingRequiredField);
             }
-            if !component_ids.insert(component.component_id().clone()) {
+            if !component_ids.insert(component.component_id()) {
                 return Err(ProviderContractError::DuplicateDeclaration);
             }
             for resource_type in component.exported_resource_types() {
                 // "The same ResourceType is declared once." Several
                 // controller instances may run under different Hosts,
                 // Guests, or domains, but not under duplicate schemas.
-                if !owned_types.insert(resource_type.clone()) {
+                if !owned_types.insert(resource_type) {
                     return Err(ProviderContractError::DuplicateDeclaration);
                 }
             }
         }
-        let mut bound_types = BTreeSet::new();
+        let mut bound_types: BTreeSet<&ResourceTypeName> = BTreeSet::new();
         for binding in &api_bindings {
             if binding.placement_anchor().is_none() {
                 return Err(ProviderContractError::PlacementAnchorMissing);
             }
-            if !bound_types.insert(binding.resource_type().clone()) {
+            if !bound_types.insert(binding.resource_type()) {
                 return Err(ProviderContractError::DuplicateDeclaration);
             }
             if !owned_types.contains(binding.resource_type()) {
@@ -2495,14 +2496,13 @@ impl ProviderManifest {
 
     /// Validate the shared Host and Guest daemon/broker artifact declarations.
     pub fn validate_runtime_artifacts(
-        entries: impl IntoIterator<Item = TargetRuntimeArtifacts>,
+        entries: &[TargetRuntimeArtifacts],
     ) -> Result<(), ProviderContractError> {
-        let entries: Vec<_> = entries.into_iter().collect();
         if entries.len() > 3 {
             return Err(ProviderContractError::BoundExceeded);
         }
         let mut seen = BTreeSet::new();
-        for entry in &entries {
+        for entry in entries {
             if !seen.insert(entry.target_kind()) {
                 return Err(ProviderContractError::DuplicateDeclaration);
             }
@@ -2528,7 +2528,7 @@ impl ProviderManifest {
         entries: impl IntoIterator<Item = TargetRuntimeArtifacts>,
     ) -> Result<Self, ProviderContractError> {
         let mut entries: Vec<_> = entries.into_iter().collect();
-        Self::validate_runtime_artifacts(entries.clone())?;
+        Self::validate_runtime_artifacts(&entries)?;
         entries.sort_by_key(TargetRuntimeArtifacts::target_kind);
         self.runtime_artifacts = entries;
         Ok(self)
@@ -2577,7 +2577,7 @@ impl ProviderManifest {
                 }
             }
         }
-        Self::validate_runtime_artifacts(self.runtime_artifacts.clone())?;
+        Self::validate_runtime_artifacts(&self.runtime_artifacts)?;
         for target in required_targets {
             if !self
                 .runtime_artifacts
@@ -3221,7 +3221,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            ProviderManifest::validate_runtime_artifacts([host, guest]),
+            ProviderManifest::validate_runtime_artifacts(&[host, guest]),
             Err(ProviderContractError::SharedRuntimeArtifactMismatch)
         );
     }

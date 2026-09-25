@@ -995,6 +995,11 @@ pub trait CredentialWire: Sized {
     /// Append the canonical protobuf encoding.
     fn encode_wire(&self, output: &mut Vec<u8>);
     /// Decode one complete message and reject unknown or duplicate fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`CredentialServiceError`] the DTO's decoder reports for
+    /// a truncated, unknown-field, duplicate-field, or out-of-range message.
     fn decode_wire(bytes: &[u8]) -> Result<Self, CredentialServiceError>;
 }
 
