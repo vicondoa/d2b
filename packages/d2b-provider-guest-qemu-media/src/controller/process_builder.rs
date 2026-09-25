@@ -240,7 +240,7 @@ impl LaunchTicket {
         {
             return Err(ProcessSpecError::InvalidReference);
         }
-        let mut attachments = Vec::new();
+        let mut attachments = Vec::with_capacity(media_refs.len() + 3);
         if let Some(device_ref) = process.execution().device_usage().first() {
             attachments.push(AttachmentSlot {
                 slot: "kvm".to_owned(),

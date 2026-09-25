@@ -119,6 +119,18 @@ fn controller() -> QemuMediaController<FakeEffect> {
     .unwrap()
 }
 
+fn device() -> DeviceObservation {
+    DeviceObservation {
+        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
+        phase: DevicePhase::Ready,
+        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
+        platform: PlatformClass::X86_64Linux,
+        authority_key: [4; 32],
+        process_identity: Some("qemu-media-runner".to_owned()),
+        media_contract: "qemu-media/v1".to_owned(),
+    }
+}
+
 #[test]
 fn ready_requires_process_device_and_qmp_health() {
     let mut controller = controller();
@@ -129,15 +141,7 @@ fn ready_requires_process_device_and_qmp_health() {
     assert!(matches!(pending, QemuMediaReconcileOutcome::Retry { .. }));
     assert_eq!(controller.phase(), QemuMediaPhase::Pending);
 
-    let device = DeviceObservation {
-        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
-        phase: DevicePhase::Ready,
-        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
-        platform: PlatformClass::X86_64Linux,
-        authority_key: [4; 32],
-        process_identity: Some("qemu-media-runner".to_owned()),
-        media_contract: "qemu-media/v1".to_owned(),
-    };
+    let device = device();
     let mut deps = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
     deps.media_refs = vec![ResourceRef::parse("Volume/boot-media").unwrap()];
     deps.display_ref = Some(ResourceRef::parse("Endpoint/display").unwrap());
@@ -151,15 +155,7 @@ fn ready_requires_process_device_and_qmp_health() {
 fn pause_at_boot_is_initial_proof_then_running_is_ready() {
     let mut controller = controller();
     let mut effect = FakeEffect::default();
-    let device = DeviceObservation {
-        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
-        phase: DevicePhase::Ready,
-        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
-        platform: PlatformClass::X86_64Linux,
-        authority_key: [4; 32],
-        process_identity: Some("qemu-media-runner".to_owned()),
-        media_contract: "qemu-media/v1".to_owned(),
-    };
+    let device = device();
     let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
 
     assert_eq!(
@@ -184,15 +180,7 @@ fn pause_at_boot_is_initial_proof_then_running_is_ready() {
 fn pause_at_boot_rejects_running_before_pause_proof() {
     let mut controller = controller();
     let mut effect = FakeEffect::default();
-    let device = DeviceObservation {
-        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
-        phase: DevicePhase::Ready,
-        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
-        platform: PlatformClass::X86_64Linux,
-        authority_key: [4; 32],
-        process_identity: Some("qemu-media-runner".to_owned()),
-        media_contract: "qemu-media/v1".to_owned(),
-    };
+    let device = device();
     let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
     dependencies.qmp_status = Some(d2b_provider_guest_qemu_media::QmpVmStatus::Running);
 
@@ -218,15 +206,7 @@ fn matching_restart_process_is_adopted_without_launch() {
         stop_clears_observation: true,
         ..FakeEffect::default()
     };
-    let device = DeviceObservation {
-        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
-        phase: DevicePhase::Ready,
-        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
-        platform: PlatformClass::X86_64Linux,
-        authority_key: [4; 32],
-        process_identity: Some("qemu-media-runner".to_owned()),
-        media_contract: "qemu-media/v1".to_owned(),
-    };
+    let device = device();
     let deps = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
     controller.set_expected_identity(identity);
     assert_eq!(
@@ -265,15 +245,8 @@ fn finalization_closes_media_before_releasing_authority() {
 fn qmp_timeout_retains_authority_until_process_exit_is_proven() {
     let mut controller = controller();
     let mut effect = FakeEffect::default();
-    let device = DeviceObservation {
-        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
-        phase: DevicePhase::Ready,
-        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
-        platform: PlatformClass::X86_64Linux,
-        authority_key: [9; 32],
-        process_identity: Some("qemu-media-runner".to_owned()),
-        media_contract: "qemu-media/v1".to_owned(),
-    };
+    let mut device = device();
+    device.authority_key = [9; 32];
     let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
@@ -311,15 +284,8 @@ fn qmp_timeout_retains_authority_until_process_exit_is_proven() {
 fn failed_qmp_timeout_does_not_adopt_a_stopping_runner() {
     let mut controller = controller();
     let mut effect = FakeEffect::default();
-    let device = DeviceObservation {
-        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
-        phase: DevicePhase::Ready,
-        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
-        platform: PlatformClass::X86_64Linux,
-        authority_key: [9; 32],
-        process_identity: Some("qemu-media-runner".to_owned()),
-        media_contract: "qemu-media/v1".to_owned(),
-    };
+    let mut device = device();
+    device.authority_key = [9; 32];
     let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
@@ -354,15 +320,8 @@ fn failed_qmp_timeout_with_exit_proven_does_not_rereserve_on_reconcile() {
         stop_clears_observation: true,
         ..FakeEffect::default()
     };
-    let device = DeviceObservation {
-        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
-        phase: DevicePhase::Ready,
-        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
-        platform: PlatformClass::X86_64Linux,
-        authority_key: [9; 32],
-        process_identity: Some("qemu-media-runner".to_owned()),
-        media_contract: "qemu-media/v1".to_owned(),
-    };
+    let mut device = device();
+    device.authority_key = [9; 32];
     let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
@@ -439,15 +398,8 @@ fn adopted_runner_qmp_timeout_uses_health_retry_not_launch_age() {
         ..FakeEffect::default()
     };
     controller.set_expected_identity(identity);
-    let device = DeviceObservation {
-        device_ref: ResourceRef::parse("Device/host-kvm").unwrap(),
-        phase: DevicePhase::Ready,
-        owner_ref: Some(ResourceRef::parse("Guest/media-vm").unwrap()),
-        platform: PlatformClass::X86_64Linux,
-        authority_key: [9; 32],
-        process_identity: Some("qemu-media-runner".to_owned()),
-        media_contract: "qemu-media/v1".to_owned(),
-    };
+    let mut device = device();
+    device.authority_key = [9; 32];
     let mut dependencies = d2b_provider_guest_qemu_media::QemuMediaDependencies::ready(device);
     dependencies.qmp_ready = false;
     dependencies.qmp_status = None;
