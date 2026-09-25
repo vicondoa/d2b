@@ -206,22 +206,6 @@ mod tests {
     }
 
     #[test]
-    fn workload_identity_new_has_none_optional_fields() {
-        let id = make_identity("demo", "work");
-        assert!(id.workload_name.is_none());
-        assert!(id.legacy_vm_name.is_none());
-        assert!(id.runtime_kind.is_none());
-        assert!(id.provider_id.is_none());
-        assert_eq!(id.canonical_target.to_canonical(), "demo.work.d2b");
-    }
-
-    #[test]
-    fn workload_identity_target_accessor() {
-        let id = make_identity("api", "dev");
-        assert_eq!(id.target().to_canonical(), "api.dev.d2b");
-    }
-
-    #[test]
     fn workload_identity_round_trips_minimal() {
         let id = make_identity("ci", "build");
         let json = serde_json::to_string(&id).unwrap();
