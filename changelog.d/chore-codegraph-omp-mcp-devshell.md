@@ -13,7 +13,6 @@
   of skipping silently.
 - `/.codegraph/`, the local index built by `codegraph init`, is now
   gitignored and never committed.
-
-A cloner running omp outside `nix develop` on a host without node must
-install node (for example `nix profile install nixpkgs#nodejs`) or enter
-the devShell before the `npx`-based server can launch.
+- A cloner running omp outside `nix develop` on a host without node must
+  install node (for example `nix profile install nixpkgs#nodejs`) or enter
+  the devShell before the `npx`-based server can launch.

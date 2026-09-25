@@ -74,9 +74,13 @@
         mcp = builtins.fromJSON (builtins.readFile ./.omp/mcp.json);
         args = mcp.mcpServers.codegraph.args
           or (throw "codegraph npm spec missing from .omp/mcp.json");
-        isPkg = a: builtins.match "@colbymchenry/codegraph@[0-9][0-9a-zA-Z.-]*" a != null;
-        found = nixpkgs.lib.findFirst isPkg
-          (throw "codegraph npm spec missing from .omp/mcp.json") args;
+        isPkg = a: builtins.isString a
+          && builtins.match "@colbymchenry/codegraph@[0-9][0-9a-zA-Z.-]*" a != null;
+        found = if ! builtins.isList args then
+          throw "codegraph npm spec missing from .omp/mcp.json"
+        else
+          nixpkgs.lib.findFirst isPkg
+            (throw "codegraph npm spec missing from .omp/mcp.json") args;
       in found;
 
       providerElfShim = import ./nix/provider-elf-shim.nix;
