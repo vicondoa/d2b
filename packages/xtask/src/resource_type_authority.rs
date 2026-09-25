@@ -701,7 +701,7 @@ fn parity_errors(registry: &AuthorityRegistry) -> Vec<String> {
     }
     for (type_name, crates) in &declared_by {
         if crates.len() > 1 {
-errors.push(format!(
+            errors.push(format!(
                 "type-declared-twice: {type_name} is declared by both {}and {}",
                 crates[0], crates[1]
             ));
@@ -937,7 +937,7 @@ fn render(registry: &AuthorityRegistry) -> Result<String, String> {
     }
     entries.extend(declared_all);
     let mut out = String::new();
-out.push_str("// @generated\n");
+    out.push_str("// @generated\n");
     out.push_str("// Provenance:emitted from the per-crate `resource-types.json` declarations\n");
     out.push_str("// by `cargo xtask check-provider-crate-layout --fix`;the layout check's\n");
     out.push_str("// authority drift gate regenerates this file byte-for-byte,and refuses a\n");
@@ -1080,7 +1080,7 @@ mod tests {
 
     impl Drop for Fixture {
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn drop(&mut self) {
+        fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
     }
