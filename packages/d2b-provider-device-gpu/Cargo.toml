@@ -17,12 +17,10 @@ await_holding_refcell_ref = "deny"
 test-support = []
 
 [dependencies]
-async-trait = "0.1"
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
-d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 parking_lot = "0.12"
 serde.workspace = true
 sha2 = { workspace = true }

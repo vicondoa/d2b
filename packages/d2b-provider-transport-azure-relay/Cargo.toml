@@ -33,7 +33,7 @@ tokio = { workspace = true, features = ["io-util", "net", "sync", "time", "macro
 tracing = "0.1"
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 urlencoding = "2"
-webpki-roots = "0.26"
+webpki-roots = "1"
 zeroize = "1"
 
 [dev-dependencies]
