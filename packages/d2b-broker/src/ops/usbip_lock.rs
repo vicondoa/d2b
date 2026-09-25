@@ -78,6 +78,11 @@ impl std::fmt::Display for UsbipLockError {
 impl std::error::Error for UsbipLockError {}
 
 /// Open the pre-created parent dir for a busid lock file.
+///
+/// # Errors
+///
+/// Returns [`UsbipLockError::Io`] when the parent directory cannot be
+/// opened.
 pub fn ensure_lock_root(parent: &Path) -> Result<OwnedFd, UsbipLockError> {
     open_existing_lock_parent(parent).map_err(|e| UsbipLockError::Io {
         path: parent.to_path_buf(),
@@ -85,7 +90,13 @@ pub fn ensure_lock_root(parent: &Path) -> Result<OwnedFd, UsbipLockError> {
     })
 }
 
-/// Acquire a per-busid lock; refuses if already held.
+/// Acquire a per-busid lock; refuses if already held..
+///
+/// # Errors
+///
+/// Returns [`UsbipLockError::LockAlreadyHeld`] when another VM already
+/// owns the lock file, and [`UsbipLockError::Io`] for path resolution or
+/// lock-file creation failures.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn acquire_lock(
     lock_path: &Path,
@@ -168,6 +179,13 @@ pub fn acquire_lock(
 /// Owner mismatch is a typed error (defence-in-depth against a
 /// stale unbind happening after a different VM rebound the same
 /// busid).
+///
+/// # Errors
+///
+/// Returns [`UsbipLockError::OwnerMismatch`] when the lock file's
+/// observed owner differs from `expected_owner`, and [`UsbipLockError::Io`]
+/// for read or removal failures (besides the treated-as-success
+/// missing-file cases).
 pub fn release_lock(lock_path: &Path, expected_owner: &str) -> Result<(), UsbipLockError> {
     let full_lock_path = resolve_lock_path(lock_path).map_err(|e| UsbipLockError::Io {
         path: lock_path.to_path_buf(),
@@ -312,8 +330,9 @@ fn read_owner(path: &Path) -> std::io::Result<String> {
 }
 
 /// Read the current owner of a busid lock without modifying it.
-/// Used by reconcile / proxy-reconcile to verify expected ownership.
-pub fn peek_owner(lock_path: &Path) -> Option<String> {
+    /// Used by reconcile / proxy-reconcile to verify expected ownership.
+    /// Returns `None` when the lock cannot be read (missing or I/O error).
+    pub fn peek_owner(lock_path: &Path) -> Option<String> {
     read_owner(lock_path).ok()
 }
 
