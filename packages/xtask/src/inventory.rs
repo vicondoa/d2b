@@ -133,7 +133,7 @@ fn git_tracked_files(repo_root: &Path) -> Result<Vec<String>, Box<dyn std::error
         .filter(|raw| !raw.is_empty())
     {
         let path = String::from_utf8(raw.to_vec())?;
-        validate_repo_relative_path(&path)?;
+        crate::delivery::model::validate_repo_relative_path(Path::new(&path))?;
         files.push(path);
     }
     files.sort();
@@ -227,21 +227,6 @@ fn build_inventory(
     })
 }
 
-fn validate_repo_relative_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let candidate = Path::new(path);
-    if candidate.is_absolute()
-        || candidate.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(format!("git reported non-repository-relative path: {path}").into());
-    }
-    Ok(())
-}
-
 fn validate_output_path(
     repo_root: &Path,
     output_path: &Path,
@@ -297,7 +282,7 @@ fn path_to_repo_string(path: &Path) -> Result<String, Box<dyn std::error::Error>
         .ok_or_else(|| "path is not valid UTF-8".to_owned())?
         .trim_start_matches("./")
         .to_owned();
-    validate_repo_relative_path(&value)?;
+    crate::delivery::model::validate_repo_relative_path(Path::new(&value))?;
     Ok(value)
 }
 
@@ -634,8 +619,14 @@ version = "0.0.0"
 
     #[test]
     fn rejects_non_repo_relative_paths() {
-        assert!(validate_repo_relative_path("packages/xtask/src/main.rs").is_ok());
-        assert!(validate_repo_relative_path("/home/example/repo/file").is_err());
-        assert!(validate_repo_relative_path("../file").is_err());
+        assert!(crate::delivery::model::validate_repo_relative_path(Path::new(
+            "packages/xtask/src/main.rs"
+        ))
+        .is_ok());
+        assert!(crate::delivery::model::validate_repo_relative_path(Path::new(
+            "/home/example/repo/file"
+        ))
+        .is_err());
+        assert!(crate::delivery::model::validate_repo_relative_path(Path::new("../file")).is_err());
     }
 }
