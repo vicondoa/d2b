@@ -13,6 +13,9 @@ use std::pin::Pin;
 use d2b_core::bundle_resolver::ResolvedUsbipBindIntent;
 use d2b_core::host::VendorProductPair;
 
+/// A fail-closed refusal from USBIP host inspection: invalid or departed
+/// devices, allowlist mismatches, topology drift, and I/O failures all
+/// refuse named rather than replaying a claim blind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UsbipHostInspectionError {
     InvalidBusId {
@@ -149,6 +152,8 @@ impl std::fmt::Display for UsbipHostInspectionError {
 
 impl std::error::Error for UsbipHostInspectionError {}
 
+/// Which driver currently owns a USB device's kernel interface: unbound,
+/// bound to the usbip-host stub, or bound to an unrelated driver.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UsbipDriverBinding {
     Unbound,
@@ -156,14 +161,26 @@ pub enum UsbipDriverBinding {
     BoundToOtherDriver { driver: String },
 }
 
+/// The observed identity and topology of one USB device under sysfs,
+/// matching the bundle intend's allowlist and declared physical location.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsbipHostDeviceInspection {
+    /// The USBIP bus id the device was inspected under.
     pub bus_id: String,
+    /// The observed USB vendor id.
+
     pub vendor: u16,
+    /// The observed USB product id.
+
     pub product: u16,
+    /// The physical bus number the device sits on.
     pub bus_number: u16,
+    /// The physical port chain under the bus, root-first.
+
     pub port_chain: Vec<u8>,
+    /// The device node (e.g. `/dev/bus/usb/...`) the device exposes.
     pub device_node: PathBuf,
+    /// Which kernel driver currently binds the device's interface.
     pub driver: UsbipDriverBinding,
 }
 
