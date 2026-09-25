@@ -38,10 +38,12 @@ use crate::vocabulary::{AUDIO_BINDING_TYPE, AUDIO_SERVICE_TYPE};
 const GUEST_TYPE: &str = "Guest";
 
 /// Stable errors for the daemon-owned audio resource path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AudioResourceRuntimeError {
     /// A resource body was malformed or used an unexpected provider.
     InvalidResource,
+    /// A wire spec or envelope failed to parse; carries the serde reason.
+    InvalidSpec(String),
     /// A binding referred to a different or missing Zone resource.
     InvalidRelationship,
     /// A controller finalizer or effect failed.
@@ -51,7 +53,7 @@ pub(crate) enum AudioResourceRuntimeError {
 impl core::fmt::Display for AudioResourceRuntimeError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidResource => "audio-resource-invalid",
+            Self::InvalidResource | Self::InvalidSpec(_) => "audio-resource-invalid",
             Self::InvalidRelationship => "audio-resource-relationship-invalid",
             Self::Controller(error) => match error {
                 AudioControllerError::Admission => "audio-controller-admission-failed",
@@ -510,7 +512,7 @@ fn is_audio_resource(
         return Err(AudioResourceRuntimeError::InvalidResource);
     }
     let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| AudioResourceRuntimeError::InvalidResource)?;
+        .map_err(|error| AudioResourceRuntimeError::InvalidSpec(error.to_string()))?;
     Ok(envelope
         .spec()
         .provider_ref()
@@ -521,9 +523,9 @@ fn decode_spec<T: DeserializeOwned>(
     resource: &StoredResource,
 ) -> Result<T, AudioResourceRuntimeError> {
     let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| AudioResourceRuntimeError::InvalidResource)?;
+        .map_err(|error| AudioResourceRuntimeError::InvalidSpec(error.to_string()))?;
     let mut spec = serde_json::to_value(envelope.spec().base())
-        .map_err(|_| AudioResourceRuntimeError::InvalidResource)?;
+        .map_err(|error| AudioResourceRuntimeError::InvalidSpec(error.to_string()))?;
     if let Some(provider_ref) = envelope.spec().provider_ref() {
         let object = spec
             .as_object_mut()
@@ -533,7 +535,8 @@ fn decode_spec<T: DeserializeOwned>(
             serde_json::Value::String(provider_ref.to_canonical_string()),
         );
     }
-    serde_json::from_value(spec).map_err(|_| AudioResourceRuntimeError::InvalidResource)
+    serde_json::from_value(spec)
+        .map_err(|error| AudioResourceRuntimeError::InvalidSpec(error.to_string()))
 }
 
 /// The `status.resource` projection for one AudioBinding (old
