@@ -413,17 +413,19 @@ where
             };
         }
         if self.finalization_stage == AcaFinalizationStage::Stop {
-            let record = self
+            let record_id = self
                 .observed
-                .clone()
-                .ok_or(AcaControllerError::SandboxUnavailable)?;
+                .as_ref()
+                .ok_or(AcaControllerError::SandboxUnavailable)?
+                .id
+                .clone();
             let stopped = self
                 .with_lease(
                     operation_id.clone(),
                     AcaCredentialPurpose::Stop,
                     deadline_remaining_ms,
                     move |control, lease, context| async move {
-                        control.stop_sandbox(&lease, &context, &record.id).await
+                        control.stop_sandbox(&lease, &context, &record_id).await
                     },
                 )
                 .await?;
@@ -465,11 +467,17 @@ where
                 self.finalization_stage = AcaFinalizationStage::Stop;
                 return Ok(());
             }
-            let record = self
+            let record_id = self
                 .observed
-                .clone()
-                .ok_or(AcaControllerError::SandboxUnavailable)?;
-            if record.lifecycle == AcaSandboxLifecycle::Stopping {
+                .as_ref()
+                .ok_or(AcaControllerError::SandboxUnavailable)?
+                .id
+                .clone();
+            if self
+                .observed
+                .as_ref()
+                .is_some_and(|record| record.lifecycle == AcaSandboxLifecycle::Stopping)
+            {
                 return Ok(());
             }
             let outcome = self
@@ -478,7 +486,7 @@ where
                     AcaCredentialPurpose::Destroy,
                     deadline_remaining_ms,
                     move |control, lease, context| async move {
-                        control.delete_sandbox(&lease, &context, &record.id).await
+                        control.delete_sandbox(&lease, &context, &record_id).await
                     },
                 )
                 .await?;
