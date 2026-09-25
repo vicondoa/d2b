@@ -13,7 +13,7 @@ use crate::{
 /// Daemon-owned notification effect boundary.
 pub trait NotificationProcessEffectPort: SourceProcessEffectPort {
     /// Release the authenticated ComponentSession authority after drain.
-    fn release_authority(&mut self) -> Result<(), &'static str>;
+    fn release_authority(&mut self) -> Result<(), crate::ProviderError>;
 }
 
 /// Stable failures from notification runtime admission and reconciliation.
@@ -166,7 +166,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|error| {
                 warn!(
                     provider = "notification-desktop",
-                    reason = error,
+                    reason = %error,
                     "notification source route reconcile failed"
                 );
                 NotificationRuntimeError::ReconciliationFailed
@@ -200,7 +200,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|error| {
                 warn!(
                     provider = "notification-desktop",
-                    reason = error,
+                    reason = %error,
                     "notification source route reconcile failed"
                 );
                 NotificationRuntimeError::ReconciliationFailed
@@ -221,7 +221,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|error| {
                 warn!(
                     provider = "notification-desktop",
-                    reason = error,
+                    reason = %error,
                     "notification drain reconcile failed"
                 );
                 NotificationRuntimeError::ReconciliationFailed
@@ -247,7 +247,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|error| {
                 warn!(
                     provider = "notification-desktop",
-                    reason = error,
+                    reason = %error,
                     "notification drain reconcile failed"
                 );
                 NotificationRuntimeError::ReconciliationFailed
@@ -260,7 +260,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .map_err(|error| {
                 warn!(
                     provider = "notification-desktop",
-                    reason = error,
+                    reason = %error,
                     "notification finalize failed: authority release error"
                 );
                 NotificationRuntimeError::ReconciliationFailed
@@ -296,14 +296,14 @@ mod tests {
             &mut self,
             plan: &SourceReconcileResult,
             _lifecycle: &crate::NotificationLifecyclePlan,
-        ) -> Result<crate::SourceProcessEffectReceipt, &'static str> {
+        ) -> Result<crate::SourceProcessEffectReceipt, crate::ProviderError> {
             self.plans += 1;
             Ok(crate::SourceProcessEffectReceipt::complete(plan))
         }
     }
 
     impl NotificationProcessEffectPort for Effects {
-        fn release_authority(&mut self) -> Result<(), &'static str> {
+        fn release_authority(&mut self) -> Result<(), crate::ProviderError> {
             self.authority_releases += 1;
             Ok(())
         }

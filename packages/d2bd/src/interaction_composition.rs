@@ -66,7 +66,7 @@ use d2b_provider_notification_desktop::Category;
 use d2b_provider_notification_desktop::{
     DesktopNotificationPort, NotificationHostSinkIdentity, NotificationLifecycleBackend,
     NotificationLifecycleObservation, NotificationLifecyclePlan, NotificationLifecycleSupervisor,
-    NotificationProcessEffectPort, NotificationRequest, NotificationSourceIdentity,
+    NotificationProcessEffectPort, NotificationRequest, NotificationSourceIdentity, ProviderError,
     SourceProcessEffectPort, SourceProcessEffectReceipt, SourceReconcileResult,
 };
 use d2b_resource_api::authz::{
@@ -1919,7 +1919,8 @@ where
                                 Category::ALL,
                             )
                         })
-                        .collect::<Result<Vec<_>, _>>()?;
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|error| error.as_str())?;
                     let display_route = self
                         .route_for_service(d2b_provider_display_wayland::SERVICE_PACKAGE)
                         .ok_or("notification-display-session-unavailable")?;
@@ -1934,12 +1935,15 @@ where
                         .ok_or("notification-display-evidence-unavailable")?
                         .observer_user_ref
                         .clone();
-                    d2b_provider_notification_desktop::NotificationProviderConfig::new(sources)?
-                        .with_host_binding(host_execution_ref, observer_user_ref)?
+                    d2b_provider_notification_desktop::NotificationProviderConfig::new(sources)
+                        .map_err(|error| error.as_str())?
+                        .with_host_binding(host_execution_ref, observer_user_ref)
+                        .map_err(|error| error.as_str())?
                         .with_display_wayland_ref(Some(
                             ResourceRef::parse("Provider/display-wayland")
                                 .map_err(|_| "notification-display-provider-invalid")?,
-                        ))?
+                        ))
+                        .map_err(|error| error.as_str())?
                 }
             };
             self.notification = Some(
@@ -4574,60 +4578,60 @@ impl NotificationLifecycleBackend for InteractionNotificationLifecycleBackend {
     // The trait is synchronous (d2b-provider-notification-desktop), so the
     // tokio locks are taken with non-blocking `try_lock` per plan U4: a
     // collision fails closed with the same lifecycle error, never a stall.
-    fn start_source(&self, source: &NotificationSourceIdentity) -> Result<(), &'static str> {
+    fn start_source(&self, source: &NotificationSourceIdentity) -> Result<(), ProviderError> {
         self.state
             .try_lock()
-            .map_err(|_| "notification-source-lifecycle-unavailable")?
+            .map_err(|_| ProviderError::LifecycleSourceUnavailable)?
             .sources
             .insert(source.clone());
         Ok(())
     }
 
-    fn stop_source(&self, source: &NotificationSourceIdentity) -> Result<(), &'static str> {
+    fn stop_source(&self, source: &NotificationSourceIdentity) -> Result<(), ProviderError> {
         if self
             .state
             .try_lock()
-            .map_err(|_| "notification-source-lifecycle-unavailable")?
+            .map_err(|_| ProviderError::LifecycleSourceUnavailable)?
             .sources
             .remove(source)
         {
             Ok(())
         } else {
-            Err("notification-source-lifecycle-mismatch")
+            Err(ProviderError::LifecycleSourceMismatch)
         }
     }
 
-    fn start_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), &'static str> {
+    fn start_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), ProviderError> {
         self.port
             .try_lock()
-            .map_err(|_| "notification-host-sink-unavailable")?
+            .map_err(|_| ProviderError::HostSinkUnavailable)?
             .activate()
-            .map_err(|_| "notification-host-sink-unavailable")?;
+            .map_err(|_| ProviderError::HostSinkUnavailable)?;
         self.state
             .try_lock()
-            .map_err(|_| "notification-host-sink-unavailable")?
+            .map_err(|_| ProviderError::HostSinkUnavailable)?
             .host_sink = Some(sink.clone());
         Ok(())
     }
 
-    fn stop_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), &'static str> {
+    fn stop_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), ProviderError> {
         {
             let state = self
                 .state
                 .try_lock()
-                .map_err(|_| "notification-host-sink-unavailable")?;
+                .map_err(|_| ProviderError::HostSinkUnavailable)?;
             if state.host_sink.as_ref() != Some(sink) {
-                return Err("notification-host-sink-lifecycle-mismatch");
+                return Err(ProviderError::HostSinkLifecycleMismatch);
             }
         }
         self.port
             .try_lock()
-            .map_err(|_| "notification-host-sink-unavailable")?
+            .map_err(|_| ProviderError::HostSinkUnavailable)?
             .deactivate()
-            .map_err(|_| "notification-host-sink-unavailable")?;
+            .map_err(|_| ProviderError::HostSinkUnavailable)?;
         self.state
             .try_lock()
-            .map_err(|_| "notification-host-sink-unavailable")?
+            .map_err(|_| ProviderError::HostSinkUnavailable)?
             .host_sink = None;
         Ok(())
     }
@@ -4636,11 +4640,11 @@ impl NotificationLifecycleBackend for InteractionNotificationLifecycleBackend {
         &self,
         _zone: &ZoneId,
         _provider_ref: &ResourceRef,
-    ) -> Result<NotificationLifecycleObservation, &'static str> {
+    ) -> Result<NotificationLifecycleObservation, ProviderError> {
         let state = self
             .state
             .try_lock()
-            .map_err(|_| "notification-source-lifecycle-unavailable")?;
+            .map_err(|_| ProviderError::LifecycleSourceUnavailable)?;
         Ok(NotificationLifecycleObservation::new(
             state.sources.iter().cloned().collect(),
             state.host_sink.clone(),
@@ -4710,11 +4714,11 @@ impl SourceProcessEffectPort for InteractionDrainEffects {
         &mut self,
         plan: &SourceReconcileResult,
         lifecycle: &NotificationLifecyclePlan,
-    ) -> Result<SourceProcessEffectReceipt, &'static str> {
+    ) -> Result<SourceProcessEffectReceipt, ProviderError> {
         let supervisor = self
             .notification_lifecycle
             .as_ref()
-            .ok_or("notification-supervisor-unavailable")?;
+            .ok_or(ProviderError::SupervisorUnavailable)?;
         if !self.notification_recovered {
             supervisor.recover(lifecycle.zone(), lifecycle.provider_ref())?;
             self.notification_recovered = true;
@@ -4725,17 +4729,17 @@ impl SourceProcessEffectPort for InteractionDrainEffects {
 }
 
 impl NotificationProcessEffectPort for InteractionDrainEffects {
-    fn release_authority(&mut self) -> Result<(), &'static str> {
+    fn release_authority(&mut self) -> Result<(), ProviderError> {
         if self
             .notification_lifecycle
             .as_ref()
-            .ok_or("notification-supervisor-unavailable")?
+            .ok_or(ProviderError::SupervisorUnavailable)?
             .is_drained()?
         {
             self.authority_released = true;
             Ok(())
         } else {
-            Err("notification-authority-release-incomplete")
+            Err(ProviderError::AuthorityReleaseIncomplete)
         }
     }
 }
@@ -8274,7 +8278,7 @@ mod tests {
             d2b_provider_notification_desktop::NotificationProcessEffectPort::release_authority(
                 &mut effects
             ),
-            Err("notification-authority-release-incomplete")
+            Err(ProviderError::AuthorityReleaseIncomplete)
         );
         assert!(!effects.authority_released());
     }

@@ -4,7 +4,7 @@ use crate::SessionEvidence;
 use tracing::{debug, warn};
 use crate::{
     NotificationHostSinkIdentity, NotificationLifecyclePlan, NotificationLifecycleReceipt,
-    NotificationSourceIdentity,
+    NotificationSourceIdentity, ProviderError,
 };
 use d2b_contracts_resource::v3::identity::{EvidenceClass, Locality};
 use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
@@ -102,10 +102,10 @@ impl DisplayDependencyEvidence {
     /// Project authenticated Ready evidence from the display route.
     pub fn from_authenticated_route(
         route: AuthenticatedSessionRouteBinding,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         let provider_generation = route
             .provider_generation()
-            .ok_or("display-dependency-unauthenticated")?
+            .ok_or(ProviderError::DisplayDependencyUnauthenticated)?
             .get();
         Self::from_route(route, DisplayDependencyState::Ready, provider_generation)
     }
@@ -116,19 +116,19 @@ impl DisplayDependencyEvidence {
     pub fn from_daemon_route(
         route: AuthenticatedSessionRouteBinding,
         user_ref: ResourceRef,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         let provider_generation = route
             .provider_generation()
-            .ok_or("display-dependency-unauthenticated")?
+            .ok_or(ProviderError::DisplayDependencyUnauthenticated)?
             .get();
         let Some(provider) = route.provider_ref() else {
-            return Err("display-dependency-unauthenticated");
+            return Err(ProviderError::DisplayDependencyUnauthenticated);
         };
         let Some(host_execution_ref) = route.context().execution_ref() else {
-            return Err("display-dependency-unauthenticated");
+            return Err(ProviderError::DisplayDependencyUnauthenticated);
         };
         let Some(controller_generation) = route.controller_generation() else {
-            return Err("display-dependency-unauthenticated");
+            return Err(ProviderError::DisplayDependencyUnauthenticated);
         };
         if provider.to_canonical_string() != DISPLAY_PROVIDER_REF
             || route.service().as_str() != DISPLAY_SERVICE_PACKAGE
@@ -141,7 +141,7 @@ impl DisplayDependencyEvidence {
             || route.reconnect_generation().get() == 0
             || controller_generation.get() == 0
         {
-            return Err("display-dependency-unauthenticated");
+            return Err(ProviderError::DisplayDependencyUnauthenticated);
         }
         Ok(Self {
             provider_ref: provider.clone(),
@@ -160,9 +160,9 @@ impl DisplayDependencyEvidence {
         route: AuthenticatedSessionRouteBinding,
         state: DisplayDependencyState,
         generation: u64,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         let Some(provider) = route.provider_ref() else {
-            return Err("display-dependency-unauthenticated");
+            return Err(ProviderError::DisplayDependencyUnauthenticated);
         };
         if route.service().as_str() != DISPLAY_SERVICE_PACKAGE
             || route.evidence_class() != EvidenceClass::UnixPeer
@@ -175,17 +175,17 @@ impl DisplayDependencyEvidence {
                 .provider_generation()
                 .is_none_or(|observed| observed.get() != generation)
         {
-            return Err("display-dependency-unauthenticated");
+            return Err(ProviderError::DisplayDependencyUnauthenticated);
         }
         let Some(host_execution_ref) = route.context().execution_ref() else {
-            return Err("display-dependency-unauthenticated");
+            return Err(ProviderError::DisplayDependencyUnauthenticated);
         };
         let Some(controller_generation) = route.controller_generation() else {
-            return Err("display-dependency-unauthenticated");
+            return Err(ProviderError::DisplayDependencyUnauthenticated);
         };
         if host_execution_ref.resource_type().as_str() != "Host" || controller_generation.get() == 0
         {
-            return Err("display-dependency-unauthenticated");
+            return Err(ProviderError::DisplayDependencyUnauthenticated);
         }
         Ok(Self {
             provider_ref: provider.clone(),
@@ -306,13 +306,13 @@ impl GuestSourceConfig {
         source_ref: ResourceRef,
         zone: ZoneId,
         categories: impl IntoIterator<Item = Category>,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         if source_ref.resource_type().as_str() != "Guest" {
-            return Err("notification-source-ref-invalid");
+            return Err(ProviderError::SourceRefInvalid);
         }
         let categories = categories.into_iter().collect::<BTreeSet<_>>();
         if categories.is_empty() {
-            return Err("notification-category-set-empty");
+            return Err(ProviderError::CategorySetEmpty);
         }
         Ok(Self {
             source_ref,
@@ -365,14 +365,14 @@ pub struct NotificationProviderConfig {
 
 impl NotificationProviderConfig {
     /// Validate bounded, unique Guest source configuration.
-    pub fn new(guest_sources: Vec<GuestSourceConfig>) -> Result<Self, &'static str> {
+    pub fn new(guest_sources: Vec<GuestSourceConfig>) -> Result<Self, ProviderError> {
         if guest_sources.len() > MAX_GUEST_SOURCES {
-            return Err("notification-source-capacity");
+            return Err(ProviderError::SourceCapacity);
         }
         let mut seen = BTreeSet::new();
         for source in &guest_sources {
             if !seen.insert(source.source_ref.clone()) {
-                return Err("notification-source-duplicate");
+                return Err(ProviderError::SourceDuplicate);
             }
         }
         Ok(Self {
@@ -415,11 +415,11 @@ impl NotificationProviderConfig {
     pub fn with_max_pending_notifications(
         mut self,
         max_pending_notifications: usize,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         if !(MIN_MAX_PENDING_NOTIFICATIONS..=MAX_MAX_PENDING_NOTIFICATIONS)
             .contains(&max_pending_notifications)
         {
-            return Err("notification-pending-capacity");
+            return Err(ProviderError::PendingCapacity);
         }
         self.max_pending_notifications = max_pending_notifications;
         Ok(self)
@@ -434,10 +434,10 @@ impl NotificationProviderConfig {
     pub fn with_action_nonce_ttl_secs(
         mut self,
         action_nonce_ttl_secs: u64,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         if !(MIN_ACTION_NONCE_TTL_SECS..=MAX_ACTION_NONCE_TTL_SECS).contains(&action_nonce_ttl_secs)
         {
-            return Err("notification-action-nonce-ttl");
+            return Err(ProviderError::ActionNonceTtl);
         }
         self.action_nonce_ttl_secs = action_nonce_ttl_secs;
         Ok(self)
@@ -452,11 +452,11 @@ impl NotificationProviderConfig {
     pub fn with_action_nonce_store_size(
         mut self,
         action_nonce_store_size: usize,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         if !(MIN_ACTION_NONCE_STORE_SIZE..=MAX_ACTION_NONCE_STORE_SIZE)
             .contains(&action_nonce_store_size)
         {
-            return Err("notification-action-nonce-capacity");
+            return Err(ProviderError::ActionNonceCapacity);
         }
         self.action_nonce_store_size = action_nonce_store_size;
         Ok(self)
@@ -471,11 +471,11 @@ impl NotificationProviderConfig {
     pub fn with_acknowledge_timeout_secs(
         mut self,
         acknowledge_timeout_secs: u64,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         if !(MIN_ACKNOWLEDGE_TIMEOUT_SECS..=MAX_ACKNOWLEDGE_TIMEOUT_SECS)
             .contains(&acknowledge_timeout_secs)
         {
-            return Err("notification-acknowledge-timeout");
+            return Err(ProviderError::AcknowledgeTimeout);
         }
         self.acknowledge_timeout_secs = acknowledge_timeout_secs;
         Ok(self)
@@ -490,12 +490,12 @@ impl NotificationProviderConfig {
     pub fn with_display_wayland_ref(
         mut self,
         display_wayland_ref: Option<ResourceRef>,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         if display_wayland_ref
             .as_ref()
             .is_some_and(|provider| provider.to_canonical_string() != DISPLAY_PROVIDER_REF)
         {
-            return Err("notification-display-provider-invalid");
+            return Err(ProviderError::DisplayProviderInvalid);
         }
         self.display_wayland_ref = display_wayland_ref;
         Ok(self)
@@ -511,11 +511,11 @@ impl NotificationProviderConfig {
         mut self,
         host_execution_ref: ResourceRef,
         host_user_ref: ResourceRef,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         if host_execution_ref.resource_type().as_str() != "Host"
             || host_user_ref.resource_type().as_str() != "User"
         {
-            return Err("notification-host-binding-invalid");
+            return Err(ProviderError::HostBindingInvalid);
         }
         self.host_execution_ref = Some(host_execution_ref);
         self.host_user_ref = Some(host_user_ref);
@@ -554,7 +554,7 @@ pub struct SourceReconcileResult {
     pub stop_endpoints: Vec<SourceEndpoint>,
     display_fingerprint: [u8; 32],
     host_sink_fingerprint: [u8; 32],
-    source_error: Option<&'static str>,
+    source_error: Option<ProviderError>,
 }
 
 impl SourceReconcileResult {
@@ -582,7 +582,7 @@ impl SourceReconcileResult {
         digest.update(self.display_fingerprint);
         digest.update(self.host_sink_fingerprint);
         if let Some(error) = self.source_error {
-            digest.update(error.as_bytes());
+            digest.update(error.as_str().as_bytes());
         }
         let bytes = digest.finalize();
         let mut result = [0; 32];
@@ -629,9 +629,9 @@ impl SourceProcessEffectReceipt {
         plan: &SourceReconcileResult,
         lifecycle: &NotificationLifecyclePlan,
         receipt: &NotificationLifecycleReceipt,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         if !receipt.matches(lifecycle) {
-            return Err("notification-supervisor-receipt-mismatch");
+            return Err(ProviderError::SupervisorReceiptMismatch);
         }
         Ok(Self::complete(plan))
     }
@@ -697,13 +697,13 @@ impl SourceProcessEffectReceipt {
             && self.acknowledgements == Self::expected_acknowledgements(plan)
     }
 
-    fn no_effects(plan: &SourceReconcileResult) -> Result<Self, &'static str> {
+    fn no_effects(plan: &SourceReconcileResult) -> Result<Self, ProviderError> {
         if !plan.start_endpoints.is_empty()
             || !plan.stop_endpoints.is_empty()
             || plan.start_host_sink
             || plan.stop_host_sink
         {
-            return Err("notification-process-effect-incomplete");
+            return Err(ProviderError::ProcessEffectIncomplete);
         }
         Ok(Self {
             plan_digest: plan.digest(),
@@ -769,10 +769,10 @@ impl SourceProcessEffectReceiptBuilder {
     }
 
     /// Finish the receipt only when every planned effect was acknowledged.
-    fn finish(mut self) -> Result<SourceProcessEffectReceipt, &'static str> {
+    fn finish(mut self) -> Result<SourceProcessEffectReceipt, ProviderError> {
         self.acknowledgements.sort();
         if self.acknowledgements != self.expected {
-            return Err("notification-process-effect-incomplete");
+            return Err(ProviderError::ProcessEffectIncomplete);
         }
         Ok(SourceProcessEffectReceipt {
             plan_digest: self.plan_digest,
@@ -792,7 +792,7 @@ pub trait SourceProcessEffectPort {
         &mut self,
         plan: &SourceReconcileResult,
         lifecycle: &NotificationLifecyclePlan,
-    ) -> Result<SourceProcessEffectReceipt, &'static str>;
+    ) -> Result<SourceProcessEffectReceipt, ProviderError>;
 }
 
 /// Authenticated Guest source endpoint evidence.
@@ -810,20 +810,20 @@ impl SourceEndpoint {
         source: &GuestSourceConfig,
         session: &SessionEvidence,
         display: &DisplayDependencyEvidence,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, ProviderError> {
         session.admit_source().map_err(|_| {
             debug!(
                 provider = "notification-desktop",
                 "source endpoint construction refused: session not authenticated as a source"
             );
-            "notification-source-unauthenticated"
+            ProviderError::SourceUnauthenticated
         })?;
         if session.subject_ref() != source.source_ref() || session.zone() != source.zone() {
             debug!(
                 provider = "notification-desktop",
                 "source endpoint construction refused: session binding mismatch"
             );
-            return Err("notification-source-binding-mismatch");
+            return Err(ProviderError::SourceBindingMismatch);
         }
         let mut digest = Sha256::new();
         digest.update(source.source_ref().to_canonical_string().as_bytes());
@@ -927,21 +927,21 @@ pub struct NotificationController {
 
 impl NotificationController {
     /// Construct a controller for one exact Provider instance.
-    pub fn new(provider_ref: impl AsRef<str>) -> Result<Self, &'static str> {
+    pub fn new(provider_ref: impl AsRef<str>) -> Result<Self, ProviderError> {
         let provider_ref = ResourceRef::parse(provider_ref.as_ref()).map_err(|error| {
             warn!(
                 provider = "notification-desktop",
                 error = %error,
                 "notification controller construction refused: provider reference invalid"
             );
-            "notification-provider-ref-invalid"
+            ProviderError::ProviderRefInvalid
         })?;
         if provider_ref.to_canonical_string() != crate::PROVIDER_REF {
             warn!(
                 provider = "notification-desktop",
                 "notification controller construction refused: provider reference mismatch"
             );
-            return Err("notification-provider-ref-invalid");
+            return Err(ProviderError::ProviderRefInvalid);
         }
         Ok(Self {
             provider_ref,
@@ -957,28 +957,28 @@ impl NotificationController {
         &self,
         display: &DisplayDependencyEvidence,
         config: &NotificationProviderConfig,
-    ) -> Result<Vec<ProcessPlan>, &'static str> {
+    ) -> Result<Vec<ProcessPlan>, ProviderError> {
         let host_execution_ref = config
             .host_execution_ref()
-            .ok_or("notification-host-binding-missing")?;
+            .ok_or(ProviderError::HostBindingMissing)?;
         let host_user_ref = config.host_user_ref();
         if display.host_execution_ref() != host_execution_ref
             || (config.dbus_sink_enabled()
                 && host_user_ref.is_none_or(|user| display.user_ref() != user))
         {
-            return Err("notification-host-binding-mismatch");
+            return Err(ProviderError::HostBindingMismatch);
         }
         if config.dbus_sink_enabled()
             && config.display_wayland_ref() != Some(display.provider_ref())
         {
-            return Err("notification-display-provider-mismatch");
+            return Err(ProviderError::DisplayProviderMismatch);
         }
         if config
             .guest_sources()
             .iter()
             .any(|source| source.zone() != display.zone())
         {
-            return Err("notification-source-zone-mismatch");
+            return Err(ProviderError::SourceZoneMismatch);
         }
         let mut plans = vec![ProcessPlan {
             template: "notification-desktop-controller",
@@ -990,7 +990,7 @@ impl NotificationController {
             observer_enabled: false,
         }];
         if config.dbus_sink_enabled() && display.is_ready() {
-            let host_user_ref = host_user_ref.ok_or("notification-host-binding-missing")?;
+            let host_user_ref = host_user_ref.ok_or(ProviderError::HostBindingMissing)?;
             plans.push(ProcessPlan {
                 template: "notification-desktop-host-sink",
                 domain: "user",
@@ -1022,7 +1022,7 @@ impl NotificationController {
         display: &DisplayDependencyEvidence,
         config: &NotificationProviderConfig,
         source_sessions: &[SessionEvidence],
-    ) -> Result<SourceReconcileResult, &'static str> {
+    ) -> Result<SourceReconcileResult, ProviderError> {
         let result = match self.plan_reconciliation(display, config, source_sessions) {
             Ok(result) => result,
             Err(error) => {
@@ -1043,7 +1043,7 @@ impl NotificationController {
         config: &NotificationProviderConfig,
         source_sessions: &[SessionEvidence],
         effects: &mut E,
-    ) -> Result<SourceReconcileResult, &'static str> {
+    ) -> Result<SourceReconcileResult, ProviderError> {
         let result = match self.plan_reconciliation(display, config, source_sessions) {
             Ok(result) => result,
             Err(error) => {
@@ -1053,7 +1053,7 @@ impl NotificationController {
         };
         let receipt = self.apply_with_effects(Some(display), config, &result, effects)?;
         if !receipt.matches(&result) {
-            return Err("notification-process-effect-proof-mismatch");
+            return Err(ProviderError::ProcessEffectProofMismatch);
         }
         let source_error = result.source_error;
         self.commit_reconciliation(display, config, &result)?;
@@ -1065,7 +1065,7 @@ impl NotificationController {
         display: &DisplayDependencyEvidence,
         config: &NotificationProviderConfig,
         source_sessions: &[SessionEvidence],
-    ) -> Result<SourceReconcileResult, &'static str> {
+    ) -> Result<SourceReconcileResult, ProviderError> {
         self.plan(display, config)?;
         let mut endpoints = Vec::new();
         let mut source_error = None;
@@ -1075,11 +1075,11 @@ impl NotificationController {
                     .iter()
                     .filter(|session| session.subject_ref() == source.source_ref());
                 let Some(session) = matches.next() else {
-                    source_error.get_or_insert("notification-source-unauthenticated");
+                    source_error.get_or_insert(ProviderError::SourceUnauthenticated);
                     continue;
                 };
                 if matches.next().is_some() {
-                    source_error.get_or_insert("notification-source-ambiguous");
+                    source_error.get_or_insert(ProviderError::SourceAmbiguous);
                     continue;
                 }
                 match SourceEndpoint::from_authenticated(source, session, display) {
@@ -1180,11 +1180,11 @@ impl NotificationController {
         &mut self,
         config: &NotificationProviderConfig,
         effects: &mut E,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), ProviderError> {
         let result = self.drain_plan();
         let receipt = self.apply_with_effects(None, config, &result, effects)?;
         if !receipt.matches(&result) {
-            return Err("notification-process-effect-proof-mismatch");
+            return Err(ProviderError::ProcessEffectProofMismatch);
         }
         self.clear_reconciliation();
         Ok(())
@@ -1193,7 +1193,7 @@ impl NotificationController {
     fn source_lifecycle_identity(
         &self,
         endpoint: &SourceEndpoint,
-    ) -> Result<NotificationSourceIdentity, &'static str> {
+    ) -> Result<NotificationSourceIdentity, ProviderError> {
         NotificationSourceIdentity::new(
             endpoint.zone().clone(),
             self.provider_ref.clone(),
@@ -1208,17 +1208,17 @@ impl NotificationController {
         &self,
         display: &DisplayDependencyEvidence,
         config: &NotificationProviderConfig,
-    ) -> Result<NotificationHostSinkIdentity, &'static str> {
+    ) -> Result<NotificationHostSinkIdentity, ProviderError> {
         NotificationHostSinkIdentity::new(
             display.zone().clone(),
             self.provider_ref.clone(),
             config
                 .host_execution_ref()
-                .ok_or("notification-host-binding-missing")?
+                .ok_or(ProviderError::HostBindingMissing)?
                 .clone(),
             config
                 .host_user_ref()
-                .ok_or("notification-host-binding-missing")?
+                .ok_or(ProviderError::HostBindingMissing)?
                 .clone(),
             display.provider_ref().clone(),
             display.generation(),
@@ -1231,7 +1231,7 @@ impl NotificationController {
         display: Option<&DisplayDependencyEvidence>,
         config: &NotificationProviderConfig,
         result: &SourceReconcileResult,
-    ) -> Result<Option<NotificationLifecyclePlan>, &'static str> {
+    ) -> Result<Option<NotificationLifecyclePlan>, ProviderError> {
         if result.start_endpoints.is_empty()
             && result.stop_endpoints.is_empty()
             && !result.start_host_sink
@@ -1253,7 +1253,7 @@ impl NotificationController {
             .start_host_sink
             .then(|| {
                 self.host_sink_identity(
-                    display.ok_or("notification-display-dependency-unavailable")?,
+                    display.ok_or(ProviderError::DisplayDependencyUnavailable)?,
                     config,
                 )
             })
@@ -1263,7 +1263,7 @@ impl NotificationController {
             .then(|| {
                 self.active_host_sink
                     .clone()
-                    .ok_or("notification-lifecycle-host-sink-missing")
+                    .ok_or(ProviderError::LifecycleHostSinkMissing)
             })
             .transpose()?;
         let zone = display
@@ -1271,7 +1271,7 @@ impl NotificationController {
             .or_else(|| start_sources.first().map(|source| source.zone().clone()))
             .or_else(|| stop_sources.first().map(|source| source.zone().clone()))
             .or_else(|| stop_host_sink.as_ref().map(|sink| sink.zone().clone()))
-            .ok_or("notification-lifecycle-zone-unavailable")?;
+            .ok_or(ProviderError::LifecycleZoneUnavailable)?;
         Ok(Some(NotificationLifecyclePlan::new(
             zone,
             self.provider_ref.clone(),
@@ -1288,7 +1288,7 @@ impl NotificationController {
         config: &NotificationProviderConfig,
         result: &SourceReconcileResult,
         effects: &mut E,
-    ) -> Result<SourceProcessEffectReceipt, &'static str> {
+    ) -> Result<SourceProcessEffectReceipt, ProviderError> {
         match self.lifecycle_plan(display, config, result)? {
             Some(lifecycle) => effects.apply(result, &lifecycle),
             None => SourceProcessEffectReceipt::no_effects(result),
@@ -1300,7 +1300,7 @@ impl NotificationController {
         display: &DisplayDependencyEvidence,
         config: &NotificationProviderConfig,
         result: &SourceReconcileResult,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), ProviderError> {
         for source in &result.stop {
             self.active_sources.remove(source);
         }
@@ -1329,12 +1329,12 @@ impl NotificationController {
         config: &NotificationProviderConfig,
         source_sessions: &[SessionEvidence],
         effects: &mut E,
-    ) -> Result<SourceReconcileResult, &'static str> {
+    ) -> Result<SourceReconcileResult, ProviderError> {
         let Some(proof) = display else {
             let result = self.drain_plan();
             let receipt = self.apply_with_effects(None, config, &result, effects)?;
             if !receipt.matches(&result) {
-                return Err("notification-process-effect-proof-mismatch");
+                return Err(ProviderError::ProcessEffectProofMismatch);
             }
             self.clear_reconciliation();
             return Ok(result);
@@ -1357,19 +1357,19 @@ impl NotificationController {
         config: &NotificationProviderConfig,
         source_sessions: &[SessionEvidence],
         effects: &mut E,
-    ) -> Result<SourceReconcileResult, &'static str> {
+    ) -> Result<SourceReconcileResult, ProviderError> {
         let Some(proof) = display else {
             let result = self.drain_plan();
             let receipt = self.apply_with_effects(None, config, &result, effects)?;
             if !receipt.matches(&result) {
-                return Err("notification-process-effect-proof-mismatch");
+                return Err(ProviderError::ProcessEffectProofMismatch);
             }
             self.clear_reconciliation();
             return Ok(result);
         };
         let user_ref = config
             .host_user_ref()
-            .ok_or("notification-host-binding-missing")?
+            .ok_or(ProviderError::HostBindingMissing)?
             .clone();
         let evidence = match DisplayDependencyEvidence::from_daemon_route(proof, user_ref) {
             Ok(evidence) => evidence,
@@ -1468,7 +1468,7 @@ mod tests {
         let wrong_zone_config = bound_config(vec![wrong_zone]);
         assert_eq!(
             controller.plan(&display(DisplayDependencyState::Ready), &wrong_zone_config),
-            Err("notification-source-zone-mismatch")
+            Err(ProviderError::SourceZoneMismatch)
         );
     }
 
@@ -1478,19 +1478,19 @@ mod tests {
         assert_eq!(
             base.clone()
                 .with_display_wayland_ref(Some(ResourceRef::parse("Provider/another").unwrap())),
-            Err("notification-display-provider-invalid")
+            Err(ProviderError::DisplayProviderInvalid)
         );
         assert_eq!(
             base.clone().with_max_pending_notifications(7).unwrap_err(),
-            "notification-pending-capacity"
+            ProviderError::PendingCapacity
         );
         assert_eq!(
             base.clone().with_action_nonce_ttl_secs(29).unwrap_err(),
-            "notification-action-nonce-ttl"
+            ProviderError::ActionNonceTtl
         );
         assert_eq!(
             base.with_action_nonce_store_size(63).unwrap_err(),
-            "notification-action-nonce-capacity"
+            ProviderError::ActionNonceCapacity
         );
     }
 
@@ -1506,7 +1506,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             controller.plan(&display(DisplayDependencyState::Ready), &config),
-            Err("notification-display-provider-mismatch")
+            Err(ProviderError::DisplayProviderMismatch)
         );
     }
 
@@ -1618,7 +1618,7 @@ mod tests {
                 &config,
                 &[test_source_at("one", 1), test_source_at("one", 2)],
             ),
-            Err("notification-source-ambiguous")
+            Err(ProviderError::SourceAmbiguous)
         );
     }
 
@@ -1629,8 +1629,8 @@ mod tests {
             &mut self,
             _plan: &SourceReconcileResult,
             _lifecycle: &NotificationLifecyclePlan,
-        ) -> Result<SourceProcessEffectReceipt, &'static str> {
-            Err("process-effect-failed")
+        ) -> Result<SourceProcessEffectReceipt, ProviderError> {
+            Err(ProviderError::ProcessEffectIncomplete)
         }
     }
 
@@ -1641,7 +1641,7 @@ mod tests {
             &mut self,
             plan: &SourceReconcileResult,
             _lifecycle: &NotificationLifecyclePlan,
-        ) -> Result<SourceProcessEffectReceipt, &'static str> {
+        ) -> Result<SourceProcessEffectReceipt, ProviderError> {
             Ok(SourceProcessEffectReceipt::complete(plan))
         }
     }
@@ -1657,7 +1657,7 @@ mod tests {
         let mut effects = CompletingEffects;
         assert_eq!(
             controller.reconcile_sources_with_effects(&dependency, &config, &[], &mut effects),
-            Err("notification-source-unauthenticated")
+            Err(ProviderError::SourceUnauthenticated)
         );
         assert!(controller.drain_sources().is_empty());
     }
@@ -1682,7 +1682,7 @@ mod tests {
                 &[test_source("one")],
                 &mut effects,
             ),
-            Err("notification-source-unauthenticated")
+            Err(ProviderError::SourceUnauthenticated)
         );
         let plan = &effects.plans[0];
         assert!(plan.start.is_empty());
@@ -1730,7 +1730,7 @@ mod tests {
                 &[test_source("two")],
                 &mut effects,
             ),
-            Err("process-effect-failed")
+            Err(ProviderError::ProcessEffectIncomplete)
         );
         let retry = controller
             .reconcile_sources(&dependency, &second, &[test_source("two")])
@@ -1756,7 +1756,7 @@ mod tests {
         assert!(receipt.matches(&plan));
         assert_eq!(
             SourceProcessEffectReceipt::builder(&plan).finish(),
-            Err("notification-process-effect-incomplete")
+            Err(ProviderError::ProcessEffectIncomplete)
         );
         let changed = SourceReconcileResult {
             stop_host_sink: true,
