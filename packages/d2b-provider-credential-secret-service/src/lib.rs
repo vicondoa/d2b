@@ -1370,17 +1370,9 @@ impl SecretServiceCredentialProvider {
                 .insert(user_ref.clone(), key);
             return Ok(key);
         }
-        if let Some(key) = self
-            .user_sessions
-            .lock()
-            .await
-            .get(user_ref)
-            .copied()
-            && self
-                .sessions
-                .lock()
-                .await
-                .contains_key(&key)
+        let cached_key = self.user_sessions.lock().await.get(user_ref).copied();
+        if let Some(key) = cached_key
+            && self.sessions.lock().await.contains_key(&key)
         {
             return Ok(key);
         }

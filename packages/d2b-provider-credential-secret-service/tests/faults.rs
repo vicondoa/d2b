@@ -35,9 +35,14 @@ fn locked_and_unavailable_map_to_provider_unavailable() {
                 .call(CredentialMethod::AcquireToken, request("idem-failure"))
                 .unwrap_err()
                 .code(),
-            CredentialServiceErrorCode::ProviderUnavailable
+            CredentialServiceErrorCode::ProviderUnavailable,
+            "case: {failure:?}"
         );
-        assert_eq!(port.issue_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            port.issue_calls.load(Ordering::SeqCst),
+            1,
+            "case: {failure:?}"
+        );
     }
 }
 
