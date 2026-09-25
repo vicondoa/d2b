@@ -129,12 +129,13 @@ documentation.
   available and effective. Do not put model, tool, or agent attribution in
   shipped artifacts.
 
-The full agent-skill surface is vendored and committed: `.agents/skills`
-links into `third_party/agent-skills/` (the Compound Engineering plugin's
-complete `ce-*` set, the caveman suite, and ponytail), so a fresh clone
-is fully configured when omp opens - no install step. Refresh upstream
-content with `make update-agent-skills` and commit the result; each
-vendored tree carries an `UPSTREAM.json` provenance manifest.
+The full agent-skill surface is vendored and committed: the
+`.agents/skills` and `.claude/skills` links into
+`third_party/agent-skills/` (the Compound Engineering plugin's complete
+`ce-*` set, the caveman suite, and ponytail), so a fresh clone is fully
+configured when omp opens - no install step. Refresh upstream content
+with `make update-agent-skills` and commit the result; each vendored
+tree carries an `UPSTREAM.json` provenance manifest.
 
 ### Review and PR contract
 
