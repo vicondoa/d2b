@@ -84,7 +84,14 @@ impl DisplayChildSource for SessionChildSource {
             request.spec,
             request.process_generation,
         )
-        .map_err(|_| InteractionEffectError::InvalidResource)
+        .map_err(|error| {
+            tracing::warn!(
+                provider = WAYLAND_SESSION_PROVIDER_REF,
+                reason = %error,
+                "display child derivation failed for wayland session"
+            );
+            InteractionEffectError::InvalidResource
+        })
     }
 }
 

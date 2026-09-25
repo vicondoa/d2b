@@ -220,9 +220,10 @@ impl TransportPortal {
             );
             PortalError::from(error)
         })?;
-        let accepted = AcceptedTransport::bind(binding, fd).map_err(|_| {
+        let accepted = AcceptedTransport::bind(binding, fd).map_err(|error| {
             tracing::warn!(
                 provider = "transport-unix",
+                reason = %error,
                 "transport open rejected: peer credentials unavailable on accepted socket"
             );
             PortalError::PeerCredentials
@@ -247,9 +248,10 @@ impl TransportPortal {
             );
             return Err(PortalError::HandleTableFull);
         }
-        let monitor_fd = fcntl_dupfd_cloexec(fd.as_fd(), 3).map_err(|_| {
+        let monitor_fd = fcntl_dupfd_cloexec(fd.as_fd(), 3).map_err(|error| {
             tracing::warn!(
                 provider = "transport-unix",
+                reason = %error,
                 "transport monitor fd duplication failed; open rejected"
             );
             PortalError::Cloexec
@@ -316,9 +318,10 @@ impl TransportPortal {
             &entry.monitor_fd,
             PollFlags::ERR | PollFlags::HUP | PollFlags::RDHUP,
         )];
-        poll(&mut fds, 0).map_err(|_| {
+        poll(&mut fds, 0).map_err(|error| {
             tracing::warn!(
                 provider = "transport-unix",
+                reason = %error,
                 "transport observation poll failed"
             );
             PortalError::MonitorUnavailable
@@ -363,9 +366,10 @@ impl fmt::Debug for TransportPortal {
 fn next_handle(state: &PortalState) -> Result<TransportHandle, PortalError> {
     for _ in 0..8 {
         let mut bytes = [0_u8; 16];
-        fill(&mut bytes).map_err(|_| {
+        fill(&mut bytes).map_err(|error| {
             tracing::warn!(
                 provider = "transport-unix",
+                reason = %error,
                 "transport handle generation failed: entropy source unavailable"
             );
             PortalError::MonitorUnavailable
