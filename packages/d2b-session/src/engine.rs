@@ -874,7 +874,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
             .reserve_send(stream, fragment.as_bytes().len())?;
         let logical_limit = self.offer.limits.logical_named_stream_bytes;
         let mut payload = Vec::with_capacity(FRAGMENT_HEADER_LEN + fragment.as_bytes().len());
-        payload.extend_from_slice(&fragment.header.encode(len, logical_limit)?);
+        payload.extend_from_slice(&fragment.header().encode(len, logical_limit)?);
         payload.extend_from_slice(fragment.as_bytes());
         let protected =
             self.protector
@@ -1353,11 +1353,12 @@ impl<T: OwnedTransport> SessionEngine<T> {
 
     async fn flush(&mut self) -> Result<()> {
         while let Some(frame) = self.scheduler.dequeue() {
-            let (kind, channel) = match frame.class() {
-                QueueClass::SessionControl => (RecordKind::SessionControl, frame.channel()),
-                QueueClass::TtrpcControl => (RecordKind::Ttrpc, frame.channel()),
-                QueueClass::AttachmentControl => (RecordKind::Attachment, frame.channel()),
-                QueueClass::NamedStream => (RecordKind::NamedStream, frame.channel()),
+            let channel = frame.channel()?;
+            let kind = match frame.class() {
+                QueueClass::SessionControl => RecordKind::SessionControl,
+                QueueClass::TtrpcControl => RecordKind::Ttrpc,
+                QueueClass::AttachmentControl => RecordKind::Attachment,
+                QueueClass::NamedStream => RecordKind::NamedStream,
             };
             self.send_logical(kind, channel, frame.as_bytes().to_vec(), Vec::new())
                 .await?;
@@ -1391,7 +1392,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
                 .map_err(|_| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
             let mut record_payload =
                 Vec::with_capacity(FRAGMENT_HEADER_LEN + fragment.as_bytes().len());
-            record_payload.extend_from_slice(&fragment.header.encode(fragment_len, limit)?);
+            record_payload.extend_from_slice(&fragment.header().encode(fragment_len, limit)?);
             record_payload.extend_from_slice(fragment.as_bytes());
             let protected = self.protector.protect(kind, channel, &record_payload)?;
             let packet_attachments = attachments.take().unwrap_or_default();

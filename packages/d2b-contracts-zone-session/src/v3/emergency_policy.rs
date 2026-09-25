@@ -138,11 +138,6 @@ impl EmergencyPolicySpec {
         })
     }
 
-    /// Construct the inactive default policy.
-    pub fn default_values() -> Self {
-        Self::new(false, EmergencyScope::default(), 30, "").expect("default is valid")
-    }
-
     /// Whether this policy contributes to the effective scope.
     pub const fn enabled(&self) -> bool {
         self.enabled
@@ -169,7 +164,7 @@ redacted_debug!(EmergencyPolicySpec);
 
 impl Default for EmergencyPolicySpec {
     fn default() -> Self {
-        Self::default_values()
+        Self::new(false, EmergencyScope::default(), 30, "").expect("default is valid")
     }
 }
 

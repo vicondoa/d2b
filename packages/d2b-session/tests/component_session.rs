@@ -822,7 +822,7 @@ fn named_stream_state_and_scheduler_have_independent_credit_and_fairness() {
     );
 
     let ttrpc = OutboundFrame::control(QueueClass::TtrpcControl, vec![1]).unwrap();
-    assert_eq!(ttrpc.channel(), ChannelId::TTRPC_CONTROL);
+    assert_eq!(ttrpc.channel(), Ok(ChannelId::TTRPC_CONTROL));
 }
 
 #[test]

@@ -82,9 +82,6 @@ impl From<PrimitiveSpecError> for ResourceImportContractError {
     }
 }
 
-/// Compatibility alias used by controller and Provider adapter callers.
-pub type ResourceImportError = ResourceImportContractError;
-
 /// Disconnect behavior for a local projection Service.
 #[derive(
     Debug,

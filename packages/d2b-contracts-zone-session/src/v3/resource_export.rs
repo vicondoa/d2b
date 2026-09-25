@@ -93,9 +93,6 @@ impl From<PrimitiveSpecError> for ResourceExportContractError {
     }
 }
 
-/// Compatibility alias used by controller and Provider adapter callers.
-pub type ResourceExportError = ResourceExportContractError;
-
 /// Arbitration mode for one exported capability.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
@@ -151,9 +148,6 @@ pub enum ShareFairness {
     /// Use the Provider's signed weighted policy.
     Weighted,
 }
-
-/// Compatibility alias for callers that use the shorter fairness name.
-pub type Fairness = ShareFairness;
 
 /// Bounded quota and deadline policy shared by export and import requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, JsonSchema)]

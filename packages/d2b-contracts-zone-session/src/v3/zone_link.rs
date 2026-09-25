@@ -440,9 +440,6 @@ impl<'de> Deserialize<'de> for ZoneLinkStatusResource {
     }
 }
 
-/// Alias used by generic status adapters.
-pub type ZoneLinkStatus = ZoneLinkStatusResource;
-
 /// Record admission of one locally queued intent.
 pub const fn admit_local_intent(
     pending: u32,

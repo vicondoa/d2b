@@ -155,7 +155,7 @@ pub trait OwnedTransport: Send + 'static {
 /// The handle exposes only the transport descriptor and the ability to
 /// consume or close the owned carriage. It carries no ZoneLink state,
 /// authorization claims, or raw locator.
-pub struct OwnedTransportHandle(Option<Box<dyn OwnedTransport>>);
+pub struct OwnedTransportHandle(Box<dyn OwnedTransport>);
 
 impl OwnedTransportHandle {
     /// Wrap one owned transport without exposing its implementation type.
@@ -163,36 +163,27 @@ impl OwnedTransportHandle {
     where
         T: OwnedTransport,
     {
-        Self(Some(Box::new(transport)))
+        Self(Box::new(transport))
     }
 
     /// Wrap an already erased owned transport.
     pub fn from_box(transport: Box<dyn OwnedTransport>) -> Self {
-        Self(Some(transport))
+        Self(transport)
     }
 
     /// Borrow the immutable carriage descriptor.
     pub fn descriptor(&self) -> TransportDescriptor {
-        self.0
-            .as_ref()
-            .expect("an owned transport handle is consumed only once")
-            .descriptor()
+        self.0.descriptor()
     }
 
     /// Consume the handle and return the session-owned transport.
-    pub fn into_owned_transport(mut self) -> Box<dyn OwnedTransport> {
+    pub fn into_owned_transport(self) -> Box<dyn OwnedTransport> {
         self.0
-            .take()
-            .expect("an owned transport handle is consumed only once")
     }
 
     /// Close the owned carriage and consume the handle.
     pub async fn close(mut self) -> std::result::Result<(), TransportError> {
-        self.0
-            .take()
-            .expect("an owned transport handle is consumed only once")
-            .close()
-            .await
+        self.0.close().await
     }
 }
 
