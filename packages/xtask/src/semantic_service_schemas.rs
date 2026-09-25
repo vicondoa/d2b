@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 /// The subdirectory the committed artifacts live in.
 const OUT_DIR: &str = "docs/reference/schemas/v3";
 
-fn resource_ref_schema(pattern: String, allowed_types: &[String]) -> Value {
+fn resource_ref_schema(pattern: &str, allowed_types: &[&str]) -> Value {
     json!({
         "type": "string",
         "pattern": pattern,
@@ -41,18 +41,18 @@ fn resource_ref_schema(pattern: String, allowed_types: &[String]) -> Value {
 
 fn provider_ref_schema() -> Value {
     resource_ref_schema(
-        r"^Provider/[a-z][a-z0-9-]{0,62}$".to_owned(),
-        &[String::from("Provider")],
+        r"^Provider/[a-z][a-z0-9-]{0,62}$",
+        &["Provider"],
     )
 }
 
 fn service_ref_schema(service_type: &str) -> Value {
     resource_ref_schema(
-        format!(
+        &format!(
             "^{}\\/[a-z][a-z0-9-]{{0,62}}$",
             service_type.replace('.', "\\.")
         ),
-        &[service_type.to_owned()],
+        &[service_type],
     )
 }
 
@@ -68,11 +68,8 @@ fn generic_resource_ref_schema(allowed_types: &[&str]) -> Value {
         format!("^(?:{alternatives})/[a-z][a-z0-9-]{{0,62}}$")
     };
     resource_ref_schema(
-        pattern,
-        &allowed_types
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect::<Vec<_>>(),
+        &pattern,
+        allowed_types,
     )
 }
 
@@ -152,7 +149,7 @@ fn metadata_schema() -> Value {
                 "pattern": "^[a-z][a-z0-9-]{0,62}$",
             },
             "ownerRef": resource_ref_schema(
-                "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$".to_owned(),
+                "^(?:[A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$",
                 &[],
             ),
         },
