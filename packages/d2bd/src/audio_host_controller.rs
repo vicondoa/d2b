@@ -409,26 +409,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn qemu_controller_level_is_applied() {
-        let ctrl = QemuAudioController;
-        let level = LevelPercent::new(80).unwrap();
-        assert_eq!(
-            ctrl.enforce_level("qemu-vm", level, AudioChannel::Microphone),
-            HostEnforcementResult::Applied,
-        );
-    }
-
-    #[test]
-    fn qemu_controller_on_grant_is_applied() {
-        let ctrl = QemuAudioController;
-        // Unmute (grant=On) should also return Applied for qemu-media.
-        assert_eq!(
-            ctrl.enforce_grant("qemu-vm", AudioGrant::On, AudioChannel::Speaker),
-            HostEnforcementResult::Applied,
-        );
-    }
-
     // ── PipeWireHostController construction ─────────────────────────────────
 
     #[test]

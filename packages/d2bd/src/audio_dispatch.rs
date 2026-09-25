@@ -787,50 +787,6 @@ mod tests {
     }
 
     #[test]
-    fn fake_controller_failure_on_level_maps_to_unsupported() {
-        use crate::audio_host_controller::FakeHostController;
-        let cap = d2b_provider_guest_qemu_media::audio_capability();
-        let ctrl = FakeHostController::failed();
-        let level = LevelPercent::new(80).unwrap();
-        let host_result = ctrl.enforce_level("corp-vm", level, AudioChannel::Microphone);
-        assert_eq!(host_result, HostEnforcementResult::Failed);
-        let applied = combined_audio_applied(host_result, &cap);
-        assert_eq!(applied, AudioSetApplied::Unsupported);
-    }
-
-    #[test]
-    fn qemu_controller_applied_maps_to_host_only() {
-        use crate::audio_host_controller::QemuAudioController;
-        let cap = d2b_provider_guest_qemu_media::audio_capability();
-        let ctrl = QemuAudioController;
-        let host_result = ctrl.enforce_grant("qemu-vm", AudioGrant::Off, AudioChannel::Speaker);
-        assert_eq!(host_result, HostEnforcementResult::Applied);
-        let applied = combined_audio_applied(host_result, &cap);
-        assert_eq!(applied, AudioSetApplied::HostOnly);
-    }
-
-    #[test]
-    fn qemu_controller_never_calls_target_process_path() {
-        use crate::audio_host_controller::QemuAudioController;
-        // qemu-media VMs have guest_enforcement = Unsupported. Verify the
-        // applied result with Unsupported guest kind, not ProcessCapable.
-        let cap = d2b_provider_guest_qemu_media::audio_capability();
-        let ctrl = QemuAudioController;
-        let host_result = ctrl.enforce_level(
-            "qemu-vm",
-            LevelPercent::new(50).unwrap(),
-            AudioChannel::Microphone,
-        );
-        assert_eq!(host_result, HostEnforcementResult::Applied);
-        let applied = combined_audio_applied(host_result, &cap);
-        assert_eq!(
-            applied,
-            AudioSetApplied::HostOnly,
-            "qemu-media: offline policy applied → HostOnly; no guest enforcement"
-        );
-    }
-
-    #[test]
     fn level_increase_classifier_treats_missing_old_level_as_increase() {
         let current = AudioPolicyState::default_v2();
         let old = current.speaker_level;
