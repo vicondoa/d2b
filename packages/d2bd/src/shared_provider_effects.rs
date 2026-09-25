@@ -1057,7 +1057,7 @@ impl ProductionSharedProviderEffects {
             .cloned()
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let network_generation = request.generation;
-        let network_ref = key_ref(&request.target).to_canonical_string();
+        let network_ref = key_ref(&request.target)?.to_canonical_string();
         let mut guest_uids = Vec::with_capacity(spec.attachments().len());
         let mut attachment_generation = network_generation.get();
         for attachment in spec.attachments() {
@@ -1526,7 +1526,7 @@ impl ProductionSharedProviderEffects {
         let fence = self
             .network_content_fence(SharedProviderKind::Network, &runtime, request, &admission)
             .await?;
-        let owner_ref = key_ref(&request.target).clone();
+        let owner_ref = key_ref(&request.target)?;
         let children = NetworkChildPort::new(self, request, owner_ref, request.uid.clone(), fence);
         let readiness = children
             .readiness()
@@ -1590,13 +1590,13 @@ impl ProductionSharedProviderEffects {
         let holder = request.owner_ref()?;
         if holder.resource_type().as_str() != "Guest" {
             tracing::warn!(
-                device = %key_ref(&request.target).to_canonical_string(),
+                device = %key_ref(&request.target)?.to_canonical_string(),
                 owner = %holder.to_canonical_string(),
                 "TPM device reconcile refused: the Device is not owned by a Guest",
             );
             return Err(SharedProviderEffectError::InvalidResource);
         }
-        let device_ref = key_ref(&request.target).clone();
+        let device_ref = key_ref(&request.target)?;
         let runtime = self.runtime().inspect_err(|_| {
             tracing::warn!(
                 device = %device_ref.to_canonical_string(),
@@ -1635,7 +1635,7 @@ impl ProductionSharedProviderEffects {
                 Some(controller) => controller,
                 None => d2b_provider_device_tpm::TpmResourceController::new(
                     request.uid.clone(),
-                    key_ref(&request.target).clone(),
+                    key_ref(&request.target)?,
                     execution_ref.clone(),
                 )
                 .map_err(|_| SharedProviderEffectError::InvalidResource)?,
@@ -1655,7 +1655,7 @@ impl ProductionSharedProviderEffects {
             decision,
             d2b_provider_device_tpm::effects_service::AdmittedTpmDevice::from_row(
                 request.uid.clone(),
-                key_ref(&request.target).clone(),
+                key_ref(&request.target)?,
                 self.zone.as_str(),
                 execution_ref,
                 request.operation_id.clone(),
@@ -1667,7 +1667,7 @@ impl ProductionSharedProviderEffects {
         .map_err(|error| {
             tracing::warn!(
                 error = ?error,
-                device = %key_ref(&request.target).to_canonical_string(),
+                device = %key_ref(&request.target)?.to_canonical_string(),
                 "TPM device controller reconcile failed",
             );
             SharedProviderEffectError::Unavailable
@@ -1732,7 +1732,7 @@ impl ProductionSharedProviderEffects {
             )
             .await
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
-        let device_ref = key_ref(&request.target).to_canonical_string();
+        let device_ref = key_ref(&request.target)?.to_canonical_string();
         let ready = services.iter().any(|service| {
             service.pointer("/spec/providerRef").and_then(Value::as_str)
                 == Some(d2b_provider_device_usbip::PROVIDER_REF)
@@ -1868,14 +1868,14 @@ impl ProductionSharedProviderEffects {
                 .map_err(|_| SharedProviderEffectError::InvalidResource)?;
                 let mut controller =
                     d2b_provider_device_usbip::UsbipBindingController::new_admitted(
-                        &key_ref(&request.target),
+                        &key_ref(&request.target)?,
                         &service_ref,
                         &guest_ref,
                         admission,
                     )
                     .map_err(|_| SharedProviderEffectError::InvalidResource)?;
                 let desired = d2b_provider_device_usbip::binding_child_resources(
-                    &key_ref(&request.target),
+                    &key_ref(&request.target)?,
                     &service_ref,
                     &guest_ref,
                 )
@@ -2091,14 +2091,14 @@ impl ProductionSharedProviderEffects {
                     .and_then(|value| ResourceRef::parse(value).ok())
                 {
                     d2b_provider_device_security_key::SecurityKeyController::child_resources_for_user(
-                        &key_ref(&request.target),
+                        &key_ref(&request.target)?,
                         &service_ref,
                         &target_ref,
                         &user_ref,
                     )
                 } else {
                     d2b_provider_device_security_key::SecurityKeyController::child_resources(
-                        &key_ref(&request.target),
+                        &key_ref(&request.target)?,
                         &service_ref,
                         &target_ref,
                     )
@@ -2168,7 +2168,7 @@ impl ProductionSharedProviderEffects {
                     request.children,
                 ),
                 self.zone.as_str().to_owned(),
-                key_ref(&request.target).clone(),
+                key_ref(&request.target)?,
                 request.uid.clone(),
                 holder_ref,
                 request.generation,
@@ -2228,7 +2228,7 @@ impl ProductionSharedProviderEffects {
         )
         .map_err(|_| SharedProviderEffectError::InvalidResource)?;
         let mut controller = d2b_provider_device_usbip::UsbipBindingController::new(
-            &key_ref(&request.target),
+            &key_ref(&request.target)?,
             &service_ref,
             &guest_ref,
         )
@@ -2243,7 +2243,7 @@ impl ProductionSharedProviderEffects {
         &self,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        let device_ref = key_ref(&request.target).to_canonical_string();
+        let device_ref = key_ref(&request.target)?.to_canonical_string();
         let runtime = self.runtime()?;
         let children = runtime
             .committed_resources_of_type(d2b_provider_device_usbip::USB_SERVICE_RESOURCE_TYPE)
@@ -2267,7 +2267,7 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let runtime = self.runtime()?;
-        let service_ref = key_ref(&request.target).to_canonical_string();
+        let service_ref = key_ref(&request.target)?.to_canonical_string();
         let bindings = runtime
             .committed_resources_of_type(
                 d2b_provider_device_security_key::SECURITY_KEY_BINDING_RESOURCE_TYPE,
@@ -2289,7 +2289,7 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let runtime = self.runtime()?;
-        let device_ref = key_ref(&request.target).to_canonical_string();
+        let device_ref = key_ref(&request.target)?.to_canonical_string();
         let services = runtime
             .committed_resources_of_type(
                 d2b_provider_device_security_key::SECURITY_KEY_SERVICE_RESOURCE_TYPE,
@@ -2347,7 +2347,7 @@ impl ProductionSharedProviderEffects {
         zone: &ZoneId,
     ) -> Result<bool, SharedProviderEffectError> {
         for intent in desired.iter() {
-            if *intent.owner_ref() != key_ref(owner) || zone.as_str() != self.zone.as_str() {
+            if *intent.owner_ref() != key_ref(owner)? || zone.as_str() != self.zone.as_str() {
                 return Err(SharedProviderEffectError::InvalidResource);
             }
             if !self.resource_ready(intent.resource_ref()).await {
@@ -2377,7 +2377,7 @@ impl ProductionSharedProviderEffects {
         let fence = self
             .network_content_fence(SharedProviderKind::Network, &runtime, request, &admission)
             .await?;
-        let owner_ref = key_ref(&request.target).clone();
+        let owner_ref = key_ref(&request.target)?;
         let children = NetworkChildPort::new(self, request, owner_ref, request.uid.clone(), fence);
         let volume = children
             .current(&children.volume_ref)
@@ -2512,7 +2512,7 @@ impl ProductionSharedProviderEffects {
         let decision = runtime
             .tpm_device_is_admitted(
                 &request.uid,
-                &key_ref(&request.target),
+                &key_ref(&request.target)?,
                 vm_id.as_str(),
                 &request.operation_id,
                 None,
@@ -2540,7 +2540,7 @@ impl ProductionSharedProviderEffects {
             decision,
             d2b_provider_device_tpm::effects_service::AdmittedTpmDevice::from_row(
                 request.uid.clone(),
-                key_ref(&request.target).clone(),
+                key_ref(&request.target)?,
                 self.zone.as_str(),
                 execution_ref,
                 request.operation_id.clone(),
@@ -2561,7 +2561,7 @@ impl ProductionSharedProviderEffects {
                 }
                 tracing::warn!(
                     error = ?error,
-                    device = %key_ref(&request.target).to_canonical_string(),
+                    device = %key_ref(&request.target)?.to_canonical_string(),
                     "TPM device controller finalize failed",
                 );
                 Err(SharedProviderEffectError::Unavailable)
@@ -2574,7 +2574,7 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
         let runtime = self.runtime()?;
-        let service_ref = key_ref(&request.target).to_canonical_string();
+        let service_ref = key_ref(&request.target)?.to_canonical_string();
         let bindings = runtime
             .committed_resources_of_type(d2b_provider_device_usbip::USB_BINDING_RESOURCE_TYPE)
             .await
@@ -2634,7 +2634,7 @@ impl ProductionSharedProviderEffects {
                     request.children,
                 ),
                 self.zone.as_str().to_owned(),
-                key_ref(&request.target).clone(),
+                key_ref(&request.target)?,
                 request.uid.clone(),
                 admission.owner().holder_ref().clone(),
                 admission.owner().generation(),
@@ -2644,7 +2644,7 @@ impl ProductionSharedProviderEffects {
         let result = controller.finalize_lifecycle(&mut port).map_err(|error| {
             tracing::debug!(
                 error = ?error,
-                device = %key_ref(&request.target).to_canonical_string(),
+                device = %key_ref(&request.target)?.to_canonical_string(),
                 "GPU lifecycle finalize failed",
             );
             SharedProviderEffectError::Unavailable

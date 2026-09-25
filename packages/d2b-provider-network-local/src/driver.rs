@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use d2b_contracts_resource::v3::{
-    ControllerGeneration, ResourceRef, ResourceUid, execution_policy::ExecutionPolicy,
+    ControllerGeneration, ResourceRef, ResourceUid, ZoneId, execution_policy::ExecutionPolicy,
     network::NetworkSpec,
 };
 use d2b_provider_guest::GuestSpec;
@@ -151,7 +151,7 @@ pub trait NetworkDriverEffects: Send + Sync + 'static {
 /// plus the zone-authority inputs every derived identity folds in (U14).
 pub struct NetworkDriverArgs {
     /// The zone the driver serves.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
     /// The daemon-supplied facet set the family's effects implementation is
@@ -183,7 +183,8 @@ impl SharedProviderFamily for NetworkFamily {
     ) -> Result<Option<Vec<ChildEnsure>>, SharedProviderDeclarationError> {
         match component {
             NetworkComponent::Network => {
-                let owner = key_ref(ctx.key());
+                let owner = key_ref(ctx.key())
+                    .map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
                 let uid =
                     resource_uid(ctx.uid()).map_err(|_| SharedProviderDeclarationError::SpecInvalid)?;
                 let spec =
@@ -549,7 +550,7 @@ impl RequeueScheduler for RecordingRequeue {
 
     fn descriptor(runtime: Arc<RecordingRuntime>) -> d2b_resource_types::DriverDescriptor {
         network_descriptor(NetworkDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").expect("valid test zone"),
             controller_generation: d2b_contracts_resource::v3::ControllerGeneration::new(1)
                 .expect("generation"),
             facets: recording_facets(runtime),

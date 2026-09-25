@@ -527,7 +527,7 @@ impl<P: ProviderBase> TestHarness<P> {
     ///
     /// The clock is the harness's own, so a test advances time explicitly
     /// instead of waiting for it.
-    pub fn clock(&self) -> &Arc<DeterministicClock> {
+    pub fn clock(&self) -> &DeterministicClock {
         &self.clock
     }
 
