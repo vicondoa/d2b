@@ -400,6 +400,11 @@ pub fn decode_metadata(raw: &[u8]) -> Result<Value, GuestEffectError> {
 /// Convert one durable 16-byte uid to its canonical identity (the manager
 /// persists the uid as bytes; the Provider effects key on the canonical
 /// string).
+///
+/// # Errors
+///
+/// Returns [`GuestEffectError::InvalidResource`] when the bytes are not a
+/// canonical resource uid.
 pub fn resource_uid(bytes: &[u8; 16]) -> Result<ResourceUid, GuestEffectError> {
     ResourceUid::from_bytes(bytes).map_err(|_| GuestEffectError::InvalidResource)
 }
@@ -978,7 +983,11 @@ impl GuestDriver {
                         .any(|child| owned_child_matches_child_ensure(row, child))
             })
             .collect::<Vec<_>>();
-        obsolete.sort_by_key(|row| (teardown_rank(&row.key.type_name), row.key.name.clone()));
+        obsolete.sort_by(|a, b| {
+            teardown_rank(&a.key.type_name)
+                .cmp(&teardown_rank(&b.key.type_name))
+                .then_with(|| a.key.name.cmp(&b.key.name))
+        });
         let mut mutated = false;
         for row in obsolete {
             ctx.delete(&row.key)
