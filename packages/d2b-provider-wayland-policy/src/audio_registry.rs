@@ -823,4 +823,182 @@ mod tests {
 
         assert!(decode_services(&zone, &[resource]).unwrap().is_empty());
     }
-}
+struct NoAudioSource;
+
+    impl AudioMediatorSource for NoAudioSource {
+
+        fn build(&self, _vm_name: &str, _projection: bool) -> Option<Box<dyn AudioMediator>> {
+            None
+        }
+    }
+
+    struct FailingMediatorSource;
+
+    impl AudioMediatorSource for FailingMediatorSource {
+
+        fn build(&self, _vm_name: &str, _projection: bool) -> Option<Box<dyn AudioMediator>> {
+            Some(Box::new(d2b_provider_audio_pipewire::FakeAudioMediator::unavailable()))
+        }
+    }
+
+    fn service_resource(zone: &ZoneId) -> StoredResource {
+        stored_audio_resource(
+            "audio.d2bus.org.AudioService/owner",
+            serde_json::to_value(
+                AudioServiceSpec::owner(ResourceRef::parse("Endpoint/audio").unwrap(), zone.as_str())
+                    .unwrap(),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn binding_resource(zone: &ZoneId, mic_on: bool) -> StoredResource {
+        let mut spec = AudioBindingSpec::new(
+            ResourceRef::parse("audio.d2bus.org.AudioService/owner").unwrap(),
+            ResourceRef::parse("Guest/vm").unwrap(),
+            zone.as_str(),
+        )
+        .unwrap();
+        if mic_on {
+            spec.grants.mic = AudioGrant::On;
+        }
+        stored_audio_resource(
+            "audio.d2bus.org.AudioBinding/mic",
+            serde_json::to_value(spec).unwrap(),
+        )
+    }
+
+    fn guest_resource(name: &str) -> StoredResource {
+        stored_audio_resource(name, serde_json::json!({}))
+    }
+
+    #[test]
+    fn reconcile_binding_resource_validates_relationships_and_reconciles() {
+        let zone = ZoneId::parse("dev").unwrap();
+
+        // A service that is not the binding's declared same-Zone service.
+
+
+
+        let mut runtime = AudioResourceRuntime::new(zone.clone(), Arc::new(NoAudioSource));
+        let other_service = stored_audio_resource(
+            "audio.d2bus.org.AudioService/other",
+            serde_json::to_value(
+                AudioServiceSpec::owner(ResourceRef::parse("Endpoint/audio").unwrap(), zone.as_str())
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            runtime.reconcile_binding_resource(
+                &binding_resource(&zone, false),
+                &other_service,
+                &guest_resource("Guest/vm"),
+            ),
+            Err(AudioResourceRuntimeError::InvalidRelationship)
+        );
+
+        // A Guest row that is not the binding's target refuses, as does a
+        // Guest row whose envelope does not decode.
+
+                let mut broken_guest = guest_resource("Guest/vm");
+        broken_guest.canonical_json = b"{}".to_vec();
+        let mut runtime = AudioResourceRuntime::new(zone.clone(), Arc::new(NoAudioSource));
+        assert_eq!(
+            runtime.reconcile_binding_resource(
+                &binding_resource(&zone, false),
+                &service_resource(&zone),
+                &broken_guest,
+            ),
+            Err(AudioResourceRuntimeError::InvalidRelationship)
+        );
+
+        // A valid trio reconciles: no audio capability on the target
+        // publishes the honest Degraded/Unavailable status and the binding row
+        // enters the shared registry.
+
+
+
+        let mut runtime = AudioResourceRuntime::new(zone.clone(), Arc::new(NoAudioSource));
+        let status = runtime
+            .reconcile_binding_resource(
+                &binding_resource(&zone, false),
+                &service_resource(&zone),
+                &guest_resource("Guest/vm"),
+            )
+            .unwrap()
+            .expect("binding status");
+        assert_eq!(status.status.phase, AudioBindingPhase::Degraded);
+        assert_eq!(status.status.host_readiness, HostAudioReadiness::Unavailable);
+        assert_eq!(status.status.guest_readiness, GuestAudioReadiness::Unavailable);
+        assert_eq!(runtime.statuses().len(), 1);
+    }
+
+    #[test]
+    fn controller_error_maps_to_a_degraded_binding_status() {
+        let zone = ZoneId::parse("dev").unwrap();
+        let mut runtime = AudioResourceRuntime::new(zone.clone(), Arc::new(FailingMediatorSource));
+        let status = runtime
+            .reconcile_binding_resource(
+                &binding_resource(&zone, true),
+                &service_resource(&zone),
+                &guest_resource("Guest/vm"),
+            )
+            .unwrap()
+            .expect("binding status");
+        assert_eq!(status.status.phase, AudioBindingPhase::Degraded);
+        assert_eq!(
+            status.status.host_readiness,
+            HostAudioReadiness::Unavailable,
+            "the failing mediator's host readiness is surfaced"
+        );
+        assert_eq!(status.status.guest_readiness, GuestAudioReadiness::Ready);
+    }
+
+    #[test]
+    fn product_is_audio_resource_and_decode_spec_are_pinned_directly() {
+        let zone = ZoneId::parse("dev").unwrap();
+
+        // A non-audio type,and an unreadable envelope are unusable identities. other provider rows are not audio resources.
+
+
+        assert_eq!(
+            is_audio_resource(
+                &stored_audio_resource("Process/audio-service", serde_json::json!({})),
+                &zone,
+            ),
+            Err(AudioResourceRuntimeError::InvalidResource)
+        );
+        let mut broken = service_resource(&zone);
+        broken.canonical_json = b"{}".to_vec();
+        assert_eq!(
+            is_audio_resource(&broken, &zone),
+            Err(AudioResourceRuntimeError::InvalidResource)
+        );
+        let foreign_provider = stored_audio_resource(
+            "audio.d2bus.org.AudioService/foreign",
+            serde_json::json!({
+                "providerRef": "Provider/other",
+                "implementationDetail": true
+            }),
+        );
+        assert_eq!(is_audio_resource(&foreign_provider, &zone), Ok(false));
+        assert_eq!(is_audio_resource(&service_resource(&zone), &zone), Ok(true));
+
+        // The spec decoder re-inserts the reserved providerRef and round-trips
+        // the typed spec.
+
+
+        let decoded: AudioServiceSpec = decode_spec(&service_resource(&zone)).unwrap();
+        assert_eq!(decoded.provider_ref, PROVIDER_REF);
+        let decoded_binding: AudioBindingSpec = decode_spec(&binding_resource(&zone, false)).unwrap();
+        assert_eq!(decoded_binding.provider_ref, PROVIDER_REF);
+        assert_eq!(
+            decoded_binding.service_ref,
+            ResourceRef::parse("audio.d2bus.org.AudioService/owner").unwrap()
+        );
+        assert_eq!(
+            decode_spec::<AudioServiceSpec>(&broken),
+            Err(AudioResourceRuntimeError::InvalidResource)
+        );
+    }}
