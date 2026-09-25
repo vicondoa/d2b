@@ -1058,7 +1058,7 @@ impl ProductionSharedProviderEffects {
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let network_generation = request.generation;
         let network_ref = key_ref(&request.target).to_canonical_string();
-        let mut guest_uids = Vec::new();
+        let mut guest_uids = Vec::with_capacity(spec.attachments().len());
         let mut attachment_generation = network_generation.get();
         for attachment in spec.attachments() {
             let attached = self

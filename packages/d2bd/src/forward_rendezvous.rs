@@ -1364,8 +1364,48 @@ impl AsyncSeqpacket {
     }
 
     /// Read one frame, waiting at most `deadline` for it to arrive.
+    // R11 inventory note: genuinely synchronous path - the `nix::sys::socket`
+    // recv runs inside the `AsyncFd::async_io` readiness closure on a
+    // non-blocking descriptor (the clippy.toml replacement vocabulary names
+    // this exact AsyncFd-over-raw-socket shape as the sanctioned seam); the
+    // syscall never blocks because readiness was already observed.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) async fn read_frame(&self, deadline: Duration) -> Result<Vec<u8>, TypedError> {
-        let mut datagram = vec![0u8; MAX_FRAME_SIZE + 5];
+        // The frame is length-prefixed, so peek the four-byte prefix and
+        // size the datagram buffer from the declared length instead of the
+        // ceiling: drain_pending reads up to four frames per refused call,
+        // and the ceiling buffer is 1 MiB.
+        let mut prefix = [0u8; 4];
+        let peeked = match tokio::time::timeout(
+            deadline,
+            self.io.async_io(Interest::READABLE, |socket| {
+                recv(socket.as_raw_fd(), &mut prefix, MsgFlags::MSG_PEEK)
+                    .map_err(|errno| io::Error::from_raw_os_error(errno as i32))
+            }),
+        )
+        .await
+        {
+            Ok(Ok(read)) => read,
+            Ok(Err(error)) => return Err(recv_failure(error.to_string())),
+            Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"))),
+        };
+        if peeked < 4 {
+            // A datagram shorter than the prefix is malformed; consume it
+            // so the next read starts clean, refusing it exactly as the
+            // ceiling-buffer read did.
+            let mut short = [0u8; 4];
+            let read = match tokio::time::timeout(deadline, self.recv_datagram(&mut short)).await {
+                Ok(Ok(read)) => read,
+                Ok(Err(error)) => return Err(recv_failure(error.to_string())),
+                Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"))),
+            };
+            return decode_frame(&short[..read]);
+        }
+        let declared = u32::from_le_bytes(prefix) as usize;
+        if declared > MAX_FRAME_SIZE {
+            return Err(TypedError::WireFrameTooLarge { declared });
+        }
+        let mut datagram = vec![0u8; declared + 5];
         let read = match tokio::time::timeout(deadline, self.recv_datagram(&mut datagram)).await {
             Ok(Ok(read)) => read,
             Ok(Err(error)) => return Err(recv_failure(error.to_string())),

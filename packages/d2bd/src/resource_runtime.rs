@@ -2359,22 +2359,6 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 )?;
                 let payload = replace_public_field(&current_value, "spec", merged_spec)
                     .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
-                let mut operation_payload = format!(
-                    "{}:{}:",
-                    update.expected_uid().as_str(),
-                    update.expected_revision().get(),
-                )
-                .into_bytes();
-                operation_payload.extend_from_slice(&payload);
-                let payload_operation_digest =
-                    d2b_contracts_resource::v3::resource_schema::canonical_digest(
-                        d2b_contracts_resource::v3::resource_schema::RESOURCE_ENVELOPE_DOMAIN_TAG,
-                        &operation_payload,
-                    );
-                let operation_id = format!(
-                    "ch-update-child-{}",
-                    payload_operation_digest.trim_start_matches("sha256:")
-                );
                 let envelope = ResourceEnvelope::from_json(&current.canonical_json)
                     .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
                 let owner_ref = envelope
@@ -2420,7 +2404,6 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 // an update that did not route to the manager names a row
                 // this plane does not serve: refuse closed rather than write
                 // a pre-v3 row no actor would launch (KTD4).
-                let _ = (&owner_ref, &payload, &operation_id);
                 Err(CloudHypervisorResourceApiError::Conflict)
             }
             CloudHypervisorResourceRequest::UpdateStatus { guest_ref, status } => {
@@ -2472,37 +2455,6 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 {
                     return Ok(CloudHypervisorResourceResponse::StatusUpdated);
                 }
-                let mut payload_value = current_value;
-                let base_status = payload_value
-                    .get_mut("status")
-                    .and_then(Value::as_object_mut)
-                    .ok_or_else(|| {
-                        tracing::warn!("Cloud Hypervisor status update failed: status-replacement");
-                        CloudHypervisorResourceApiError::InvalidResponse
-                    })?;
-                base_status.insert("resource".to_owned(), desired_status.clone());
-                base_status.insert("phase".to_owned(), public_phase);
-                base_status.insert(
-                    "observedGeneration".to_owned(),
-                    Value::from(current.generation.get()),
-                );
-                let payload_bytes = serde_json::to_vec(&payload_value)
-                    .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?;
-                let payload = CanonicalJsonValue::parse(&payload_bytes)
-                    .map_err(|_| CloudHypervisorResourceApiError::InvalidResponse)?
-                    .to_canonical_bytes();
-                let mut operation_payload =
-                    format!("{}:{}:", current.uid.as_str(), current.revision.get()).into_bytes();
-                operation_payload.extend_from_slice(&payload);
-                let payload_operation_digest =
-                    d2b_contracts_resource::v3::resource_schema::canonical_digest(
-                        d2b_contracts_resource::v3::resource_schema::RESOURCE_ENVELOPE_DOMAIN_TAG,
-                        &operation_payload,
-                    );
-                let operation_id = format!(
-                    "ch-update-status-{}",
-                    payload_operation_digest.trim_start_matches("sha256:")
-                );
                 // U12 status decision: `Guest` is a converted type, so its
                 // row has no durable status to write - the row's actor owns
                 // status (R11). The controller's layered status is captured
@@ -2510,12 +2462,9 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 // the row's `status.resource` projection; a session with no
                 // capture point (an explicit lifecycle relist) acknowledges
                 // the write without persisting it. Converted children never
-                // receive a provider-written status either: the Process and
+                // never receive a provider-written status either: the Process and
                 // Endpoint drivers' `Ready` is the only publication, and
                 // writing one here as well would be a dual-write.
-                let _ = &current;
-                let _ = &payload;
-                let _ = &operation_id;
                 if let Some(sink) = self.status_sink.as_ref() {
                     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
                     {
@@ -2866,11 +2815,6 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 if envelope.metadata().owner_ref() != Some(&guest_ref) {
                     return Err(CloudHypervisorResourceApiError::Conflict);
                 }
-                let _operation_id = format!(
-                    "cloud-hypervisor-delete-child-{}-{}",
-                    child.uid().as_str(),
-                    child.revision().get(),
-                );
                 if child_mutation_route(child.target()) == ChildMutationRoute::Manager {
                     // U17: the manager marks a converted child deleting and
                     // cascades; the child's own actor owns the cleanup.
