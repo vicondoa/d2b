@@ -76,6 +76,31 @@ fn operation_validation_enforces_closed_identifiers_and_semantic_bounds() {
             .code(),
         "config-view-invalid"
     );
+
+    let unknown_field = serde_json::json!({
+        "guestRef": "Guest/work",
+        "identifier": "guest-config",
+        "typoKey": "must be rejected"
+    });
+    assert_eq!(
+        service
+            .validate_operation(ConfigOperation::ReadGuestConfig, &unknown_field)
+            .expect_err("unknown fields must fail closed admission")
+            .code(),
+        "config-request-invalid"
+    );
+
+    let wrong_type = serde_json::json!({
+        "guestRef": 42,
+        "identifier": "guest-config"
+    });
+    assert_eq!(
+        service
+            .validate_operation(ConfigOperation::ReadGuestConfig, &wrong_type)
+            .expect_err("wrong field types must fail closed admission")
+            .code(),
+        "config-request-invalid"
+    );
 }
 
 #[test]
