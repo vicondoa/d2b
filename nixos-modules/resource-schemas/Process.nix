@@ -1,7 +1,0 @@
-# Generated from the d2b-contracts-resource and d2b-contracts-zone-session contract families.
-# Do not hand-edit; run xtask gen-resource-schemas.
-{ lib }:
-{
-type = "Process";
-schema = builtins.fromJSON (builtins.readFile ../docs/reference/schemas/v3/core.d2bus.org_Process.schema.json);
-}

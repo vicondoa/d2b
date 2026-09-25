@@ -34,13 +34,13 @@ mod diagnostic_redaction;
 use schemars::schema::RootSchema;
 
 mod async_gate;
+mod authority_common;
 mod bazel_evidence;
 mod changelog;
 mod deadcode;
 mod delivery;
 mod gen_broker_operations;
 mod gen_layer_catalogs;
-mod gen_resource_schemas;
 mod inventory;
 mod nix_inventories;
 mod production_closure;
@@ -117,9 +117,6 @@ fn main() -> std::process::ExitCode {
         }),
         [command] if command == "gen-zone-nix-options" => run_task("gen-zone-nix-options", || {
             zone_schema::gen_zone_nix_options(repo_root()?)
-        }),
-        [command] if command == "gen-resource-schemas" => run_task("gen-resource-schemas", || {
-            gen_resource_schemas::generate(repo_root()?)
         }),
         [command, rest @ ..] if command == "gen-layer-catalogs" => {
             let result = repo_root()
@@ -215,7 +212,7 @@ fn main() -> std::process::ExitCode {
         [command] if command == "deadcode-check" => deadcode::run(),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|blocking-census [<crate-path>...] [--json <path>] [--check <baseline.json>]|check-async-gate [--write-inventory] [<paths>...]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
+                "usage: cargo run --manifest-path Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-layer-catalogs [--check|--write]|gen-error-codes|gen-provider-packaging|gen-nix-inventories|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|gen-package-policy-inputs [--check|--write]|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|bazel-evidence <check-security|security-digest|classify-failure|redact-log> ...|check-provider-crate-layout [--fix]|blocking-census [<crate-path>...] [--json <path>] [--check <baseline.json>]|check-async-gate [--write-inventory] [<paths>...]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|recovery-import|seal|merge-target|merge-eligibility|help> [options]>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -372,7 +369,16 @@ fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
 
     let out_file = out_dir.join("d2b_resource_v3_ttrpc.rs");
     sanitize_generated_rust(&out_file)?;
-    Ok(vec![out_file])
+    // The generated ttrpc surface references `super::d2b_resource_v3::...`
+    // for the message types, so the module file carries the alias beside the
+    // ttrpc module. Generator-owned like the contracts-resource side's
+    // `write_contract_generated_mod`, so the generated dir has no
+    // hand-editable gap.
+    fs::write(
+        out_dir.join("mod.rs"),
+        "// @generated\n\npub mod d2b_resource_v3 {\n    pub use d2b_contracts_resource::resource_proto::*;\n}\n\npub mod d2b_resource_v3_ttrpc;\n",
+    )?;
+    Ok(vec![out_file, out_dir.join("mod.rs")])
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
@@ -1027,117 +1033,100 @@ fn parse_rust_items(
     path: &Path,
 ) -> Result<Vec<RustItem>, Box<dyn std::error::Error>> {
     let text = fs::read_to_string(path)?;
-    let lines = text.lines().collect::<Vec<_>>();
     let file_rel = path
         .strip_prefix(repo_root)?
         .to_string_lossy()
         .replace('\\', "/");
+    let syntax: syn::File = syn::parse_str(&text)?;
 
     let mut items = Vec::new();
-    let mut index = 0usize;
-    while index < lines.len() {
-        let line = lines[index].trim_start();
-
-        // Skip macro_rules! definitions: their bodies contain
-        // `pub struct $name(...)` templates whose `$name`
-        // placeholder is not a valid Rust identifier and would
-        // make extract_name fail. We track brace depth from the
-        // `macro_rules! foo {` opening line until the matched
-        // closing brace and skip everything in between.
-        if line.starts_with("macro_rules!") {
-            let mut depth = brace_delta(lines[index]);
-            index += 1;
-            // If the `{` is on a later line, advance until we see it.
-            while depth == 0 && index < lines.len() {
-                depth += brace_delta(lines[index]);
-                index += 1;
-                if depth > 0 {
-                    break;
-                }
-            }
-            while depth > 0 && index < lines.len() {
-                depth += brace_delta(lines[index]);
-                index += 1;
-            }
-            continue;
-        }
-
-        let kind = if line.starts_with("pub struct ") {
-            Some(ItemKind::Struct)
-        } else if line.starts_with("pub enum ") {
-            Some(ItemKind::Enum)
-        } else {
-            None
-        };
-
-        let Some(kind) = kind else {
-            index += 1;
-            continue;
-        };
-
-        let start = index;
-        let mut item_lines = vec![lines[index].to_string()];
-        let mut depth = brace_delta(lines[index]);
-        index += 1;
-        while depth > 0 && index < lines.len() {
-            item_lines.push(lines[index].to_string());
-            depth += brace_delta(lines[index]);
-            index += 1;
-        }
-
-        let item_text = item_lines.join("\n");
-        let body = extract_body(&item_text);
-        let name = extract_name(
-            item_lines.first().map(String::as_str).unwrap_or_default(),
-            &kind,
-        )?;
-        let fields = if kind == ItemKind::Struct {
-            parse_fields(&body)
-        } else {
-            Vec::new()
-        };
-        let variants = if kind == ItemKind::Enum {
-            parse_variants(&body)
-        } else {
-            Vec::new()
-        };
-        items.push(RustItem {
-            name,
-            kind,
-            file_rel: file_rel.clone(),
-            line: start + 1,
-            fields,
-            variants,
-        });
-    }
-
+    let mut collector = IpcItemCollector {
+        text: &text,
+        file_rel: &file_rel,
+        items: &mut items,
+    };
+    syn::visit::Visit::visit_file(&mut collector, &syntax);
     Ok(items)
 }
 
-fn brace_delta(line: &str) -> i32 {
-    let opens = line.chars().filter(|&ch| ch == '{').count() as i32;
-    let closes = line.chars().filter(|&ch| ch == '}').count() as i32;
-    opens - closes
+/// The `syn` visitor that collects the IPC declarations: every
+/// `pub struct`/`pub enum` item in the file, at any nesting depth (module
+/// bodies, function bodies, impl blocks). `macro_rules!` bodies stay opaque
+/// token streams, so their `pub struct $name(...)` templates are never
+/// collected, exactly like the line scanner's skip.
+struct IpcItemCollector<'a> {
+    text: &'a str,
+    file_rel: &'a str,
+    items: &'a mut Vec<RustItem>,
 }
 
-fn extract_name(header: &str, kind: &ItemKind) -> Result<String, Box<dyn std::error::Error>> {
-    let needle = match kind {
-        ItemKind::Struct => "pub struct ",
-        ItemKind::Enum => "pub enum ",
-    };
-    let after = header
-        .split_once(needle)
-        .map(|(_, tail)| tail)
-        .ok_or("missing type header")?
-        .trim_start();
-    let name = after
-        .chars()
-        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-        .collect::<String>();
-    if name.is_empty() {
-        return Err("could not parse type name".into());
+impl<'ast> syn::visit::Visit<'ast> for IpcItemCollector<'_> {
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        if !matches!(item.vis, syn::Visibility::Public(_)) {
+            return;
+        }
+        // Tuple and unit structs carry no brace; their body is empty.
+        let body = match &item.fields {
+            syn::Fields::Named(fields) => slice_source(
+                self.text,
+                fields.brace_token.span.open(),
+                fields.brace_token.span.close(),
+            ),
+            _ => String::new(),
+        };
+        let fields = parse_fields(&extract_body(&body));
+        self.items.push(RustItem {
+            name: item.ident.to_string(),
+            kind: ItemKind::Struct,
+            file_rel: self.file_rel.to_owned(),
+            line: item.struct_token.span.start().line,
+            fields,
+            variants: Vec::new(),
+        });
     }
-    Ok(name)
+
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        if !matches!(item.vis, syn::Visibility::Public(_)) {
+            return;
+        }
+        let body = slice_source(
+            self.text,
+            item.brace_token.span.open(),
+            item.brace_token.span.close(),
+        );
+        let variants = parse_variants(&extract_body(&body));
+        self.items.push(RustItem {
+            name: item.ident.to_string(),
+            kind: ItemKind::Enum,
+            file_rel: self.file_rel.to_owned(),
+            line: item.enum_token.span.start().line,
+            fields: Vec::new(),
+            variants,
+        });
+    }
+}
+
+/// The original source text between a braced group's delimiters (the item's
+/// body between its `{` and `}`), so the field/variant extraction below sees
+/// exactly the bytes the previous line-join produced.
+fn slice_source(text: &str, open: proc_macro2::Span, close: proc_macro2::Span) -> String {
+    let start = open.start();
+    let end = close.end();
+    text[line_col_to_offset(text, start.line, start.column)
+        ..line_col_to_offset(text, end.line, end.column)]
+        .to_owned()
+}
+
+/// Byte offset of a 1-based line / 0-based column position.
+fn line_col_to_offset(text: &str, line: usize, column: usize) -> usize {
+    let mut offset = 0;
+    for (index, line_text) in text.split_inclusive('\n').enumerate() {
+        if index + 1 == line {
+            return offset + column;
+        }
+        offset += line_text.len();
+    }
+    offset
 }
 
 fn extract_body(item_text: &str) -> String {

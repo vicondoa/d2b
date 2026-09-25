@@ -50,7 +50,16 @@ nix = { version = "0.29", default-features = false, features = ["user"] }
 # way to get an owned, safe anchored-open API.
 rustix = { workspace = true }
 protobuf-codegen = "3.7.2"
+# The gen-daemon-api IPC declaration scan slices each item's braced body out
+# of the original source text via its syn span (already in the lockfile via
+# syn/schemars), so the rendered doc stays byte-identical to the line-based
+# extraction.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 serde.workspace = true
+# The gen-daemon-api IPC declaration scan parses the contract sources with
+# syn (already in the lockfile via schemars), replacing the hand-rolled
+# brace-counted `pub struct`/`pub enum` line scanner.
+syn = { version = "2", features = ["full", "visit"] }
 ttrpc-codegen = "0.6.0"
 schemars.workspace = true
 serde_json.workspace = true

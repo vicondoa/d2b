@@ -30,6 +30,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::authority_common::{collect_rs_files, verify_committed};
 use serde::Deserialize;
 
 /// The directory-glob root the per-crate declarations live under.
@@ -70,7 +71,7 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
         ));
     }
     let rendered = render(repo_root)?;
-    verify_committed(repo_root, &rendered)?;
+    verify_committed(repo_root, GENERATED_ARTIFACT, &rendered, "provider-registration")?;
     let rendered_again = render(repo_root)?;
     if rendered_again != rendered {
         return Err("provider-registration regeneration is not idempotent".to_owned());
@@ -105,26 +106,6 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
         )
     })?;
     Ok(vec![artifact_path])
-}
-
-/// Fail when the committed copy of the generated artifact differs from the
-/// declarations' render.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn verify_committed(repo_root: &Path, rendered: &str) -> Result<(), String> {
-    let artifact_path = repo_root.join(GENERATED_ARTIFACT);
-    let on_disk = fs::read_to_string(&artifact_path).map_err(|_| {
-        format!(
-            "provider-registration artifact is missing at {}; run `cargo xtask check-provider-crate-layout --fix`",
-            artifact_path.display()
-        )
-    })?;
-    if on_disk != rendered {
-        return Err(format!(
-            "provider-registration drift: the committed generated artifact {} differs from the declarations' output; a hand edit or a stale generation must be repaired by `cargo xtask check-provider-crate-layout --fix`",
-            artifact_path.display()
-        ));
-    }
-    Ok(())
 }
 
 /// The declaration-to-source parity violations: a declared provider that is
@@ -213,30 +194,6 @@ fn parity_errors(repo_root: &Path) -> Result<Vec<String>, String> {
         }
     }
     Ok(errors)
-}
-
-/// Recursively collect every `.rs` file under one source tree.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn collect_rs_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut out = Vec::new();
-    if !dir.is_dir() {
-        return Err(format!(
-            "missing-src: the declaring crate has no src tree at {}",
-            dir.display()
-        ));
-    }
-    let entries = fs::read_dir(dir)
-        .map_err(|error| format!("cannot read {}: {error}", dir.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read a source entry: {error}"))?;
-        let path = entry.path();
-        if path.is_dir() {
-            out.extend(collect_rs_files(&path)?);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            out.push(path);
-        }
-    }
-    Ok(out)
 }
 
 /// Every `pub const NAME: ServiceDecl = ServiceDecl { id: "ID", ... };` in

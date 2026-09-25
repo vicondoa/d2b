@@ -30,6 +30,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::authority_common::{collect_rs_files, verify_committed};
 use crate::gen_broker_operations;
 use crate::resource_type_authority;
 
@@ -58,7 +59,7 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
     let artifacts = gen_broker_operations::render_artifacts(repo_root)
         .map_err(|error| format!("operation-row generation failed: {error}"))?;
     for (relative, rendered) in &artifacts {
-        verify_committed(repo_root, relative, rendered)?;
+        verify_committed(repo_root, relative, rendered, "operation-row")?;
     }
     let rendered_again = gen_broker_operations::render_artifacts(repo_root)
         .map_err(|error| format!("operation-row generation failed: {error}"))?;
@@ -108,26 +109,6 @@ pub fn regenerate(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
         written.push(artifact_path);
     }
     Ok(written)
-}
-
-/// Fail when the committed copy of one generated artifact differs from the
-/// declarations' render.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn verify_committed(repo_root: &Path, relative: &str, rendered: &str) -> Result<(), String> {
-    let artifact_path = repo_root.join(relative);
-    let on_disk = fs::read_to_string(&artifact_path).map_err(|_| {
-        format!(
-            "operation-row artifact is missing at {}; run `cargo xtask check-provider-crate-layout --fix`",
-            artifact_path.display()
-        )
-    })?;
-    if on_disk != rendered {
-        return Err(format!(
-            "operation-row drift: the committed generated artifact {} differs from the declarations' output; a hand edit or a stale generation must be repaired by `cargo xtask check-provider-crate-layout --fix`",
-            artifact_path.display()
-        ));
-    }
-    Ok(())
 }
 
 /// The declaration-to-descriptor parity violations: a declared operation the
@@ -333,30 +314,6 @@ fn service_facet_bound_errors(repo_root: &Path) -> Result<Vec<String>, String> {
     errors.sort();
     errors.dedup();
     Ok(errors)
-}
-
-/// Recursively collect every `.rs` file under one source tree.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn collect_rs_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut out = Vec::new();
-    if !dir.is_dir() {
-        return Err(format!(
-            "missing-src: the declaring crate has no src tree at {}",
-            dir.display()
-        ));
-    }
-    let entries = fs::read_dir(dir)
-        .map_err(|error| format!("cannot read {}: {error}", dir.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read a source entry: {error}"))?;
-        let path = entry.path();
-        if path.is_dir() {
-            out.extend(collect_rs_files(&path)?);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            out.push(path);
-        }
-    }
-    Ok(out)
 }
 
 /// Every `pub const NAME: &str = "VALUE";` in one crate's sources, as an

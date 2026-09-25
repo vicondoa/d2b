@@ -124,12 +124,6 @@ generated_artifact_check(
     ],
 )
 
-generated_artifact_check(
-    name = "gen_resource_schemas_drift",
-    command = "gen-resource-schemas",
-    data = ["//:generated_resource_schemas"],
-)
-
 # The telemetry `op` label domain is projected from the committed broker rows,
 # so the drift target needs the row catalog as an input beside the artifacts it
 # compares.
@@ -241,7 +235,6 @@ test_suite(
         ":gen_package_policy_inputs_drift",
         ":gen_provider_packaging_drift",
         ":gen_resource_proto_drift",
-        ":gen_resource_schemas_drift",
         ":gen_resource_ttrpc_drift",
         ":gen_schemas_drift",
         ":schema_reproducibility_test",

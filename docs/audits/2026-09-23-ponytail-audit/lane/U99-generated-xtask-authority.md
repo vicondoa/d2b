@@ -25,3 +25,12 @@ Read (in full or structural + targeted ranges):`packages/xtask/src/gen_broker_op
 ## Addendum (post-audit tree movement)
 
 - PR #600 (4d26998d8) added ~+1,300 lines to packages/xtask/src/async_gate.rs plus data/async-gate-inventory.json after this pass; treat the async-gate scanner as unaudited new surface.
+
+## U99 outcome (2026-09-24)
+
+- applied: gen-daemon-api's hand-rolled brace-counted parser (parse_rust_items line scan, brace_delta, extract_name, macro_rules skip) replaced with a syn visitor (IpcItemCollector, slice_source, line_col_to_offset); each item's braced body is span-sliced from the original source and fed to the unchanged text-based field/variant extraction, so `docs/reference/daemon-api.md` stays byte-identical (regenerated, git diff clean). syn 2.0.119 + proc-macro2 (span-locations) become direct xtask deps; no new lockfile nodes.
+- applied: `collect_rs_files`/`verify_committed` triplication folded into one shared `packages/xtask/src/authority_common.rs`; the three authorities call the shared helpers with their own authority name, preserving the exact error strings and walk order.
+- applied: `gen-resource-schemas` deleted (module, dispatch arm, usage row, GENERATOR_COMMANDS row, GENERATED_ARTIFACT_COMMANDS row, gen_resource_schemas_drift bazel target + test_suite entry, root `generated_resource_schemas` filegroup) and the six orphaned `nixos-modules/resource-schemas/*.nix` wrappers deleted (workspace grep: zero consumers outside the deleted generator + docs prose).
+- applied: zone_schema's duplicate `resource-types.nix` emitter deleted (generated_resource_types_module, write arm, read-back assertion, and the two tests that rendered it now read the committed authority-owned file); `generated_zone_nix_options` bazel filegroup trimmed to the generator's 3-file output. Canonical emission = resource_type_authority via check-provider-crate-layout.
+- applied: `packages/d2b-resource-api/src/generated/mod.rs` folded into `gen_resource_ttrpc`'s emission (`// @generated` header + alias + ttrpc module), committed file updated to match, `resource_ttrpc_generated` filegroup +1 entry.
+- not in this work order (lane rows only): `string_array`/`string_slice` collapse and the `clipto_camel_casepy` sanitize no-op remain open.
