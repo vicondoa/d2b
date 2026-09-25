@@ -754,9 +754,12 @@ fn render_float(v: f64) -> String {
     }
 }
 
-/// Render an HTTP-shaped response for library consumers and tests. The
-/// daemon does not expose this renderer as a public listener.
-pub fn metrics_handler(request: &[u8], registry: &Registry) -> Vec<u8> {
+/// Parse and validate the request line of an HTTP-shaped metrics request.
+///
+/// Only `GET /metrics` is served; a different method or path is refused
+/// with the closed 405/404 responses. Shared by [`metrics_handler`] and
+/// [`metrics_handler_with_ch_stats`] so the two cannot drift.
+fn validate_metrics_request(request: &[u8]) -> Result<(), Vec<u8>> {
     let head = request.split(|b| *b == b'\n').next().unwrap_or(&[]);
     let head = std::str::from_utf8(head).unwrap_or("");
     let mut parts = head.split_whitespace();
@@ -764,10 +767,23 @@ pub fn metrics_handler(request: &[u8], registry: &Registry) -> Vec<u8> {
     let path = parts.next().unwrap_or("");
 
     if method != "GET" {
-        return http_response(405, "text/plain; charset=utf-8", "method not allowed\n");
+        return Err(http_response(
+            405,
+            "text/plain; charset=utf-8",
+            "method not allowed\n",
+        ));
     }
     if path != "/metrics" {
-        return http_response(404, "text/plain; charset=utf-8", "not found\n");
+        return Err(http_response(404, "text/plain; charset=utf-8", "not found\n"));
+    }
+    Ok(())
+}
+
+/// Render an HTTP-shaped response for library consumers and tests. The
+/// daemon does not expose this renderer as a public listener.
+pub fn metrics_handler(request: &[u8], registry: &Registry) -> Vec<u8> {
+    if let Err(response) = validate_metrics_request(request) {
+        return response;
     }
 
     let body = registry.render();
@@ -788,17 +804,8 @@ pub fn metrics_handler_with_ch_stats(
     ch_source: &dyn crate::ch_stats::ChStatsSource,
     running_probe: &dyn crate::ch_stats::VmRunningProbe,
 ) -> Vec<u8> {
-    let head = request.split(|b| *b == b'\n').next().unwrap_or(&[]);
-    let head = std::str::from_utf8(head).unwrap_or("");
-    let mut parts = head.split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let path = parts.next().unwrap_or("");
-
-    if method != "GET" {
-        return http_response(405, "text/plain; charset=utf-8", "method not allowed\n");
-    }
-    if path != "/metrics" {
-        return http_response(404, "text/plain; charset=utf-8", "not found\n");
+    if let Err(response) = validate_metrics_request(request) {
+        return response;
     }
 
     let mut body = registry.render();
@@ -1199,5 +1206,20 @@ mod tests {
         );
         let s = std::str::from_utf8(&resp).expect("utf8");
         assert!(s.starts_with("HTTP/1.1 404 "));
+    }
+
+    #[test]
+    fn metrics_handler_with_ch_stats_rejects_non_get_method() {
+        use crate::ch_stats::NullChStatsSource;
+        let r = Registry::new();
+        let resp = metrics_handler_with_ch_stats(
+            b"POST /metrics HTTP/1.1\r\n\r\n",
+            &r,
+            &[],
+            &NullChStatsSource,
+            &|_: &str| false,
+        );
+        let s = std::str::from_utf8(&resp).expect("utf8");
+        assert!(s.starts_with("HTTP/1.1 405 "));
     }
 }
