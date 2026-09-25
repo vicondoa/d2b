@@ -2125,20 +2125,13 @@ where
                 }
             }
         }
-        let committed = BTreeMap::new();
-
         let desired_lifecycle = if dependency_readiness != DependencyReadiness::Ready {
             DesiredLifecycle::Stopped
         } else {
             self.lifecycle_intent.unwrap_or(DesiredLifecycle::Running)
         };
         match self
-            .repair_children(
-                child_plan.child_batch(),
-                &children,
-                &committed,
-                desired_lifecycle,
-            )
+            .repair_children(child_plan.child_batch(), &children, desired_lifecycle)
             .await
         {
             Ok(true) => {
@@ -2865,26 +2858,11 @@ where
         &self,
         batch: &GuestChildBatch,
         observed: &BTreeMap<ResourceRef, OwnedChildSnapshot>,
-        committed: &BTreeMap<ResourceRef, CommittedChild>,
         desired_lifecycle: DesiredLifecycle,
     ) -> Result<bool, CloudHypervisorError> {
         for mutation in batch.mutations() {
             let target = mutation.target();
             let Some(child) = observed.get(target) else {
-                if target.resource_type().as_str() == "Process"
-                    && desired_lifecycle == DesiredLifecycle::Running
-                    && let Some(identity) = committed.get(target)
-                {
-                    let update = ChildSpecUpdate::new(
-                        target.clone(),
-                        identity.uid().clone(),
-                        identity.revision(),
-                        mutation.body().clone(),
-                        Some(desired_lifecycle),
-                    )?;
-                    self.api.update_spec(update).await?;
-                    return Ok(true);
-                }
                 continue;
             };
             let lifecycle_drift = target.resource_type().as_str() == "Process"
