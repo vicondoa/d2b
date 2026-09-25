@@ -415,10 +415,17 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
 
     /// Build an adapter with explicit blocking concurrency and fallback timeout.
     ///
-    /// A zero blocking limit is rejected because it would deadlock every call.
+    /// A zero blocking limit is clamped up to one, because zero would
+    /// deadlock every call; a zero fallback timeout is clamped up to the
+    /// default thirty-second deadline, because every blocked effect would
+    /// otherwise expire immediately.
     pub fn with_limits(backend: B, blocking_limit: usize, default_timeout: Duration) -> Self {
-        assert!(blocking_limit > 0, "blocking limit must be nonzero");
-        assert!(!default_timeout.is_zero(), "timeout must be nonzero");
+        let blocking_limit = blocking_limit.max(1);
+        let default_timeout = if default_timeout.is_zero() {
+            Duration::from_secs(30)
+        } else {
+            default_timeout
+        };
         Self {
             inner: Arc::new(Inner {
                 backend: Arc::new(backend),
