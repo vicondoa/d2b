@@ -1,6 +1,6 @@
 //! Bounded in-memory clipboard history and lifecycle controls.
 
-use crate::picker::CompletionKey;
+use crate::picker::{CompletionKey, EntryDigest};
 use crate::policy::Policy;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -42,7 +42,7 @@ impl std::error::Error for HistoryError {}
 
 /// A clipboard item retained only in clipd-host process memory.
 pub struct ClipboardEntry {
-    token: String,
+    token: EntryDigest,
     guest: String,
     mime: String,
     bytes: Vec<u8>,
@@ -75,7 +75,7 @@ impl ClipboardEntry {
         hasher.update([0]);
         hasher.update(bytes);
         hasher.update(created_at.to_le_bytes());
-        let token = format!("sha256:{:x}", hasher.finalize());
+        let token = EntryDigest::from_sha256_hex(format!("sha256:{:x}", hasher.finalize()));
         Ok(Self {
             token,
             guest,
@@ -85,9 +85,9 @@ impl ClipboardEntry {
         })
     }
 
-    /// Borrow the opaque entry token.
+/// Borrow the opaque entry token..
     pub fn token(&self) -> &str {
-        &self.token
+        self.token.as_str()
     }
 
     /// Borrow the authenticated owner label.
