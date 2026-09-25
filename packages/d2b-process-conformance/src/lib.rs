@@ -33,7 +33,6 @@ mod status;
 mod terminal;
 mod ticket;
 
-pub mod process_provider;
 pub mod suite;
 pub mod testing;
 
