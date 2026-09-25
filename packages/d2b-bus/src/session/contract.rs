@@ -957,6 +957,7 @@ impl RouteAdmissionVerifier {
 
     /// Re-check the runtime-owned authority state against one borrowed
     /// admission body, without constructing owned evidence.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn verify_body(
         &self,
         body: &RouteAdmissionBody,
