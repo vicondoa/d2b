@@ -563,11 +563,6 @@ impl GuestUpgradePlan {
         self.next_session_generation
     }
 
-    /// Whether durable state is preserved.
-    pub const fn preserve_state(&self) -> bool {
-        true
-    }
-
     /// Borrow ordered recycle steps.
     pub fn steps(&self) -> &[FinalizationStep] {
         &self.steps
