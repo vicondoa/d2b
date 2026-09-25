@@ -2907,7 +2907,7 @@ impl ResourcePlaneV3 {
             // The Guest family: the descriptor builds its effects from the
             // declared facets; no externally built port appears here (R2).
             "guest" => vec![guest_descriptor(GuestDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.guest_facets.clone(),
             })],
