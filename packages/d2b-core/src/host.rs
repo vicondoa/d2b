@@ -538,10 +538,9 @@ pub enum CapabilityStatus {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgePortFlags, HostJson, IfName, Ipv6SysctlEntry, TapRole, UsbipBusidLock,
+        BridgePortFlags, HostJson, Ipv6SysctlEntry, TapRole, UsbipBusidLock,
         UsbipLockOwner, UsbipLockScope, VendorProductPair,
     };
-    use d2b_contracts_resource::v3::IfNameError;
 
     #[test]
     fn host_json_denies_unknown_fields() {
