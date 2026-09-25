@@ -31,6 +31,9 @@ pub enum CredentialResourceRuntimeError {
     InvalidResource,
     /// A typed Credential session refused or could not confirm revocation.
     Revocation,
+    /// The dependency-facts read failed (a manager RPC failure), so the
+    /// caller can distinguish a failed read from an absent row.
+    DependencyFacts,
 }
 
 impl core::fmt::Display for CredentialResourceRuntimeError {
@@ -38,6 +41,7 @@ impl core::fmt::Display for CredentialResourceRuntimeError {
         formatter.write_str(match self {
             Self::InvalidResource => "credential-resource-invalid",
             Self::Revocation => "credential-revocation-unconfirmed",
+            Self::DependencyFacts => "credential-dependency-facts-unavailable",
         })
     }
 }

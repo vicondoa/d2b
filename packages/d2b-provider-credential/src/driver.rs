@@ -261,14 +261,16 @@ pub struct CredentialLeaseFacts {
 /// the same seam (R4).
 #[async_trait::async_trait]
 pub trait CredentialDriverEffects: Send + Sync + 'static {
-    /// Provider + execution-target facts. `None` when the Provider row is
-    /// not observable to this daemon (the old controller was never started
-    /// without it; deletion still fails closed rather than guessing).
+    /// Provider + execution-target facts. `Ok(None)` when the Provider row
+    /// is not observable to this daemon (the old controller was never
+    /// started without it; deletion still fails closed rather than
+    /// guessing); `Err` when the dependency read itself failed (a manager
+    /// RPC failure), so absence is never answered for a failed read.
     async fn dependency_facts(
         &self,
         provider_ref: &ResourceRef,
         execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts>;
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError>;
 
     /// Provider-side lease facts for one Credential row.
     async fn lease_facts(&self, credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts>;
@@ -641,13 +643,19 @@ impl CredentialDriver {
             return Err(unconfirmed());
         };
         let execution_ref = self.execution_ref(spec, op)?.clone();
-        let Some(facts) = self
+        // Absence and a failed dependency read both fail closed: no
+        // authenticated revocation may run without the Provider facts
+        // (R28), and a read failure must not be answered as absence.
+        let facts = match self
             .effects
             .dependency_facts(provider_ref, &execution_ref)
             .await
-        else {
-            ctx.set_status(CredentialDriverStatus::RevocationUncertain { evidence: None });
-            return Err(unconfirmed());
+        {
+            Ok(Some(facts)) => facts,
+            Ok(None) | Err(_) => {
+                ctx.set_status(CredentialDriverStatus::RevocationUncertain { evidence: None });
+                return Err(unconfirmed());
+            }
         };
         let rotation_generation = lease
             .map(|facts| facts.rotation_generation)
@@ -808,16 +816,22 @@ impl ResourceDriver for CredentialDriver {
         let (envelope, spec) = self.decoded_spec(ctx, DriverOp::Reconcile)?;
         let (provider_ref, kind) = self.provider_of(&envelope, DriverOp::Reconcile)?;
         let execution_ref = self.execution_ref(&spec, DriverOp::Reconcile)?.clone();
-        let Some(facts) = self
+        // Absence and a failed dependency read both report the Provider
+        // unavailable (retryable): a read failure must not be answered as
+        // absence, and neither may reconcile against guessed readiness.
+        let facts = match self
             .effects
             .dependency_facts(&provider_ref, &execution_ref)
             .await
-        else {
-            ctx.set_status(CredentialDriverStatus::ProviderUnavailable);
-            return Err(self.error(
-                CredentialDriverErrorKind::ProviderUnavailable,
-                DriverOp::Reconcile,
-            ));
+        {
+            Ok(Some(facts)) => facts,
+            Ok(None) | Err(_) => {
+                ctx.set_status(CredentialDriverStatus::ProviderUnavailable);
+                return Err(self.error(
+                    CredentialDriverErrorKind::ProviderUnavailable,
+                    DriverOp::Reconcile,
+                ));
+            }
         };
         if !facts.provider_ready {
             ctx.set_status(CredentialDriverStatus::ProviderUnavailable);
