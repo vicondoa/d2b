@@ -8,7 +8,7 @@ fn payload_canary_stays_out_of_clipboard_debug_and_audit() {
     const CANARY: &str = "clipboard-payload-canary-7f4a";
     let entry =
         ClipboardEntry::new("Guest/work", "text/plain", CANARY.as_bytes(), 100).expect("entry");
-    let mut history = ClipboardHistory::new(ClipboardConfig::default()).expect("history");
+    let mut history = ClipboardHistory::new(ClipboardConfig::default());
     history.insert(entry).expect("insert");
 
     let debug = format!("{history:?}");

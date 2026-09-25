@@ -572,11 +572,7 @@ impl ClipdHost {
         audit_capacity: usize,
         display: Option<DisplayDependencyEvidence>,
     ) -> Result<Self, ClipboardServiceError> {
-        let history = ClipboardHistory::new(crate::ClipboardConfig::from_policy(policy.clone()))
-            .map_err(|_e| {
-                tracing::warn!("clipboard history construction refused at service start");
-                ClipboardServiceError::HistoryRejected
-            })?;
+        let history = ClipboardHistory::new(crate::ClipboardConfig::from_policy(policy.clone()));
         let max_concurrent_fds = policy.max_concurrent_fds();
         let mut host = Self {
             policy,

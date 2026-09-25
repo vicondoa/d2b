@@ -134,8 +134,8 @@ pub struct ClipboardHistory {
 
 impl ClipboardHistory {
     /// Construct an empty history.
-    pub fn new(config: crate::ClipboardConfig) -> Result<Self, HistoryError> {
-        Ok(Self {
+    pub fn new(config: crate::ClipboardConfig) -> Self {
+        Self {
             config,
             entries: BTreeMap::new(),
             order: VecDeque::new(),
@@ -143,7 +143,7 @@ impl ClipboardHistory {
             suspended: BTreeSet::new(),
             guest_requests: BTreeMap::new(),
             picker_completions: BTreeMap::new(),
-        })
+        }
     }
 
     /// Insert an entry after policy, quota, and rate checks.
@@ -403,7 +403,7 @@ mod tests {
 
     #[test]
     fn gc_prunes_idle_guest_rate_buckets() {
-        let mut history = ClipboardHistory::new(ClipboardConfig::default()).unwrap();
+        let mut history = ClipboardHistory::new(ClipboardConfig::default());
         history.record_guest_request("Guest/work", 100).unwrap();
         assert_eq!(history.guest_requests.len(), 1);
         history.gc(160);
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn history_normalizes_mime_values_before_storage_and_matching() {
-        let mut history = ClipboardHistory::new(ClipboardConfig::default()).unwrap();
+        let mut history = ClipboardHistory::new(ClipboardConfig::default());
         let entry = ClipboardEntry::new("Guest/work", "TEXT/PLAIN", b"hello", 100).unwrap();
         let token = entry.token().to_owned();
         history.insert(entry).unwrap();
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn purging_a_guest_releases_its_picker_completion_keys() {
-        let mut history = ClipboardHistory::new(ClipboardConfig::default()).unwrap();
+        let mut history = ClipboardHistory::new(ClipboardConfig::default());
         let key = "operation|zone|Guest/work|1|zone|Guest/destination|1".to_owned();
         assert!(history.claim_picker_completion(key.clone(), 200, 100));
         history.purge_guest("Guest/work");
