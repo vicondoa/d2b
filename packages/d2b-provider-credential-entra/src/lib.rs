@@ -109,11 +109,6 @@ pub fn run_from_fd10() -> i32 {
     )
 }
 
-/// Return the supervised controller process status.
-pub fn controller_binary_entrypoint() -> i32 {
-    run_from_fd10()
-}
-
 fn runtime_provider(
     route: &AuthenticatedSessionRouteBinding,
     metadata: &ProviderSessionMetadata,
@@ -450,13 +445,6 @@ fn entra_inspection(
 /// Boxed asynchronous result returned by the injected identity-Guest client.
 pub type EntraFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, EntraClientError>> + Send + 'a>>;
-
-/// Exact-consumer ownership policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntraCredentialOwner {
-    /// Only the configured consumer may be admitted.
-    ExactConsumer,
-}
 
 /// Closed client state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -978,11 +966,6 @@ pub struct EntraCredentialProvider {
 }
 
 impl EntraCredentialProvider {
-    /// Return exact-consumer ownership.
-    pub const fn owner(&self) -> EntraCredentialOwner {
-        EntraCredentialOwner::ExactConsumer
-    }
-
     /// Borrow the exact consumer required at authenticated admission.
     pub const fn consumer_ref(&self) -> &ResourceRef {
         &self.consumer_ref
