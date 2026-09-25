@@ -108,11 +108,20 @@ const FENCE_REVOKED: u8 = 2;
 /// consumed the authenticated session that created it. Sharing the transport
 /// implementation shares no authority: the consumed session owner retains its
 /// liveness and single-owner authorization state.
+/// The sealed admission and liveness pair of one established driver lane.
+///
+/// Both values are set together by [`ZoneLinkSession::establish_authenticated`]
+/// and are absent only on the test lane, so a half-set lane is unrepresentable.
+
+struct EstablishedLane {
+    admission: VerifiedRouteAdmission,
+    liveness: d2b_session::SessionLiveness,
+}
+
 pub struct ZoneLinkSession {
     driver: Arc<dyn ComponentSessionDriver>,
     epoch: LinkEpoch,
-    admission: Option<VerifiedRouteAdmission>,
-    liveness: Option<d2b_session::SessionLiveness>,
+    established: Option<EstablishedLane>,
     fence: AtomicU8,
 }
 
@@ -170,8 +179,10 @@ impl ZoneLinkSession {
         Ok(Self {
             driver: Arc::new(driver),
             epoch,
-            admission: Some(admission),
-            liveness: Some(route.liveness()),
+            established: Some(EstablishedLane {
+                admission,
+                liveness: route.liveness(),
+            }),
             fence: AtomicU8::new(FENCE_OPEN),
         })
     }
@@ -188,8 +199,7 @@ impl ZoneLinkSession {
         Ok(Self {
             driver,
             epoch,
-            admission: None,
-            liveness: None,
+            established: None,
             fence: AtomicU8::new(FENCE_OPEN),
         })
     }
@@ -208,15 +218,15 @@ impl ZoneLinkSession {
     pub fn is_open(&self) -> bool {
         if self.fence.load(Ordering::Acquire) != FENCE_OPEN
             || self
-                .liveness
+                .established
                 .as_ref()
-                .is_some_and(|liveness| !liveness.is_live())
+                .is_some_and(|lane| !lane.liveness.is_live())
         {
             return false;
         }
-        if let Some(admission) = &self.admission
-            && (admission.revalidate().is_err()
-                || self.driver.generation() != admission.reconnect_generation().get())
+        if let Some(lane) = &self.established
+            && (lane.admission.revalidate().is_err()
+                || self.driver.generation() != lane.admission.reconnect_generation().get())
         {
             self.fence.store(FENCE_REVOKED, Ordering::Release);
             return false;
@@ -246,20 +256,20 @@ impl ZoneLinkSession {
         match self.fence.load(Ordering::Acquire) {
             FENCE_OPEN => {
                 if self
-                    .liveness
+                    .established
                     .as_ref()
-                    .is_some_and(|liveness| !liveness.is_live())
+                    .is_some_and(|lane| !lane.liveness.is_live())
                 {
                     return Err(ZoneLinkSessionError::ZoneLinkDisconnected);
                 }
-                if let Some(admission) = &self.admission
-                    && let Err(error) = admission.revalidate()
+                if let Some(lane) = &self.established
+                    && let Err(error) = lane.admission.revalidate()
                 {
                     self.fence.store(FENCE_REVOKED, Ordering::Release);
                     return Err(ZoneLinkSessionError::RouteAdmission(error));
                 }
-                if self.admission.as_ref().is_some_and(|admission| {
-                    self.driver.generation() != admission.reconnect_generation().get()
+                if self.established.as_ref().is_some_and(|lane| {
+                    self.driver.generation() != lane.admission.reconnect_generation().get()
                 }) {
                     self.fence.store(FENCE_REVOKED, Ordering::Release);
                     return Err(ZoneLinkSessionError::RouteAdmission(
@@ -348,20 +358,20 @@ impl ZoneLinkSession {
             return Err(ZoneLinkSessionError::ZoneLinkRevoked);
         }
         if self
-            .liveness
+            .established
             .as_ref()
-            .is_some_and(|liveness| !liveness.is_live())
+            .is_some_and(|lane| !lane.liveness.is_live())
         {
             return Err(ZoneLinkSessionError::ZoneLinkDisconnected);
         }
-        if let Some(admission) = &self.admission
-            && let Err(error) = admission.revalidate()
+        if let Some(lane) = &self.established
+            && let Err(error) = lane.admission.revalidate()
         {
             self.fence.store(FENCE_REVOKED, Ordering::Release);
             return Err(ZoneLinkSessionError::RouteAdmission(error));
         }
-        if self.admission.as_ref().is_some_and(|admission| {
-            self.driver.generation() != admission.reconnect_generation().get()
+        if self.established.as_ref().is_some_and(|lane| {
+            self.driver.generation() != lane.admission.reconnect_generation().get()
         }) {
             self.fence.store(FENCE_REVOKED, Ordering::Release);
             return Err(ZoneLinkSessionError::RouteAdmission(
