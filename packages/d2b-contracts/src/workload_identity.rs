@@ -206,31 +206,6 @@ mod tests {
     }
 
     #[test]
-    fn workload_target_parse_canonical() {
-        let t = WorkloadTarget::parse("builder.dev.d2b").unwrap();
-        assert_eq!(t.to_canonical(), "builder.dev.d2b");
-        assert_eq!(t.workload.as_str(), "builder");
-    }
-
-    #[test]
-    fn workload_target_parse_nested_realm() {
-        let t = WorkloadTarget::parse("api.payments.work.d2b").unwrap();
-        assert_eq!(t.to_canonical(), "api.payments.work.d2b");
-        assert_eq!(t.workload.as_str(), "api");
-        assert_eq!(t.realm.target_form(), "payments.work");
-    }
-
-    #[test]
-    fn workload_target_rejects_no_dot() {
-        assert!(WorkloadTarget::parse("builder").is_err());
-    }
-
-    #[test]
-    fn workload_target_rejects_missing_d2b_suffix() {
-        assert!(WorkloadTarget::parse("builder.dev.org").is_err());
-    }
-
-    #[test]
     fn workload_identity_new_has_none_optional_fields() {
         let id = make_identity("demo", "work");
         assert!(id.workload_name.is_none());

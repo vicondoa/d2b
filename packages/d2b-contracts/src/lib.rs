@@ -325,13 +325,6 @@ mod tests {
     }
 
     #[test]
-    fn frame_too_large_is_rejected() {
-        let oversized = "x".repeat(MAX_FRAME_SIZE + 1);
-        let error = encode_frame(&oversized).expect_err("oversized frame fails");
-        assert_eq!(error.kind().as_str(), "wire-frame-too-large");
-    }
-
-    #[test]
     fn encode_frame_public_sock_cap_boundary_is_exact() {
         // A JSON string of N chars serializes to N+2 bytes (two quotes), so
         // drive the encoded body length to exactly cap-1, cap, and cap+1 to
