@@ -27,4 +27,4 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 serde_json.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }

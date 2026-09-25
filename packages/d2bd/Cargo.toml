@@ -79,7 +79,6 @@ d2b-provider-device-tpm = { path = "../d2b-provider-device-tpm", version = "0.0.
 d2b-provider-device-security-key = { path = "../d2b-provider-device-security-key", version = "0.0.0-bootstrap" }
 d2b-provider-device-usbip = { path = "../d2b-provider-device-usbip", version = "0.0.0-bootstrap" }
 d2b-provider-device-gpu = { path = "../d2b-provider-device-gpu", version = "0.0.0-bootstrap" }
-d2b-provider-observability-otel = { path = "../d2b-provider-observability-otel", version = "0.0.0-bootstrap" }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap" }
 d2b-provider-clipboard-wayland = { path = "../d2b-provider-clipboard-wayland", version = "0.0.0-bootstrap" }
 d2b-provider-notification-desktop = { path = "../d2b-provider-notification-desktop", version = "0.0.0-bootstrap", features = ["daemon-support"] }
@@ -87,14 +86,6 @@ d2b-provider-audio-pipewire = { path = "../d2b-provider-audio-pipewire", version
 d2b-provider-network-local = { path = "../d2b-provider-network-local", version = "0.0.0-bootstrap" }
 d2b-provider-guest-cloud-hypervisor = { path = "../d2b-provider-guest-cloud-hypervisor", version = "0.0.0-bootstrap" }
 d2b-provider-guest-qemu-media = { path = "../d2b-provider-guest-qemu-media", version = "0.0.0-bootstrap" }
-d2b-provider-guest-azure-virtual-machine = { path = "../d2b-provider-guest-azure-virtual-machine", version = "0.0.0-bootstrap" }
-# v2 constellation contract crates (ADR 0032). The peer-module skeletons in
-# src/realm_stubs.rs wire this trait surface; they are compile-only
-# and NOT called from the running daemon (zero behavior change).
-d2b-provider-guest-azure-container-apps = { path = "../d2b-provider-guest-azure-container-apps", version = "0.0.0-bootstrap" }
-d2b-provider-credential-secret-service = { path = "../d2b-provider-credential-secret-service", version = "0.0.0-bootstrap" }
-d2b-provider-credential-entra = { path = "../d2b-provider-credential-entra", version = "0.0.0-bootstrap" }
-d2b-provider-credential-managed-identity = { path = "../d2b-provider-credential-managed-identity", version = "0.0.0-bootstrap" }
 d2b-provider-credential = { path = "../d2b-provider-credential", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 d2b-provider-transport-azure-relay = { path = "../d2b-provider-transport-azure-relay", version = "0.0.0-bootstrap" }
@@ -117,11 +108,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde_json.workspace = true
 socket2 = "0.5"
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "fs"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "fs", "io-util"] }
 # R16 (U14): only the ttrpc async surface is used; the `sync` feature is gone.
-ttrpc = { version = "0.9.0", default-features = false, features = ["async"] }
+ttrpc = { workspace = true, features = ["async"] }
 
 [dev-dependencies]
+# U100: wired over the binary/service contract in tests/cloud_composition.rs only
+d2b-provider-guest-azure-container-apps = { path = "../d2b-provider-guest-azure-container-apps", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2bd-runtime = { path = "../d2bd-runtime", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
@@ -147,4 +140,4 @@ d2b-provider-provider = { path = "../d2b-provider-provider", version = "0.0.0-bo
 d2b-provider-notification-desktop = { path = "../d2b-provider-notification-desktop", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-wayland-policy = { path = "../d2b-provider-wayland-policy", version = "0.0.0-bootstrap", features = ["test-support"] }
 tempfile = "3"
-tokio = { version = "1", features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }

@@ -23,7 +23,6 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -36,7 +35,6 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -48,7 +46,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-process-conformance:d2b_process_conformance",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -62,7 +59,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_guest_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -76,7 +72,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_guest_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -90,7 +85,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_guest_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -104,7 +98,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_guest_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -118,7 +111,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_guest_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -134,7 +126,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_guest_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -148,7 +139,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-core:d2b_core",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_guest_qemu_media",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

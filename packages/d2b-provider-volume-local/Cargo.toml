@@ -15,7 +15,6 @@ await_holding_refcell_ref = "deny"
 
 [dependencies]
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
-d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 # The anchored adapter (U7) verifies `file-record` lease ownership against
 # the hardlink-farm sync-lock owner record the broker writes, and uses the
@@ -29,6 +28,7 @@ sha2 = { workspace = true }
 tracing = "0.1"
 
 [dev-dependencies]
+d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 # The moved adapter suite (U7) renders Network content through the
 # network-local controller helpers to pin the foreign-marker preserve path.
 d2b-provider-network-local = { path = "../d2b-provider-network-local", version = "0.0.0-bootstrap" }

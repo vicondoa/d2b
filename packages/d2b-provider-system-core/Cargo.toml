@@ -15,7 +15,7 @@ await_holding_refcell_ref = "deny"
 
 [dependencies]
 async-trait = "0.1"
-tokio = { version = "1", default-features = false, features = ["sync"] }
+tokio = { workspace = true, features = ["sync"] }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 tracing = "0.1"
 serde = { workspace = true }

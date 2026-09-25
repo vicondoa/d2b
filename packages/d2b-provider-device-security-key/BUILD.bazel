@@ -24,7 +24,6 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail",
         "//packages/d2b-provider-process-systemd:d2b_provider_process_systemd",
@@ -44,7 +43,6 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "@crates//:tracing",
         "//packages/d2b-core-controller:d2b_core_controller_test_support",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
@@ -63,7 +61,6 @@ d2b_rust_test(
         "//packages/d2b-core-controller:d2b_core_controller",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail",
         "//packages/d2b-provider-process-systemd:d2b_provider_process_systemd",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
@@ -79,7 +76,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_security_key",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -91,7 +87,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_security_key",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -103,7 +98,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_security_key",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -115,7 +109,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_security_key",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -138,7 +131,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_device_security_key",
         "//packages/d2b-provider-endpoint:d2b_provider_endpoint",] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

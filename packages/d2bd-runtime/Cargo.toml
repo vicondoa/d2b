@@ -39,9 +39,9 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 socket2 = "0.5"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "process", "fs", "io-util"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time", "net", "process", "fs", "io-util"] }
 tracing = "0.1"
-ttrpc = { version = "0.9.0", default-features = false, features = ["async"] }
+ttrpc = { workspace = true, features = ["async"] }
 uzers = "0.12"
 
 
@@ -54,4 +54,4 @@ tempfile = "3"
 # Test-only tokio feature: `start_paused`/`advance` give the startup store
 # retry tests a virtual clock instead of a wall-clock race with the retry
 # backoff timers. Feature unification scopes it to test builds.
-tokio = { version = "1", features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }

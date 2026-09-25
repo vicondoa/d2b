@@ -9,14 +9,12 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
 semver = "1"
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 sha2.workspace = true
-unicode-normalization.workspace = true
 
 [dev-dependencies]
-regex = "1"
 serde_json.workspace = true
+regex = "1"

@@ -10,8 +10,5 @@ workspace = true
 
 [dependencies]
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
-schemars.workspace = true
-serde.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true

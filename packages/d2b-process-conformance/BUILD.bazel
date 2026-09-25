@@ -20,7 +20,6 @@ d2b_rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -33,7 +32,6 @@ d2b_rust_library(
     visibility = ["//visibility:public"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-contracts:d2b_contracts_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -43,7 +41,7 @@ d2b_rust_test(
     compile_data = ["Cargo.toml"],
     crate = ":d2b_process_conformance",
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+    ],
 )
 
 # keep

@@ -20,7 +20,7 @@ test-support = []
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
-base64 = "0.22"
+base64 = { workspace = true }
 tracing = "0.1"
 serde = { workspace = true }
 sha2 = { workspace = true }

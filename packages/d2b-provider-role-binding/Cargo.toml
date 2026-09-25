@@ -18,4 +18,6 @@ test-support = []
 
 [dependencies]
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

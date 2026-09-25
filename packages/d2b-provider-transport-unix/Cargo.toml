@@ -14,9 +14,9 @@ await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 
 [dependencies]
-tokio = { version = "1", default-features = false, features = ["sync"] }
-d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
+tokio = { workspace = true, features = ["sync"] }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
+# snow-constrained: keep 0.3 inline until a snow bump (U100)
 getrandom = "0.3"
 tracing = "0.1"
 rustix = { workspace = true, features = ["event"] }

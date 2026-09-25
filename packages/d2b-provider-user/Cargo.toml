@@ -30,7 +30,7 @@ parking_lot = "0.12"
 test-support = []
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [[test]]
 name = "registration"

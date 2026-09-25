@@ -24,7 +24,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 rustix = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }
-ttrpc = { version = "0.9.0", default-features = false, features = ["async", "sync"] }
+ttrpc = { workspace = true, features = ["async", "sync"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
