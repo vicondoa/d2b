@@ -368,6 +368,16 @@ impl InheritedFdTable {
     }
 }
 
+/// Private binding of the immutable Zone UID to its host-runtime scope.
+///
+/// The scope is an effect-owner commitment, not a public ResourceRef, and it
+/// is only valid together with the Zone UID it was derived for.
+#[derive(Clone, PartialEq, Eq)]
+struct RuntimeScopeBinding {
+    zone_uid: ResourceUid,
+    scope: ConfigurationDigest,
+}
+
 /// The ticket a Process controller hands to the fixed process effect
 /// adapter.
 ///
@@ -384,7 +394,6 @@ impl InheritedFdTable {
 pub struct LaunchTicket {
     process_ref: ResourceRef,
     process_uid: ResourceUid,
-    zone_uid: Option<ResourceUid>,
     owner_ref: Option<ResourceRef>,
     owner_uid: Option<ResourceUid>,
     /// The canonical launch identity this ticket carries: owner ref/UID,
@@ -392,7 +401,7 @@ pub struct LaunchTicket {
     /// role. The broker's identity fence consumes it instead of re-deriving
     /// its fields.
     launch_identity: LaunchIdentity,
-    runtime_scope: Option<ConfigurationDigest>,
+    runtime_scope: Option<RuntimeScopeBinding>,
     resource_revision: Option<ZoneRevision>,
     resource_generation: ResourceGeneration,
     controller_generation: ControllerGeneration,
@@ -484,7 +493,6 @@ impl LaunchTicket {
         Ok(Self {
             process_ref,
             process_uid,
-            zone_uid: None,
             owner_ref: None,
             owner_uid: None,
             launch_identity,
@@ -541,7 +549,6 @@ impl LaunchTicket {
         runtime_scope: ConfigurationDigest,
     ) -> Result<Self, ProcessConformanceError> {
         if runtime_scope.is_zero()
-            || self.zone_uid.is_some()
             || self.runtime_scope.is_some()
             || self
                 .owner_ref
@@ -550,7 +557,7 @@ impl LaunchTicket {
         {
             return Err(ProcessConformanceError::InvalidTicket);
         }
-        self.zone_uid = Some(zone_uid);
+        self.runtime_scope = Some(RuntimeScopeBinding { zone_uid, scope: runtime_scope });
         if let Some(owner_ref) = owner_ref {
             self.launch_identity = self
                 .launch_identity
@@ -558,7 +565,6 @@ impl LaunchTicket {
                 .map_err(|_| ProcessConformanceError::InvalidTicket)?;
             self.owner_ref = Some(owner_ref);
         }
-        self.runtime_scope = Some(runtime_scope);
         Ok(self)
     }
 
@@ -766,9 +772,7 @@ impl LaunchTicket {
         {
             return Err(ProcessConformanceError::InvalidTicket);
         }
-        if self.zone_uid.is_some() != self.runtime_scope.is_some()
-            || self.runtime_scope.is_some_and(ConfigurationDigest::is_zero)
-        {
+        if matches!(&self.runtime_scope, Some(binding) if binding.scope.is_zero()) {
             return Err(ProcessConformanceError::InvalidTicket);
         }
         if self.execution_ref.resource_type().as_str() == "Guest"
@@ -979,7 +983,10 @@ impl LaunchTicket {
 
     /// Borrow the immutable Zone UID bound to this launch.
     pub const fn zone_uid(&self) -> Option<&ResourceUid> {
-        self.zone_uid.as_ref()
+        match &self.runtime_scope {
+            Some(binding) => Some(&binding.zone_uid),
+            None => None,
+        }
     }
 
     /// Borrow the exact semantic owner, when one was committed.
@@ -994,7 +1001,10 @@ impl LaunchTicket {
 
     /// Borrow the private host-runtime scope commitment.
     pub const fn runtime_scope(&self) -> Option<ConfigurationDigest> {
-        self.runtime_scope
+        match &self.runtime_scope {
+            Some(binding) => Some(binding.scope),
+            None => None,
+        }
     }
 
     /// Return the committed resource revision, when one was bound.
