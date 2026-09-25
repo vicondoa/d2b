@@ -55,18 +55,18 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0015` | `idiom` | `d2b-contracts-broker` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-broker/src/kernel_client.rs:225-227` |  |  |
 | `RS-0016` | `idiom` | `d2b-contracts-broker` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-broker/src/host_generation.rs:162-167, packages/d2b-contracts-broke` |  |  |
 | `RS-0017` | `idiom` | `d2b-contracts-broker` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-broker/src/broker_wire.rs:2904-2912, packages/d2b-contracts-broker/` |  |  |
-| `RS-0018` | `idiom` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/credential.rs:362, packages/d2b-contracts-provider/` |  |  |
-| `RS-0020` | `idiom` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/semantic_services/child_resources.rs:573, packages/` |  |  |
-| `RS-0019` | `idiom` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/provider.rs:2374` |  |  |
+| `RS-0018` | `idiom` | `d2b-contracts-provider` | low | actionable | leaf | applied | U2 | 6fa152aa1 | `packages/d2b-contracts-provider/src/v3/credential.rs` | derive(Default) with #[default] on RotationPolicyClass::OnExpiry and RevocationAction::Immediate; manual Default impls deleted |  |
+| `RS-0020` | `idiom` | `d2b-contracts-provider` | low | actionable | leaf | applied | U2 | 6fa152aa1 | `packages/d2b-contracts-provider/src/v3/semantic_services/child_resources.rs` | producer_ref.transpose()? bound once; duplicate 15-field BindingChildIntent literal collapsed to one push, else-continue arm deleted |  |
+| `RS-0019` | `idiom` | `d2b-contracts-provider` | low | actionable | leaf | applied | U2 | 6fa152aa1 | `packages/d2b-contracts-provider/src/v3/provider.rs` | manual Debug impl on UpgradePolicy replaced by #[derive(Debug)] |  |
 | `RS-0022` | `idiom` | `d2b-contracts-resource` | medium | actionable | leaf |  |  |  | `packages/d2b-contracts-resource/src/v3/volume.rs:1210-1213, packages/d2b-contracts-resourc` |  |  |
 | `RS-0021` | `idiom` | `d2b-contracts-resource` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-resource/src/v3/network.rs:597, packages/d2b-contracts-resource/src` |  |  |
 | `RS-0023` | `idiom` | `d2b-contracts-resource` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-resource/src/v3/resource.rs:621-626` |  |  |
 | `RS-0024` | `idiom` | `d2b-contracts-resource` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-resource/src/v3/volume.rs:1218-1223` |  |  |
 | `RS-0025` | `idiom` | `d2b-contracts-zone-session` | low | actionable | leaf |  |  |  | `src/v3/component_session.rs:1935, src/v3/component_session.rs:1976` |  |  |
-| `RS-0027` | `idiom` | `d2b-core` | low | actionable | leaf |  |  |  | `packages/d2b-core/src/bundle_resolver.rs:1805, packages/d2b-core/src/bundle_resolver.rs:19` |  |  |
-| `RS-0030` | `idiom` | `d2b-core` | low | actionable | leaf |  |  |  | `packages/d2b-core/src/static_invariants.rs:162, packages/d2b-core/src/static_invariants.rs` |  |  |
-| `RS-0028` | `idiom` | `d2b-core` | low | actionable | leaf |  |  |  | `packages/d2b-core/src/bundle_resolver.rs:5746` |  |  |
-| `RS-0029` | `idiom` | `d2b-core` | low | actionable | leaf |  |  |  | `packages/d2b-core/src/bundle_resolver.rs:2434, packages/d2b-core/src/processes.rs:180` |  |  |
+| `RS-0027` | `idiom` | `d2b-core` | low | actionable | leaf | applied | U2 | f3da9fd31 | `packages/d2b-core/src/bundle_resolver.rs` | let spec = find_network_spec(&parts)?; let _ = spec; replaced by bare self.find_network_spec(&parts)?; in projection and sysctl intents |  |
+| `RS-0030` | `idiom` | `d2b-core` | low | actionable | leaf | applied | U2 | f3da9fd31 | `packages/d2b-core/src/static_invariants.rs` | iter().any(f == last) replaced with slice contains for PUBLIC_MANIFEST_FIELDS and BROAD_CAPABILITIES |  |
+| `RS-0028` | `idiom` | `d2b-core` | low | actionable | leaf | applied-variant | U2 | f3da9fd31 | `packages/d2b-core/src/bundle_resolver.rs` | row's bare-import removal broke tests using TapRole via use super::*; variant: import dropped, const deleted, 3 test sites qualified crate::host::TapRole (as _ import rejected by -D warnings) |  |
+| `RS-0029` | `idiom` | `d2b-core` | low | actionable | leaf | applied | U2 | f3da9fd31 | `packages/d2b-core/src/bundle_resolver.rs` | resolve_disk_init_ops flattened to vm.nodes.iter().flat_map(...).filter_map(...).collect() |  |
 | `RS-0026` | `idiom` | `d2b-core-controller` | low | actionable | leaf |  |  |  | `authority.rs:2189-2192, authority.rs:2542-2545` |  |  |
 | `RS-0040` | `idiom` | `d2b-provider-clipboard-wayland` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-clipboard-wayland/src/clipd_host/policy.rs:3-16, packages/d2b-provid` |  |  |
 | `RS-0039` | `idiom` | `d2b-provider-clipboard-wayland` | medium | actionable | leaf |  |  |  | `src/bin/d2b-clipd.rs:2812, src/policy.rs:12` |  |  |
@@ -77,9 +77,9 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0044` | `idiom` | `d2b-provider-config-nixos` | low | actionable | leaf |  |  |  | `packages/d2b-provider-config-nixos/src/ttrpc.rs:379-386, packages/d2b-provider-config-nixo` |  |  |
 | `RS-0045` | `idiom` | `d2b-provider-credential-entra` | medium | actionable | family |  |  |  | `packages/d2b-provider-credential-entra/src/lib.rs:1164, packages/d2b-provider-credential-e` |  |  |
 | `RS-0046` | `idiom` | `d2b-provider-credential-secret-service` | low | actionable | leaf |  |  |  | `packages/d2b-provider-credential-secret-service/src/lib.rs:446, packages/d2b-provider-cred` |  |  |
-| `RS-0047` | `idiom` | `d2b-provider-device-gpu` | low | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/src/authority.rs:401, packages/d2b-provider-device-gpu/sr` |  |  |
-| `RS-0048` | `idiom` | `d2b-provider-device-gpu` | low | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/src/effects_service.rs:193` |  |  |
-| `RS-0049` | `idiom` | `d2b-provider-device-gpu` | low | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/src/authority.rs:17, packages/d2b-provider-device-gpu/src` |  |  |
+| `RS-0047` | `idiom` | `d2b-provider-device-gpu` | low | actionable | leaf | applied | U2 | 8d910bf9c | `packages/d2b-provider-device-gpu/src/authority.rs` | rustfmt drift normalized: enum closing brace, trailing-whitespace line, reindented variant doc comment |  |
+| `RS-0048` | `idiom` | `d2b-provider-device-gpu` | low | actionable | leaf | applied | U2 | 8d910bf9c | `packages/d2b-provider-device-gpu/src/effects_service.rs` | let _ = binding dropped; Self::declared_row_template(&view, role)?; |  |
+| `RS-0049` | `idiom` | `d2b-provider-device-gpu` | low | actionable | leaf | applied | U2 | 8d910bf9c | `packages/d2b-provider-device-gpu/src/authority.rs` | in-crate macro_rules! opaque_token (derive list + is_zero/as_bytes feature arms, stringify redacting Debug); all 6 newtypes migrated with exact surfaces preserved |  |
 | `RS-0050` | `idiom` | `d2b-provider-device-security-key` | low | actionable | leaf |  |  |  | `packages/d2b-provider-device-security-key/src/driver.rs:380-390` |  |  |
 | `RS-0051` | `idiom` | `d2b-provider-device-tpm` | low | actionable | leaf |  |  |  | `swtpm_argv.rs:160, lib.rs:63, lib.rs:65` |  |  |
 | `RS-0052` | `idiom` | `d2b-provider-device-usbip` | low | actionable | leaf |  |  |  | `driver.rs:267-281` |  |  |
@@ -92,7 +92,7 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0057` | `idiom` | `d2b-provider-display-wayland` | low | actionable | leaf |  |  |  | `packages/d2b-provider-display-wayland/src/wayland_proxy/dmabuf.rs:820, packages/d2b-provid` |  |  |
 | `RS-0061` | `idiom` | `d2b-provider-endpoint` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-endpoint/src/effects_service.rs:50-60, packages/d2b-provider-endpoin` |  |  |
 | `RS-0060` | `idiom` | `d2b-provider-endpoint` | low | actionable | leaf |  |  |  | `packages/d2b-provider-endpoint/src/endpoint.rs:395-398` |  |  |
-| `RS-0062` | `idiom` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf |  |  |  | `src/bootstrap.rs:138, src/bootstrap.rs:124` |  |  |
+| `RS-0062` | `idiom` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf | applied | U2 | 8b6efd32a | `packages/d2b-provider-guest-azure-virtual-machine/src/bootstrap.rs` | derive(Default) with #[default] on BootstrapServiceState::Waiting; manual BootstrapService Default impl deleted |  |
 | `RS-0063` | `idiom` | `d2b-provider-guest-cloud-hypervisor` | low | actionable | leaf |  |  |  | `controller.rs:1712, controller.rs:1744` |  |  |
 | `RS-0064` | `idiom` | `d2b-provider-guest-cloud-hypervisor` | low | actionable | leaf |  |  |  | `controller.rs:1722, controller.rs:1860, controller.rs:2042` |  |  |
 | `RS-0065` | `idiom` | `d2b-provider-guest-cloud-hypervisor` | low | actionable | leaf |  |  |  | `shutdown.rs:487-494, shutdown.rs:666-673` |  |  |
@@ -130,8 +130,8 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0096` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 4cbf82851 | `manager.rs` | shared free manager_rpc transport; both endpoints route through it |  |
 | `RS-0098` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 69d4b615f | `target.rs` | derive Default on TargetDirectory |  |
 | `RS-0099` | `idiom` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | fb5ed9466 | `spec_store.rs` | impl FromStr for ResourceProvenance; store parses via str::parse |  |
-| `RS-0100` | `idiom` | `d2b-session` | low | actionable | leaf |  |  |  | `engine.rs:1802, engine.rs:1803, engine.rs:1807` |  |  |
-| `RS-0101` | `idiom` | `d2b-session` | low | actionable | leaf |  |  |  | `admission.rs:1593, admission.rs:956, admission.rs:958` |  |  |
+| `RS-0100` | `idiom` | `d2b-session` | low | actionable | leaf | applied | U2 | 217c0c66c | `packages/d2b-session/src/engine.rs` | index loop replaced with chunks_exact().take(count).map(decode_attachment_descriptor).collect::<Result<Vec<_>>>() |  |
+| `RS-0101` | `idiom` | `d2b-session` | low | actionable | leaf | applied | U2 | 217c0c66c | `packages/d2b-session/src/admission.rs` | send_authorized_ttrpc now calls validate_ttrpc_permit(&permit, now_tick)? instead of re-writing the matches! block |  |
 | `RS-0102` | `idiom` | `d2b-sk-frontend` | low | actionable | leaf |  |  |  | `packages/d2b-sk-frontend/src/config.rs:178` |  |  |
 | `RS-0103` | `idiom` | `d2b-unsafe-local-helper` | low | actionable | leaf | applied | U2 | f3a847c72 | `packages/d2b-unsafe-local-helper/src/systemd.rs` | Replaced the then_some/ok_or NotFound normalization with an explicit if-let/if-error branch in terminate_scope and stop_scope; cargo check and test green. |  |
 | `RS-0104` | `idiom` | `d2b-zone-routing` | low | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/resolver.rs:144` |  |  |
@@ -170,18 +170,18 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0132` | `own` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/router.rs` | ScopedCommitTransport::validate added; authorization_request validates borrowed data instead of cloning |  |
 | `RS-0133` | `own` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/session/prologue.rs` | of_subject hashes &str slices via hash_resource_ref; digest byte-identical (full bus suite passed |  |
 | `RS-0134` | `own` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/session/contract.rs` | private verify_body() shared by verify()/revalidate(); clone removed |  |
-| `RS-0137` | `own` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/telemetry_policy.rs:497, packages/d2b-contracts-pro` |  |  |
-| `RS-0135` | `own` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/provider.rs:2497, packages/d2b-contracts-provider/s` |  |  |
-| `RS-0138` | `own` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/credential_controller.rs:1591, packages/d2b-contrac` |  |  |
-| `RS-0136` | `own` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/provider.rs:2438, packages/d2b-contracts-provider/s` |  |  |
+| `RS-0137` | `own` | `d2b-contracts-provider` | low | actionable | leaf | applied | U2 | 6fa152aa1 | `packages/d2b-contracts-provider/src/v3/telemetry_policy.rs` | duplicate-detection set now BTreeSet<&str> inserting &label.key |  |
+| `RS-0135` | `own` | `d2b-contracts-provider` | low | actionable | leaf | applied | U2 | 6fa152aa1 | `packages/d2b-contracts-provider/src/v3/provider.rs` | validate_runtime_artifacts takes &[TargetRuntimeArtifacts]; entries.clone() and self.runtime_artifacts.clone() dropped; test call site updated |  |
+| `RS-0138` | `own` | `d2b-contracts-provider` | low | actionable | leaf | applied | U2 | 6fa152aa1 | `packages/d2b-contracts-provider/src/v3/credential_controller.rs` | is_valid_zone(&str) extracted; validate_zone delegates to it; allowed_telemetry_value no longer allocates |  |
+| `RS-0136` | `own` | `d2b-contracts-provider` | low | actionable | leaf | applied | U2 | 6fa152aa1 | `packages/d2b-contracts-provider/src/v3/provider.rs` | dedup sets now BTreeSet<&BoundedToken>/BTreeSet<&ResourceTypeName> in ProviderManifest::new and with_state_namespaces |  |
 | `RS-0139` | `own` | `d2b-contracts-resource` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-resource/src/v3/volume_state.rs:138` |  |  |
 | `RS-0142` | `own` | `d2b-contracts-zone-session` | low | actionable | leaf |  |  |  | `zone_routing.rs:883` |  |  |
 | `RS-0140` | `own` | `d2b-contracts-zone-session` | low | actionable | family |  |  |  | `src/v3/component_session.rs:456, src/v3/component_session.rs:473, src/v3/component_session` |  |  |
 | `RS-0143` | `own` | `d2b-contracts-zone-session` | low | actionable | leaf |  |  |  | `resource_bundle.rs:944, resource_bundle.rs:149` |  |  |
 | `RS-0141` | `own` | `d2b-contracts-zone-session` | low | actionable | family |  |  |  | `src/v3/resource_export.rs:545, src/v3/resource_export.rs:546` |  |  |
 | `RS-0144` | `own` | `d2b-contracts-zone-session` | low | actionable | leaf |  |  |  | `services.rs:216` |  |  |
-| `RS-0148` | `own` | `d2b-core` | low | actionable | leaf |  |  |  | `packages/d2b-core/src/static_invariants.rs:201` |  |  |
-| `RS-0147` | `own` | `d2b-core` | low | actionable | leaf |  |  |  | `packages/d2b-core/src/bundle_resolver.rs:1973, packages/d2b-core/src/bundle_resolver.rs:33` |  |  |
+| `RS-0148` | `own` | `d2b-core` | low | actionable | leaf | applied | U2 | f3da9fd31 | `packages/d2b-core/src/static_invariants.rs` | path_bearing_key_violations renders through Cow<str>; string arm borrows instead of cloning |  |
+| `RS-0147` | `own` | `d2b-core` | low | actionable | leaf | applied | U2 | f3da9fd31 | `packages/d2b-core/src/bundle_resolver.rs` | parse(value.as_str()) at 3 sites; network_uid compare via as_str; note: row rationale 'no allocation' inaccurate (Into<String> still allocates) but explicit clones removed |  |
 | `RS-0145` | `own` | `d2b-core-controller` | low | actionable | leaf |  |  |  | `owner_reconcile.rs:1072-1075` |  |  |
 | `RS-0146` | `own` | `d2b-core-controller` | low | actionable | leaf |  |  |  | `authority.rs:2803, authority.rs:2806` |  |  |
 | `RS-0153` | `own` | `d2b-process-conformance` | low | actionable | leaf |  |  |  | `packages/d2b-process-conformance/src/ticket.rs:557, packages/d2b-process-conformance/src/t` |  |  |
@@ -189,22 +189,22 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0155` | `own` | `d2b-provider-clipboard-wayland` | low | actionable | leaf |  |  |  | `packages/d2b-provider-clipboard-wayland/src/clipd_host/wayland.rs:257-263` |  |  |
 | `RS-0156` | `own` | `d2b-provider-config-nixos` | low | actionable | leaf |  |  |  | `packages/d2b-provider-config-nixos/src/ttrpc.rs:111, packages/d2b-provider-config-nixos/sr` |  |  |
 | `RS-0157` | `own` | `d2b-provider-credential` | low | actionable | leaf |  |  |  | `packages/d2b-provider-credential/src/driver.rs:342, packages/d2b-provider-credential/src/t` |  |  |
-| `RS-0158` | `own` | `d2b-provider-device-gpu` | low | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/src/controller.rs:272, packages/d2b-provider-device-gpu/s` |  |  |
+| `RS-0158` | `own` | `d2b-provider-device-gpu` | low | actionable | leaf | applied | U2 | 8d910bf9c | `packages/d2b-provider-device-gpu/src/controller.rs` | validate &identity before store; identity stored on failure branch preserving test-pinned retain-for-finalize contract |  |
 | `RS-0159` | `own` | `d2b-provider-device-tpm` | low | actionable | leaf |  |  |  | `resource_controller.rs:233, resource_controller.rs:247, effects_service.rs:280, effects_se` |  |  |
 | `RS-0160` | `own` | `d2b-provider-device-usbip` | low | actionable | leaf |  |  |  | `broker.rs:194-208, broker.rs:218-232, broker.rs:313-321, broker.rs:333-341` |  |  |
 | `RS-0161` | `own` | `d2b-provider-display-wayland` | low | actionable | leaf |  |  |  | `packages/d2b-provider-display-wayland/src/wayland_proxy/policy.rs:186, packages/d2b-provid` |  |  |
 | `RS-0162` | `own` | `d2b-provider-guest` | low | actionable | leaf |  |  |  | `packages/d2b-provider-guest/src/driver.rs:981` |  |  |
 | `RS-0163` | `own` | `d2b-provider-guest` | low | actionable | leaf |  |  |  | `packages/d2b-provider-guest/src/effects_service.rs:243, packages/d2b-provider-guest/src/ef` |  |  |
-| `RS-0164` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf |  |  |  | `src/controller.rs:156-157` |  |  |
-| `RS-0165` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf |  |  |  | `src/controller.rs:500-501` |  |  |
-| `RS-0166` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf |  |  |  | `src/controller.rs:527` |  |  |
-| `RS-0167` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf |  |  |  | `src/controller.rs:417-419, src/controller.rs:469-471` |  |  |
-| `RS-0168` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf |  |  |  | `src/controller.rs:892, src/controller.rs:903` |  |  |
-| `RS-0169` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf |  |  |  | `src/effects.rs:450-464` |  |  |
-| `RS-0170` | `own` | `d2b-provider-guest-azure-virtual-machine` | medium | actionable | leaf |  |  |  | `src/controller/mod.rs:791, src/bootstrap.rs:42` |  |  |
-| `RS-0171` | `own` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf |  |  |  | `src/controller/mod.rs:640, src/controller/mod.rs:764` |  |  |
-| `RS-0172` | `own` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf |  |  |  | `src/controller/mod.rs:852` |  |  |
-| `RS-0173` | `own` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf |  |  |  | `src/controller/mod.rs:1046` |  |  |
+| `RS-0164` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf | not-started | U2 |  | `src/controller.rs:156-157` | budget stop before azure-container-apps crate |  |
+| `RS-0165` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf | not-started | U2 |  | `src/controller.rs:500-501` | budget stop before azure-container-apps crate |  |
+| `RS-0166` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf | not-started | U2 |  | `src/controller.rs:527` | budget stop before azure-container-apps crate |  |
+| `RS-0167` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf | not-started | U2 |  | `src/controller.rs:417-419, src/controller.rs:469-471` | budget stop before azure-container-apps crate |  |
+| `RS-0168` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf | not-started | U2 |  | `src/controller.rs:892, src/controller.rs:903` | budget stop before azure-container-apps crate |  |
+| `RS-0169` | `own` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf | not-started | U2 |  | `src/effects.rs:450-464` | budget stop before azure-container-apps crate |  |
+| `RS-0170` | `own` | `d2b-provider-guest-azure-virtual-machine` | medium | actionable | leaf | applied-variant | U2 | 8b6efd32a | `packages/d2b-provider-guest-azure-virtual-machine/src/controller/mod.rs` | zeroize here lacks into_inner and From<Zeroizing<T>> for T; variant: std::mem::take(&mut *delivery) moves buffer out, no plain Vec copy |  |
+| `RS-0171` | `own` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf | applied | U2 | 8b6efd32a | `packages/d2b-provider-guest-azure-virtual-machine/src/controller/mod.rs` | both vm_handle sites borrow via as_ref().ok_or(AzureVmError::Ambiguous) instead of cloning |  |
+| `RS-0172` | `own` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf | applied | U2 | 8b6efd32a | `packages/d2b-provider-guest-azure-virtual-machine/src/controller/mod.rs` | pending_delete_operation_id borrowed via as_deref() instead of clone |  |
+| `RS-0173` | `own` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf | applied | U2 | 8b6efd32a | `packages/d2b-provider-guest-azure-virtual-machine/src/controller/mod.rs` | base32 output truncated in place (id.truncate(20)) instead of a second 20-char copy |  |
 | `RS-0174` | `own` | `d2b-provider-guest-qemu-media` | low | actionable | leaf |  |  |  | `packages/d2b-provider-guest-qemu-media/src/qmp/mod.rs:266` |  |  |
 | `RS-0175` | `own` | `d2b-provider-host` | low | actionable | leaf |  |  |  | `packages/d2b-provider-host/src/driver.rs:263, packages/d2b-provider-host/src/driver.rs:266` |  |  |
 | `RS-0176` | `own` | `d2b-provider-network-local` | low | actionable | leaf |  |  |  | `src/controller.rs:416-417` |  |  |
@@ -689,14 +689,14 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0643` | `docs` | `d2b-contracts-control` | medium | actionable | leaf |  |  |  | `unsafe_local_wire.rs:15, unsafe_local_wire.rs:21, unsafe_local_wire.rs:24, unsafe_local_wi` |  |  |
 | `RS-0644` | `docs` | `d2b-contracts-control` | low | actionable | leaf |  |  |  | `terminal_wire.rs:12, terminal_wire.rs:19, terminal_wire.rs:26, terminal_wire.rs:105` |  |  |
 | `RS-0646` | `docs` | `d2b-contracts-provider` | medium | actionable | family |  |  |  | `packages/d2b-contracts-provider/src/v3/credential_controller.rs:155, packages/d2b-contract` |  |  |
-| `RS-0645` | `docs` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/provider.rs:250, packages/d2b-contracts-provider/sr` |  |  |
+| `RS-0645` | `docs` | `d2b-contracts-provider` | low | actionable | leaf | applied | U2 | 6fa152aa1 | `packages/d2b-contracts-provider/src/v3/provider.rs` | # Errors sections added to BinaryRef::parse, TrustEvidence::admit, macro-generated parse/from_opaque_digest, CredentialWire::decode_wire |  |
 | `RS-0649` | `docs` | `d2b-contracts-resource` | medium | actionable | leaf |  |  |  | `packages/d2b-contracts-resource/src/v3/artifact.rs:5, packages/d2b-contracts-resource/src/` |  |  |
 | `RS-0650` | `docs` | `d2b-contracts-resource` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-resource/src/v3/execution_policy.rs:923, packages/d2b-contracts-res` |  |  |
 | `RS-0647` | `docs` | `d2b-contracts-resource` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-resource/src/v3/limits.rs:3, packages/d2b-contracts-resource/src/v3` |  |  |
 | `RS-0648` | `docs` | `d2b-contracts-resource` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-resource/src/v3/operations/error.rs:21, packages/d2b-contracts-reso` |  |  |
 | `RS-0651` | `docs` | `d2b-contracts-zone-session` | medium | actionable | wide |  |  |  | `src/v3/component_session.rs:27, src/v3/component_session.rs:51, src/v3/component_session.r` |  |  |
-| `RS-0655` | `docs` | `d2b-core` | medium | actionable | leaf |  |  |  | `packages/d2b-core/src/manifest_v04.rs:1, packages/d2b-core/src/manifest_v04.rs:31, package` |  |  |
-| `RS-0654` | `docs` | `d2b-core` | medium | actionable | leaf |  |  |  | `packages/d2b-core/src/bundle_resolver.rs:2917, packages/d2b-core/src/bundle_resolver.rs:29` |  |  |
+| `RS-0655` | `docs` | `d2b-core` | medium | actionable | leaf | applied | U2 | f3da9fd31 | `packages/d2b-core/src/manifest_v04.rs` | module doc plus docs on ManifestV04/ManifestMeta/ObservabilityMeta/VmEntry/VmLifecycle/VmGracefulShutdown/VmLiveActivation/VmLanPolicy/VmObservability/VmShellMetadata/ManifestShellName; # Errors on fr |  |
+| `RS-0654` | `docs` | `d2b-core` | medium | actionable | leaf | applied | U2 | f3da9fd31 | `packages/d2b-core/src/bundle_resolver.rs` | one-line docs naming the exact BundleOpId shape added to all 15 undocumented intent_id_* constructors |  |
 | `RS-0652` | `docs` | `d2b-core-controller` | low | actionable | leaf |  |  |  | `packages/d2b-core-controller/src/main.rs:33-56, packages/d2b-core-controller/src/controlle` |  |  |
 | `RS-0653` | `docs` | `d2b-core-controller` | low | actionable | leaf |  |  |  | `migration.rs:54, migration.rs:58` |  |  |
 | `RS-0656` | `docs` | `d2b-host` | low | actionable | leaf | applied | U2 | f7e032f8f | `packages/d2b-host/src/bridge_port.rs` | Added # Errors to validate_readback, parse_request, parse_validation_request, validate_media_ref, validate_usb_busid, and NftBatch::parse (the wire-boundary parsers the row names). |  |
@@ -719,8 +719,8 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0675` | `docs` | `d2b-provider-credential-managed-identity` | low | actionable | leaf | applied | U2 | e86206bab | `packages/d2b-provider-credential-managed-identity/src/lib.rs` | Added # Errors naming ManagedIdentityProviderError/CredentialServiceError/CredentialObservabilityError variants to the named constructors and controller projections. |  |
 | `RS-0676` | `docs` | `d2b-provider-credential-secret-service` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-credential-secret-service/src/lib.rs:523, packages/d2b-provider-cred` |  |  |
 | `RS-0677` | `docs` | `d2b-provider-credential-secret-service` | low | actionable | leaf |  |  |  | `packages/d2b-provider-credential-secret-service/src/service.rs:660, packages/d2b-provider-` |  |  |
-| `RS-0678` | `docs` | `d2b-provider-device-gpu` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/src/controller.rs:172, packages/d2b-provider-device-gpu/s` |  |  |
-| `RS-0679` | `docs` | `d2b-provider-device-gpu` | low | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/src/gpu_argv.rs:24, packages/d2b-provider-device-gpu/src/` |  |  |
+| `RS-0678` | `docs` | `d2b-provider-device-gpu` | medium | actionable | leaf | applied | U2 | 8d910bf9c | `packages/d2b-provider-device-gpu/src/controller.rs` | # Errors sections added to all 16 named Result-returning items with exact error variants |  |
+| `RS-0679` | `docs` | `d2b-provider-device-gpu` | low | actionable | leaf | applied-variant | U2 | 8d910bf9c | `packages/d2b-provider-device-gpu/src/gpu_argv.rs` | dropping the allows exposed 15 more undocumented variants/fields under deny(missing_docs); documented GpuContextType variants, GpuArgvError/VideoArgvError variants+path fields, VideoBackend::Vaapi, pl |  |
 | `RS-0681` | `docs` | `d2b-provider-device-security-key` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-device-security-key/src/lease.rs:150-303, packages/d2b-provider-devi` |  |  |
 | `RS-0680` | `docs` | `d2b-provider-device-security-key` | low | actionable | leaf |  |  |  | `packages/d2b-provider-device-security-key/src/relay.rs:7, packages/d2b-provider-device-sec` |  |  |
 | `RS-0682` | `docs` | `d2b-provider-device-tpm` | low | actionable | leaf |  |  |  | `resources.rs:53, swtpm_argv.rs:130, resource_controller.rs:132, resource_controller.rs:190` |  |  |
@@ -731,9 +731,9 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0686` | `docs` | `d2b-provider-display-wayland` | low | actionable | leaf |  |  |  | `packages/d2b-provider-display-wayland/src/wayland_proxy/bridge.rs:37, packages/d2b-provide` |  |  |
 | `RS-0688` | `docs` | `d2b-provider-display-wayland` | low | actionable | leaf |  |  |  | `src/spec.rs:117, src/spec.rs:286, src/policy.rs:247, src/controller.rs:759` |  |  |
 | `RS-0689` | `docs` | `d2b-provider-guest` | low | actionable | leaf |  |  |  | `packages/d2b-provider-guest/src/facets.rs:63, packages/d2b-provider-guest/src/target_contr` |  |  |
-| `RS-0690` | `docs` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf |  |  |  | `src/lib.rs:7, src/effects.rs:813-882` |  |  |
-| `RS-0691` | `docs` | `d2b-provider-guest-azure-virtual-machine` | medium | actionable | leaf |  |  |  | `src/controller/mod.rs:333, src/controller/mod.rs:446` |  |  |
-| `RS-0692` | `docs` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf |  |  |  | `src/bootstrap.rs:25` |  |  |
+| `RS-0690` | `docs` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf | not-started | U2 |  | `src/lib.rs:7, src/effects.rs:813-882` | budget stop before azure-container-apps crate |  |
+| `RS-0691` | `docs` | `d2b-provider-guest-azure-virtual-machine` | medium | actionable | leaf | applied | U2 | 8b6efd32a | `packages/d2b-provider-guest-azure-virtual-machine/src/controller/mod.rs` | # Errors naming AzureVmError variants incl. Transient-vs-fatal split on reconcile/adopt/poll_operation/update/finalize/complete_enrollment/restore_recovery_state/from_bytes/consume/3 validates |  |
+| `RS-0692` | `docs` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf | applied | U2 | 8b6efd32a | `packages/d2b-provider-guest-azure-virtual-machine/src/bootstrap.rs` | matches() doc states the constant-time-in-presented-length guarantee |  |
 | `RS-0693` | `docs` | `d2b-provider-guest-cloud-hypervisor` | low | actionable | leaf |  |  |  | `descriptor.rs:423-429, identity.rs:590-634` |  |  |
 | `RS-0694` | `docs` | `d2b-provider-guest-qemu-media` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-guest-qemu-media/src/controller/device_watch.rs:82, packages/d2b-pro` |  |  |
 | `RS-0695` | `docs` | `d2b-provider-notification-desktop` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-notification-desktop/src/action_nonce.rs:84-89, packages/d2b-provide` |  |  |
@@ -767,11 +767,11 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0723` | `docs` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 75d64d039 | `guest_target.rs` | TargetControlAssignment five methods documented |  |
 | `RS-0724` | `docs` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 69d4b615f | `target.rs` | doc contracts on target/spec/identity accessors |  |
 | `RS-0725` | `docs` | `d2b-resource-types` | low | actionable | leaf | applied | U2 | 61c64bf0f | `packages/d2b-resource-types/src/operation.rs` | Restored the missing spaces after commas in the OperationCtx::fds field docs. |  |
-| `RS-0726` | `docs` | `d2b-session` | medium | actionable | leaf |  |  |  | `handshake.rs:25, handshake.rs:111, handshake.rs:155, handshake.rs:239` |  |  |
-| `RS-0728` | `docs` | `d2b-session` | medium | actionable | leaf |  |  |  | `lifecycle.rs:38, lifecycle.rs:81, lifecycle.rs:147, record.rs:62` |  |  |
-| `RS-0727` | `docs` | `d2b-session` | low | actionable | leaf |  |  |  | `operation.rs:207` |  |  |
-| `RS-0729` | `docs` | `d2b-session` | low | actionable | leaf |  |  |  | `admission.rs:1182, admission.rs:1186, admission.rs:1190, admission.rs:1194` |  |  |
-| `RS-0730` | `docs` | `d2b-session` | low | actionable | leaf |  |  |  | `transport.rs:208, transport.rs:212` |  |  |
+| `RS-0726` | `docs` | `d2b-session` | medium | actionable | leaf | applied | U2 | 6970c9d9e | `packages/d2b-session/src/handshake.rs` | first-sentence docs plus # Errors naming SessionErrorCode added to x25519_public_key, constants, HandshakeRole, HandshakeCredentials, NegotiatedOffer+accessors, encode_offer, negotiate_offer, generati |  |
+| `RS-0728` | `docs` | `d2b-session` | medium | actionable | leaf | not-started | U2 |  | `lifecycle.rs:38, lifecycle.rs:81, lifecycle.rs:147, record.rs:62` | budget stop before lifecycle.rs/record.rs/bootstrap.rs/deadline.rs item docs |  |
+| `RS-0727` | `docs` | `d2b-session` | low | actionable | leaf | applied | U2 | 217c0c66c | `packages/d2b-session/src/operation.rs` | MAX_MEMBER_SPELLING_LEN const extracted with wire-bound comment; parse uses it |  |
+| `RS-0729` | `docs` | `d2b-session` | low | actionable | leaf | applied | U2 | 217c0c66c | `packages/d2b-session/src/admission.rs` | one-line docs on route-binding accessors, SessionErrorClass::as_str, SessionError accessors, TransportPacket methods |  |
+| `RS-0730` | `docs` | `d2b-session` | low | actionable | leaf | applied | U2 | 6970c9d9e | `packages/d2b-session/src/transport.rs` | serialized_transport_split doc rewritten to the serialized-compatibility contract (halves must never be driven concurrently) |  |
 | `RS-0731` | `docs` | `d2b-session-unix` | medium | actionable | leaf | applied | U2 | 83f133d3e | `packages/d2b-session-unix/src/socket.rs` | Added first-sentence contract docs to SeqpacketSocket, UnixSeqpacketTransport, UnixStreamTransport, CreditPool, PidfdEvidence, PeerCredentials, ActivatedSeqpacketListener(s), FramedVsockTransport and  |  |
 | `RS-0732` | `docs` | `d2b-session-unix` | low | actionable | leaf | applied | U2 | 83f133d3e | `packages/d2b-session-unix/src/socket.rs` | Added # Errors to the anchor Result fns (SeqpacketSocket::from_owned/from_parent_prearmed/from_inherited_fd, UnixSeqpacketTransport::new, CreditPool::new, PidfdEvidence::new) naming their distinct fai |  |
 | `RS-0733` | `docs` | `d2b-telemetry` | low | actionable | leaf | applied | U2 | e1fab0e9b | `packages/d2b-telemetry/src/audit_hash.rs` | Added # Errors naming the returned variants to every named item: AuditHash::parse, AuditChainLink::verify/verify_at, all eight BoundedEmitter fns, MetricFamily/MeterRegistry, RedactionGuard, validate_ |  |
