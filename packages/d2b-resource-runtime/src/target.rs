@@ -649,18 +649,28 @@ impl TargetDirectory {
         }
         match &reference.kind {
             TargetKind::Host => {
-                state.host_assignments.insert(source.clone(), assignment.clone());
+                state.host_assignments.insert(source.clone(), assignment);
+                let handle = state
+                    .host_assignments
+                    .get(source)
+                    .expect("host assignment was just inserted")
+                    .clone();
+                Ok(handle)
             }
             TargetKind::Guest => {
-                state
+                let assignments = &mut state
                     .guests
                     .entry(reference)
                     .or_insert_with(Self::new_guest_record)
-                    .assignments
-                    .insert(source.clone(), assignment.clone());
+                    .assignments;
+                assignments.insert(source.clone(), assignment);
+                let handle = assignments
+                    .get(source)
+                    .expect("guest assignment map entry was just inserted")
+                    .clone();
+                Ok(handle)
             }
         }
-        Ok(assignment)
     }
 
     /// The recorded assignment of one resource.
