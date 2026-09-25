@@ -77,6 +77,16 @@ impl SealedZoneTopology {
     ///
     /// Each edge's parent/direct-child relationship was already proven by
     /// [`ZoneTreeEdge::new`], so it is not re-checked here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrimitiveSpecError::ConflictingFields`] when an edge names
+    /// the local root as a child, [`PrimitiveSpecError::DuplicateEntry`] when
+    /// two rows give one child different parents,
+    /// [`PrimitiveSpecError::MissingRequiredField`] when an edge's parent is
+    /// neither the local root nor a declared child, and
+    /// [`PrimitiveSpecError::TooManyEntries`] above the frozen parent-entry
+    /// ceiling.
     pub fn seal(
         local_root: ZonePath,
         edges: Vec<ZoneTreeEdge>,
@@ -141,18 +151,15 @@ impl SealedZoneTopology {
     /// the unknown-topology case.
     fn longest_suffix_match(&self, target: &ZonePath) -> Option<&ZonePath> {
         let labels = target.labels();
-        for start in 0..labels.len() {
+        (0..labels.len()).find_map(|start| {
             // A non-empty sub-slice of a valid Zone path is itself a valid
             // Zone path, so a suffix can only fail to build if the slice is
-            // empty, which the loop bound excludes.
+            // empty, which the range bound excludes.
             let Ok(suffix) = ZonePath::new(labels[start..].to_vec()) else {
-                continue;
+                return None;
             };
-            if let Some(zone) = self.zones.get(&suffix) {
-                return Some(zone);
-            }
-        }
-        None
+            self.zones.get(&suffix)
+        })
     }
 }
 
