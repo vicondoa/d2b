@@ -4,6 +4,7 @@ use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_notification_desktop::{
     NotificationHostSinkIdentity, NotificationLifecycleBackend, NotificationLifecycleObservation,
     NotificationLifecyclePlan, NotificationLifecycleSupervisor, NotificationSourceIdentity,
+    ProviderError,
 };
 
 #[derive(Default)]
@@ -15,18 +16,18 @@ struct Backend {
 
 impl NotificationLifecycleBackend for Backend {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn start_source(&self, source: &NotificationSourceIdentity) -> Result<(), &'static str> {
+    fn start_source(&self, source: &NotificationSourceIdentity) -> Result<(), ProviderError> {
         let mut fail = self.fail_source_start_once.lock().unwrap();
         if *fail {
             *fail = false;
-            return Err("source-start-failed");
+            return Err(ProviderError::LifecycleSourceStartFailed);
         }
         self.sources.lock().unwrap().push(source.clone());
         Ok(())
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn stop_source(&self, source: &NotificationSourceIdentity) -> Result<(), &'static str> {
+    fn stop_source(&self, source: &NotificationSourceIdentity) -> Result<(), ProviderError> {
         self.sources
             .lock()
             .unwrap()
@@ -35,19 +36,19 @@ impl NotificationLifecycleBackend for Backend {
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn start_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), &'static str> {
+    fn start_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), ProviderError> {
         *self.sink.lock().unwrap() = Some(sink.clone());
         Ok(())
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn stop_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), &'static str> {
+    fn stop_host_sink(&self, sink: &NotificationHostSinkIdentity) -> Result<(), ProviderError> {
         let mut active = self.sink.lock().unwrap();
         if active.as_ref() == Some(sink) {
             *active = None;
             Ok(())
         } else {
-            Err("host-sink-not-active")
+            Err(ProviderError::HostSinkLifecycleMismatch)
         }
     }
 
@@ -56,7 +57,7 @@ impl NotificationLifecycleBackend for Backend {
         &self,
         _zone: &ZoneId,
         _provider_ref: &ResourceRef,
-    ) -> Result<NotificationLifecycleObservation, &'static str> {
+    ) -> Result<NotificationLifecycleObservation, ProviderError> {
         Ok(NotificationLifecycleObservation::new(
             self.sources.lock().unwrap().clone(),
             self.sink.lock().unwrap().clone(),
@@ -144,7 +145,7 @@ fn supervisor_rolls_back_partial_effects_for_retry() {
 
     assert!(matches!(
         supervisor.apply(&transition),
-        Err("source-start-failed")
+        Err(ProviderError::LifecycleSourceStartFailed)
     ));
     assert!(supervisor.apply(&transition).is_ok());
     assert!(!supervisor.is_drained().unwrap());
