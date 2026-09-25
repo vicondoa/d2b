@@ -69,11 +69,6 @@ impl ZoneSpec {
     pub const fn new() -> Self {
         Self {}
     }
-
-    /// Validate the self-resource desired state.
-    pub const fn validate(&self) -> Result<(), ZoneContractError> {
-        Ok(())
-    }
 }
 
 impl<'de> Deserialize<'de> for ZoneSpec {
