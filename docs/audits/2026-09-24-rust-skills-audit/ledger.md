@@ -133,7 +133,7 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0100` | `idiom` | `d2b-session` | low | actionable | leaf |  |  |  | `engine.rs:1802, engine.rs:1803, engine.rs:1807` |  |  |
 | `RS-0101` | `idiom` | `d2b-session` | low | actionable | leaf |  |  |  | `admission.rs:1593, admission.rs:956, admission.rs:958` |  |  |
 | `RS-0102` | `idiom` | `d2b-sk-frontend` | low | actionable | leaf |  |  |  | `packages/d2b-sk-frontend/src/config.rs:178` |  |  |
-| `RS-0103` | `idiom` | `d2b-unsafe-local-helper` | low | actionable | leaf |  |  |  | `packages/d2b-unsafe-local-helper/src/systemd.rs:260, packages/d2b-unsafe-local-helper/src/` |  |  |
+| `RS-0103` | `idiom` | `d2b-unsafe-local-helper` | low | actionable | leaf | applied | U2 | f3a847c72 | `packages/d2b-unsafe-local-helper/src/systemd.rs` | Replaced the then_some/ok_or NotFound normalization with an explicit if-let/if-error branch in terminate_scope and stop_scope; cargo check and test green. |  |
 | `RS-0104` | `idiom` | `d2b-zone-routing` | low | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/resolver.rs:144` |  |  |
 | `RS-0105` | `idiom` | `d2b-zone-routing` | low | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/service.rs:311` |  |  |
 | `RS-0106` | `idiom` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/resource_runtime.rs:9168, packages/d2bd/src/resource_runtime.rs:4555, pa` |  |  |
@@ -223,10 +223,10 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0189` | `own` | `d2b-provider-toolkit` | low | actionable | leaf |  |  |  | `packages/d2b-provider-toolkit/src/shared_provider.rs:771` |  |  |
 | `RS-0190` | `own` | `d2b-provider-transport-azure-relay` | low | actionable | leaf |  |  |  | `packages/d2b-provider-transport-azure-relay/src/credential_client.rs:190-198, packages/d2b` |  |  |
 | `RS-0191` | `own` | `d2b-provider-transport-azure-relay` | low | actionable | leaf |  |  |  | `packages/d2b-provider-transport-azure-relay/src/guest_credential.rs:267-277, packages/d2b-` |  |  |
-| `RS-0192` | `own` | `d2b-provider-user` | low | actionable | leaf |  |  |  | `packages/d2b-provider-user/src/effects_service.rs:179, packages/d2b-provider-user/src/effe` |  |  |
+| `RS-0192` | `own` | `d2b-provider-user` | low | actionable | leaf | applied-variant | U2 | 9ba7acf09 | `packages/d2b-provider-user/src/effects_service.rs` | Destructured InspectUserRequest and moved groups by value; username still cloned because inspect_user_response borrows it after UserSpec::new consumes it (stated fix was not implementable as written). |  |
 | `RS-0193` | `own` | `d2b-provider-volume` | low | actionable | leaf |  |  |  | `driver.rs:337` |  |  |
 | `RS-0194` | `own` | `d2b-provider-volume` | low | actionable | wide |  |  |  | `driver.rs:380, d2b-provider-volume-local/src/bindings.rs:80-81, d2bd/src/resource_runtime.` |  |  |
-| `RS-0195` | `own` | `d2b-provider-volume-binding` | low | actionable | leaf |  |  |  | `packages/d2b-provider-volume-binding/src/row_readers.rs:38-44` |  |  |
+| `RS-0195` | `own` | `d2b-provider-volume-binding` | low | actionable | leaf | applied | U2 | 275c581bf | `packages/d2b-provider-volume-binding/src/row_readers.rs` | Bounded the as_object_mut removal borrow in a block and moved spec into serde_json::from_value, dropping the Value::Object(object.clone()). |  |
 | `RS-0196` | `own` | `d2b-provider-zone-link` | low | actionable | leaf |  |  |  | `packages/d2b-provider-zone-link/src/zone_links.rs:1692, packages/d2b-provider-zone-link/sr` |  |  |
 | `RS-0197` | `own` | `d2b-provider-zone-link` | low | actionable | leaf |  |  |  | `packages/d2b-provider-zone-link/src/zone_links.rs:1526` |  |  |
 | `RS-0198` | `own` | `d2b-resource-api` | low | actionable | leaf |  |  |  | `adapter.rs:425, client.rs:110, service.rs:852` |  |  |
@@ -699,24 +699,24 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0654` | `docs` | `d2b-core` | medium | actionable | leaf |  |  |  | `packages/d2b-core/src/bundle_resolver.rs:2917, packages/d2b-core/src/bundle_resolver.rs:29` |  |  |
 | `RS-0652` | `docs` | `d2b-core-controller` | low | actionable | leaf |  |  |  | `packages/d2b-core-controller/src/main.rs:33-56, packages/d2b-core-controller/src/controlle` |  |  |
 | `RS-0653` | `docs` | `d2b-core-controller` | low | actionable | leaf |  |  |  | `migration.rs:54, migration.rs:58` |  |  |
-| `RS-0656` | `docs` | `d2b-host` | low | actionable | leaf |  |  |  | `packages/d2b-host/src/bridge_port.rs:127, packages/d2b-host/src/host_generation.rs:103, pa` |  |  |
-| `RS-0657` | `docs` | `d2b-host` | low | actionable | leaf |  |  |  | `packages/d2b-host/src/cgroup.rs:53, packages/d2b-host/src/cgroup.rs:71, packages/d2b-host/` |  |  |
+| `RS-0656` | `docs` | `d2b-host` | low | actionable | leaf | applied | U2 | f7e032f8f | `packages/d2b-host/src/bridge_port.rs` | Added # Errors to validate_readback, parse_request, parse_validation_request, validate_media_ref, validate_usb_busid, and NftBatch::parse (the wire-boundary parsers the row names). |  |
+| `RS-0657` | `docs` | `d2b-host` | low | actionable | leaf | applied | U2 | f7e032f8f | `packages/d2b-host/src/cgroup.rs` | One-line docs added to Controller::REQUIRED, Controller::as_str, Controller::from_token (token grammar noted), BusId::new, HostPrepStepId::as_str. |  |
 | `RS-0660` | `docs` | `d2b-process-conformance` | low | actionable | leaf |  |  |  | `packages/d2b-process-conformance/src/terminal.rs:51, packages/d2b-process-conformance/src/` |  |  |
 | `RS-0661` | `docs` | `d2b-provider` | medium | actionable | leaf |  |  |  | `packages/d2b-provider/src/agent.rs:270, packages/d2b-provider/src/descriptor.rs:232, packa` |  |  |
-| `RS-0662` | `docs` | `d2b-provider-activation-nixos` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-activation-nixos/src/controller.rs:711, packages/d2b-provider-activa` |  |  |
-| `RS-0663` | `docs` | `d2b-provider-audio-binding` | low | actionable | leaf |  |  |  | `packages/d2b-provider-audio-binding/src/audio_binding.rs:56, packages/d2b-provider-audio-b` |  |  |
-| `RS-0664` | `docs` | `d2b-provider-audio-pipewire` | medium | actionable | leaf |  |  |  | `src/state.rs:81-84, src/lib.rs:9-10` |  |  |
-| `RS-0665` | `docs` | `d2b-provider-audio-pipewire` | low | actionable | leaf |  |  |  | `src/controller.rs:21, src/controller.rs:209, src/controller.rs:212` |  |  |
+| `RS-0662` | `docs` | `d2b-provider-activation-nixos` | medium | actionable | leaf | applied | U2 | 6acd5ada6 | `packages/d2b-provider-activation-nixos/src/controller.rs` | Added # Errors naming the exact ActivationError/ActivationVerificationError variants to verify, verify_application, refuse_undeclared_runner_step, reconcile, apply_runner_result. |  |
+| `RS-0663` | `docs` | `d2b-provider-audio-binding` | low | actionable | leaf | applied | U2 | ca450e9d5 | `packages/d2b-provider-audio-binding/src/audio_binding.rs` | Added # Errors to binding_children, validate, dependencies, desired_children naming Unavailable vs InvalidResource conditions. |  |
+| `RS-0664` | `docs` | `d2b-provider-audio-pipewire` | medium | actionable | leaf | applied | U2 | fc6c6e7da | `packages/d2b-provider-audio-pipewire/src/state.rs` | Documented AudioStateLock guard semantics (holds the OFD lock; drop releases and closes). |  |
+| `RS-0665` | `docs` | `d2b-provider-audio-pipewire` | low | actionable | leaf | applied | U2 | fc6c6e7da | `packages/d2b-provider-audio-pipewire/src/controller.rs` | Documented the 300s cadence rationale, hoisted 64 into pub const AUDIO_QUEUE_BOUND used by new, with_shared_microphone, and the admission bound test (u64 casts at lease sites). |  |
 | `RS-0666` | `docs` | `d2b-provider-clipboard-wayland` | medium | actionable | leaf |  |  |  | `src/fd.rs:549, src/policy.rs:81, src/audit.rs:200, src/runtime.rs:97` |  |  |
 | `RS-0667` | `docs` | `d2b-provider-clipboard-wayland` | medium | actionable | family |  |  |  | `src/audit.rs:172, src/audit.rs:174` |  |  |
 | `RS-0668` | `docs` | `d2b-provider-clipboard-wayland` | low | actionable | leaf |  |  |  | `packages/d2b-provider-clipboard-wayland/src/history.rs:112-115` |  |  |
 | `RS-0669` | `docs` | `d2b-provider-clipboard-wayland` | low | actionable | leaf |  |  |  | `packages/d2b-provider-clipboard-wayland/src/clipd_host/niri.rs:136, packages/d2b-provider-` |  |  |
 | `RS-0670` | `docs` | `d2b-provider-clipboard-wayland` | low | actionable | leaf |  |  |  | `packages/d2b-provider-clipboard-wayland/src/clipd_host/framing.rs:28-29, packages/d2b-prov` |  |  |
-| `RS-0671` | `docs` | `d2b-provider-command` | low | actionable | leaf |  |  |  | `packages/d2b-provider-command/src/command.rs:38, packages/d2b-provider-command/src/command` |  |  |
+| `RS-0671` | `docs` | `d2b-provider-command` | low | actionable | leaf | applied | U2 | ef3bc5ec9 | `packages/d2b-provider-command/src/command.rs` | Added one-line # Errors naming CommandContractError variants to CommandExec::parse, CommandArgvSlot::parse, CommandSpec::new. |  |
 | `RS-0672` | `docs` | `d2b-provider-config-nixos` | low | actionable | leaf |  |  |  | `packages/d2b-provider-config-nixos/src/controller.rs:45-64, packages/d2b-provider-config-n` |  |  |
 | `RS-0673` | `docs` | `d2b-provider-credential` | low | actionable | leaf |  |  |  | `packages/d2b-provider-credential/src/session.rs:132, packages/d2b-provider-credential/src/` |  |  |
-| `RS-0674` | `docs` | `d2b-provider-credential-entra` | low | actionable | leaf |  |  |  | `packages/d2b-provider-credential-entra/src/controller.rs:47, packages/d2b-provider-credent` |  |  |
-| `RS-0675` | `docs` | `d2b-provider-credential-managed-identity` | low | actionable | leaf |  |  |  | `lib.rs:449, lib.rs:514, lib.rs:592, lib.rs:796` |  |  |
+| `RS-0674` | `docs` | `d2b-provider-credential-entra` | low | actionable | leaf | applied | U2 | b29c0b8d2 | `packages/d2b-provider-credential-entra/src/controller.rs` | Added # Errors naming returned variants to EntraEndpointPolicy::new, EntraConfig::new, EntraPlacement::new/new_in_zone/new_runtime_in_zone, EntraCredentialProviderFactory::new, revoke_owned_handles, r |  |
+| `RS-0675` | `docs` | `d2b-provider-credential-managed-identity` | low | actionable | leaf | applied | U2 | e86206bab | `packages/d2b-provider-credential-managed-identity/src/lib.rs` | Added # Errors naming ManagedIdentityProviderError/CredentialServiceError/CredentialObservabilityError variants to the named constructors and controller projections. |  |
 | `RS-0676` | `docs` | `d2b-provider-credential-secret-service` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-credential-secret-service/src/lib.rs:523, packages/d2b-provider-cred` |  |  |
 | `RS-0677` | `docs` | `d2b-provider-credential-secret-service` | low | actionable | leaf |  |  |  | `packages/d2b-provider-credential-secret-service/src/service.rs:660, packages/d2b-provider-` |  |  |
 | `RS-0678` | `docs` | `d2b-provider-device-gpu` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/src/controller.rs:172, packages/d2b-provider-device-gpu/s` |  |  |
@@ -740,23 +740,23 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0696` | `docs` | `d2b-provider-notification-desktop` | low | actionable | leaf |  |  |  | `packages/d2b-provider-notification-desktop/src/runtime.rs:88-89, packages/d2b-provider-not` |  |  |
 | `RS-0697` | `docs` | `d2b-provider-observability-otel` | medium | actionable | leaf |  |  |  | `lib.rs:13, lib.rs:14, lib.rs:15` |  |  |
 | `RS-0698` | `docs` | `d2b-provider-observability-otel` | medium | actionable | leaf |  |  |  | `agent.rs:216, config.rs:147, controller.rs:100, emitter_socket.rs:131` |  |  |
-| `RS-0699` | `docs` | `d2b-provider-operation` | low | actionable | leaf |  |  |  | `packages/d2b-provider-operation/src/operation.rs:138, packages/d2b-provider-operation/src/` |  |  |
+| `RS-0699` | `docs` | `d2b-provider-operation` | low | actionable | leaf | applied | U2 | 4e381161f | `packages/d2b-provider-operation/src/operation.rs` | Added one-line # Errors naming OperationContractError variants to OperationAudit::new, AuditJoin::new, OperationFds::new, OperationBounds::new, OperationSpec::new. |  |
 | `RS-0700` | `docs` | `d2b-provider-process` | low | actionable | leaf |  |  |  | `packages/d2b-provider-process/src/backend.rs:256, packages/d2b-provider-process/src/launch` |  |  |
-| `RS-0701` | `docs` | `d2b-provider-process-minijail` | low | actionable | leaf |  |  |  | `packages/d2b-provider-process-minijail/src/launch.rs:33, packages/d2b-provider-process-min` |  |  |
+| `RS-0701` | `docs` | `d2b-provider-process-minijail` | low | actionable | leaf | applied | U2 | 85d30ec37 | `packages/d2b-provider-process-minijail/src/launch.rs` | Added # Errors naming ProcessConformanceError conditions to PlatformGate::validate, validate_launch_ticket, and the launch/adopt/stop/stop_stale impl methods. |  |
 | `RS-0702` | `docs` | `d2b-provider-process-systemd` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-process-systemd/src/lifecycle.rs:33, packages/d2b-provider-process-s` |  |  |
 | `RS-0703` | `docs` | `d2b-provider-provider` | low | actionable | leaf |  |  |  | `src/providers.rs:72, src/providers.rs:79` |  |  |
-| `RS-0704` | `docs` | `d2b-provider-role` | low | actionable | leaf |  |  |  | `packages/d2b-provider-role/src/lib.rs:1, packages/d2b-provider-role/src/rbac.rs:11` |  |  |
+| `RS-0704` | `docs` | `d2b-provider-role` | low | actionable | leaf | applied-variant | U2 | e36441105 | `packages/d2b-provider-role/src/lib.rs` | Added #![deny(missing_docs)] and documented PolicyRevisionSet fields; the gate forced one-line docs on AuthorizationCacheKey::new and the four PositiveDecisionCache methods to keep the build green. |  |
 | `RS-0705` | `docs` | `d2b-provider-seccomp-profile` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-seccomp-profile/src/seccomp_profile.rs:31, packages/d2b-provider-sec` |  |  |
 | `RS-0706` | `docs` | `d2b-provider-shell-terminal` | medium | actionable | leaf |  |  |  | `src/authz.rs:76, src/service/controller.rs:134, src/service/supervisor.rs:88, src/session/` |  |  |
 | `RS-0707` | `docs` | `d2b-provider-system-core` | medium | actionable | leaf |  |  |  | `src/host.rs:121, src/host.rs:161, src/user.rs:241` |  |  |
 | `RS-0708` | `docs` | `d2b-provider-toolkit` | low | actionable | leaf |  |  |  | `packages/d2b-provider-toolkit/src/base/runtime.rs:248-249, packages/d2b-provider-toolkit/s` |  |  |
 | `RS-0709` | `docs` | `d2b-provider-toolkit` | low | actionable | leaf |  |  |  | `packages/d2b-provider-toolkit/src/testing/conformance.rs:267, packages/d2b-provider-toolki` |  |  |
 | `RS-0710` | `docs` | `d2b-provider-transport-azure-relay` | low | actionable | leaf |  |  |  | `packages/d2b-provider-transport-azure-relay/src/auth.rs:229-246, packages/d2b-provider-tra` |  |  |
-| `RS-0711` | `docs` | `d2b-provider-transport-unix` | low | actionable | leaf |  |  |  | `packages/d2b-provider-transport-unix/src/portal.rs:197-201, packages/d2b-provider-transpor` |  |  |
+| `RS-0711` | `docs` | `d2b-provider-transport-unix` | low | actionable | leaf | applied | U2 | 721c96f38 | `packages/d2b-provider-transport-unix/src/portal.rs` | Added # Errors naming PortalError variants to open, close, and observe. |  |
 | `RS-0712` | `docs` | `d2b-provider-transport-vsock` | low | actionable | leaf |  |  |  | `packages/d2b-provider-transport-vsock/src/auth.rs:59, packages/d2b-provider-transport-vsoc` |  |  |
-| `RS-0713` | `docs` | `d2b-provider-volume-binding` | low | actionable | leaf |  |  |  | `packages/d2b-provider-volume-binding/src/facets.rs:52, packages/d2b-provider-volume-bindin` |  |  |
+| `RS-0713` | `docs` | `d2b-provider-volume-binding` | low | actionable | leaf | applied | U2 | 275c581bf | `packages/d2b-provider-volume-binding/src/facets.rs` | Added # Errors to SocketRemoveSource::remove, GuestMountSource::guest_mount_ready, BindingDriverEffects::remove_socket, and guest_mount_ready naming the daemon-adapter failures and fail-closed handlin |  |
 | `RS-0714` | `docs` | `d2b-provider-volume-local` | low | actionable | leaf |  |  |  | `src/content.rs:118-125, src/controller.rs:148-154, src/layout.rs:54-57, src/views.rs:88-92` |  |  |
-| `RS-0715` | `docs` | `d2b-provider-zone` | low | actionable | leaf |  |  |  | `packages/d2b-provider-zone/src/zone_status.rs:110-114` |  |  |
+| `RS-0715` | `docs` | `d2b-provider-zone` | low | actionable | leaf | applied | U2 | 2170c0cac | `packages/d2b-provider-zone/src/zone_status.rs` | Added # Errors to SystemCoreStatusEmitter::emit naming the duplicate-handler and rejected-resource Contract conditions. |  |
 | `RS-0716` | `docs` | `d2b-provider-zone-link` | low | actionable | leaf |  |  |  | `packages/d2b-provider-zone-link/src/zone_links.rs:267, packages/d2b-provider-zone-link/src` |  |  |
 | `RS-0718` | `docs` | `d2b-resource-api` | medium | actionable | leaf |  |  |  | `packages/d2b-resource-api/src/authz.rs:630, packages/d2b-resource-api/src/authz.rs:864, pa` |  |  |
 | `RS-0717` | `docs` | `d2b-resource-api` | medium | actionable | leaf |  |  |  | `service.rs:198, store.rs:39, adapter.rs:71, manager_backend.rs:625` |  |  |
@@ -766,15 +766,15 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0722` | `docs` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 4cbf82851 | `manager.rs` | MODULE_NAME docs on five modules |  |
 | `RS-0723` | `docs` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 75d64d039 | `guest_target.rs` | TargetControlAssignment five methods documented |  |
 | `RS-0724` | `docs` | `d2b-resource-runtime` | low | actionable | leaf | applied | U2 | 69d4b615f | `target.rs` | doc contracts on target/spec/identity accessors |  |
-| `RS-0725` | `docs` | `d2b-resource-types` | low | actionable | leaf |  |  |  | `packages/d2b-resource-types/src/operation.rs:64, packages/d2b-resource-types/src/operation` |  |  |
+| `RS-0725` | `docs` | `d2b-resource-types` | low | actionable | leaf | applied | U2 | 61c64bf0f | `packages/d2b-resource-types/src/operation.rs` | Restored the missing spaces after commas in the OperationCtx::fds field docs. |  |
 | `RS-0726` | `docs` | `d2b-session` | medium | actionable | leaf |  |  |  | `handshake.rs:25, handshake.rs:111, handshake.rs:155, handshake.rs:239` |  |  |
 | `RS-0728` | `docs` | `d2b-session` | medium | actionable | leaf |  |  |  | `lifecycle.rs:38, lifecycle.rs:81, lifecycle.rs:147, record.rs:62` |  |  |
 | `RS-0727` | `docs` | `d2b-session` | low | actionable | leaf |  |  |  | `operation.rs:207` |  |  |
 | `RS-0729` | `docs` | `d2b-session` | low | actionable | leaf |  |  |  | `admission.rs:1182, admission.rs:1186, admission.rs:1190, admission.rs:1194` |  |  |
 | `RS-0730` | `docs` | `d2b-session` | low | actionable | leaf |  |  |  | `transport.rs:208, transport.rs:212` |  |  |
-| `RS-0731` | `docs` | `d2b-session-unix` | medium | actionable | leaf |  |  |  | `packages/d2b-session-unix/src/socket.rs:190, packages/d2b-session-unix/src/adapter.rs:351,` |  |  |
-| `RS-0732` | `docs` | `d2b-session-unix` | low | actionable | leaf |  |  |  | `packages/d2b-session-unix/src/socket.rs:202, packages/d2b-session-unix/src/socket.rs:210, ` |  |  |
-| `RS-0733` | `docs` | `d2b-telemetry` | low | actionable | leaf |  |  |  | `packages/d2b-telemetry/src/emitter.rs:236, packages/d2b-telemetry/src/audit_hash.rs:23` |  |  |
+| `RS-0731` | `docs` | `d2b-session-unix` | medium | actionable | leaf | applied | U2 | 83f133d3e | `packages/d2b-session-unix/src/socket.rs` | Added first-sentence contract docs to SeqpacketSocket, UnixSeqpacketTransport, UnixStreamTransport, CreditPool, PidfdEvidence, PeerCredentials, ActivatedSeqpacketListener(s), FramedVsockTransport and  |  |
+| `RS-0732` | `docs` | `d2b-session-unix` | low | actionable | leaf | applied | U2 | 83f133d3e | `packages/d2b-session-unix/src/socket.rs` | Added # Errors to the anchor Result fns (SeqpacketSocket::from_owned/from_parent_prearmed/from_inherited_fd, UnixSeqpacketTransport::new, CreditPool::new, PidfdEvidence::new) naming their distinct fai |  |
+| `RS-0733` | `docs` | `d2b-telemetry` | low | actionable | leaf | applied | U2 | e1fab0e9b | `packages/d2b-telemetry/src/audit_hash.rs` | Added # Errors naming the returned variants to every named item: AuditHash::parse, AuditChainLink::verify/verify_at, all eight BoundedEmitter fns, MetricFamily/MeterRegistry, RedactionGuard, validate_ |  |
 | `RS-0734` | `docs` | `d2b-zone-routing` | low | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/resolver.rs:80, packages/d2b-zone-routing/src/service.rs:208` |  |  |
 | `RS-0736` | `docs` | `d2bd` | medium | actionable | leaf |  |  |  | `packages/d2bd/src/composition.rs:3455, packages/d2bd/src/composition.rs:4828` |  |  |
 | `RS-0741` | `docs` | `d2bd` | medium | actionable | leaf |  |  |  | `packages/d2bd/src/audio_dispatch.rs:372` |  |  |
