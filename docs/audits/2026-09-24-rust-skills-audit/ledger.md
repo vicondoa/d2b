@@ -25,7 +25,7 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 
 | wave | head | security scan | census | Layer-1 aggregate | host integration | notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| U1 | `628e27af1` | pending | pending | pending | pending | - |
+| U1 | `11bbfe41a` | pass | pass | pass (988 of 988 tests) | pass (11 of 11 vmChecks) | First attempt flaked on the load-sensitive `daemon_state_persistence` kill-during-startup race (passes standalone, not an audit row); the retry is green. The head carries the refreshed async-gate inventory for the broker line shifts. |
 
 ## Findings (965 rows)
 
