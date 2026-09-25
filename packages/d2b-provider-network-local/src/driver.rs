@@ -393,13 +393,11 @@ pub fn declared_dependency_refs(
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::time::Duration;
 
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use d2b_contracts_resource::v3::network::{Ipv4Cidr, NetworkSpec};
     use d2b_provider_toolkit::SharedProviderSpecEnvelope;
-    use d2b_provider_toolkit::testing::fakes::RecordingManagerEndpoint;
-    use d2b_resource_runtime::context::{RequeueId, RequeueScheduler};
+    use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
     };
@@ -411,22 +409,6 @@ mod tests {
         network_descriptor, network_spec,
     };
     use crate::test_support::{RecordingRuntime, recording_facets};
-
-    #[derive(Default)]
-    struct RecordingRequeue {
-        scheduled: parking_lot::Mutex<Vec<RequeueId>>,
-    }
-
-impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, _key: ResourceKey, _after: Duration) -> RequeueId {
-            let mut scheduled = self.scheduled.lock();
-            let id = RequeueId(scheduled.len() as u64 + 1);
-            scheduled.push(id);
-            id
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
 
     fn test_row(type_name: &str, name: &str) -> StoredDesiredResource {
         StoredDesiredResource {

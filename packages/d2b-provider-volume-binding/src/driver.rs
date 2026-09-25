@@ -1114,7 +1114,7 @@ mod tests {
         volume_binding::{VolumeBindingReadinessFence, VolumeBindingStatusResource},
     };
     use crate::test_support::FakeServingEffects;
-    use d2b_provider_toolkit::testing::fakes::RecordingManagerEndpoint;
+    use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
     use d2b_provider_volume_virtiofs::WORKER_TEMPLATE;
     use d2b_resource_runtime::context::ResourceContext;
     use d2b_resource_runtime::driver::{
@@ -1127,38 +1127,6 @@ mod tests {
     use super::{
         BindingDriverArgs, BindingDriverFactory, BindingDriverStatus, binding_spec_decoder,
     };
-
-    /// Recording requeue: the driver's resync schedules are observable.
-    #[derive(Clone)]
-    struct RecordingRequeue {
-        scheduled: Arc<parking_lot::Mutex<Vec<ResourceKey>>>,
-    }
-
-    impl RecordingRequeue {
-        fn new() -> Self {
-            Self {
-                scheduled: Arc::new(parking_lot::Mutex::new(Vec::new())),
-            }
-        }
-
-        fn scheduled(&self) -> Vec<ResourceKey> {
-            self.scheduled.lock().clone()
-        }
-    }
-
-    impl d2b_resource_runtime::context::RequeueScheduler for RecordingRequeue {
-        fn schedule(
-            &self,
-            key: ResourceKey,
-            _after: std::time::Duration,
-        ) -> d2b_resource_runtime::context::RequeueId {
-            let mut scheduled = self.scheduled.lock();
-            scheduled.push(key);
-            d2b_resource_runtime::context::RequeueId(scheduled.len() as u64)
-        }
-
-        fn cancel(&self, _id: d2b_resource_runtime::context::RequeueId) {}
-    }
 
     // -- fixtures ------------------------------------------------------------
 
@@ -1219,7 +1187,7 @@ mod tests {
     fn fixture(row: StoredDesiredResource, manager: RecordingManagerEndpoint) -> Fixture {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
-        let requeue = RecordingRequeue::new();
+        let requeue = RecordingRequeue::default();
         let ctx = ResourceContext::new(
             row,
             TargetHandle::Host,

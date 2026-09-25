@@ -652,10 +652,10 @@ pub fn telemetry_binding_descriptor() -> DriverDescriptor {
 mod tests {
     use std::sync::Arc;
     use tokio::sync::Mutex;
-    use std::time::Duration;
 
+    use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
+        ChildEnsure, ManagerEndpoint, RequeueScheduler, ResourceContext, WatchId,
         WatchRegistration,
     };
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
@@ -833,29 +833,6 @@ mod tests {
         }
     }
 
-    /// Requeue recorder (R13): the driver's schedule calls, in order.
-    #[derive(Default)]
-    struct RecordingRequeue {
-        scheduled: Mutex<Vec<Duration>>,
-    }
-
-    impl RecordingRequeue {
-        async fn scheduled(&self) -> Vec<Duration> {
-            self.scheduled.lock().await.clone()
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn schedule(&self, _key: ResourceKey, after: Duration) -> RequeueId {
-            let mut scheduled = self.scheduled.try_lock().expect("scheduled");
-            scheduled.push(after);
-            RequeueId(scheduled.len() as u64)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
-
     struct Fixture {
         ctx: ResourceContext,
         manager: Arc<RecordingManager>,
@@ -1023,7 +1000,7 @@ mod tests {
         assert!(!status.fenced);
         assert!(!status.converged);
         assert_eq!(status.desired_children.len(), 2);
-        assert_eq!(fixture.requeue.scheduled().await, vec![TELEMETRY_BINDING_RESYNC]);
+        assert_eq!(fixture.requeue.scheduled(), vec![TELEMETRY_BINDING_RESYNC]);
 
         // Second pass: the owned child set is current; every ensure is a
         // no-op and no resync is scheduled.
@@ -1043,7 +1020,7 @@ mod tests {
         // fail-closed projection while readiness is unobservable.
         assert_eq!(status.phase, PHASE_DEGRADED);
         assert_eq!(
-            fixture.requeue.scheduled().await,
+            fixture.requeue.scheduled(),
             vec![TELEMETRY_BINDING_RESYNC],
             "converged owners stop rescheduling"
         );
@@ -1069,7 +1046,7 @@ mod tests {
         assert!(!status.converged);
         assert_eq!(status.phase, PHASE_DEGRADED);
         assert_eq!(
-            fixture.requeue.scheduled().await,
+            fixture.requeue.scheduled(),
             vec![TELEMETRY_BINDING_RESYNC],
             "the preserved resync re-evaluates the fence"
         );

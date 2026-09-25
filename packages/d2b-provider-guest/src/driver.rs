@@ -1494,8 +1494,8 @@ mod tests {
     use std::sync::Arc;
 
     use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
-    use d2b_provider_toolkit::testing::fakes::RecordingManagerEndpoint;
-    use d2b_resource_runtime::context::{RequeueId, RequeueScheduler, ResourceContext};
+    use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
+    use d2b_resource_runtime::context::ResourceContext;
     use d2b_resource_runtime::driver::{
         ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
     };
@@ -1524,27 +1524,6 @@ mod tests {
 
     // -- fakes ---------------------------------------------------------------
 
-
-    struct RecordingRequeue {
-        scheduled: parking_lot::Mutex<Vec<(ResourceKey, std::time::Duration)>>,
-    }
-
-    impl RecordingRequeue {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                scheduled: parking_lot::Mutex::new(Vec::new()),
-            })
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, key: ResourceKey, after: std::time::Duration) -> RequeueId {
-            self.scheduled.lock().push((key, after));
-            RequeueId(0)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
 
     // -- fixtures ------------------------------------------------------------
 
@@ -1601,7 +1580,7 @@ mod tests {
     fn context(
         target: StoredDesiredResource,
         manager: Arc<RecordingManagerEndpoint>,
-        requeue: Arc<RecordingRequeue>,
+        requeue: RecordingRequeue,
     ) -> ResourceContext {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1610,7 +1589,7 @@ mod tests {
             TargetHandle::Host,
             guest_spec_decoder(),
             manager,
-            requeue,
+            Arc::new(requeue),
             effects_tx,
             notify_tx,
         )
@@ -1664,7 +1643,7 @@ mod tests {
         let ctx = context(
             guest_row("work-vm", qemu_guest_spec()),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         (ctx, effects, manager)
     }
@@ -1789,7 +1768,7 @@ mod tests {
         let mut ctx_a = context(
             guest_row("work-vm", serde_json::json!({ "providerRef": "Provider/runtime-azure-container-apps" })),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         driver_a.reconcile(&mut ctx_a).await.expect("first pass");
         assert_eq!(
@@ -1804,7 +1783,7 @@ mod tests {
         let mut ctx_b = context(
             guest_row("work-vm", serde_json::json!({ "providerRef": "Provider/runtime-azure-container-apps" })),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         driver_b.reconcile(&mut ctx_b).await.expect("recreated pass");
         assert_eq!(
@@ -1857,7 +1836,7 @@ mod tests {
                     serde_json::json!({ "providerRef": registration.provider_ref }),
                 ),
                 Arc::clone(&manager),
-                RecordingRequeue::new(),
+                RecordingRequeue::default(),
             );
             let mut driver = driver(ScriptedEffects::new());
             driver.validate(&mut ctx).await.expect("registered provider");
@@ -1874,7 +1853,7 @@ mod tests {
                 serde_json::json!({ "providerRef": "Provider/not-a-runtime" }),
             ),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = driver(ScriptedEffects::new());
         let failure = driver.validate(&mut ctx).await.expect_err("refused provider");
@@ -1952,7 +1931,7 @@ mod tests {
         let mut ctx = context(
             guest_row("work-vm", qemu_guest_spec()),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = driver(Arc::clone(&effects));
         let failure = driver
@@ -2031,7 +2010,7 @@ mod tests {
                 serde_json::json!({ "providerRef": "Provider/runtime-cloud-hypervisor" }),
             ),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = driver(Arc::clone(&effects));
 
@@ -2059,7 +2038,7 @@ mod tests {
                 serde_json::json!({ "providerRef": "Provider/runtime-cloud-hypervisor" }),
             ),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = driver(ScriptedEffects::new());
         assert_eq!(
@@ -2143,7 +2122,7 @@ mod tests {
         let mut ctx = context(
             guest_row("work-vm", qemu_guest_spec()),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = driver(Arc::clone(&effects));
 

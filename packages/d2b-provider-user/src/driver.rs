@@ -439,9 +439,9 @@ mod tests {
         user::{OsUsername, UserSpec},
     };
     use d2b_provider_system_core::UserDiscoveryCondition;
+    use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
-        WatchRegistration,
+        ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration,
     };
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome,
@@ -557,36 +557,6 @@ mod tests {
         }
     }
 
-    struct RecordingRequeue {
-        calls: parking_lot::Mutex<Vec<u64>>,
-    }
-
-    impl RecordingRequeue {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
-            })
-        }
-
-        fn call_count(&self) -> usize {
-            self.calls.lock().len()
-        }
-
-        /// The scheduled delays in milliseconds, in arrival order.
-        fn calls(&self) -> Vec<u64> {
-            self.calls.lock().clone()
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, _key: ResourceKey, after: std::time::Duration) -> RequeueId {
-            self.calls.lock().push(after.as_millis() as u64);
-            RequeueId(0)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
-
     // -- fixtures ------------------------------------------------------------
 
     fn user_spec_bytes() -> Vec<u8> {
@@ -615,7 +585,7 @@ mod tests {
     fn fixture(
         row: StoredDesiredResource,
         manager: Arc<RecordingManager>,
-        requeue: Arc<RecordingRequeue>,
+        requeue: RecordingRequeue,
     ) -> ResourceContext {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -624,7 +594,7 @@ mod tests {
             TargetHandle::Host,
             user_spec_decoder(),
             manager,
-            requeue,
+            Arc::new(requeue),
             effects_tx,
             notify_tx,
         )
@@ -641,13 +611,13 @@ mod tests {
         ResourceContext,
         Arc<RecordingEffects>,
         Arc<RecordingManager>,
-        Arc<RecordingRequeue>,
+        RecordingRequeue,
         Box<dyn DynResourceDriver>,
     ) {
         let effects = RecordingEffects::new();
         let manager = RecordingManager::new();
-        let requeue = RecordingRequeue::new();
-        let ctx = fixture(row(user_spec_bytes()), Arc::clone(&manager), Arc::clone(&requeue));
+        let requeue = RecordingRequeue::default();
+        let ctx = fixture(row(user_spec_bytes()), Arc::clone(&manager), requeue.clone());
         let driver = build_driver(Arc::clone(&effects)).await;
         (ctx, effects, manager, requeue, driver)
     }
@@ -680,7 +650,7 @@ mod tests {
         let mut ctx = fixture(
             row(envelope.canonical_bytes().expect("canonical spec bytes")),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("reconcile"),
@@ -710,7 +680,7 @@ mod tests {
         let mut ctx = fixture(
             row(br#"{"nonsense":true}"#.to_vec()),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = build_driver(RecordingEffects::new()).await;
         let failure = driver.validate(&mut ctx).await.expect_err("terminal");
@@ -846,7 +816,7 @@ mod tests {
         let effects = RecordingEffects::new();
         let manager = RecordingManager::new();
         manager.seed_owned(ResourceKey::new("work", "Process", "system-core-child"));
-        let requeue = RecordingRequeue::new();
+        let requeue = RecordingRequeue::default();
         let mut ctx = fixture(row(user_spec_bytes()), Arc::clone(&manager), requeue);
         let mut d = build_driver(effects).await;
 

@@ -1061,9 +1061,9 @@ mod tests {
 
     use async_trait::async_trait;
     use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
-    use crate::testing::fakes::RecordingManagerEndpoint;
+    use crate::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, SpecDecoder,
+        ChildEnsure, ManagerEndpoint, RequeueScheduler, ResourceContext, SpecDecoder,
     };
     use d2b_resource_runtime::driver::{DynResourceDriver, RecoveryOutcome, ResourceDriverFactory};
     use d2b_resource_runtime::identity::{
@@ -1120,25 +1120,6 @@ mod tests {
             resync: Duration::from_secs(30),
         },
     ];
-
-    #[derive(Default)]
-    struct RecordingRequeue {
-        scheduled: tokio::sync::Mutex<Vec<RequeueId>>,
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, _key: ResourceKey, _after: Duration) -> RequeueId {
-            // The scheduler trait is synchronous; the recording side fails
-            // closed on the brief write race, which cannot happen in the
-            // single-threaded tests this double serves.
-            let mut scheduled = self.scheduled.try_lock().expect("scheduler lock");
-            let id = RequeueId(scheduled.len() as u64 + 1);
-            scheduled.push(id);
-            id
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
 
     struct RecordingFamily {
         log: Log,
@@ -1392,7 +1373,7 @@ mod tests {
             .expect("effect ran");
         assert!(child_at < effect_at, "{entries:?}");
         assert_eq!(
-            fixture.requeue.scheduled.lock().await.len(),
+            fixture.requeue.recorded().len(),
             1,
             "pending reconcile self-resyncs"
         );

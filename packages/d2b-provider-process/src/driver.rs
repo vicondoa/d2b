@@ -2176,9 +2176,9 @@ mod tests {
         AdoptionCandidate, AdoptionCondition, IdentityBinding, ObservedIdentity,
         ProcessIdentityDigest, ProcessPhaseClass, ProcessStatusReport, WaitReapOwner,
     };
+    use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext,
-        WatchRegistration,
+        ChildEnsure, ManagerEndpoint, ResourceContext, WatchRegistration,
     };
     use d2b_resource_runtime::driver::{
         DynResourceDriver, ReconcileOutcome, RecoveryOutcome, ResourceDriverFactory,
@@ -2191,7 +2191,6 @@ mod tests {
     };
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
-    use parking_lot::Mutex;
     use tokio::sync::mpsc;
 
     use super::{
@@ -2462,57 +2461,6 @@ mod tests {
         ) -> Result<(), ResourceError> {
             Ok(())
         }
-    }
-
-    /// Recording requeue scheduler over tokio paused time: every schedule is
-    /// recorded with its exact delay and delivers one id after the backoff.
-    #[derive(Clone)]
-    struct RecordingRequeue {
-        inner: Arc<Mutex<RecordingRequeueInner>>,
-    }
-
-    struct RecordingRequeueInner {
-        calls: Vec<(ResourceKey, Duration)>,
-        next: u64,
-        delivered_tx: Option<mpsc::UnboundedSender<u64>>,
-    }
-
-    impl RecordingRequeue {
-        fn new() -> (Self, mpsc::UnboundedReceiver<u64>) {
-            let (tx, rx) = mpsc::unbounded_channel();
-            (
-                Self {
-                    inner: Arc::new(Mutex::new(RecordingRequeueInner {
-                        calls: Vec::new(),
-                        next: 1,
-                        delivered_tx: Some(tx),
-                    })),
-                },
-                rx,
-            )
-        }
-
-        fn recorded(&self) -> Vec<(ResourceKey, Duration)> {
-            self.inner.lock().calls.clone()
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, key: ResourceKey, after: Duration) -> RequeueId {
-            let mut inner = self.inner.lock();
-            let id = inner.next;
-            inner.next += 1;
-            inner.calls.push((key, after));
-            if let Some(tx) = inner.delivered_tx.clone() {
-                tokio::spawn(async move {
-                    tokio::time::sleep(after).await;
-                    let _ = tx.send(id);
-                });
-            }
-            RequeueId(id)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
     }
 
     struct Fixture {

@@ -486,9 +486,9 @@ mod tests {
         host::{HOST_PROVIDER_REF, HostSpec},
     };
     use d2b_provider_system_core::HostCapabilityClass;
+    use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
-        WatchRegistration,
+        ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration,
     };
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome,
@@ -604,31 +604,6 @@ mod tests {
         }
     }
 
-    struct RecordingRequeue {
-        calls: tokio::sync::Mutex<Vec<u64>>,
-    }
-
-    impl RecordingRequeue {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: tokio::sync::Mutex::new(Vec::new()),
-            })
-        }
-
-        fn call_count(&self) -> usize {
-            self.calls.try_lock().expect("uncontended test mutex").len()
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, _key: ResourceKey, after: std::time::Duration) -> RequeueId {
-            self.calls.try_lock().expect("uncontended test mutex").push(after.as_millis() as u64);
-            RequeueId(0)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
-
     // -- fixtures ------------------------------------------------------------
 
     fn host_spec_bytes(provider_ref: Option<&str>) -> Vec<u8> {
@@ -657,7 +632,7 @@ mod tests {
     fn fixture(
         row: StoredDesiredResource,
         manager: Arc<RecordingManager>,
-        requeue: Arc<RecordingRequeue>,
+        requeue: RecordingRequeue,
     ) -> ResourceContext {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -666,7 +641,7 @@ mod tests {
             TargetHandle::Host,
             host_spec_decoder(),
             manager,
-            requeue,
+            Arc::new(requeue),
             effects_tx,
             notify_tx,
         )
@@ -683,16 +658,16 @@ mod tests {
         ResourceContext,
         Arc<RecordingEffects>,
         Arc<RecordingManager>,
-        Arc<RecordingRequeue>,
+        RecordingRequeue,
         Box<dyn DynResourceDriver>,
     ) {
         let effects = RecordingEffects::new();
         let manager = RecordingManager::new();
-        let requeue = RecordingRequeue::new();
+        let requeue = RecordingRequeue::default();
         let ctx = fixture(
             row(host_spec_bytes(Some(HOST_PROVIDER_REF))),
             Arc::clone(&manager),
-            Arc::clone(&requeue),
+            requeue.clone(),
         );
         let driver = build_driver(Arc::clone(&effects)).await;
         (ctx, effects, manager, requeue, driver)
@@ -720,7 +695,7 @@ mod tests {
         let mut ctx = fixture(
             row(host_spec_bytes(Some(HOST_PROVIDER_REF))),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("reconcile"),
@@ -749,7 +724,7 @@ mod tests {
         let mut ctx = fixture(
             row(host_spec_bytes(Some("Provider/network-local"))),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = build_driver(RecordingEffects::new()).await;
         let failure = driver.validate(&mut ctx).await.expect_err("terminal");
@@ -762,7 +737,7 @@ mod tests {
         let mut ctx = fixture(
             row(host_spec_bytes(None)),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = build_driver(RecordingEffects::new()).await;
         let failure = driver.validate(&mut ctx).await.expect_err("terminal");
@@ -775,7 +750,7 @@ mod tests {
         let mut ctx = fixture(
             row(br#"{"nonsense":true}"#.to_vec()),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = build_driver(RecordingEffects::new()).await;
         let failure = driver.validate(&mut ctx).await.expect_err("terminal");
@@ -873,7 +848,7 @@ mod tests {
         let effects = RecordingEffects::new();
         let manager = RecordingManager::new();
         manager.seed_owned(ResourceKey::new("work", "Process", "system-core-child"));
-        let requeue = RecordingRequeue::new();
+        let requeue = RecordingRequeue::default();
         let mut ctx = fixture(
             row(host_spec_bytes(Some(HOST_PROVIDER_REF))),
             Arc::clone(&manager),

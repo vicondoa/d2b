@@ -442,13 +442,9 @@ pub fn telemetry_service_descriptor() -> DriverDescriptor {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use tokio::sync::Mutex;
-    use std::time::Duration;
 
-    use d2b_provider_toolkit::testing::fakes::RecordingManagerEndpoint;
-    use d2b_resource_runtime::context::{
-        ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext,
-    };
+    use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
+    use d2b_resource_runtime::context::{ManagerEndpoint, RequeueScheduler, ResourceContext};
     use d2b_resource_runtime::error::FailureClass;
     use d2b_resource_runtime::identity::ResourceProvenance;
     use d2b_resource_runtime::spec_store::StoredDesiredResource;
@@ -458,29 +454,6 @@ mod tests {
     use super::*;
 
     // -- fakes ---------------------------------------------------------------
-
-    /// Requeue recorder (R13): the driver's schedule calls, in order.
-    #[derive(Default)]
-    struct RecordingRequeue {
-        scheduled: Mutex<Vec<Duration>>,
-    }
-
-    impl RecordingRequeue {
-        async fn scheduled(&self) -> Vec<Duration> {
-            self.scheduled.lock().await.clone()
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fn schedule(&self, _key: ResourceKey, after: Duration) -> RequeueId {
-            let mut scheduled = self.scheduled.try_lock().expect("scheduled");
-            scheduled.push(after);
-            RequeueId(scheduled.len() as u64)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
 
     struct Fixture {
         ctx: ResourceContext,
@@ -623,7 +596,7 @@ mod tests {
         assert_eq!(status.phase, PHASE_PENDING);
         assert!(status.present_endpoints.is_empty());
         assert_eq!(
-            fixture.requeue.scheduled().await,
+            fixture.requeue.scheduled(),
             vec![TELEMETRY_SERVICE_RESYNC],
             "the route is not materialized yet"
         );
@@ -641,7 +614,7 @@ mod tests {
         assert_eq!(status.phase, PHASE_PENDING);
         assert_eq!(status.projection["serviceReadiness"], PHASE_PENDING);
         assert_eq!(
-            fixture.requeue.scheduled().await,
+            fixture.requeue.scheduled(),
             vec![TELEMETRY_SERVICE_RESYNC],
             "a present endpoint stops rescheduling; readiness is watch-driven"
         );
@@ -673,7 +646,7 @@ mod tests {
         assert_eq!(status.projection["serviceRole"], "projection");
         assert_eq!(status.projection["serviceReadiness"], PHASE_READY);
         assert!(fixture.manager.log().is_empty());
-        assert!(fixture.requeue.scheduled().await.is_empty());
+        assert!(fixture.requeue.scheduled().is_empty());
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

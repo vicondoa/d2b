@@ -153,8 +153,8 @@ pub use testing::{
     AdmissionRefusal, AdmittedRow, DeterministicClock, FIXTURE_NOW_UNIX_MS, FakeBus,
     FakeCoreClient, FakeEffectPort, FakePortError, FakeProvider, FakeResourceStore, FakeSupervisor,
     FaultInjector, FaultPlan, Fixture, HarnessDeclarations, MAX_RECORDED_CALLS, PlaneCall,
-    RecordingManagerEndpoint, RecordingPlanePort, RowPhase, RowStatus, SampleLeaseRequest,
-    TestHarness, block_on, sample_lease_request,
+    RecordingManagerEndpoint, RecordingPlanePort, RecordingRequeue, RowPhase, RowStatus,
+    SampleLeaseRequest, TestHarness, block_on, sample_lease_request,
 };
 
 /// Audited Unix attachment types used by Provider-specific transport adapters.

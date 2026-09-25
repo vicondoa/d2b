@@ -1,5 +1,5 @@
-//! Fake core, store, bus, supervisor, manager-endpoint, and effect clients,
-//! with fault injection.
+//! Fake core, store, bus, supervisor, manager-endpoint, requeue-scheduler,
+//! and effect clients, with fault injection.
 //!
 //! `ADR-046-provider-model-and-packaging` section "Toolkit" lists these as
 //! toolkit deliverables so that every Provider crate can write hermetic
@@ -29,18 +29,22 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use d2b_contracts_provider::v3::{DependencyAlias, ProviderManifest};
 use d2b_contracts_resource::v3::ArtifactId;
 use d2b_contracts_resource::v3::{ResourceRef, execution_policy::BoundedToken};
-use d2b_resource_runtime::context::{ChildEnsure, ManagerEndpoint, WatchId, WatchRegistration};
+use d2b_resource_runtime::context::{
+    ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, WatchId, WatchRegistration,
+};
 use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
 use d2b_resource_runtime::manager::ResourceView;
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::spec_store::EnsureOutcome;
 use parking_lot::Mutex;
+use tokio::sync::mpsc;
 
 use crate::base::error::ProviderToolkitError;
 
@@ -822,6 +826,108 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
     async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
         Ok(())
     }
+}
+
+/// A recording [`RequeueScheduler`] double: every schedule is recorded with
+/// its key and exact delay, and each schedule returns a monotonically
+/// increasing [`RequeueId`].
+///
+/// [`Self::new`] additionally returns the delivery receiver: each scheduled
+/// id is sent there after the backoff elapses (over tokio paused time), so a
+/// test can pin the timer firing without touching the scheduler trait's
+/// synchronous seam. [`Self::default`] records without delivering.
+///
+/// The double is cloneable and shares its state through an `Arc`, so a test
+/// can hand one clone to the driver and keep another to read the log.
+#[derive(Clone)]
+pub struct RecordingRequeue {
+    inner: Arc<Mutex<RecordingRequeueInner>>,
+}
+
+/// The lock-guarded state behind [`RecordingRequeue`].
+struct RecordingRequeueInner {
+    calls: Vec<(ResourceKey, Duration)>,
+    next: u64,
+    delivered_tx: Option<mpsc::UnboundedSender<u64>>,
+}
+
+impl Default for RecordingRequeue {
+    /// A plain recorder: schedules are recorded, ids are never delivered.
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(RecordingRequeueInner {
+                calls: Vec::new(),
+                next: 1,
+                delivered_tx: None,
+            })),
+        }
+    }
+}
+
+impl RecordingRequeue {
+    /// Create the recorder plus the receiver its scheduled ids are delivered
+    /// on, one id per schedule, after each backoff elapses.
+    pub fn new() -> (Self, mpsc::UnboundedReceiver<u64>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            Self {
+                inner: Arc::new(Mutex::new(RecordingRequeueInner {
+                    calls: Vec::new(),
+                    next: 1,
+                    delivered_tx: Some(tx),
+                })),
+            },
+            rx,
+        )
+    }
+
+    /// The scheduled `(key, delay)` pairs, in arrival order.
+    pub fn recorded(&self) -> Vec<(ResourceKey, Duration)> {
+        self.inner.lock().calls.clone()
+    }
+
+    /// The number of schedules recorded.
+    pub fn call_count(&self) -> usize {
+        self.inner.lock().calls.len()
+    }
+
+    /// The scheduled delays in milliseconds, in arrival order.
+    pub fn calls(&self) -> Vec<u64> {
+        self.inner
+            .lock()
+            .calls
+            .iter()
+            .map(|(_, after)| after.as_millis() as u64)
+            .collect()
+    }
+
+    /// The scheduled delays, in arrival order.
+    pub fn scheduled(&self) -> Vec<Duration> {
+        self.inner
+            .lock()
+            .calls
+            .iter()
+            .map(|(_, after)| *after)
+            .collect()
+    }
+}
+
+impl RequeueScheduler for RecordingRequeue {
+    fn schedule(&self, key: ResourceKey, after: Duration) -> RequeueId {
+        let mut inner = self.inner.lock();
+        let id = inner.next;
+        inner.next += 1;
+        inner.calls.push((key, after));
+        if let Some(tx) = inner.delivered_tx.clone() {
+            tokio::spawn(async move {
+                tokio::time::sleep(after).await;
+                let _ = tx.send(id);
+            });
+        }
+        RequeueId(id)
+    }
+
+    fn cancel(&self, _id: RequeueId) {}
 }
 
 #[cfg(test)]
