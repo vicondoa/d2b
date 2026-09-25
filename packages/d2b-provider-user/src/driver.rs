@@ -805,6 +805,20 @@ mod tests {
                 vec![USER_REDISCOVER.as_millis() as u64],
                 "exactly one re-check, on the discovery cadence"
             );
+
+            // The cached status is current-generation but not realized, so
+            // the next pass re-discovers instead of short-circuiting into a
+            // claim - for every unrealized phase, not just Pending.
+            effects.set_phase(ResourcePhase::Ready);
+            assert_eq!(
+                driver.reconcile(&mut ctx).await.expect("second reconcile"),
+                ReconcileOutcome::Satisfied
+            );
+            assert_eq!(
+                effects.call_order(),
+                vec!["observe-user".to_owned(), "observe-user".to_owned()],
+                "{phase:?} cached unrealized discovery is re-observed"
+            );
         }
     }
 
@@ -847,7 +861,7 @@ mod tests {
     #[tokio::test]
     async fn reconcile_maps_a_discovery_failure_to_a_retryable_failure() {
         let (mut ctx, effects, _manager, _requeue, mut driver) = user_fixture().await;
-        effects.fail.store(true, Ordering::SeqCst);
+        effects.fail.store(true, Ordering::Relaxed);
         let failure = driver.reconcile(&mut ctx).await.expect_err("retryable");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert!(ctx.status::<UserDriverStatus>().is_none());
