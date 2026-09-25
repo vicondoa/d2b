@@ -3,12 +3,12 @@
   "sites": [
     {
       "file": "packages/d2b-broker/src/ops/host_generation_handoff.rs",
-      "line": 242,
+      "line": 245,
       "reason": "tokio OpenOptions builder flag, not a lock acquisition"
     },
     {
       "file": "packages/d2b-broker/src/ops/host_generation_handoff.rs",
-      "line": 430,
+      "line": 490,
       "reason": "tokio OpenOptions builder flag, not a lock acquisition"
     },
     {
@@ -123,22 +123,22 @@
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8129,
+      "line": 8127,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8196,
+      "line": 8194,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8413,
+      "line": 8411,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8490,
+      "line": 8488,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
