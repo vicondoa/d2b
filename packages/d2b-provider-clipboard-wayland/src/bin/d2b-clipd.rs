@@ -4018,6 +4018,32 @@ mod tests {
     }
 
     #[test]
+    fn published_selection_echo_gate_is_false_without_a_published_selection() {
+        let identity = vm_endpoint("personal-dev");
+        let window = FocusedWindowSnapshot {
+            app_id: Some("d2b.personal-dev.firefox".to_owned()),
+            ..FocusedWindowSnapshot::default()
+        };
+        let bridge = BridgeSelectionState {
+            identity: identity.clone(),
+            source_id: 7,
+            data_control_source_id: 11,
+            history_entry_id: bridge_history_entry_id(&identity, 7),
+            timestamp_unix_ms: 1,
+            suppress_selection_echo: true,
+            data_by_mime: BTreeMap::new(),
+        };
+        // No published selection: never suppress, regardless of focus or
+        // bridge state.
+        assert!(!should_suppress_published_selection_echo(
+            Some(&window),
+            None,
+            Some(&bridge),
+        ));
+        assert!(!should_suppress_published_selection_echo(None, None, None));
+    }
+
+    #[test]
     fn bridge_paste_direct_serve_requires_user_selected_publication() {
         assert!(published_selection_can_serve_bridge_paste(
             PublishedSelectionMode::Selected
