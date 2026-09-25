@@ -952,13 +952,13 @@ where
     pub fn controller(&self, binding: AcaResourceBinding) -> AcaController<C, L> {
         AcaController::new(
             binding,
-            self.config.defaults.clone(),
+            self.config.defaults().clone(),
             Arc::clone(&self.control),
             Arc::clone(&self.leases),
         )
         .with_provider_settings(
-            self.config.network_ref.clone(),
-            self.config.sandbox_transport_alias.clone(),
+            self.config.network_ref().cloned(),
+            self.config.sandbox_transport_alias().clone(),
         )
     }
 }
