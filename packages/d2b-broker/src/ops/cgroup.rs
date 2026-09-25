@@ -124,8 +124,8 @@ pub struct CgroupBundleContext {
 }
 
 impl CgroupBundleContext {
-    pub fn slice_path(&self) -> PathBuf {
-        self.parent_slice.clone()
+    pub fn slice_path(&self) -> &Path {
+        &self.parent_slice
     }
 
     /// v1.1.1 per-VM-interior + per-role-leaf taxonomy per ADR 0011
@@ -246,7 +246,7 @@ where
     let root = context.unified_hierarchy_root.as_path();
 
     let mut fields = AuditFields {
-        slice_path: Some(context.slice_path()),
+        slice_path: Some(context.slice_path().to_path_buf()),
         controllers_enabled: Vec::new(),
         owner_uid: Some(context.d2bd_uid),
         ..AuditFields::default()
@@ -320,7 +320,7 @@ where
     // maps that to a canonical path under d2b.slice.
     let (canonical_path, class) =
         if requested_subject == D2B_SLICE_NAME || requested_subject == "d2b-slice" {
-            (context.slice_path(), PathClass::D2bSlice)
+            (context.slice_path().to_path_buf(), PathClass::D2bSlice)
         } else if context.knows_vm(requested_subject) {
             (context.vm_leaf_path(requested_subject), PathClass::VmLeaf)
         } else {
@@ -340,7 +340,7 @@ where
     fields.path_class = Some(class);
     fields.cgroup_id = Some(canonical_path.display().to_string());
 
-    if !is_under_slice(&canonical_path, &context.slice_path()) {
+    if !is_under_slice(&canonical_path, context.slice_path()) {
         audit.record(
             "OpenCgroupDir",
             AuditDecision::DeniedRefused,
@@ -818,7 +818,7 @@ mod tests {
         let ctx = context(&["alpha"]);
         let audit = RecordingAuditSink::default();
         handle_delegate_cgroup_v2(&b, &ctx, &audit).unwrap();
-        host_cgroup::create_vm_subtree(&b, &ctx.slice_path(), "alpha", ctx.d2bd_uid, ctx.d2bd_gid)
+        host_cgroup::create_vm_subtree(&b, ctx.slice_path(), "alpha", ctx.d2bd_uid, ctx.d2bd_gid)
             .unwrap();
         let outcome = handle_open_cgroup_dir(&b, &ctx, "alpha", &audit).unwrap();
         assert_eq!(outcome.path_class, PathClass::VmLeaf);

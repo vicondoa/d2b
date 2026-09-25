@@ -96,8 +96,8 @@ pub struct KernelConfig {
 /// Every kernel is registered under its committed broker-generic row name;
 /// the mixed [`KernelDispatcher`](crate::envelope::KernelDispatcher) routes
 /// exactly those names to this table and forwards every other operation.
-pub fn kernel_table(config: &KernelConfig) -> HandlerTable {
-    let config = Arc::new(config.clone());
+pub fn kernel_table(config: KernelConfig) -> HandlerTable {
+    let config = Arc::new(config);
     HandlerTable::new()
         .with(OPEN_PIDFD, {
             let config = Arc::clone(&config);

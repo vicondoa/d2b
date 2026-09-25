@@ -117,9 +117,9 @@ pub fn refuse_unsafe_parent(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum WriteMarkerBlockError {
-    Io(String),
+    Io(io::Error),
     ReconcileExec(ReconcileExecError),
     ForeignOwnership,
 }
@@ -134,7 +134,14 @@ impl std::fmt::Display for WriteMarkerBlockError {
     }
 }
 
-impl std::error::Error for WriteMarkerBlockError {}
+impl std::error::Error for WriteMarkerBlockError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
 
 /// Runtime entry-point for `UpdateHostsFile`.
 ///
@@ -146,11 +153,11 @@ pub async fn write_marker_block(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedHostsIntent,
 ) -> Result<(), WriteMarkerBlockError> {
-    refuse_unsafe_parent(&intent.path).map_err(|err| WriteMarkerBlockError::Io(err.to_string()))?;
+    refuse_unsafe_parent(&intent.path).map_err(WriteMarkerBlockError::Io)?;
     let existing = match path_safe::read_to_string_nofollow(&intent.path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(err) => return Err(WriteMarkerBlockError::Io(err.to_string())),
+        Err(err) => return Err(WriteMarkerBlockError::Io(err)),
     };
     validate_marker_ownership(&existing, intent)?;
     let merged = if intent.ownership_marker.is_some() {
@@ -173,11 +180,11 @@ pub async fn remove_marker_block(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedHostsIntent,
 ) -> Result<(), WriteMarkerBlockError> {
-    refuse_unsafe_parent(&intent.path).map_err(|err| WriteMarkerBlockError::Io(err.to_string()))?;
+    refuse_unsafe_parent(&intent.path).map_err(WriteMarkerBlockError::Io)?;
     let existing = match path_safe::read_to_string_nofollow(&intent.path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(WriteMarkerBlockError::Io(err.to_string())),
+        Err(err) => return Err(WriteMarkerBlockError::Io(err)),
     };
     validate_marker_ownership(&existing, intent)?;
     let merged = if intent.ownership_marker.is_some() {

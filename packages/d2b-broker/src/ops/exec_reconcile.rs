@@ -952,6 +952,7 @@ async fn run_usbip_driver_isolated(
 ) -> Result<(), ReconcileExecError> {
     let deadline = tokio::time::Instant::now() + USBIP_DRIVER_HELPER_TIMEOUT;
     let mut last_error = None;
+    let mut last_failure = None;
 
     for attempt in 0..USBIP_DRIVER_MAX_ATTEMPTS {
         let attempt_started = tokio::time::Instant::now();
@@ -972,41 +973,44 @@ async fn run_usbip_driver_isolated(
                 );
                 return Ok(());
             }
-            Err(error)
-                if usbip_unbind_error_is_transient(&error)
-                    && attempt + 1 < USBIP_DRIVER_MAX_ATTEMPTS =>
-            {
-                tracing::debug!(
-                    usbip_subcommand = subcommand.as_str(),
-                    attempt = attempt + 1,
-                    elapsed_ms,
-                    deadline_remaining_ms = remaining_ms,
-                    error = ?error,
-                    "usbip driver helper retrying transient failure"
-                );
-                last_error = Some(error);
-                let delay = usbip_unbind_retry_delay(bus_id, attempt);
-                let now = tokio::time::Instant::now();
-                if now + delay >= deadline {
-                    break;
-                }
-                tokio::time::sleep(delay).await;
-            }
             Err(error) => {
-                tracing::debug!(
-                    usbip_subcommand = subcommand.as_str(),
-                    attempt = attempt + 1,
-                    elapsed_ms,
-                    deadline_remaining_ms = remaining_ms,
-                    "usbip driver helper failed"
-                );
-                return Err(error);
+                let failure = UsbipUnbindFailure::classify(&error);
+                if failure.transient && attempt + 1 < USBIP_DRIVER_MAX_ATTEMPTS {
+                    tracing::debug!(
+                        usbip_subcommand = subcommand.as_str(),
+                        attempt = attempt + 1,
+                        elapsed_ms,
+                        deadline_remaining_ms = remaining_ms,
+                        failure_kind = ?failure.kind,
+                        error = ?error,
+                        "usbip driver helper retrying transient failure"
+                    );
+                    last_error = Some(error);
+                    last_failure = Some(failure);
+                    let delay = usbip_unbind_retry_delay(bus_id, attempt);
+                    let now = tokio::time::Instant::now();
+                    if now + delay >= deadline {
+                        break;
+                    }
+                    tokio::time::sleep(delay).await;
+                } else {
+                    tracing::debug!(
+                        usbip_subcommand = subcommand.as_str(),
+                        attempt = attempt + 1,
+                        elapsed_ms,
+                        deadline_remaining_ms = remaining_ms,
+                        failure_kind = ?failure.kind,
+                        "usbip driver helper failed"
+                    );
+                    return Err(error);
+                }
             }
         }
     }
     tracing::debug!(
         usbip_subcommand = subcommand.as_str(),
         attempts = USBIP_DRIVER_MAX_ATTEMPTS,
+        failure_kind = ?last_failure.as_ref().map(|failure| failure.kind),
         "usbip driver helper retry budget exhausted"
     );
     Err(last_error.unwrap_or_else(|| ReconcileExecError::TimedOut {
@@ -1188,31 +1192,70 @@ fn usbip_stream_shutdown_error_is_ignorable(error: &io::Error) -> bool {
     )
 }
 
-fn usbip_unbind_error_is_transient(error: &ReconcileExecError) -> bool {
-    match error {
-        ReconcileExecError::NonZeroExit { stderr, .. } => {
-            let stderr = stderr.to_ascii_lowercase();
-            stderr.contains("ebusy")
-                || stderr.contains("busy")
-                || stderr.contains("eagain")
-                || stderr.contains("temporarily unavailable")
-                || stderr.contains("interrupted")
-                || stderr.contains("eintr")
-        }
-        ReconcileExecError::Io { detail, .. } => {
-            let detail = detail.to_ascii_lowercase();
-            detail.contains("ebusy")
-                || detail.contains("busy")
-                || detail.contains("eagain")
-                || detail.contains("temporarily unavailable")
-                || detail.contains("interrupted")
-                || detail.contains("eintr")
-        }
-        ReconcileExecError::BinaryMissing { detail, .. } => {
-            let detail = detail.to_ascii_lowercase();
-            detail.contains("text file busy") || detail.contains("etxtbsy")
-        }
-        _ => false,
+/// Stable classification of a usbip driver-helper failure, decided once
+/// from the raw error text so retries and the final verdict never
+/// re-scan strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UsbipUnbindFailureKind {
+    /// Device or driver busy (EBUSY / EAGAIN): retryable.
+    Busy,
+    /// Interrupted operation (EINTR): retryable.
+    Interrupted,
+    /// Helper binary busy (ETXTBSY): retryable.
+    TextFileBusy,
+    /// Any other failure: fatal.
+    Fatal,
+}
+
+/// One classified usbip driver-helper failure: the typed kind, the
+/// retry verdict, and the raw detail text for reporting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UsbipUnbindFailure {
+    kind: UsbipUnbindFailureKind,
+    transient: bool,
+    detail: String,
+}
+
+impl UsbipUnbindFailure {
+    /// Classify a driver-helper error once, case-folded, at the point
+    /// the failure is observed.
+    fn classify(error: &ReconcileExecError) -> Self {
+        let (detail, kind) = match error {
+            ReconcileExecError::NonZeroExit { stderr, .. }
+            | ReconcileExecError::Io { detail: stderr, .. } => {
+                let stderr = stderr.to_ascii_lowercase();
+                let kind = if stderr.contains("ebusy")
+                    || stderr.contains("busy")
+                    || stderr.contains("eagain")
+                    || stderr.contains("temporarily unavailable")
+                {
+                    UsbipUnbindFailureKind::Busy
+                } else if stderr.contains("interrupted") || stderr.contains("eintr") {
+                    UsbipUnbindFailureKind::Interrupted
+                } else {
+                    UsbipUnbindFailureKind::Fatal
+                };
+                (stderr, kind)
+            }
+            ReconcileExecError::BinaryMissing { detail, .. } => {
+                let detail = detail.to_ascii_lowercase();
+                let kind = if detail.contains("text file busy") || detail.contains("etxtbsy") {
+                    UsbipUnbindFailureKind::TextFileBusy
+                } else {
+                    UsbipUnbindFailureKind::Fatal
+                };
+                (detail, kind)
+            }
+            _ => {
+                return Self {
+                    kind: UsbipUnbindFailureKind::Fatal,
+                    transient: false,
+                    detail: String::new(),
+                }
+            }
+        };
+        let transient = kind != UsbipUnbindFailureKind::Fatal;
+        Self { kind, transient, detail }
     }
 }
 
@@ -1926,32 +1969,37 @@ mod tests {
 
     #[test]
     fn usbip_unbind_retry_classifier_and_delay_are_bounded_with_jitter() {
-        assert!(usbip_unbind_error_is_transient(
-            &ReconcileExecError::NonZeroExit {
-                which: "usbip unbind".to_owned(),
-                exit_code: 1,
-                stderr: "write: Device or resource busy (EBUSY)".to_owned(),
-            }
-        ));
-        assert!(usbip_unbind_error_is_transient(
-            &ReconcileExecError::BinaryMissing {
-                which: "usbip".to_owned(),
-                detail: "Text file busy (os error 26)".to_owned(),
-            }
-        ));
-        assert!(!usbip_unbind_error_is_transient(
-            &ReconcileExecError::BinaryMissing {
-                which: "usbip".to_owned(),
-                detail: "No such file or directory (os error 2)".to_owned(),
-            }
-        ));
-        assert!(!usbip_unbind_error_is_transient(
-            &ReconcileExecError::NonZeroExit {
-                which: "usbip unbind".to_owned(),
-                exit_code: 1,
-                stderr: "device is not bound to usbip-host driver".to_owned(),
-            }
-        ));
+        let busy = UsbipUnbindFailure::classify(&ReconcileExecError::NonZeroExit {
+            which: "usbip unbind".to_owned(),
+            exit_code: 1,
+            stderr: "write: Device or resource busy (EBUSY)".to_owned(),
+        });
+        assert!(busy.transient);
+        assert_eq!(busy.kind, UsbipUnbindFailureKind::Busy);
+        assert!(busy.detail.contains("ebusy"));
+
+        let text_file_busy = UsbipUnbindFailure::classify(&ReconcileExecError::BinaryMissing {
+            which: "usbip".to_owned(),
+            detail: "Text file busy (os error 26)".to_owned(),
+        });
+        assert!(text_file_busy.transient);
+        assert_eq!(text_file_busy.kind, UsbipUnbindFailureKind::TextFileBusy);
+
+        let missing = UsbipUnbindFailure::classify(&ReconcileExecError::BinaryMissing {
+            which: "usbip".to_owned(),
+            detail: "No such file or directory (os error 2)".to_owned(),
+        });
+        assert!(!missing.transient);
+        assert_eq!(missing.kind, UsbipUnbindFailureKind::Fatal);
+
+        let unbound = UsbipUnbindFailure::classify(&ReconcileExecError::NonZeroExit {
+            which: "usbip unbind".to_owned(),
+            exit_code: 1,
+            stderr: "device is not bound to usbip-host driver".to_owned(),
+        });
+        assert!(!unbound.transient);
+        assert_eq!(unbound.kind, UsbipUnbindFailureKind::Fatal);
+
         let first = usbip_unbind_retry_delay("1-2", 0);
         let second = usbip_unbind_retry_delay("1-3", 0);
         assert_ne!(first, second, "busid-derived jitter should vary delay");

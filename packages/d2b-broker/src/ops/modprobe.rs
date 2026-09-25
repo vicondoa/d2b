@@ -29,7 +29,7 @@ use crate::ops::exec_reconcile::SystemLiveExec;
 /// Audit fields emitted by every decision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModprobeAuditRecord {
+pub(crate) struct ModprobeAuditRecord {
     pub module_name: String,
     pub matrix_entry_id: String,
     pub modules_disabled_sysctl: bool,
@@ -39,7 +39,7 @@ pub struct ModprobeAuditRecord {
 /// Possible decisions for the dispatcher.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum ModprobeDecision {
+pub(crate) enum ModprobeDecision {
     /// Module is already loaded; no-op success.
     AlreadyLoaded,
     /// Module is compiled-in; no-op success.
@@ -58,13 +58,13 @@ pub enum ModprobeDecision {
 
 /// Trusted-bundle row controlling whether a module can be loaded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AllowlistRow {
+pub(crate) struct AllowlistRow {
     pub entry: KernelModuleEntry,
     pub load_allowed: bool,
 }
 
 /// Backend trait so the L1c canary can swap a fake `modprobe`.
-pub trait ModprobeBackend {
+pub(crate) trait ModprobeBackend {
     fn load<'a>(
         &'a mut self,
         module: &'a str,
@@ -73,7 +73,7 @@ pub trait ModprobeBackend {
 
 /// Fake backend used by `tests/kernel-module-matrix.sh`.
 #[derive(Debug, Default)]
-pub struct RecordingBackend {
+pub(crate) struct RecordingBackend {
     pub loaded: Vec<String>,
     pub fail_on: Vec<String>,
 }
@@ -96,7 +96,7 @@ impl ModprobeBackend for RecordingBackend {
 /// Dispatcher entry point. The four-step probe is run via the typed
 /// `d2b_host::modules` helpers; this function only resolves the
 /// matrix row and audit record.
-pub async fn dispatch(
+pub(crate) async fn dispatch(
     requested: &str,
     allowlist: &[AllowlistRow],
     inputs: &ProbeInputs,
@@ -162,7 +162,7 @@ impl ModprobeBackend for LiveBackend<'_> {
     }
 }
 
-pub async fn live_modprobe_if_allowed(
+pub(crate) async fn live_modprobe_if_allowed(
     exec: &SystemLiveExec,
     resolver: &BundleResolver,
     req: &ModprobeIfAllowedRequest,
