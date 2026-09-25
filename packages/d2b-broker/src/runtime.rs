@@ -10388,9 +10388,15 @@ fn run_probe(
 }
 
 #[cfg(feature = "layer1-bootstrap")]
+/// One flag arm of the shared bootstrap parser: it sees the flag name, the
+/// remaining arguments, and the cursor, and advances the cursor past the
+/// arguments it consumed.
+type FlagArm<'a> = dyn FnMut(&str, &[String], &mut usize) -> Result<(), RunError> + 'a;
+
+#[cfg(feature = "layer1-bootstrap")]
 fn parse_common_flags(
     rest: &[String],
-    extra: &mut dyn FnMut(&str, &[String], &mut usize) -> Result<(), RunError>,
+    extra: &mut FlagArm<'_>,
 ) -> Result<(PathBuf, Option<u32>), RunError> {
     let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
     let mut test_uid = None;
