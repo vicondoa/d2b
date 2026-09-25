@@ -9,6 +9,6 @@ fn settings_are_strict_and_bounded() {
     );
     assert_eq!(
         SwtpmSettings { log_level: 0 }.validate(),
-        Err(SwtpmArgvError::LogLevelOutOfRange)
+        Err(SwtpmArgvError::LogLevelOutOfRange { level: 0 })
     );
 }
