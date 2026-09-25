@@ -1,3 +1,10 @@
+//! The broker process entry point.
+//!
+//! [`parse_command`] turns the process arguments into a [`BrokerMode`]
+//! carrying a [`ServerConfig`]; [`run`] executes that mode, serving the
+//! broker's socket until termination or returning a [`RunError`] on
+//! failure.
+
 use std::env;
 use std::fs;
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -320,6 +327,8 @@ fn stale_wire_refusal(retired: &RetiredWireVariant) -> BrokerResponse {
     })
 }
 
+/// Process-start configuration for one broker run, resolved from CLI
+/// flags and environment defaults by [`parse_command`].
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// Fixed process-start authority profile. Requests cannot change it.
@@ -371,6 +380,8 @@ pub struct ServerConfig {
     pub retired_wire_variants: &'static [RetiredWireVariant],
 }
 
+/// The process mode selected by [`parse_command`]: host or guest serving,
+/// or a bootstrap probe.
 #[derive(Debug, Clone)]
 pub enum BrokerMode {
     Host(ServerConfig),
@@ -394,6 +405,8 @@ pub enum BrokerMode {
     },
 }
 
+/// A process-entry failure surfaced by [`parse_command`] or [`run`]:
+/// usage, I/O, or protocol.
 #[derive(Debug)]
 pub enum RunError {
     Usage(String),
@@ -562,6 +575,13 @@ impl core::fmt::Debug for BrokerError {
     }
 }
 
+/// Parse process arguments into the [`BrokerMode`] to run.
+///
+/// # Errors
+///
+/// Returns [`RunError::Usage`] when the first argument is not a known
+/// profile (or probe subcommand), a flag is missing or malformed, or the
+/// d2bd uid/gid cannot be resolved.
 pub fn parse_command<I>(args: I) -> Result<BrokerMode, RunError>
 where
     I: IntoIterator<Item = String>,
@@ -796,6 +816,13 @@ where
     })
 }
 
+/// Run the broker in the parsed [`BrokerMode`], serving until termination.
+///
+/// # Errors
+///
+/// Returns [`RunError::Io`] when the socket cannot be adopted or bound,
+/// [`RunError::Protocol`] when the wire negotiation or a request fails
+/// fatally, and [`RunError::Usage`] for a malformed probe invocation.
 pub fn run(command: BrokerMode) -> Result<(), RunError> {
     match command {
         BrokerMode::Host(config) | BrokerMode::Guest(config) => run_server(config),
