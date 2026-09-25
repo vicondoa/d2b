@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use d2b_contracts_provider::v3::ComponentType;
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_zone_session::v3::ZoneStatusResource;
-use d2b_controller_toolkit::{DependencySnapshot, ResourceKey, ResourceSnapshot};
+use d2b_controller_toolkit::{DependencySnapshot, OwnerIdentity, ResourceKey, ResourceSnapshot};
 
 use crate::driver::{
     SYSTEM_CORE_HOST_REF, SYSTEM_CORE_PROVIDER_REF, SYSTEM_MINIJAIL_PROVIDER_REF,
@@ -416,7 +416,7 @@ pub fn provider_observation(
             .as_str()
         {
             "Process" => {
-                if dependency_resource.owner_uid() != Some(resource.key().uid()) {
+                if dependency_resource.owner().map(OwnerIdentity::uid) != Some(resource.key().uid()) {
                     graph_valid = false;
                     conformance_valid = false;
                     required_components_ready = false;
@@ -470,8 +470,10 @@ pub fn provider_observation(
                     continue;
                 }
                 observed_volume_refs.insert(volume_ref);
-                let owner_uid_matches =
-                    dependency_resource.owner_uid() == Some(resource.key().uid());
+                let owner_uid_matches = dependency_resource
+                    .owner()
+                    .map(OwnerIdentity::uid)
+                    == Some(resource.key().uid());
                 if !owner_uid_matches {
                     required_dependencies_ready = false;
                     continue;
