@@ -181,6 +181,8 @@ pub async fn run_bridge<L, R>(
     mut right: R,
     mut stop: watch::Receiver<bool>,
     stats: Arc<BridgeStats>,
+    endpoint_id: &crate::service::OpaqueEndpointId,
+    binding_id: &crate::service::OpaqueBindingId,
 ) -> (L, R, BridgeExit)
 where
     L: AsyncRead + AsyncWrite + Unpin,
@@ -196,6 +198,8 @@ where
                 Err(_) => {
                     tracing::debug!(
                         provider = "transport-vsock",
+                        endpoint = %endpoint_id,
+                        binding = %binding_id,
                         "bridge copy failed with an IO error"
                     );
                     BridgeExit::IoError
