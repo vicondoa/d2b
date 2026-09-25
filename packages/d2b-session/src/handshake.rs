@@ -18,10 +18,20 @@ const INIT_PAYLOAD: &[u8] = b"d2b-component-session-v3-init";
 const ACCEPT_PAYLOAD: &[u8] = b"d2b-component-session-v3-accept";
 const GENERATION_QUERY_MAGIC: &[u8; 8] = b"D2BGD3Q\n";
 const GENERATION_REPLY_MAGIC: &[u8; 8] = b"D2BGD3A\n";
+/// Wire length of one generation-discovery request (magic plus the
+/// canonical endpoint identity).
 pub const GENERATION_DISCOVERY_REQUEST_LEN: usize =
     GENERATION_QUERY_MAGIC.len() + ENDPOINT_POLICY_IDENTITY_CANONICAL_LEN;
+/// Wire length of one generation-discovery response (magic plus a 32-byte
+/// digest and an 8-byte generation).
 pub const GENERATION_DISCOVERY_RESPONSE_LEN: usize = GENERATION_REPLY_MAGIC.len() + 32 + 8;
 
+/// Derive the X25519 public key for a private key.
+///
+/// # Errors
+///
+/// Returns [`SessionErrorCode::AuthenticationFailed`] when the private key
+/// is the all-zero identity or the resolver cannot derive a public key.
 pub fn x25519_public_key(private_key: &[u8; 32]) -> Result<[u8; 32]> {
     if private_key == &[0; 32] {
         return Err(SessionError::new(SessionErrorCode::AuthenticationFailed));
@@ -35,23 +45,35 @@ pub fn x25519_public_key(private_key: &[u8; 32]) -> Result<[u8; 32]> {
         .map_err(|_| SessionError::new(SessionErrorCode::AuthenticationFailed))
 }
 
+/// One side of the Noise handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakeRole {
+    /// The party that sends the first handshake message.
     Initiator,
+    /// The party that receives the first handshake message.
     Responder,
 }
 
+/// Key material for one Noise profile.
+///
+/// The `Nn` profile authenticates nothing; `Kk` authenticates both sides
+/// from pre-shared static keys; `IkPsk2` authenticates the responder to the
+/// initiator and adds a one-time bootstrap PSK.
 pub enum HandshakeCredentials {
+    /// Anonymous `Nn` profile.
     Nn,
+    /// `Kk` profile with both static keys.
     Kk {
         local_private: Secret32,
         remote_public: [u8; 32],
     },
+    /// `IKpsk2` profile as the initiator.
     IkPsk2Initiator {
         local_private: Secret32,
         remote_public: [u8; 32],
         psk: AdmittedBootstrapPsk,
     },
+    /// `IKpsk2` profile as the responder.
     IkPsk2Responder {
         local_private: Secret32,
         psk: AdmittedBootstrapPsk,
@@ -73,6 +95,7 @@ impl fmt::Debug for HandshakeCredentials {
     }
 }
 
+/// A validated handshake offer bound to one endpoint policy.
 pub struct NegotiatedOffer {
     preface: ComponentSessionPreface,
     offer: HandshakeOffer,
@@ -80,10 +103,12 @@ pub struct NegotiatedOffer {
 }
 
 impl NegotiatedOffer {
+    /// Borrow the negotiated handshake offer.
     pub fn offer(&self) -> &HandshakeOffer {
         &self.offer
     }
 
+    /// Return the negotiated session preface.
     pub fn preface(&self) -> ComponentSessionPreface {
         self.preface
     }
@@ -108,6 +133,12 @@ impl fmt::Debug for NegotiatedOffer {
     }
 }
 
+/// Encode an endpoint policy as a preface plus canonical offer bytes.
+///
+/// # Errors
+///
+/// Returns the preface or canonical-encoding error when the policy cannot
+/// be rendered on the wire.
 pub fn encode_offer(policy: &EndpointPolicy) -> Result<([u8; PREFACE_LEN], Vec<u8>)> {
     let offer = HandshakeOffer::from(policy.clone());
     let canonical = offer.encode_canonical()?;
@@ -117,6 +148,14 @@ pub fn encode_offer(policy: &EndpointPolicy) -> Result<([u8; PREFACE_LEN], Vec<u
     Ok((preface, canonical))
 }
 
+/// Validate a received preface and canonical offer against one policy.
+///
+/// # Errors
+///
+/// Returns [`SessionErrorCode::MalformedPreface`] when the preface is
+/// malformed or its length contradicts the offer bytes, and the
+/// canonical-decode or policy-mismatch error when the offer does not
+/// validate exactly against the policy.
 pub fn negotiate_offer(
     preface_bytes: &[u8],
     offer_bytes: &[u8],
@@ -135,6 +174,12 @@ pub fn negotiate_offer(
     })
 }
 
+/// Encode a generation-discovery request binding one endpoint identity.
+///
+/// # Errors
+///
+/// Returns the identity validation or canonical-encoding error when the
+/// identity cannot be bound on the wire.
 pub fn encode_generation_discovery_request(identity: &EndpointPolicyIdentity) -> Result<Vec<u8>> {
     identity
         .validate_generation_discovery()
@@ -148,10 +193,18 @@ pub fn encode_generation_discovery_request(identity: &EndpointPolicyIdentity) ->
     Ok(request)
 }
 
+/// Whether the bytes carry the generation-discovery request magic.
 pub fn is_generation_discovery_request(bytes: &[u8]) -> bool {
     bytes.starts_with(GENERATION_QUERY_MAGIC)
 }
 
+/// Validate a generation-discovery request and bind it to a request digest.
+///
+/// # Errors
+///
+/// Returns [`SessionErrorCode::MalformedHandshake`] when the length or
+/// magic is wrong, and the identity, policy, or offer validation error when
+/// the request does not match the endpoint policy.
 pub fn accept_generation_discovery_request(
     bytes: &[u8],
     policy: &EndpointPolicy,
@@ -188,6 +241,14 @@ pub fn encode_generation_discovery_response(
     Ok(response)
 }
 
+/// Decode a generation-discovery response and verify its request binding.
+///
+/// # Errors
+///
+/// Returns [`SessionErrorCode::MalformedHandshake`] when the length or
+/// magic is wrong, [`SessionErrorCode::TranscriptMismatch`] when the
+/// response does not bind the request digest, and
+/// [`SessionErrorCode::GenerationMismatch`] when the generation is zero.
 pub fn decode_generation_discovery_response(bytes: &[u8], request: &[u8]) -> Result<u64> {
     if bytes.len() != GENERATION_DISCOVERY_RESPONSE_LEN
         || !bytes.starts_with(GENERATION_REPLY_MAGIC)
@@ -236,6 +297,11 @@ fn preface_error(error: PrefaceError) -> SessionError {
     SessionError::new(code)
 }
 
+/// A step-limited Noise handshake state machine.
+///
+/// The handshake runs a fixed number of steps (one write and one read for
+/// the initiator, one read and one write for the responder) and fails
+/// closed on any step mismatch.
 pub struct NoiseHandshake {
     state: HandshakeState,
     bootstrap_identity: Option<BootstrapIdentityBinding>,
@@ -246,6 +312,12 @@ pub struct NoiseHandshake {
 }
 
 impl NoiseHandshake {
+    /// Start a handshake from a negotiated offer and role credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns the credentials-validation error when the role, noise
+    /// profile, and credentials do not agree.
     pub fn new(
         role: HandshakeRole,
         negotiated: &NegotiatedOffer,
@@ -274,6 +346,14 @@ impl NoiseHandshake {
         })
     }
 
+    /// Write the next handshake message for the current step.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::InternalInvariant`] when the step is not
+    /// the one this role writes, [`SessionErrorCode::AuthenticationFailed`]
+    /// when the Noise write fails, and the bound error when the message
+    /// exceeds the negotiated limit profile.
     pub fn write_next(&mut self) -> Result<Vec<u8>> {
         let payload = match (self.role, self.step) {
             (HandshakeRole::Initiator, 0) => INIT_PAYLOAD,
@@ -291,6 +371,16 @@ impl NoiseHandshake {
         Ok(output)
     }
 
+    /// Read and authenticate the next handshake message for the current step.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::MalformedHandshake`] when the message
+    /// exceeds the negotiated bound, [`SessionErrorCode::InternalInvariant`]
+    /// when the step is not the one this role reads,
+    /// [`SessionErrorCode::AuthenticationFailed`] when the Noise read
+    /// fails, and [`SessionErrorCode::TranscriptMismatch`] when the
+    /// decrypted payload is not the expected step payload.
     pub fn read_next(&mut self, message: &[u8]) -> Result<()> {
         if message.len() > self.limits.protected_ciphertext_bytes as usize {
             return Err(SessionError::new(SessionErrorCode::MalformedHandshake));
@@ -312,6 +402,16 @@ impl NoiseHandshake {
         Ok(())
     }
 
+    /// Complete the handshake and enter transport mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::MalformedHandshake`] when the step count
+    /// or Noise state does not mark the handshake finished,
+    /// [`SessionErrorCode::InternalInvariant`] when the transcript hash
+    /// cannot be captured, and
+    /// [`SessionErrorCode::AuthenticationFailed`] when the remote static
+    /// key or transport-mode transition fails.
     pub fn finish(self) -> Result<EstablishedHandshake> {
         if self.step != 2 || !self.state.is_handshake_finished() {
             return Err(SessionError::new(SessionErrorCode::MalformedHandshake));
@@ -438,6 +538,7 @@ fn build_state(
     .map_err(|_| SessionError::new(SessionErrorCode::AuthenticationFailed))
 }
 
+/// A completed Noise handshake in transport mode.
 pub struct EstablishedHandshake {
     pub(crate) transport: TransportState,
     transcript_hash: [u8; 32],
@@ -455,10 +556,12 @@ pub(crate) struct EstablishedAuthentication {
 }
 
 impl EstablishedHandshake {
+    /// Borrow the handshake transcript hash.
     pub fn transcript_hash(&self) -> &[u8; 32] {
         &self.transcript_hash
     }
 
+    /// Return the bound resource generation.
     pub fn generation(&self) -> u64 {
         self.generation
     }
