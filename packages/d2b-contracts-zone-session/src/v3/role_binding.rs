@@ -149,17 +149,17 @@ impl ScopeNarrowing {
                     && narrowing_set_is_subset(
                         narrowed.subresources(),
                         allowed.subresources(),
-                        true,
+                        EmptyAllowedPolicy::Unrestricted,
                     )
                     && narrowing_names_are_subset(
                         narrowed.resource_names(),
                         allowed.resource_names(),
                     )
-                    && narrowing_set_is_subset(narrowed.zones(), allowed.zones(), false)
+                    && narrowing_set_is_subset(narrowed.zones(), allowed.zones(), EmptyAllowedPolicy::Deny)
                     && narrowing_set_is_subset(
                         narrowed.execution_refs(),
                         allowed.execution_refs(),
-                        true,
+                        EmptyAllowedPolicy::Unrestricted,
                     )
             })
         })
@@ -176,13 +176,26 @@ fn narrowing_names_are_subset(narrowed: &[String], allowed: &[String]) -> bool {
             .all(|item| item != "*" && allowed.contains(item))
 }
 
+/// How an empty allowed set is interpreted when checking a narrowing subset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmptyAllowedPolicy {
+    /// An empty allowed set grants everything.
+
+    Unrestricted,
+    /// An empty allowed set grants nothing.
+    Deny,
+}
+
 fn narrowing_set_is_subset<T: PartialEq>(
     narrowed: &[T],
     allowed: &[T],
-    empty_allowed_is_unrestricted: bool,
+    empty_allowed: EmptyAllowedPolicy,
 ) -> bool {
     if allowed.is_empty() {
-        return empty_allowed_is_unrestricted || narrowed.is_empty();
+        return match empty_allowed {
+            EmptyAllowedPolicy::Unrestricted => true,
+            EmptyAllowedPolicy::Deny => narrowed.is_empty(),
+        };
     }
     !narrowed.is_empty() && narrowed.iter().all(|item| allowed.contains(item))
 }
