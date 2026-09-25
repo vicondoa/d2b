@@ -108,21 +108,20 @@ const FENCE_REVOKED: u8 = 2;
 /// consumed the authenticated session that created it. Sharing the transport
 /// implementation shares no authority: the consumed session owner retains its
 /// liveness and single-owner authorization state.
-/// The sealed admission and liveness pair of one established driver lane.
-///
-/// Both values are set together by [`ZoneLinkSession::establish_authenticated`]
-/// and are absent only on the test lane, so a half-set lane is unrepresentable.
-
-struct EstablishedLane {
-    admission: VerifiedRouteAdmission,
-    liveness: d2b_session::SessionLiveness,
-}
-
 pub struct ZoneLinkSession {
     driver: Arc<dyn ComponentSessionDriver>,
     epoch: LinkEpoch,
     established: Option<EstablishedLane>,
     fence: AtomicU8,
+}
+
+/// The sealed admission and liveness pair of one established driver lane.
+///
+/// Both values are set together by [`ZoneLinkSession::establish_authenticated`]
+/// and are absent only on the test lane, so a half-set lane is unrepresentable.
+struct EstablishedLane {
+    admission: VerifiedRouteAdmission,
+    liveness: d2b_session::SessionLiveness,
 }
 
 impl core::fmt::Debug for ZoneLinkSession {
