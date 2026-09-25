@@ -624,6 +624,7 @@ pub mod path_safe {
             mode: u64::from(mode),
             resolve,
         };
+        // SAFETY: `dirfd` and `path` are valid; the syscall result is checked before use.
         let ret = unsafe {
             libc::syscall(
                 libc::SYS_openat2,
@@ -646,6 +647,7 @@ pub mod path_safe {
         flags: libc::c_int,
         mode: u32,
     ) -> io::Result<OwnedFd> {
+        // SAFETY: `dirfd` and `path` are valid; the returned fd is checked before use.
         let ret = unsafe { libc::openat(dirfd, path.as_ptr(), flags, mode) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -661,6 +663,7 @@ pub mod path_safe {
         newpath: &CString,
         flags: u32,
     ) -> io::Result<()> {
+        // SAFETY: both dirfds and paths are valid; the syscall result is checked before use.
         let ret = unsafe {
             libc::syscall(
                 libc::SYS_renameat2,
@@ -684,6 +687,7 @@ pub mod path_safe {
         newdirfd: RawFd,
         newpath: &CString,
     ) -> io::Result<()> {
+        // SAFETY: both dirfds and paths are valid; the result is checked before use.
         let ret = unsafe { libc::renameat(olddirfd, oldpath.as_ptr(), newdirfd, newpath.as_ptr()) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -693,6 +697,7 @@ pub mod path_safe {
 
     #[allow(unsafe_code)]
     fn mkdirat_raw(dirfd: RawFd, path: &CString, mode: u32) -> io::Result<()> {
+        // SAFETY: `dirfd` and `path` are valid; the result is checked before use.
         let ret = unsafe { libc::mkdirat(dirfd, path.as_ptr(), mode) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -707,6 +712,7 @@ pub mod path_safe {
 
     #[allow(unsafe_code)]
     fn unlinkat_raw_with_flags(dirfd: RawFd, path: &CString, flags: libc::c_int) -> io::Result<()> {
+        // SAFETY: `dirfd` and `path` are valid; the result is checked before use.
         let ret = unsafe { libc::unlinkat(dirfd, path.as_ptr(), flags) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -716,7 +722,9 @@ pub mod path_safe {
 
     #[allow(unsafe_code)]
     fn fstatat_raw(dirfd: RawFd, path: &CString, flags: libc::c_int) -> io::Result<libc::stat> {
+        // SAFETY: `stat` is plain data; zeroing is safe and fstatat overwrites it on success.
         let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: `dirfd`/`path` are valid and `stat` is writable; the result is checked before use.
         let ret = unsafe { libc::fstatat(dirfd, path.as_ptr(), &mut stat, flags) };
         if ret < 0 {
             return Err(io::Error::last_os_error());
@@ -727,6 +735,7 @@ pub mod path_safe {
     #[allow(unsafe_code)]
     fn linkat_empty_path_raw(oldfd: RawFd, newdirfd: RawFd, newpath: &CString) -> io::Result<()> {
         let empty = CString::new(Vec::<u8>::new()).expect("empty C string is valid");
+        // SAFETY: `oldfd`/`newdirfd` are valid and both paths are NUL-terminated; result checked.
         let ret = unsafe {
             libc::linkat(
                 oldfd,
@@ -2222,11 +2231,14 @@ pub mod pidfd_sys {
         for (index, &source_fd) in pre_opened_raw_fds.iter().enumerate() {
             let destination_fd = RENDER_NODE_INHERITED_FD + index as libc::c_int;
             if source_fd != destination_fd {
+                // SAFETY: pre-exec child context; `source_fd` is valid and `destination_fd` is in range.
                 if unsafe { libc::dup2(source_fd, destination_fd) } < 0 {
                     return Err(());
                 }
+                // SAFETY: pre-exec child context; closes the just-duplicated source fd.
                 unsafe { libc::close(source_fd) };
             }
+            // SAFETY: `destination_fd` is valid after dup2; the result is checked before use.
             if unsafe { libc::fcntl(destination_fd, libc::F_SETFD, 0) } < 0 {
                 return Err(());
             }
@@ -2664,6 +2676,7 @@ pub mod pidfd_sys {
     fn apply_mount_actions(actions: &[PreparedMountAction]) -> io::Result<()> {
         for action in actions {
             let path = action.path.as_ptr();
+            // SAFETY: `path` is a valid NUL-terminated path; the mount result is checked.
             let bind_ret = unsafe {
                 libc::mount(
                     path,
@@ -2677,6 +2690,7 @@ pub mod pidfd_sys {
                 return Err(io::Error::last_os_error());
             }
             if action.readonly {
+                // SAFETY: `path` is a valid NUL-terminated path; the mount result is checked.
                 let remount_ret = unsafe {
                     libc::mount(
                         std::ptr::null(),
@@ -2704,6 +2718,7 @@ pub mod pidfd_sys {
     ) -> Result<(), (libc::c_int, Vec<u8>)> {
         for action in actions {
             let path = action.path.as_ptr();
+            // SAFETY: `path` is a valid NUL-terminated path; the mount result is checked.
             let bind_ret = unsafe {
                 libc::mount(
                     path,
@@ -2714,10 +2729,12 @@ pub mod pidfd_sys {
                 )
             };
             if bind_ret < 0 {
+                // SAFETY: errno is read only immediately after a failed libc call.
                 let errno = unsafe { *libc::__errno_location() };
                 return Err((errno, action.path.as_bytes().to_vec()));
             }
             if action.readonly {
+                // SAFETY: `path` is a valid NUL-terminated path; the mount result is checked.
                 let remount_ret = unsafe {
                     libc::mount(
                         std::ptr::null(),
@@ -2729,6 +2746,7 @@ pub mod pidfd_sys {
                     )
                 };
                 if remount_ret < 0 {
+                    // SAFETY: errno is read only immediately after a failed libc call.
                     let errno = unsafe { *libc::__errno_location() };
                     return Err((errno, action.path.as_bytes().to_vec()));
                 }
@@ -2739,13 +2757,17 @@ pub mod pidfd_sys {
 
     #[allow(unsafe_code)]
     fn mkdir_one(path: *const libc::c_char) -> Result<(), libc::c_int> {
+        // SAFETY: `path` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::mkdir(path, 0o755) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             let errno = unsafe { *libc::__errno_location() };
             if errno != libc::EEXIST {
                 return Err(errno);
             }
         }
+        // SAFETY: `path` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::chmod(path, 0o755) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             Err(unsafe { *libc::__errno_location() })
         } else {
             Ok(())
@@ -2779,19 +2801,27 @@ pub mod pidfd_sys {
         uid: libc::uid_t,
         gid: libc::gid_t,
     ) -> Result<(), libc::c_int> {
+        // SAFETY: `destination` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::unlink(destination.as_ptr()) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             let errno = unsafe { *libc::__errno_location() };
             if errno != libc::ENOENT {
                 return Err(errno);
             }
         }
+        // SAFETY: `destination` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::mknod(destination.as_ptr(), mode, dev) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             return Err(unsafe { *libc::__errno_location() });
         }
+        // SAFETY: `destination` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::chmod(destination.as_ptr(), mode & 0o777) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             return Err(unsafe { *libc::__errno_location() });
         }
+        // SAFETY: `destination` is a valid NUL-terminated path; the result is checked before use.
         if unsafe { libc::chown(destination.as_ptr(), uid, gid) } < 0 {
+            // SAFETY: errno is read only immediately after a failed libc call.
             return Err(unsafe { *libc::__errno_location() });
         }
         Ok(())
@@ -2806,6 +2836,7 @@ pub mod pidfd_sys {
         let dev = c"/dev".as_ptr();
         let tmpfs = c"tmpfs".as_ptr();
         let options = c"mode=0755".as_ptr() as *const libc::c_void;
+        // SAFETY: `tmpfs`/`dev`/`options` are valid NUL-terminated strings; result checked.
         if unsafe {
             libc::mount(
                 tmpfs,
@@ -2816,6 +2847,7 @@ pub mod pidfd_sys {
             )
         } < 0
         {
+            // SAFETY: errno is read only immediately after a failed libc call.
             let errno = unsafe { *libc::__errno_location() };
             return Err((errno, b"/dev".to_vec()));
         }
@@ -2829,6 +2861,7 @@ pub mod pidfd_sys {
                     if let Err(errno) = mkdir_one(bind.destination.as_ptr()) {
                         return Err((errno, bind.destination.as_bytes().to_vec()));
                     }
+                    // SAFETY: both bind paths are valid NUL-terminated; the result is checked before use.
                     if unsafe {
                         libc::mount(
                             bind.source.as_ptr(),
@@ -2839,6 +2872,7 @@ pub mod pidfd_sys {
                         )
                     } < 0
                     {
+                        // SAFETY: errno is read only immediately after a failed libc call.
                         let errno = unsafe { *libc::__errno_location() };
                         return Err((errno, bind.destination.as_bytes().to_vec()));
                     }
