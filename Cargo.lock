@@ -1064,7 +1064,6 @@ dependencies = [
  "d2b-resource-types",
  "parking_lot",
  "ring",
- "serde",
  "serde_json",
  "sha2",
  "tokio",
@@ -1094,7 +1093,6 @@ dependencies = [
  "d2b-contracts-resource",
  "libc",
  "nix 0.29.0",
- "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -1421,7 +1419,6 @@ dependencies = [
  "d2b-contracts-resource",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "tracing",
 ]
