@@ -31,6 +31,18 @@ use sha2::{Digest, Sha256};
 
 const DEFAULT_UDEVADM_BINARY: &str = "/run/current-system/sw/bin/udevadm";
 
+/// The fixed `d2bd` group, resolved once: `Group::from_name` is an nss
+/// lookup that can block on the calling thread (LDAP/NSS plugins), so the
+/// registry-index write path must not re-resolve it on every write. The
+/// group is a serve-time constant of the installed package; absence or a
+/// lookup failure is a permanent condition recorded on first resolution.
+static D2BD_GROUP_GID: std::sync::LazyLock<Result<Option<nix::unistd::Gid>, String>> =
+    std::sync::LazyLock::new(|| {
+        Group::from_name("d2bd")
+            .map(|group| group.map(|group| group.gid))
+            .map_err(|err| format!("resolve d2bd group: {err}"))
+    });
+
 #[derive(Debug)]
 pub enum MediaOpError {
     InvalidRef(String),
@@ -2123,9 +2135,9 @@ async fn write_redacted_registry_index_at_path(
         .and_then(|name| name.to_str())
         .ok_or_else(|| MediaOpError::Registry("redacted-index-name-invalid".to_owned()))?;
     let owner_gid = if Uid::effective().is_root() {
-        let gid = Group::from_name("d2bd")
-            .map_err(|err| MediaOpError::Registry(format!("resolve d2bd group: {err}")))?
-            .map(|group| group.gid)
+        let gid = D2BD_GROUP_GID
+            .as_ref()
+            .map_err(|detail| MediaOpError::Registry(detail.clone()))?
             .ok_or_else(|| MediaOpError::Registry("d2bd group missing".to_owned()))?;
         Some(gid.as_raw())
     } else {
