@@ -297,6 +297,9 @@
             # MCP wiring. Cached under $HOME, never written into the repo.
             export NPM_CONFIG_PREFIX="''${NPM_CONFIG_PREFIX:-$HOME/.cache/d2b-npm-global}"
             export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+            # Codegraph telemetry off by default for this repository's CLI
+            # runs; the omp MCP entry in .omp/mcp.json sets the same env.
+            export CODEGRAPH_TELEMETRY="''${CODEGRAPH_TELEMETRY:-0}"
             npm ls -g ${codegraphNpmSpec} >/dev/null 2>&1 || npm install -g ${codegraphNpmSpec} || echo "codegraph install failed; retry with: npm install -g ${codegraphNpmSpec}"
             echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
           '';
