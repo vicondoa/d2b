@@ -1199,7 +1199,7 @@ impl NetworkBroker for KernelNetworkBroker {
                 .intents
                 .resolve_bridge_intent(intent_ref.as_str(), &provenance)
                 .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
-            self.invoke_kernel("create-bridge", &zone, resolved_bridge_payload(&intent))?;
+            self.invoke_kernel("create-bridge", &zone, resolved_bridge_payload(&intent)?)?;
         }
         Ok(())
     }
@@ -1213,7 +1213,7 @@ impl NetworkBroker for KernelNetworkBroker {
                 .intents
                 .resolve_bridge_intent(intent_ref.as_str(), &provenance)
                 .ok_or(NetworkBrokerError::NetworkAdmissionMismatch)?;
-            self.invoke_kernel("delete-bridge", &zone, resolved_bridge_payload(&intent))?;
+            self.invoke_kernel("delete-bridge", &zone, resolved_bridge_payload(&intent)?)?;
         }
         Ok(())
     }
@@ -1294,7 +1294,7 @@ impl NetworkBroker for KernelNetworkBroker {
             self.invoke_kernel(
                 "apply-route",
                 &zone,
-                resolved_route_payload(&intent, &provenance, false),
+                resolved_route_payload(&intent, &provenance, false)?,
             )?;
         }
         Ok(())
@@ -1312,7 +1312,7 @@ impl NetworkBroker for KernelNetworkBroker {
             self.invoke_kernel(
                 "apply-route",
                 &zone,
-                resolved_route_payload(&intent, &provenance, true),
+                resolved_route_payload(&intent, &provenance, true)?,
             )?;
         }
         Ok(())
@@ -1419,8 +1419,8 @@ impl NetworkBroker for KernelNetworkBroker {
 }
 
 /// The resolved bridge intent payload one bridge kernel invocation carries.
-fn resolved_bridge_payload(intent: &ResolvedBridgeIntent) -> serde_json::Value {
-    serde_json::json!({
+fn resolved_bridge_payload(intent: &ResolvedBridgeIntent) -> Result<serde_json::Value, NetworkBrokerError> {
+    Ok(serde_json::json!({
         "intentId": intent.intent_id,
         "scopeLabel": intent.scope_label,
         "bridgeIfname": intent.bridge_ifname.as_str(),
@@ -1429,9 +1429,9 @@ fn resolved_bridge_payload(intent: &ResolvedBridgeIntent) -> serde_json::Value {
         "multicastSnoopingDisabled": intent.multicast_snooping_disabled,
         "ipv6Suppressed": intent.ipv6_suppressed,
         "ipv4Address": intent.ipv4_address.as_ref().map(|cidr| cidr.as_str()),
-        "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().ok().flatten(),
+        "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().map_err(|_| NetworkBrokerError::Rejected)?,
         "ownershipMarker": intent.ownership_marker,
-    })
+    }))
 }
 
 /// The resolved route intent payload one apply-route kernel invocation
@@ -1440,8 +1440,8 @@ fn resolved_route_payload(
     intent: &ResolvedRouteIntent,
     provenance: &NetworkProvenance,
     destroy: bool,
-) -> serde_json::Value {
-    serde_json::json!({
+) -> Result<serde_json::Value, NetworkBrokerError> {
+    Ok(serde_json::json!({
         "intentId": intent.intent_id,
         "routeSpec": intent.route_spec,
         "destination": intent.destination,
@@ -1450,10 +1450,10 @@ fn resolved_route_payload(
         "table": intent.table,
         "owned": intent.owned,
         "routeName": intent.route_name,
-        "provenance": serde_json::to_value(provenance).ok(),
+        "provenance": serde_json::to_value(provenance).map_err(|_| NetworkBrokerError::Rejected)?,
         "ownershipMarker": intent.ownership_marker,
         "destroy": destroy,
-    })
+    }))
 }
 
 /// Map one kernel refusal onto the provider's closed retry/block states,
