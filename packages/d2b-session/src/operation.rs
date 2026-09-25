@@ -349,6 +349,15 @@ mod tests {
     }
 
     #[test]
+    fn member_boundaries_accept_single_char_identifiers_and_reject_extra_segments() {
+        assert!(OperationMember::method("A/B").is_ok());
+        assert!(OperationMember::method("a.b-c_d/x.y-z_w").is_ok());
+        for invalid in ["A/B/C", "A//B", "A/B/", "/A/B"] {
+            assert!(OperationMember::method(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
     fn diagnostics_are_exact_and_resolve_closed_verbs() {
         let audit =
             SessionOperation::method(service("d2b.audit.v3"), "AuditService/Export").unwrap();
