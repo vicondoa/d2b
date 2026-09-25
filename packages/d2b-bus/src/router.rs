@@ -64,7 +64,9 @@ use crate::{
 
 /// Default maximum bytes in one method payload.
 pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
+/// Default maximum routes one source session may hold concurrently.
 pub const DEFAULT_MAX_ROUTES_PER_SESSION: usize = 128;
+/// Default maximum routes one bus may hold across all sessions.
 pub const DEFAULT_MAX_TOTAL_ROUTES: usize = 4096;
 const FIRST_CORRELATION_ID: u32 = RESERVED_CORRELATION_MAX + 1;
 const DEFAULT_MAX_CORRELATIONS_PER_GENERATION: u64 =
@@ -477,7 +479,7 @@ impl ResourceCall {
                 assignment,
                 mutations,
             } => {
-                if ScopedCommitTransport::new(assignment.clone(), mutations.clone()).is_err() {
+                if ScopedCommitTransport::validate(&assignment, &mutations).is_err() {
                     return Err(BusError::InvalidResourceCall);
                 }
                 (
@@ -1122,36 +1124,59 @@ pub struct ZoneBus {
     core: Arc<BusCore>,
 }
 
+/// One terminal bus-observable outcome class for an operation attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BusEvent {
+    /// A method-invocation attempt ended in error or cancellation.
     Invoke,
+    /// A named-stream operation attempt ended in error or cancellation.
     OpenStream,
+    /// A cancellation attempt ended in error or was abandoned.
     Cancel,
+    /// A deferred cleanup attempt failed or was abandoned.
     Cleanup,
+    /// An expired operation tombstone was evicted.
     TombstoneEviction,
 }
 
+/// Why one terminal bus outcome was recorded through [`BusObserver::record`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BusFailureReason {
+    /// The bus authorization layer refused the operation.
     Authorization,
+    /// The operation's route shape, registry, or reference was invalid.
     Route,
+    /// The operation's source session was mismatched or closed.
     Session,
+    /// An operation or stream capacity limit was exceeded.
     Capacity,
+    /// The operation or stream was shed under backpressure.
     Backpressure,
+    /// The operation's route was revoked.
     RouteRevoked,
+    /// The operation outlived its deadline.
     Deadline,
+    /// The operation attempt was cancelled.
     Cancelled,
+    /// The endpoint could not authenticate the source.
     Authentication,
+    /// The endpoint or bus generation moved beneath the operation.
     Generation,
+    /// A transport or endpoint delivery failure occurred.
     Transport,
+    /// A protocol or wire-shape failure occurred.
     Protocol,
+    /// An endpoint failed without a more specific class.
     Endpoint,
+    /// The operation's owner abandoned it.
     Abandoned,
+    /// The stream was shed for exceeding the per-source retention bound.
     StreamShed,
+    /// The operation hit the per-source retention bound.
     PerSourceRetention,
+    /// The operation hit the global retention bound.
     GlobalRetention,
 }
-
 impl BusFailureReason {
     const fn from_error(error: &BusError) -> Self {
         match error {
@@ -1184,10 +1209,17 @@ impl BusFailureReason {
     }
 }
 
+/// Observes terminal outcomes for the bus's operation attempts.
+///
+/// The observer is invoked once per terminal attempt outcome; see
+/// [`BusEvent`] for when each event fires and [`BusFailureReason`] for the
+/// reason classes.
 pub trait BusObserver: Send + Sync {
+    /// Record one terminal outcome observed by the bus.
     fn record(&self, event: BusEvent, reason: BusFailureReason);
 }
 
+/// A [`BusObserver`] that discards every recorded outcome.
 #[derive(Debug, Default)]
 pub struct NoopBusObserver;
 
@@ -1770,10 +1802,10 @@ impl AuthoritativeUnixSubjectResolver {
             .subjects
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let matches = subjects
+        let mut matches = subjects
             .iter()
             .enumerate()
-            .filter(|(_, subject)| {
+            .filter_map(|(index, subject)| {
                 let peer_matches = if *service == ServicePackage::ResourceV3 {
                     subject
                         .expected_peer
@@ -1786,20 +1818,19 @@ impl AuthoritativeUnixSubjectResolver {
                             .expected_peer_uid
                             .is_some_and(|expected| peer.uid().as_raw() == expected)
                 };
-                peer_matches
+                (peer_matches
                     && subject
                         .service
                         .as_ref()
-                        .is_none_or(|expected| expected == service)
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        if matches.len() != 1 {
-            return Err(d2b_session::SessionError::new(
+                        .is_none_or(|expected| expected == service))
+                .then_some(index)
+            });
+        let index = match (matches.next(), matches.next()) {
+            (Some(index), None) => index,
+            _ => return Err(d2b_session::SessionError::new(
                 d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
-            ));
-        }
-        let index = matches[0];
+            )),
+        };
         if subjects[index].expected_peer.is_some() {
             Ok(subjects.swap_remove(index))
         } else {
@@ -1892,6 +1923,7 @@ struct InteractionSubjectRegistrar {
     authority: Arc<InteractionSubjectAuthority>,
 }
 
+/// Committed identity material the bus installs for one interaction subject.
 pub struct CommittedInteractionSubjectInstallBody {
     pub zone: ZoneId,
     pub display_subject_ref: ResourceRef,
@@ -3258,6 +3290,13 @@ impl ZoneRegistrar {
 
     /// Consume an authenticated candidate and install it only after native
     /// connect authorization succeeds.
+    ///
+    /// # Errors
+    /// Returns the seat's registration rejection when the candidate does not
+    /// pass the component-session admission gate; `BusError::SessionMismatch`
+    /// when the candidate is bound to a different Zone; the connect
+    /// authorization failure; or the registry admission failure (route shape,
+    /// capacity, or duplicate routing).
     pub async fn register_component_session(
         &mut self,
         session: AuthenticatedComponentSession<ComponentSessionAdmission>,
@@ -3705,7 +3744,16 @@ impl BusIngress {
         }
     }
 
-    /// Invoke a non-resource exact service method.
+/// Invoke a non-resource exact service method..
+///
+/// # Errors
+/// Returns `BusError::SessionClosed` when the bus or session is closed;
+/// `BusError::RouteShape` for a non-method route, an oversized payload, or
+/// an oversized response;the session's authorization or registry admission
+/// failures otherwise;an endpoint rejection wrapped as `BusError::Endpoint`;
+/// `BusError::Cancelled` or
+/// `BusError::Operation(OperationError::DeadlineExceeded)` when the attempt is
+/// cancelled or outlives its deadline.
     pub async fn invoke(
         &self,
         route: RouteKey,
