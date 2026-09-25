@@ -1000,6 +1000,22 @@ fn generation_publication_payload_matches(
         && value.get("generationSet") == serde_json::to_value(expected_generation_set).ok().as_ref()
 }
 
+/// The once-only teardown progress of one controller session. The stages
+/// advance monotonically: the ingress is revoked first, then the
+/// assignments, then the transport is closed; a session can never skip or
+/// reorder a step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TeardownStage {
+    /// No teardown step has run yet.
+    Active,
+    /// The controller ingress has been revoked.
+    IngressRevoked,
+    /// The controller assignments have been revoked.
+    AssignmentsRevoked,
+    /// The transport has been closed.
+    TransportClosed,
+}
+
 struct ControllerSession {
     context: crate::process_provider_runtime::ControllerBootstrapContext,
     binding: ControllerSessionBinding,
@@ -1010,9 +1026,7 @@ struct ControllerSession {
     service_task: tokio::task::JoinHandle<Result<(), SessionServerError>>,
     assignments: BTreeMap<ResourceUid, ResourceClientLease>,
     assignment_stream_open: bool,
-    assignments_revoked: bool,
-    transport_closed: bool,
-    ingress_revoked: bool,
+    teardown_stage: TeardownStage,
 }
 
 impl ControllerSession {
@@ -3001,6 +3015,20 @@ fn merge_cloud_hypervisor_child_spec(
     Ok(Value::Object(merged_spec))
 }
 
+/// The publication stage of one Zone's resource plane. The plane opens on
+/// the bootstrap policy with the controller endpoint and watch still
+/// pending, and moves to `Published` when the committed bundle is
+/// activated; the two stages are the only reachable gate states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanePublicationStage {
+    /// The plane is open on the bootstrap policy; the controller endpoint
+    /// is not yet registered and the watch is not yet admitted.
+    BootstrapOnly,
+    /// The committed bundle is activated; the controller endpoint is
+    /// registered and the watch admitted.
+    Published,
+}
+
 /// A production Resource API and core-controller runtime for one Zone.
 pub struct ZoneResourceRuntime {
     zone: ZoneId,
@@ -3037,9 +3065,7 @@ pub struct ZoneResourceRuntime {
     /// manager-served committed policy replaces it at activation; it remains
     /// the reported snapshot while no manager-served projection is installed.
     bootstrap_policy_snapshot: PolicySnapshot,
-    policy_installed: bool,
-    controller_endpoint_registered: bool,
-    watch_admitted: bool,
+    publication_stage: PlanePublicationStage,
     assignments: AssignmentRegistry,
     authority_index: Arc<tokio::sync::Mutex<HostGlobalAuthorityIndex>>,
     /// The process-local Zone authority operation ledger (U14): generation
@@ -3226,9 +3252,7 @@ impl ZoneResourceRuntime {
                 authority_ready: true,
                 core_stage,
             },
-            policy_installed: true,
-            controller_endpoint_registered: false,
-            watch_admitted: false,
+            publication_stage: PlanePublicationStage::BootstrapOnly,
             assignments,
             authority_index,
             authority_ledger,
@@ -3466,9 +3490,7 @@ impl ZoneResourceRuntime {
             .service_task
             .lock()
             .await = Some(zone_service_task);
-        self.policy_installed = true;
-        self.controller_endpoint_registered = true;
-        self.watch_admitted = true;
+        self.publication_stage = PlanePublicationStage::Published;
         self.activate_committed_plane_state().await
     }
 
@@ -6975,9 +6997,7 @@ impl ControllerSessionCoordinator {
                         service_task,
                         assignments: BTreeMap::new(),
                         assignment_stream_open: false,
-                        assignments_revoked: false,
-                        transport_closed: false,
-                        ingress_revoked: false,
+                        teardown_stage: TeardownStage::Active,
                     });
                     let inserted = {
                         let mut sessions = self.controller_sessions.lock().await;
@@ -7608,7 +7628,7 @@ impl ControllerSessionCoordinator {
             (context, session)
         };
 
-        if !session.ingress_revoked {
+        if session.teardown_stage == TeardownStage::Active {
             if let Err(error) = self
                 .revoke_controller_ingress_in_place(&mut session.ingress)
                 .await
@@ -7619,7 +7639,7 @@ impl ControllerSessionCoordinator {
                 }
                 return Err(error);
             }
-            session.ingress_revoked = true;
+            session.teardown_stage = TeardownStage::IngressRevoked;
         }
 
         self.credential_sessions.remove(
@@ -7627,13 +7647,13 @@ impl ControllerSessionCoordinator {
             session.binding.session_generation(),
         );
 
-        if !session.assignments_revoked {
+        if session.teardown_stage == TeardownStage::IngressRevoked {
             self.revoke_controller_assignments(&session.binding);
             send_controller_assignment_revocations(&session.driver, &session.assignments).await;
-            session.assignments_revoked = true;
+            session.teardown_stage = TeardownStage::AssignmentsRevoked;
         }
 
-        if !session.transport_closed {
+        if session.teardown_stage == TeardownStage::AssignmentsRevoked {
             session.cancel_backend_lease();
             let _ = session
                 .driver
@@ -7644,7 +7664,7 @@ impl ControllerSessionCoordinator {
                 .await;
             session.service_task.abort();
             let _ = (&mut session.service_task).await;
-            session.transport_closed = true;
+            session.teardown_stage = TeardownStage::TransportClosed;
         }
 
         if let Err(error) = self
@@ -8098,20 +8118,14 @@ impl ZoneResourceRuntime {
 
     /// Return the first startup gate that prevents publication.
     pub fn readiness_error(&self) -> Option<ResourceRuntimeError> {
-        if !self.policy_installed {
-            return Some(ResourceRuntimeError::PolicyUnavailable);
-        }
         if !self.readiness.resource_api_ready {
             return Some(ResourceRuntimeError::PolicyUnavailable);
         }
-        if !self.controller_endpoint_registered {
+        if self.publication_stage == PlanePublicationStage::BootstrapOnly {
             return Some(ResourceRuntimeError::ControllerEndpointUnavailable);
         }
         if !self.readiness.local_session_ready {
             return Some(ResourceRuntimeError::AuthenticationUnavailable);
-        }
-        if !self.watch_admitted {
-            return Some(ResourceRuntimeError::WatchUnavailable);
         }
         if !self.readiness.authority_ready
             || self
