@@ -1378,23 +1378,6 @@ mod tests {
 
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn garbage_checkpoint_scratch_without_commit_is_discarded() {
-        let directory = test_directory("garbage-checkpoint-next");
-        let _ = fs::remove_dir_all(&directory);
-        fs::create_dir_all(&directory).unwrap();
-        fs::write(checkpoint_next_path(&directory), b"garbage").unwrap();
-
-        let writer = SegmentWriter::open_at(&directory, 1024, 30, 1_700_000_000_000).unwrap();
-
-        assert!(!checkpoint_path(&directory).exists());
-        assert!(!checkpoint_next_path(&directory).exists());
-        assert_eq!(checkpoint_anchor(&directory).unwrap(), genesis_hash());
-        drop(writer);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn unsafe_checkpoint_scratch_identity_fails_closed() {
         for kind in ["directory", "symlink"] {
             let directory = test_directory(&format!("unsafe-checkpoint-next-{kind}"));

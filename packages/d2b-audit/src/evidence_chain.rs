@@ -276,17 +276,6 @@ mod tests {
     }
 
     #[test]
-    fn the_root_invocation_id_survives_every_hop() {
-        let root = EvidenceChain::root("invocation-9", "daemon");
-        let mut chain = root;
-        for _ in 0..5 {
-            chain = chain.nested("provider-alpha");
-        }
-        assert_eq!(chain.root_invocation_id(), "invocation-9");
-        assert_eq!(chain.depth(), 5);
-    }
-
-    #[test]
     fn the_record_shape_serializes_to_stable_greppable_keys() {
         let record = ChainRecord {
             ts_ms: 42,

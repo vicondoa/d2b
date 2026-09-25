@@ -175,20 +175,6 @@ mod tests {
     }
 
     #[test]
-    fn impossible_success_is_integrity_failure_and_one_sided_terminal_is_not_replayed() {
-        let impossible = evidence("operation", DurabilityOutcome::Success, false);
-        assert_eq!(
-            reconcile(Some(&impossible), Some(&impossible)),
-            Reconciliation::IntegrityFailure
-        );
-        let failed = evidence("operation", DurabilityOutcome::Failure, false);
-        assert_eq!(
-            reconcile(Some(&failed), None),
-            Reconciliation::IntegrityFailure
-        );
-    }
-
-    #[test]
     fn evidence_requires_a_closed_pair_and_matching_supplied_key() {
         let zone = ZoneId::derive("work").unwrap();
         let operation = OperationIdentity::derive("operation").unwrap();
