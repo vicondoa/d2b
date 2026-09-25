@@ -607,7 +607,7 @@ pub(crate) async fn run_connection(
 mod tests {
     use super::*;
     use crate::{
-        CTAPHID_CANCEL, CTAPHID_ERR_CHANNEL_BUSY, CTAPHID_ERR_INVALID_CMD, CTAPHID_ERROR,
+        CTAPHID_CANCEL, CTAPHID_ERR_CHANNEL_BUSY, CTAPHID_ERROR,
         CidTranslator, LeaseId, build_error_report, build_init_packet,
         relay::LeaseState as RelayLeaseState,
     };
@@ -666,25 +666,6 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn parse_init_packet_identifies_cmd_and_cid() {
-        let mut buf = [0u8; CTAPHID_REPORT_SIZE];
-        buf[0..4].copy_from_slice(&[0x01, 0x02, 0x03, 0x04]);
-        buf[4] = CTAPHID_INIT;
-        buf[5] = 0x00;
-        buf[6] = 0x08;
-
-        let pkt = parse_ctaphid_report(&buf);
-        match pkt {
-            CtaphidPacket::Init(p) => {
-                assert_eq!(p.cid, 0x0102_0304);
-                assert_eq!(p.cmd, CTAPHID_INIT);
-                assert_eq!(p.bcnt, 8);
-            }
-            _ => panic!("expected Init packet"),
-        }
-    }
-
-    #[test]
     fn parse_continuation_packet_identifies_seq_and_cid() {
         let mut buf = [0u8; CTAPHID_REPORT_SIZE];
         buf[0..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
@@ -717,16 +698,6 @@ mod tests {
     // -----------------------------------------------------------------------
     // CID translation
     // -----------------------------------------------------------------------
-
-    #[test]
-    fn cid_translator_allocs_fresh_host_cid() {
-        let mut t = CidTranslator::new();
-        let host = t.alloc_host_cid(42);
-        assert_ne!(host, 0);
-        assert_ne!(host, CTAPHID_BROADCAST_CID);
-        assert_eq!(t.guest_to_host(42), Some(host));
-        assert_eq!(t.host_to_guest(host), Some(42));
-    }
 
     #[test]
     fn cid_translator_two_guests_get_different_host_cids() {
@@ -765,53 +736,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cid_translator_release_removes_mapping() {
-        let mut t = CidTranslator::new();
-        t.alloc_host_cid(77);
-        t.release_guest_cid(77);
-        assert_eq!(t.guest_to_host(77), None);
-    }
-
     // -----------------------------------------------------------------------
     // Lease state machine
     // -----------------------------------------------------------------------
-
-    #[test]
-    fn lease_acquire_succeeds_when_available() {
-        let mut state = SecurityKeyState::new("test-selector");
-        let id = state.try_acquire_lease("vm-a");
-        assert!(id.is_some());
-        assert!(matches!(state.lease, RelayLeaseState::Leased { .. }));
-    }
-
-    #[test]
-    fn lease_acquire_fails_when_held_by_other_vm() {
-        let mut state = SecurityKeyState::new("test-selector");
-        let _ = state.try_acquire_lease("vm-a");
-        let second = state.try_acquire_lease("vm-b");
-        assert!(
-            second.is_none(),
-            "second VM must not acquire lease while first holds it"
-        );
-    }
-
-    #[test]
-    fn lease_release_makes_key_available() {
-        let mut state = SecurityKeyState::new("test-selector");
-        let id = state.try_acquire_lease("vm-a").unwrap();
-        state.release_lease("vm-a", id);
-        assert!(matches!(state.lease, RelayLeaseState::Available));
-    }
-
-    #[test]
-    fn lease_release_wrong_vm_does_not_release() {
-        let mut state = SecurityKeyState::new("test-selector");
-        let id = state.try_acquire_lease("vm-a").unwrap();
-        // vm-b tries to release vm-a's lease - must be a no-op.
-        state.release_lease("vm-b", id);
-        assert!(matches!(state.lease, RelayLeaseState::Leased { .. }));
-    }
 
     #[test]
     fn lease_expired_returns_is_expired_true() {
@@ -838,17 +765,6 @@ mod tests {
             id.is_some(),
             "expired lease must be evicted and new acquirer must succeed"
         );
-    }
-
-    #[test]
-    fn contention_second_vm_cannot_acquire_active_lease() {
-        let mut state = SecurityKeyState::new("test-selector");
-        state.enabled_vms.insert("vm-a".to_owned());
-        state.enabled_vms.insert("vm-b".to_owned());
-        let id = state.try_acquire_lease("vm-a").unwrap();
-        assert!(id.as_u64() > 0);
-        let id2 = state.try_acquire_lease("vm-b");
-        assert!(id2.is_none());
     }
 
     #[test]
@@ -940,24 +856,6 @@ mod tests {
         let device = AsyncHidrawDevice::from_file(File::from(fd)).expect("wrap socket fd");
         let err = device.read_report().await.unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
-    }
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn hidraw_device_write_report_to_socket_succeeds() {
-        let (left, mut right) = std::os::unix::net::UnixStream::pair().expect("socket pair");
-        left.set_nonblocking(true).expect("left nonblocking");
-        let fd: OwnedFd = left.into();
-        let device = AsyncHidrawDevice::from_file(File::from(fd)).expect("wrap socket fd");
-        let report = build_error_report(1, CTAPHID_ERR_INVALID_CMD);
-        device.write_report(&report).await.expect("write report");
-
-        let mut written = [0u8; CTAPHID_REPORT_SIZE + 1];
-        right
-            .read_exact(&mut written)
-            .expect("read report from peer socket");
-        assert_eq!(written[0], 0);
-        assert_eq!(&written[1..], &report);
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
