@@ -45,6 +45,7 @@ impl BusDirection {
     pub const ALL: [Self; 4] = [Self::Local, Self::Host, Self::Guest, Self::ZoneLink];
 
     /// Stable metric label.
+    /// Canonical wire label emitted in metrics events.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Local => "local",
@@ -88,6 +89,7 @@ impl BusTransport {
     pub const ALL: [Self; 3] = [Self::Unix, Self::Vsock, Self::ZoneLink];
 
     /// Stable metric label.
+    /// Canonical wire label emitted in metrics events.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Unix => "unix",
@@ -107,6 +109,7 @@ pub enum BusRouteOutcome {
 }
 
 impl BusRouteOutcome {
+    /// Canonical wire label emitted in metrics events.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Ok => "ok",
@@ -125,6 +128,7 @@ pub enum BusRegistrationOutcome {
 }
 
 impl BusRegistrationOutcome {
+    /// Canonical wire label emitted in metrics events.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Accepted => "accepted",
@@ -142,6 +146,7 @@ pub enum BusStreamOutcome {
 }
 
 impl BusStreamOutcome {
+    /// Canonical wire label emitted in metrics events.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Accepted => "accepted",
@@ -159,6 +164,7 @@ pub enum BusStreamKind {
 }
 
 impl BusStreamKind {
+    /// Canonical wire label emitted in metrics events.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Control => "control",
@@ -176,6 +182,7 @@ pub enum BusBackpressureReason {
 }
 
 impl BusBackpressureReason {
+    /// Canonical wire label emitted in metrics events.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Credit | Self::Capacity => "quota",
@@ -194,6 +201,7 @@ pub enum BusRejectionOutcome {
 }
 
 impl BusRejectionOutcome {
+    /// Canonical wire label emitted in metrics events.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Denied => "denied",
@@ -214,6 +222,7 @@ pub enum BusDisconnectOutcome {
 }
 
 impl BusDisconnectOutcome {
+    /// Canonical wire label emitted in metrics events.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Abandoned => "abandoned",

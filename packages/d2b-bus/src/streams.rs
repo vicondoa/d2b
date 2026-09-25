@@ -36,7 +36,12 @@ pub const DEFAULT_MAX_FRAME_BYTES: usize = 64 * 1024;
 pub struct StreamName(String);
 
 impl StreamName {
-    /// Parse a canonical stream name.
+    /// Parse a canonical stream name..
+    ///
+    /// # Errors
+    /// Returns `StreamError::InvalidName` when the value is empty, longer than
+    /// 128 bytes, or contains a character outside the ASCII alphanumeric or
+    /// `-`/`_`/`.`/`:` set.
     pub fn parse(value: impl Into<String>) -> Result<Self, StreamError> {
         let value = value.into();
         if value.is_empty()

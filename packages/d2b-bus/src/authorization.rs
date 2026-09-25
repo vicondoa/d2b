@@ -397,6 +397,7 @@ pub enum AuthorizationError {
     Assignment(AssignmentError),
 }
 
+/// Closed classifier for bus authorization failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorizationErrorClass {
     MissingGrant,
