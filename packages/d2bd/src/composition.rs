@@ -395,8 +395,11 @@ mod audio_dispatch;
 mod audio_host_controller;
 mod credential_resource_runtime;
 pub mod interaction_composition;
-pub mod process_provider_runtime;
+pub(crate) mod process_provider_runtime;
 mod process_resource_runtime;
+#[cfg(not(feature = "test-support"))]
+pub(crate) mod provider_effects;
+#[cfg(feature = "test-support")]
 pub mod provider_effects;
 pub mod provider_registry;
 pub mod provider_shutdown;
@@ -4099,7 +4102,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         // tests can drive a single connection deterministically.
         if options.once {
             if let Err(error) = handle_connection(stream, &state, None) {
-                eprintln!("{}", error.message());
+                tracing::error!(
+                    error = %error.message(),
+                    "connection handler failed",
+                );
             }
             finalize_daemon_interactions(&state).await?;
             break;
@@ -4117,7 +4123,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                     ACCEPT_REFUSAL_WRITE_DEADLINE,
                 );
                 drain_rejected_peer_input(&stream);
-                eprintln!("{}", error.message());
+                tracing::error!(
+                    error = %error.message(),
+                    "public connection authorization refused",
+                );
                 continue;
             }
         };
@@ -4147,22 +4156,24 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             .spawn(move || {
                 // `permit` (and, for an exec session, ownership of it) is
                 // dropped when this handler returns.
+
+                let peer_uid = peer.uid;
                 if let Err(error) =
                     handle_connection_authorized(stream, &conn_state, peer, Some(permit))
                 {
-                    eprintln!("{}", error.message());
+                    tracing::error!(
+                        peer_uid,
+                        error = %error.message(),
+                        "connection handler failed",
+                    );
                 }
             })
         {
             // Spawn failure drops the moved closure (and its permit), so
             // the slot is released; log and keep serving.
-            eprintln!(
-                "{}",
-                TypedError::InternalIo {
-                    context: "spawn connection handler".to_owned(),
-                    detail: err.to_string(),
-                }
-                .message()
+            tracing::error!(
+                error = %err,
+                "connection handler thread spawn failed",
             );
         }
     }
@@ -4214,7 +4225,7 @@ pub struct GatewayGuestZoneLinkOptions {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GatewayGuestConfigFile {
     credential_path: PathBuf,
     seal_key_path: PathBuf,
@@ -4223,7 +4234,7 @@ struct GatewayGuestConfigFile {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GatewayGuestRelayConfigFile {
     namespace: Option<String>,
     entity: Option<String>,
@@ -4359,6 +4370,41 @@ async fn load_gateway_guest_zone_link_options(
         max_concurrent_sessions: 32,
         connect_timeout_seconds: 30,
     }))
+}
+
+#[cfg(test)]
+mod gateway_guest_config_tests {
+    use super::*;
+
+    /// A typo in the user-written Guest gateway config must be refused at
+    /// the deserialization boundary, not silently ignored until the Relay
+    /// namespace lookup later fails.
+
+    #[test]
+    fn gateway_guest_config_typo_is_refused_at_parse() {
+        let error = serde_json::from_slice::<GatewayGuestConfigFile>(
+            br#"{"credentialPath":"/run/gateway/cred","sealKeyPath":"/run/gateway/seed","relay":{"namespace":"ns","entity":"ent"},"typoKey":true}"#,
+        )
+        .expect_err("a typo'd gateway guest config key must be refused");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "the typo must surface as the serde unknown-field error: {error}"
+        );
+    }
+
+    /// The Relay sub-object refuses unknown keys at the same boundary.
+
+    #[test]
+    fn gateway_guest_relay_config_typo_is_refused_at_parse() {
+        let error = serde_json::from_slice::<GatewayGuestRelayConfigFile>(
+            br#"{"namespace":"ns","entity":"ent","typoKey":true}"#,
+        )
+        .expect_err("a typo'd relay config key must be refused");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "the typo must surface as the serde unknown-field error: {error}"
+        );
+    }
 }
 
 /// The journal-visible event every accepted Guest ComponentSession publishes.
@@ -4505,7 +4551,11 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     })
     .transpose()?;
     if gateway_zone_link.is_some() {
-        tracing::info!("Guest-local ZoneLink transport Provider composed");
+        tracing::info!(
+            zone = %identity.zone(),
+            guest_ref = %identity.guest_ref().name().as_str(),
+            "Guest-local ZoneLink transport Provider composed",
+        );
     }
     let local_private_path =
         options
@@ -4556,7 +4606,11 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             d2b_provider_guest::production_guest_target_effects(),
         ),
     );
-    tracing::info!("Guest target-control service composed");
+    tracing::info!(
+        zone = %identity.zone(),
+        guest_ref = %identity.guest_ref().name().as_str(),
+        "Guest target-control service composed",
+    );
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| TypedError::InternalIo {
             context: "install Guest SIGTERM handler".to_owned(),
@@ -5326,7 +5380,11 @@ async fn run_startup_autostart(state: &ServerState, kernel_module_degraded: &BTr
     };
     let plan = d2bd_runtime::autostart::build_autostart_plan(&resolver);
     if plan.vms.is_empty() {
-        tracing::info!("autostart: nothing to do (empty plan)");
+        tracing::info!(
+            net_vm_count = plan.net_vms().count(),
+            workload_count = plan.workload_vms().count(),
+            "autostart: nothing to do (empty plan)",
+        );
         return;
     }
     tracing::info!(
@@ -8164,9 +8222,7 @@ fn record_workload_availability_metrics(
             } else {
                 "not-applicable"
             };
-            *counts
-                .get_mut(&(provider, component, selected))
-                .expect("bounded workload availability tuple") += 1;
+            *counts.entry((provider, component, selected)).or_insert(0) += 1;
         }
     }
     let samples = counts
@@ -11184,7 +11240,7 @@ pub(crate) async fn ensure_guest_target_session(
     plane
         .bind_guest_target(&guest, generation, control)
         .map_err(|error| format!("guest-session:target-bind-refused:{error}"))?;
-    adopt_guest_target_assignments(plane.targets(), &guest, generation).await;
+    adopt_guest_target_assignments(&plane.targets(), &guest, generation).await;
     Ok(())
 }
 
@@ -11276,7 +11332,7 @@ pub(crate) async fn binding_guest_mount_ready(
         .lock()
         .await
         .get(zone.as_str())
-        .map(|plane| std::sync::Arc::clone(plane.targets()));
+        .map(|plane| plane.targets());
     let Some(directory) = directory else {
         return false;
     };
@@ -14809,7 +14865,10 @@ async fn compose_gateway_zone_links(
         .authority_bundle_generation()
         .map(|value| value.as_str().to_owned())
     else {
-        tracing::error!("Gateway Guest composition refused: root Zone generation unavailable");
+        tracing::error!(
+            zone = %topology.root,
+            "Gateway Guest composition refused: root Zone generation unavailable",
+        );
         return;
     };
     let authority_generation = root.current_revision().get().max(1);
@@ -15216,7 +15275,10 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                         .await?;
                     }
                     *state.resource_plane.lock().await = Some(Arc::new(plane));
-                    tracing::warn!("resource plane still has live request owners during shutdown");
+                    tracing::warn!(
+                        zones = ?zones,
+                        "resource plane still has live request owners during shutdown",
+                    );
                 }
                 Err(error) => {
                     for zone in &zones {
@@ -15242,7 +15304,10 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                     )
                     .await?;
                 }
-                tracing::warn!("resource plane still has live request owners during shutdown");
+                tracing::warn!(
+                    zones = ?zones,
+                    "resource plane still has live request owners during shutdown",
+                );
             }
         }
     }
@@ -16152,7 +16217,8 @@ struct VmStopRoleReport {
     shutdown_outcome: Option<VmShutdownOutcome>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum VmShutdownOutcome {
     CleanGuestShutdown,
     CleanVmmCleanup,
@@ -16175,7 +16241,7 @@ struct ShutdownDegradedReport {
 #[serde(rename_all = "camelCase")]
 struct ShutdownDegradedMarker {
     vm: String,
-    outcome: String,
+    outcome: VmShutdownOutcome,
     severity: String,
     remediation: String,
     elapsed_ms: u64,
@@ -16384,7 +16450,7 @@ fn persist_vm_shutdown_marker(
     if let Some(severity) = outcome.degraded_severity() {
         report.markers.push(ShutdownDegradedMarker {
             vm: vm.to_owned(),
-            outcome: outcome.label().to_owned(),
+            outcome,
             severity: severity.to_owned(),
             remediation: outcome.remediation().replace("<vm>", vm),
             elapsed_ms: elapsed.as_millis() as u64,
@@ -18680,7 +18746,6 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
             self.operation,
             &self.caller_role,
         )?;
-        let _ = self.force;
         drive_sync(&self.state.runtime_handle, self.runtime.apply_cloud_hypervisor_lifecycle(
             Arc::new(self.state.clone()),
             &self.guest,
@@ -18689,7 +18754,7 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
             self.operation,
         ))
         .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
-        if self.wait_for_ready {
+        if self.wait_for_ready && !self.force {
             drive_sync(&self.state.runtime_handle, self.runtime.wait_cloud_hypervisor_lifecycle(
                 Arc::new(self.state.clone()),
                 &self.guest,
@@ -20209,7 +20274,9 @@ impl ActivationLockGuard {
 impl Drop for ActivationLockGuard {
     fn drop(&mut self) {
         let mut coordinator = lock_sync(&self.coordinator);
-        let _ = coordinator.finish_activation(&self.zone);
+        if let Err(error) = coordinator.finish_activation(&self.zone) {
+            tracing::warn!(zone = %self.zone, error = %error, "activation finish refused by Zone coordinator");
+        }
     }
 }
 
@@ -22801,9 +22868,8 @@ fn dispatch_audit(
                 Some("denied") => Ok(Some(
                     d2b_contracts_broker::broker_wire::BrokerAuditSeverity::Denied,
                 )),
-                Some(_) => Err(TypedError::InternalIo {
-                    context: "audit filter".to_owned(),
-                    detail: "severity-invalid".to_owned(),
+                Some(_) => Err(TypedError::WireInvalidFrame {
+                    detail: "audit filter has an invalid severity".to_owned(),
                 }),
             }?;
             Ok::<_, TypedError>(d2b_contracts_broker::broker_wire::BrokerAuditFilter {

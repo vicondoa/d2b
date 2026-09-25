@@ -3433,7 +3433,17 @@ async fn serving_worker_launch_args(
             .await
             .map_err(|_| "provider-ticket:serving-socket-dir-create".to_owned())?;
         use std::os::unix::fs::PermissionsExt as _;
-        let _ = tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await;
+        if let Err(error) = tokio::fs::set_permissions(
+            parent,
+            std::fs::Permissions::from_mode(0o700),
+        ).await {
+            tracing::warn!(
+                zone = %zone,
+                socket_dir = %parent.display(),
+                error = %error,
+                "failed to enforce 0700 on the serving worker socket directory"
+            );
+        }
     }
     let cache = match launch.cache {
         AttachmentCache::Auto => "auto",

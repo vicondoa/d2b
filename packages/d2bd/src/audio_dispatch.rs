@@ -157,7 +157,7 @@ pub fn enforce_host_grant(
     channel: AudioChannel,
 ) -> HostEnforcementResult {
     match build_host_controller(state, vm_name, cap, caller_role) {
-        Some(ctrl) => ctrl.enforce_grant(vm_name, grant, channel),
+        Some(ctrl) => ctrl.enforce_grant(grant, channel),
         None => HostEnforcementResult::Unsupported,
     }
 }
@@ -174,7 +174,7 @@ pub fn enforce_host_level(
     channel: AudioChannel,
 ) -> HostEnforcementResult {
     match build_host_controller(state, vm_name, cap, caller_role) {
-        Some(ctrl) => ctrl.enforce_level(vm_name, level, channel),
+        Some(ctrl) => ctrl.enforce_level(level, channel),
         None => HostEnforcementResult::Unsupported,
     }
 }
@@ -766,7 +766,7 @@ mod tests {
         use crate::audio_host_controller::FakeHostController;
         let cap = d2b_provider_guest_cloud_hypervisor::audio_capability();
         let ctrl = FakeHostController::success();
-        let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
+        let host_result = ctrl.enforce_grant(AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Applied);
         let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(
@@ -783,7 +783,7 @@ mod tests {
         // report Unsupported, never HostOnly.
         let cap = d2b_provider_guest_cloud_hypervisor::audio_capability();
         let ctrl = FakeHostController::failed();
-        let host_result = ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker);
+        let host_result = ctrl.enforce_grant(AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Failed);
         let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(
@@ -800,7 +800,7 @@ mod tests {
         let cap = d2b_provider_guest_qemu_media::audio_capability();
         let ctrl = FakeHostController::failed();
         let level = LevelPercent::new(80).unwrap();
-        let host_result = ctrl.enforce_level("corp-vm", level, AudioChannel::Microphone);
+        let host_result = ctrl.enforce_level(level, AudioChannel::Microphone);
         assert_eq!(host_result, HostEnforcementResult::Failed);
         let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(applied, AudioSetApplied::Unsupported);
@@ -811,7 +811,7 @@ mod tests {
         use crate::audio_host_controller::QemuAudioController;
         let cap = d2b_provider_guest_qemu_media::audio_capability();
         let ctrl = QemuAudioController;
-        let host_result = ctrl.enforce_grant("qemu-vm", AudioGrant::Off, AudioChannel::Speaker);
+        let host_result = ctrl.enforce_grant(AudioGrant::Off, AudioChannel::Speaker);
         assert_eq!(host_result, HostEnforcementResult::Applied);
         let applied = combined_audio_applied(host_result, &cap);
         assert_eq!(applied, AudioSetApplied::HostOnly);
@@ -825,7 +825,6 @@ mod tests {
         let cap = d2b_provider_guest_qemu_media::audio_capability();
         let ctrl = QemuAudioController;
         let host_result = ctrl.enforce_level(
-            "qemu-vm",
             LevelPercent::new(50).unwrap(),
             AudioChannel::Microphone,
         );
