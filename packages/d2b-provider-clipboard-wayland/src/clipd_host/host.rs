@@ -47,6 +47,8 @@ impl<P: crate::clipd_host::niri::FocusedWindowProvider> HostClipboard<P> {
         self.attributor.cache_mut().apply_event(event)
     }
 
+    /// Synchronously refresh the focused-window snapshot from the niri
+    /// provider; blocks on the IPC socket.
     pub fn refresh_focused_window_snapshot(&mut self) -> Option<FocusedWindowSnapshot> {
         self.attributor.refresh_from_provider().window
     }

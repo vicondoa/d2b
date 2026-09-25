@@ -11,6 +11,9 @@ use thiserror::Error;
 
 use crate::clipd_host::policy::AttributionQuality;
 
+/// Upper bound on one niri IPC response line: 1 MiB is far above any real
+/// window or workspace payload while still bounding memory on the socket
+/// read path.
 pub const DEFAULT_NIRI_MAX_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Error)]
@@ -125,6 +128,7 @@ impl FocusedWindowProvider for NiriJsonClient {
     }
 }
 
+/// Serialize a request as one newline-terminated NDJSON frame.
 pub fn encode_niri_request(request: &NiriRequest) -> Result<Vec<u8>, NiriIpcError> {
     let mut frame =
         serde_json::to_vec(request).map_err(|err| NiriIpcError::Json(err.to_string()))?;
@@ -132,6 +136,8 @@ pub fn encode_niri_request(request: &NiriRequest) -> Result<Vec<u8>, NiriIpcErro
     Ok(frame)
 }
 
+/// Blocking read of one newline-terminated NDJSON line from `reader`,
+/// refusing frames longer than `max_line_bytes` before JSON parsing.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn read_bounded_ndjson_line<R: Read>(
     reader: &mut R,
@@ -159,6 +165,8 @@ pub fn read_bounded_ndjson_line<R: Read>(
     }
 }
 
+/// Decode a niri NDJSON response line, mapping niri's `Err`/`error`
+/// envelopes to [`NiriIpcError::Niri`] and unwrapping the `Ok` payload.
 pub fn decode_niri_response<T: DeserializeOwned>(line: &str) -> Result<T, NiriIpcError> {
     let value: Value =
         serde_json::from_str(line).map_err(|err| NiriIpcError::Json(err.to_string()))?;
@@ -343,6 +351,8 @@ pub struct NiriStateCache {
 }
 
 impl NiriStateCache {
+    /// Apply one niri event to the cache and return the resulting
+    /// focused-window snapshot, if any.
     pub fn apply_event(&mut self, event: NiriEvent) -> Option<FocusedWindowSnapshot> {
         match event {
             NiriEvent::FocusChanged { id } => {
@@ -396,6 +406,8 @@ impl NiriStateCache {
         self.focused_window()
     }
 
+    /// Replace the focused window from a synchronous query and return the
+    /// resulting snapshot, if any.
     pub fn update_focused_window(
         &mut self,
         focused: Option<NiriWindow>,
@@ -411,14 +423,17 @@ impl NiriStateCache {
         self.focused_window()
     }
 
+    /// Mark the cached focus as stale after a failed provider probe.
     pub fn mark_stale(&mut self) {
         self.stale = true;
     }
 
+    /// Whether the cached focus is known to be stale.
     pub fn is_stale(&self) -> bool {
         self.stale
     }
 
+    /// Resolve the current focused-window snapshot, if any.
     pub fn focused_window(&self) -> Option<FocusedWindowSnapshot> {
         self.focused
             .as_ref()
@@ -426,6 +441,7 @@ impl NiriStateCache {
     }
 }
 
+/// Source of focused-window and workspace state from the niri IPC socket.
 pub trait FocusedWindowProvider {
     fn query_focused_window(&mut self) -> Result<Option<NiriWindow>, NiriIpcError>;
 
@@ -447,6 +463,7 @@ pub struct HostClipboardAttributor<P> {
 }
 
 impl<P: FocusedWindowProvider> HostClipboardAttributor<P> {
+    /// Construct an attributor over a niri provider with an empty cache.
     pub fn new(provider: P) -> Self {
         Self {
             provider,
@@ -454,14 +471,17 @@ impl<P: FocusedWindowProvider> HostClipboardAttributor<P> {
         }
     }
 
+    /// Mutably borrow the underlying niri state cache.
     pub fn cache_mut(&mut self) -> &mut NiriStateCache {
         &mut self.cache
     }
 
+    /// Produce attribution for a new host selection from the cached focus.
     pub fn on_host_selection_changed(&mut self) -> HostSelectionAttribution {
         self.cached_focused_window_guess()
     }
 
+    /// Return the cached focused-window guess with its quality tag.
     pub fn cached_focused_window_guess(&mut self) -> HostSelectionAttribution {
         let quality = if self.cache.is_stale() {
             AttributionQuality::CacheStaleFocusedWindowGuess
@@ -474,6 +494,8 @@ impl<P: FocusedWindowProvider> HostClipboardAttributor<P> {
         }
     }
 
+    /// Query the provider synchronously over the IPC socket (blocking) and
+    /// refresh the cache, falling back to the stale guess on failure.
     pub fn refresh_from_provider(&mut self) -> HostSelectionAttribution {
         if let Ok(workspaces) = self.provider.query_workspaces() {
             let _ = self
