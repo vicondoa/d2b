@@ -49,18 +49,6 @@ const MAX_SESSIONS: usize = 64;
 /// Default ring-buffer capacity per VM (256 KiB).
 const RING_CAPACITY: usize = 256 * 1024;
 
-/// Drainer source: where console bytes come from.
-#[derive(Debug)]
-pub enum DrainerSource {
-    /// Connect to a UNIX stream socket path created by the hypervisor
-    /// (`--serial socket=<path>`). The drainer reconnects after drops.
-    UnixSocket(String),
-    /// Read from a pre-opened UNIX stream socket (used for testing or
-    /// for cases where the socket is already connected).
-    #[allow(dead_code)]
-    Connected(tokio::net::UnixStream),
-}
-
 /// Shared ring buffer state for one VM's console stream.
 #[derive(Debug)]
 pub struct ConsoleRing {
