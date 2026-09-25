@@ -290,3 +290,46 @@ impl ProcessCreditLimit {
         CreditPool::new(configured_limit.min(usize::from(MAX_HOST_ATTACHMENT_CREDITS)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_limit_pool_is_rejected() {
+        // A zero-limit pool would be silently exhausted on first use; the
+        // configuration boundary must refuse it up front.
+        assert!(matches!(CreditPool::new(0), Err(CreditError::ZeroLimit)));
+    }
+
+    #[test]
+    fn derive_rejects_baseline_at_or_above_soft_limit() {
+        // The observed open-fd baseline plus the reserved control fds must
+        // stay below the soft rlimit; at or above it no transferable credit
+        // exists and the attachment budget must fail closed.
+        assert_eq!(
+            ProcessCreditLimit::derive(10, 10),
+            Err(CreditError::BaselineExceedsLimit)
+        );
+    }
+
+    #[test]
+    fn derive_rejects_overflowing_baseline() {
+        assert_eq!(
+            ProcessCreditLimit::derive(u64::MAX, usize::MAX),
+            Err(CreditError::Overflow)
+        );
+    }
+
+    #[test]
+    fn derive_caps_transferable_budget_below_the_soft_limit() {
+        // A healthy rlimit yields the capped attachment budget: the
+        // reserved control fds are deducted and the process cap applies.
+        let limit = ProcessCreditLimit::derive(1_000_000, 0).expect("healthy rlimit derives");
+        assert_eq!(
+            limit.transferable(),
+            (1_000_000 - usize::from(RESERVED_CONTROL_FDS))
+                .min(usize::from(MAX_PROCESS_ATTACHMENT_CREDITS))
+        );
+    }
+}
