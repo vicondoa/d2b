@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    num::NonZeroUsize,
     sync::Arc,
 };
 
@@ -44,18 +45,17 @@ pub struct MicrophoneArbiter {
 pub type SharedMicrophoneArbiter = Arc<tokio::sync::Mutex<MicrophoneArbiter>>;
 
 /// Construct a shared microphone authority with the provider's queue bound.
-pub fn shared_microphone_arbiter(max_queue: usize) -> SharedMicrophoneArbiter {
+pub fn shared_microphone_arbiter(max_queue: NonZeroUsize) -> SharedMicrophoneArbiter {
     Arc::new(tokio::sync::Mutex::new(MicrophoneArbiter::new(max_queue)))
 }
 
 impl MicrophoneArbiter {
     /// Construct an arbiter with a bounded pending queue.
-    pub fn new(max_queue: usize) -> Self {
-        assert!(max_queue > 0);
+    pub fn new(max_queue: NonZeroUsize) -> Self {
         Self {
             active: None,
             queue: VecDeque::new(),
-            max_queue,
+            max_queue: max_queue.get(),
         }
     }
 
@@ -141,12 +141,11 @@ pub struct SpeakerMixer {
 
 impl SpeakerMixer {
     /// Construct a mixer with a bounded number of consumers.
-    pub fn new(max_consumers: usize) -> Self {
-        assert!(max_consumers > 0);
+    pub fn new(max_consumers: NonZeroUsize) -> Self {
         Self {
             levels: BTreeMap::new(),
             grants: BTreeSet::new(),
-            max_consumers,
+            max_consumers: max_consumers.get(),
         }
     }
 

@@ -13,6 +13,7 @@ use d2b_contracts_provider::v3::semantic_services::{
     },
 };
 use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef};
+use std::num::NonZeroUsize;
 use tracing::{debug, warn};
 
 const AUDIO_PROVIDER_REF: &str = "Provider/audio-pipewire";
@@ -28,7 +29,7 @@ pub const AUDIO_REPAIR_INTERVAL_SECS: u64 = 300;
 /// The arbiter and mixer admission bound: how many pending microphone
 /// leases or speaker consumers one controller admits before refusing
 /// further admission.
-pub const AUDIO_QUEUE_BOUND: usize = 64;
+pub const AUDIO_QUEUE_BOUND: NonZeroUsize = NonZeroUsize::new(64).expect("fixed nonzero bound");
 
 const AUDIO_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
     BindingChildRequest::process(

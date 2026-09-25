@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -302,7 +303,9 @@ impl AudioResourceRuntime {
                 let microphone = self
                     .service_microphones
                     .entry(spec.service_ref.to_canonical_string())
-                    .or_insert_with(|| shared_microphone_arbiter(64))
+                    .or_insert_with(|| {
+                        shared_microphone_arbiter(NonZeroUsize::new(64).expect("fixed bound"))
+                    })
                     .clone();
                 let mut controller =
                     AudioBindingController::with_shared_microphone(mediator, microphone);
