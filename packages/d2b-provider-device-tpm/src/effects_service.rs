@@ -20,6 +20,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use d2b_contracts::types::{BundleOpId, VmId};
 use d2b_contracts_broker::kernel_client::{KernelInvocation, envelope_invoke_kernel};
@@ -358,7 +359,7 @@ pub(crate) struct LiveTpmResourceEffectPort<'a> {
     /// The guest lifecycle lease is consumed at most once, by the first
     /// effect that reaches a launchable row (the preserved
     /// `lifecycle_lease_consumed` gate of the old executor).
-    lifecycle_lease_consumed: tokio::sync::Mutex<bool>,
+    lifecycle_lease_consumed: AtomicBool,
 }
 
 impl LiveTpmResourceEffectPort<'_> {
@@ -381,18 +382,14 @@ impl LiveTpmResourceEffectPort<'_> {
     /// authorized this Device's start operation; the row's Process controller
     /// owns the process from here, so the port only retires the admission.
     async fn consume_lifecycle_lease(&self) -> Result<(), TpmResourceEffectError> {
-        let mut consumed = self
-            .lifecycle_lease_consumed
-            .try_lock()
-            .map_err(|_| TpmResourceEffectError::Transient)?;
-        if *consumed {
+        if self.lifecycle_lease_consumed.load(Ordering::Acquire) {
             return Ok(());
         }
         self.facets
             .runtime
             .consume_lifecycle_lease(self.vm_id.as_str(), &self.operation_id)
             .await?;
-        *consumed = true;
+        self.lifecycle_lease_consumed.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -694,7 +691,7 @@ impl AdmittedTpmDevice {
             device_ref: self.device_ref,
             execution_ref: self.execution_ref,
             operation_id: self.operation_id,
-            lifecycle_lease_consumed: tokio::sync::Mutex::new(false),
+            lifecycle_lease_consumed: AtomicBool::new(false),
         }
     }
 }
