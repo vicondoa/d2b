@@ -139,9 +139,9 @@ fn the_service_row_decodes_and_reads_nothing() {
 #[test]
 fn a_foreign_row_is_refused() {
     let envelope = envelope(&json!({"providerRef": "Provider/audio-pipewire"}));
-    assert_eq!(
+    assert!(matches!(
         AudioService.validate(&envelope),
-        Err(InteractionEffectError::InvalidResource)
-    );
+        Err(InteractionEffectError::InvalidSpec(_))
+    ));
     assert!(audio_service_spec_decoder().decode(b"[]").is_err());
 }

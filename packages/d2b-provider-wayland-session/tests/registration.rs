@@ -196,10 +196,10 @@ fn the_session_reads_its_domain_dependencies() {
 fn a_foreign_row_is_refused() {
     let envelope = envelope(&json!({"providerRef": "Provider/display-wayland"}));
     let behavior = WaylandSession::new(Arc::new(TwoWorkers));
-    assert_eq!(
+    assert!(matches!(
         behavior.validate(&envelope),
-        Err(InteractionEffectError::InvalidResource)
-    );
+        Err(InteractionEffectError::InvalidSpec(_))
+    ));
 }
 
 /// The session's provider realization becomes manager child rows: the manager

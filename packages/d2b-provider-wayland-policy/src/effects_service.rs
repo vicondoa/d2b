@@ -203,7 +203,7 @@ impl InteractionEffectsService {
         request: &InteractionEffectRequest<'_>,
     ) -> Result<InteractionEffectOutcome, InteractionEffectError> {
         let spec: WaylandSessionSpec = serde_json::from_value(request.spec.clone())
-            .map_err(|_| InteractionEffectError::InvalidResource)?;
+            .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
         let identity = self
             .facets
             .identity()
@@ -275,7 +275,8 @@ impl InteractionEffectsService {
     ) -> Result<InteractionEffectOutcome, InteractionEffectError> {
         let spec: AudioBindingSpec = spec_with_provider_ref(&request.spec, request.provider_ref.as_ref())
             .and_then(|spec| {
-                serde_json::from_value(spec).map_err(|_| InteractionEffectError::InvalidResource)
+                serde_json::from_value(spec)
+                    .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))
             })?;
         let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
             return Err(InteractionEffectError::Unavailable);
@@ -572,8 +573,8 @@ fn resource_phase(value: &Value) -> Option<&str> {
 /// spec for Nix rows, the `spec` member for API rows that persist the full
 /// envelope minus status.
 fn spec_document_value(bytes: &[u8]) -> Result<Value, InteractionEffectError> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| InteractionEffectError::InvalidResource)?;
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
     Ok(envelope_spec_document(&value))
 }
 
@@ -606,8 +607,8 @@ fn spec_with_provider_ref(
 }
 
 fn spec_ref_at(bytes: &[u8], path: &str) -> Result<ResourceRef, InteractionEffectError> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| InteractionEffectError::InvalidResource)?;
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
     value
         .pointer(path)
         .and_then(Value::as_str)
@@ -662,7 +663,7 @@ fn validate_audio_dependency_identity(
         return Err(InteractionEffectError::InvalidResource);
     }
     let envelope = ResourceEnvelope::from_json(&resource.canonical_json)
-        .map_err(|_| InteractionEffectError::InvalidResource)?;
+        .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))?;
     let metadata = envelope.metadata();
     if metadata.zone() != zone
         || metadata.uid() != &resource.uid
@@ -680,6 +681,9 @@ fn validate_audio_dependency_identity(
 
 fn map_audio_effect_error(error: AudioResourceRuntimeError) -> InteractionEffectError {
     match error {
+        AudioResourceRuntimeError::InvalidSpec(reason) => {
+            InteractionEffectError::InvalidSpec(reason)
+        }
         AudioResourceRuntimeError::InvalidResource
         | AudioResourceRuntimeError::InvalidRelationship => {
             InteractionEffectError::InvalidResource
