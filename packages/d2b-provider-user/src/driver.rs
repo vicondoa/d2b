@@ -117,11 +117,7 @@ impl UserDriverError {
 
 impl core::fmt::Display for UserDriverError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str(match self.kind {
-            UserDriverErrorKind::SpecInvalid => "system-core-spec-invalid",
-            UserDriverErrorKind::UserDiscovery => "system-core-user-discovery-failed",
-            UserDriverErrorKind::DrainPending => "system-core-drain-pending",
-        })
+        formatter.write_str(self.kind.failure_kind().code())
     }
 }
 
