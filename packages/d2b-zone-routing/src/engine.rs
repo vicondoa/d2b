@@ -3367,12 +3367,16 @@ mod tests {
     }
 
     #[test]
-    fn every_reason_the_engine_can_produce_is_covered_by_this_suite() {
-        // The engine can produce every closed reason except
-        // `SiblingOrParentRouteAdvert` from an advertisement: the contract's
-        // own constructor already proves descendant strictness and next-hop
-        // agreement, so that shape cannot reach the engine. The engine still
-        // uses that reason for a withdrawal naming a route another Zone owns.
+    fn every_engine_reason_has_a_distinct_wire_label() {
+        // The closed refusal vocabulary is the 16 reasons below; each must
+        // map to its own wire label, so a collision between two reasons'
+        // labels would fail this suite. This is a distinctness assertion,
+        // not a coverage claim: producing every reason is the other tests'
+        // job, and `SiblingOrParentRouteAdvert` cannot reach the engine from
+        // an advertisement at all - the contract's own constructor already
+        // proves descendant strictness and next-hop agreement, and the
+        // engine uses that reason only for a withdrawal naming a route
+        // another Zone owns.
         let produced = [
             ZoneRouteFailClosedReason::MalformedAdvert,
             ZoneRouteFailClosedReason::UnknownParent,
