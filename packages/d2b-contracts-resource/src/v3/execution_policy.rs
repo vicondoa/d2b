@@ -20,6 +20,7 @@ use super::{
 
 #[macro_export]
 macro_rules! redacted_debug {
+    // Whole-value redaction: `Type(<redacted>)`.
     ($type:ty) => {
         impl core::fmt::Debug for $type {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -27,6 +28,85 @@ macro_rules! redacted_debug {
             }
         }
     };
+    // Field-level redaction: `Type { field: value, ... }`. Each value is
+    // rendered by one of the `redacted_debug_field_*` helpers: a closure
+    // borrowing a field renders the value itself, a closure evaluating an
+    // expression (collection length, option presence) renders its result,
+    // and a closure returning the `"<redacted>"` literal redacts the field.
+    ($type:ty, $($field:ident: $kind:ident($closure:expr)),+ $(,)?) => {
+        impl core::fmt::Debug for $type {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                let mut debug = f.debug_struct(stringify!($type));
+                $(
+                    debug.field(stringify!($field), &$kind($closure, self));
+                )+
+                debug.finish()
+            }
+        }
+    };
+    // Field-level redaction with a non-exhaustive tail: `Type { ..., .. }`.
+    ($type:ty, non_exhaustive, $($field:ident: $kind:ident($closure:expr)),+ $(,)?) => {
+        impl core::fmt::Debug for $type {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                let mut debug = f.debug_struct(stringify!($type));
+                $(
+                    debug.field(stringify!($field), &$kind($closure, self));
+                )+
+                debug.finish_non_exhaustive()
+            }
+        }
+    };
+    // Enum variant redaction: payload-bearing variants render as
+    // `Type::Variant(<redacted>)`; unit variants listed after `; plain:`
+    // render as `Type::Variant`.
+    ($type:ty, variants: $($redacted:ident),+ $(,)? ; plain: $($plain:ident),+ $(,)?) => {
+        impl core::fmt::Debug for $type {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                match self {
+                    $(
+                        Self::$redacted { .. } => f.write_str(concat!(
+                            stringify!($type),
+                            "::",
+                            stringify!($redacted),
+                            "(<redacted>)"
+                        )),
+                    )+
+                    $(
+                        Self::$plain => f.write_str(concat!(
+                            stringify!($type),
+                            "::",
+                            stringify!($plain)
+                        )),
+                    )+
+                }
+            }
+        }
+    };
+}
+
+/// Renders one `redacted_debug!` field closure's borrowed value.
+///
+/// The closure receives `&T` and returns a borrowed `&R`; the returned
+/// reference is passed to the debug formatter unchanged. The HRTB bound
+/// lets the closure borrow from its argument for any lifetime, which keeps
+/// `&self` borrows valid through the formatter call.
+pub fn redacted_debug_field_ref<T: ?Sized, R: ?Sized + core::fmt::Debug>(
+    value: impl for<'a> FnOnce(&'a T) -> &'a R,
+    this: &T,
+) -> &R {
+    value(this)
+}
+
+/// Renders one `redacted_debug!` field closure's owned value.
+
+/// The closure receives `&T` and returns an owned `R` (a collection length,
+/// an option presence, or the `"<redacted>"` literal); the returned value is
+/// passed to the debug formatter unchanged.
+pub fn redacted_debug_field_value<T: ?Sized, R: core::fmt::Debug>(
+    value: impl FnOnce(&T) -> R,
+    this: &T,
+) -> R {
+    value(this)
 }
 
 #[macro_export]

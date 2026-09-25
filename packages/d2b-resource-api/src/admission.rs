@@ -1,6 +1,7 @@
 //! Instance-bound admission witnesses owned by the native evaluator.
 
 use d2b_contracts_resource::redacted_debug;
+use d2b_contracts_resource::v3::execution_policy::redacted_debug_field_value;
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, RetryClass,
     canonical_digest,
@@ -83,17 +84,12 @@ pub(crate) struct AdmissionPermit {
     zone_policy_revision: u64,
 }
 
-impl core::fmt::Debug for AdmissionPermit {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("AdmissionPermit")
-            .field("target_count", &self.authorization.targets.len())
-            .field("authorization", &"<redacted>")
-            .field("policy_snapshot", &"<redacted>")
-            .field("authority", &"<redacted>")
-            .field("store_identity", &"<redacted>")
-            .finish()
-    }
-}
+redacted_debug!(AdmissionPermit,
+    target_count: redacted_debug_field_value(|s| s.authorization.targets.len()),
+    authorization: redacted_debug_field_value(|_| "<redacted>"),
+    policy_snapshot: redacted_debug_field_value(|_| "<redacted>"),
+    authority: redacted_debug_field_value(|_| "<redacted>"),
+    store_identity: redacted_debug_field_value(|_| "<redacted>"));
 
 impl AdmissionIssuer {
     /// Capture one allow returned by the evaluator that owns this capability.
@@ -305,22 +301,14 @@ impl AdmittedMutation {
     }
 }
 
-impl core::fmt::Debug for AdmittedMutation {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("AdmittedMutation")
-            .field("mutation_count", &self.mutations.len())
-            .field("authorization", &"<redacted>")
-            .field("policy_snapshot", &"<redacted>")
-            .field("operation", &"<redacted>")
-            .field(
-                "has_authorization_lease",
-                &self.authorization_lease.is_some(),
-            )
-            .field("authority", &"<redacted>")
-            .field("store_identity", &"<redacted>")
-            .finish()
-    }
-}
+redacted_debug!(AdmittedMutation,
+    mutation_count: redacted_debug_field_value(|s| s.mutations.len()),
+    authorization: redacted_debug_field_value(|_| "<redacted>"),
+    policy_snapshot: redacted_debug_field_value(|_| "<redacted>"),
+    operation: redacted_debug_field_value(|_| "<redacted>"),
+    has_authorization_lease: redacted_debug_field_value(|s| s.authorization_lease.is_some()),
+    authority: redacted_debug_field_value(|_| "<redacted>"),
+    store_identity: redacted_debug_field_value(|_| "<redacted>"));
 
 impl StoreAdmissionBinding {
     pub(super) fn verify(
@@ -758,5 +746,48 @@ mod tests {
                 assert!(!rendered.contains(sentinel), "{rendered}");
             }
         }
+    }
+
+    #[test]
+    fn redaction_debug_shapes_remain_byte_identical() {
+        let protected_authorization = AdmittedAuthorization {
+            zone: ZoneId::parse("probe-zone").unwrap(),
+            subject_ref: ResourceRef::parse("Provider/probe-subject").unwrap(),
+            subject_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            targets: vec![d2b_contracts_resource::v3::AdmittedAuthorizationTarget {
+                resource_type: ResourceTypeName::parse("Host").unwrap(),
+                resource_name: Some(ResourceName::parse("probe-name").unwrap()),
+                verb: d2b_contracts_resource::v3::AdmittedVerb::Delete,
+                subresource: Some("probe-payload".to_owned()),
+                execution_ref: Some(ResourceRef::parse("Process/probe-ref").unwrap()),
+            }],
+        };
+        let (issuer, _store_binding) = admission_pair();
+        let permit = issuer.record_allow(protected_authorization, snapshot());
+        assert_eq!(
+            format!("{permit:?}"),
+            "AdmissionPermit { target_count: 1, authorization: \"<redacted>\", \
+             policy_snapshot: \"<redacted>\", authority: \"<redacted>\", \
+             store_identity: \"<redacted>\" }"
+        );
+        let admitted = permit
+            .admit(
+                vec![mutation("probe-zone")],
+                StoreOperationContext {
+                    operation_id: "probe-operation".to_owned(),
+                    idempotency_key: None,
+                    correlation_id: "probe-correlation".to_owned(),
+                    trace_id: None,
+                    deadline_ms: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            format!("{admitted:?}"),
+            "AdmittedMutation { mutation_count: 1, authorization: \"<redacted>\", \
+             policy_snapshot: \"<redacted>\", operation: \"<redacted>\", \
+             has_authorization_lease: false, authority: \"<redacted>\", \
+             store_identity: \"<redacted>\" }"
+        );
     }
 }
