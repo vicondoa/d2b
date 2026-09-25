@@ -2807,7 +2807,7 @@ pub struct SpawnRunnerResponse {
 /// Canonical opaque digest carried by the broker audit join context.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(transparent)]
-pub struct CanonicalAuditDigest(pub String);
+pub struct CanonicalAuditDigest(String);
 
 impl CanonicalAuditDigest {
     /// Parse the exact lower-case SHA-256 wire spelling.
