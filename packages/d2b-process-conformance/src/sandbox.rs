@@ -15,7 +15,6 @@ use crate::{ConfigurationDigest, ProcessConformanceError, identity::WaitReapOwne
 pub struct CompiledSandbox {
     digest: ConfigurationDigest,
     domain: ExecutionDomain,
-    requires_cgroup_kill: bool,
 }
 
 /// The compiled semantic plan retained by a launch ticket so the privileged
@@ -55,11 +54,6 @@ impl CompiledSandbox {
     /// Return the resolved execution domain.
     pub const fn domain(&self) -> ExecutionDomain {
         self.domain
-    }
-
-    /// Whether intentional teardown needs the cgroup.kill proof.
-    pub const fn requires_cgroup_kill(&self) -> bool {
-        self.requires_cgroup_kill
     }
 }
 
@@ -101,7 +95,6 @@ impl SandboxCompiler {
         Ok(CompiledSandbox {
             digest: ConfigurationDigest::from_bytes(digest),
             domain,
-            requires_cgroup_kill: true,
         })
     }
 
