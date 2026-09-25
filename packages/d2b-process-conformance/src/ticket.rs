@@ -554,7 +554,6 @@ impl LaunchTicket {
         if let Some(owner_ref) = owner_ref {
             self.launch_identity = self
                 .launch_identity
-                .clone()
                 .with_owner(owner_ref.clone())
                 .map_err(|_| ProcessConformanceError::InvalidTicket)?;
             self.owner_ref = Some(owner_ref);
@@ -607,7 +606,6 @@ impl LaunchTicket {
         }
         self.launch_identity = self
             .launch_identity
-            .clone()
             .with_owner_uid(owner_uid.clone())
             .map_err(|_| ProcessConformanceError::InvalidTicket)?;
         self.owner_uid = Some(owner_uid);
@@ -628,7 +626,6 @@ impl LaunchTicket {
         }
         self.launch_identity = self
             .launch_identity
-            .clone()
             .with_owner(owner_ref.clone())
             .map_err(|_| ProcessConformanceError::InvalidTicket)?;
         self.owner_ref = Some(owner_ref);
@@ -661,7 +658,6 @@ impl LaunchTicket {
         }
         self.launch_identity = self
             .launch_identity
-            .clone()
             .with_target_ref(target_ref.clone())
             .map_err(|_| ProcessConformanceError::InvalidTicket)?;
         self.target_ref = Some(target_ref);
@@ -728,6 +724,11 @@ impl LaunchTicket {
     }
 
     /// Validate this ticket before handing it to an effect adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::InvalidTicket`] when any frozen
+    /// ticket bound or binding relation does not hold.
     pub fn validate(&self) -> Result<(), ProcessConformanceError> {
         if !matches!(
             self.process_ref.resource_type().as_str(),

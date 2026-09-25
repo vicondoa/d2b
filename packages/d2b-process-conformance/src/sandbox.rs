@@ -69,6 +69,12 @@ pub struct SandboxCompiler;
 
 impl SandboxCompiler {
     /// Compile one public SandboxSpec into an opaque digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::SandboxRejected`] when the spec
+    /// starts as root in a user domain or against a provider that does not
+    /// allow root, or when its canonical JSON rendering fails.
     pub fn compile(
         &self,
         sandbox: &SandboxSpec,

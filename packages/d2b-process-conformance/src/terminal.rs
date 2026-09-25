@@ -48,6 +48,11 @@ pub struct ProcessOutcome {
 
 impl ProcessOutcome {
     /// Construct a normal exit result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::InvalidTerminalResult`] when the
+    /// exit code is outside `0..=255`.
     pub fn exited(exit_code: i32) -> Result<Self, ProcessConformanceError> {
         if !(0..=255).contains(&exit_code) {
             return Err(ProcessConformanceError::InvalidTerminalResult);
@@ -91,6 +96,11 @@ impl ProcessOutcome {
     }
 
     /// Validate the relationship between terminal class and exit code.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::InvalidTerminalResult`] when a
+    /// clean exit carries no valid code or any other class carries one.
     pub const fn validate(self) -> Result<(), ProcessConformanceError> {
         match (self.exit_class, self.exit_code) {
             (ExitClass::CleanExit, Some(code)) if code >= 0 && code <= 255 => Ok(()),
@@ -212,6 +222,14 @@ impl BrokerTerminalResult {
     }
 
     /// Consume the result and relay it only to its matching launch ticket.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::TerminalEvidenceMismatch`] when
+    /// the evidence is not reaped or the ticket does not match the
+    /// process, operation, provider, or expected identity, and
+    /// [`ProcessConformanceError::InvalidTerminalResult`] when the outcome
+    /// itself is invalid.
     pub fn relay(self, ticket: &LaunchTicket) -> Result<ProcessOutcome, ProcessConformanceError> {
         if !self.evidence.is_reaped()
             || ticket.process_uid() != &self.process_uid

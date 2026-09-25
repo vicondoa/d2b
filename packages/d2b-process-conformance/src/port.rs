@@ -32,6 +32,12 @@ pub struct LaunchedProcess {
 
 impl LaunchedProcess {
     /// Validate the effect adapter's launch evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::IdentityUnverified`] when the
+    /// identity is zero or the observed bindings do not cover the required
+    /// set.
     pub fn validate(
         &self,
         required: &std::collections::BTreeSet<crate::identity::IdentityBinding>,
@@ -64,6 +70,12 @@ pub struct AdoptionCandidate {
 
 impl AdoptionCandidate {
     /// Validate the candidate before a pidfd may be opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::IdentityUnverified`] when the
+    /// identity is zero or the observed bindings do not cover the required
+    /// set.
     pub fn validate(
         &self,
         required: &std::collections::BTreeSet<crate::identity::IdentityBinding>,
