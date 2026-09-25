@@ -961,7 +961,6 @@ mod tests {
         ResourceKey, ResourceProvenance, StoredDesiredResource,
     };
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
         ACTIVATION_TYPE_NAME, ActivationApplicationVerifier, ActivationController,
@@ -1189,7 +1188,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = ResourceContext::new(
             row,
-            TargetHandle::Host,
             activation_spec_decoder(),
             Arc::new(manager.clone()),
             Arc::new(NullRequeue),

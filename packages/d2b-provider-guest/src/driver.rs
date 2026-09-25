@@ -1514,7 +1514,6 @@ mod tests {
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::resource::ResourceStatus;
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
         GUEST_REGISTRATIONS, GUEST_TYPE_NAME, GuestDriver, GuestDriverArgs, GuestDriverFactory,
@@ -1847,7 +1846,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             target,
-            TargetHandle::Host,
             guest_spec_decoder(),
             manager,
             requeue,

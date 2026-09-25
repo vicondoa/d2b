@@ -446,7 +446,6 @@ mod tests {
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::provider::ProviderDirectory;
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
 
     use crate::test_support::{RecordingEffects, ScriptedProbe, recording_facets};
 
@@ -619,7 +618,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             row,
-            TargetHandle::Host,
             user_spec_decoder(),
             manager,
             requeue,

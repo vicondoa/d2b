@@ -30,7 +30,6 @@ use d2b_resource_runtime::identity::{
     ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
 };
 use d2b_resource_runtime::spec_store::EnsureOutcome;
-use d2b_resource_runtime::target::TargetHandle;
 use serde_json::json;
 
 // -- the test type ----------------------------------------------------------
@@ -257,7 +256,6 @@ fn build_fixture(
     let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
     let ctx = ResourceContext::new(
         row,
-        TargetHandle::Host,
         spec_decoder(),
         Arc::new(manager.clone()),
         Arc::new(requeue),

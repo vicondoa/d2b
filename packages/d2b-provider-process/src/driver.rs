@@ -2216,7 +2216,6 @@ mod tests {
         ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
     };
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
     use parking_lot::Mutex;
     use tokio::sync::mpsc;
 
@@ -2569,7 +2568,6 @@ mod tests {
         let (requeue, requeue_rx) = RecordingRequeue::new();
         let ctx = ResourceContext::new(
             row.clone(),
-            TargetHandle::Host,
             process_spec_decoder(),
             manager,
             Arc::new(requeue.clone()),
