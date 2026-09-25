@@ -37,7 +37,7 @@ use d2b_contracts_resource::v3::identity::{
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, DEFAULT_REQUEST_DEADLINE_MS, DesiredLifecycle,
     PlacementTargetKind, ResourceBundleGenerationId, ResourceEnvelope, ResourceGeneration,
-    ResourceErrorKind, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid,
+    ResourceErrorKind, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, StateDigest,
     ZoneId, ZoneRevision,
     process::ProcessSpec,
     volume::VolumeSpec,
@@ -1550,7 +1550,7 @@ fn stored_resource_from_wire(resource: &wire::ResourceEnvelopeBytes) -> Option<S
         generation,
         revision,
         canonical_json: resource.canonical_json.clone(),
-        payload_digest: resource.payload_digest.clone(),
+        payload_digest: StateDigest::parse(resource.payload_digest.clone()).ok()?,
     })
 }
 
@@ -4101,7 +4101,7 @@ impl ZoneResourceRuntime {
             || envelope
                 .digest()
                 .map_err(|_| ResourceRuntimeError::RequestInvalid)?
-                != guest.payload_digest
+                != guest.payload_digest.as_str()
         {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
@@ -4130,7 +4130,7 @@ impl ZoneResourceRuntime {
             || provider_envelope
                 .digest()
                 .map_err(|_| ResourceRuntimeError::RequestInvalid)?
-                != provider.payload_digest
+                != provider.payload_digest.as_str()
         {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
@@ -8955,7 +8955,7 @@ fn committed_wayland_session_spec(
         || envelope
             .digest()
             .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         tracing::error!(
             zone = %zone.as_str(),
@@ -9162,7 +9162,7 @@ fn validate_committed_resource(
         || envelope
             .digest()
             .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
@@ -9349,7 +9349,7 @@ fn validate_assignment_row(
         || envelope.metadata().revision() != stored.revision
         || envelope.digest().map_err(|_| {
             ControllerAssignmentRefreshError::Failed(ResourceRuntimeError::AuthorizationUnavailable)
-        })? != stored.payload_digest
+        })? != stored.payload_digest.as_str()
     {
         return Err(ControllerAssignmentRefreshError::Failed(
             ResourceRuntimeError::AuthorizationUnavailable,
@@ -9636,7 +9636,7 @@ fn committed_provider_spec(
         || envelope
             .digest()
             .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
@@ -9654,7 +9654,7 @@ fn committed_provider_spec(
         resource.uid.clone(),
         resource.generation,
         resource.revision,
-        resource.payload_digest.clone(),
+        resource.payload_digest.as_str().to_owned(),
     ))
 }
 
@@ -12979,7 +12979,8 @@ mod tests {
             generation,
             revision: ZoneRevision::new(generation.get()),
             canonical_json: envelope.canonical_bytes().expect("canonical bytes"),
-            payload_digest: envelope.digest().expect("envelope digest"),
+            payload_digest: StateDigest::parse(envelope.digest().expect("envelope digest"))
+                .expect("a canonical envelope digest is a valid state digest"),
         }
     }
 
@@ -13178,7 +13179,11 @@ mod tests {
             generation: ResourceGeneration::new(1).expect("generation"),
             revision: ZoneRevision::new(revision),
             canonical_json: Vec::new(),
-            payload_digest: String::new(),
+            payload_digest: d2b_contracts_resource::v3::StateDigest::parse(format!(
+                "sha256:{}",
+                "0".repeat(64)
+            ))
+            .unwrap(),
         }
     }
 }

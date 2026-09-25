@@ -626,7 +626,11 @@ mod tests {
             generation: d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(1),
             canonical_json: canonical,
-            payload_digest: "sha256:test".to_owned(),
+            payload_digest: d2b_contracts_resource::v3::StateDigest::parse(format!(
+                "sha256:{}",
+                "0".repeat(64)
+            ))
+            .unwrap(),
         }
     }
 
@@ -772,7 +776,11 @@ mod tests {
             generation: d2b_contracts_resource::v3::ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(1),
             canonical_json: br#"{"metadata":{}}"#.to_vec(),
-            payload_digest: String::new(),
+            payload_digest: d2b_contracts_resource::v3::StateDigest::parse(format!(
+                "sha256:{}",
+                "0".repeat(64)
+            ))
+            .unwrap(),
         };
         let bindings = vec![(
             resource.resource_ref.to_canonical_string(),

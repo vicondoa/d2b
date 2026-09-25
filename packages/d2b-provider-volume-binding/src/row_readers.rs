@@ -120,7 +120,11 @@ mod tests {
             generation: d2b_contracts_resource::v3::ResourceGeneration::new(1).expect("generation"),
             revision: d2b_contracts_resource::v3::ZoneRevision::new(1),
             canonical_json: canonical,
-            payload_digest: "sha256:test".to_owned(),
+            payload_digest: d2b_contracts_resource::v3::StateDigest::parse(format!(
+                "sha256:{}",
+                "0".repeat(64)
+            ))
+            .expect("a zero digest is a valid state digest"),
         }
     }
 
