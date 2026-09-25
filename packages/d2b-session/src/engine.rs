@@ -1347,7 +1347,7 @@ pub async fn establish_initiator(
                 QueueClass::AttachmentControl => RecordKind::Attachment,
                 QueueClass::NamedStream => RecordKind::NamedStream,
             };
-            self.send_logical(kind, channel, frame.as_bytes().to_vec(), Vec::new())
+            self.send_logical(kind, channel, frame.into_bytes(), Vec::new())
                 .await?;
         }
         Ok(())

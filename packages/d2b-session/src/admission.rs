@@ -753,6 +753,10 @@ pub struct AuthenticatedComponentSession<C> {
 /// owning session remains in this value so its liveness and single-owner
 /// authority cannot be detached by extracting a cloneable handle.
 pub struct AuthenticatedSessionDriver {
+    /// Sync carrier for the owning session: `AuthenticatedComponentSession` is
+    /// `Send` but not `Sync`, while this driver must satisfy
+    /// `ComponentSessionDriver: Send + Sync`. The mutex is never locked; it
+    /// only makes the owner shareable across the transport lane.
     _owner: std::sync::Mutex<AuthenticatedComponentSession<()>>,
     driver: SessionDriverHandle,
 }
