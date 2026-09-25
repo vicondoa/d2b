@@ -19,7 +19,6 @@ test-support = []
 [dependencies]
 async-trait = "0.1"
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
-d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-broker = { path = "../d2b-contracts-broker", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
@@ -32,8 +31,7 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 serde.workspace = true
 tracing = "0.1"
 serde_json.workspace = true
-sha2.workspace = true
-tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
 parking_lot = "0.12"
 
 [dev-dependencies]

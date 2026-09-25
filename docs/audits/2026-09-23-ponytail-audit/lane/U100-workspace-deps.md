@@ -31,3 +31,24 @@ net: -61 deps, -61 Cargo.toml lines (15 further deps moved normal→dev-deps, 0 
 
 Receipt (for U101)lane path | net | findings count
 docs/audits/2026-09-23-ponytail-audit/lane/U100-workspace-deps.md | -61 deps,-61 Cargo.toml lines | 14 findings
+
+## U100 execution (2026-09-24)
+
+All 14 findings executed (waves U1-U7 + this pass). R4 re-verified each row at HEAD with greps before editing.
+
+- Finding 1 (tokio/ttrpc inline pins -> workspace): applied. 41 tokio rows (deps + dev) rewritten to `workspace = true` keeping each crate's feature list (incl. the 4 `default-features = false` pins, behavior-identical to the workspace row); 7 ttrpc rows rewritten. d2b-host dev tokio included.
+- Finding 2 (tokio normal -> dev, registration-test-only): applied to 11 crates (role-binding, device, zone, zone-link, quota, emergency-policy, resource-export, resource-import, command, operation, seccomp-profile), trimmed to `["macros", "rt-multi-thread"]`; role's move was already applied by U81 (its dev pin rewritten to workspace here).
+- Finding 3 (serde_json normal -> dev): applied to notification-desktop, transport-vsock, shell-pool; seccomp-profile's row already applied by U89.
+- Finding 4 (test-only normal deps -> dev): applied - d2bd d2b-provider-guest-azure-container-apps (only tests/cloud_composition.rs), volume-local d2b-contracts-provider (only tests/state.rs). Stale "realm_stubs.rs" comment dropped with the move.
+- Finding 5 (d2b-contracts-zone-session drops): applied to 19 crates (process-systemd, activation-nixos, audio-pipewire, clipboard-wayland, notification-desktop, guest-qemu-media, shell-terminal, transport-unix, process-conformance, volume-virtiofs, credential-entra, credential-managed-identity, network-local, device-gpu, device-security-key, device-tpm, device-usbip, host, telemetry) + 131 matching BUILD.bazel dep rows (U49's method); minijail's row already applied by U49.
+- Finding 6 (d2b-contracts drops): applied to 9 crates (bus, zone-routing, resource-client, resource-compiler, process-conformance, session, session-unix, resource-api, telemetry). SKIPPED for the d2b crate: claim STALE at HEAD - `d2b_contracts::` is used in production code (context.rs:18,74-75,312; debug.rs; lib.rs:38; zone_audit.rs:802).
+- Finding 7 (d2bd 5 provider deps): applied (Cargo.toml only; BUILD.bazel binary rows flagged to U101 per lane).
+- Finding 8 (broker tracing-subscriber + zbus): applied (zbus hit was a comment, verified).
+- Finding 9 (controller-toolkit serde + schemars): applied (zero serde/JsonSchema refs crate-wide).
+- Finding 10 (zero-use externals): applied 9 rows (core semver; contracts async-trait + unicode-normalization; contracts-provider unicode-normalization; resource-types serde_json; supervisor socket2; device-usbip libc; network-local sha2; process-systemd d2b-contracts-control; guest-qemu-media d2b-process-conformance). minijail serde + unsafe-local-helper d2b-core already applied by U49/U93.
+- Finding 11 (zero-use dev-deps): applied all 10 rows (core regex; contracts-resource regex; bus quote+syn; toolkit parking_lot; host ttrpc; display-wayland d2b-session; controller-toolkit serde_json; broker-composition fixture + contracts-resource).
+- Finding 12 (tokio under-declared features): applied to all 6 crates (d2bd/d2b/device-security-key +io-util; session +macros; provider +macros+rt; transport-azure-relay +macros+rt).
+- Finding 13 (getrandom): `getrandom = "0.2"` added to [workspace.dependencies]; notification-desktop, unsafe-local-helper, d2bd, d2bd-runtime switched to `workspace = true`; bus + transport-unix keep their 0.3 inline pins with a snow-constrained comment.
+- Finding 14 (same-version inline pins): applied 14 rows (serde x5, serde_json x7, base64 x2) -> `workspace = true`; the 8th serde_json row (resource-types) was dropped outright by finding 10.
+
+Gates: cargo check -p <all 75 changed crates> green; cargo test -p <all changed crates> green; cargo check --workspace green; xtask check-provider-crate-layout + blocking-census pass.

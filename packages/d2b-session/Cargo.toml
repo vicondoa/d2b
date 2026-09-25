@@ -15,13 +15,12 @@ d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-
 async-trait = "0.1"
 tracing = "0.1"
 d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
 d2b-telemetry = { path = "../d2b-telemetry", version = "0.0.0-bootstrap" }
 futures-util = "0.3"
 sha2.workspace = true
 snow = { version = "0.10", features = ["risky-raw-split"] }
-tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "rt", "sync", "time", "macros"] }
 ttrpc = { workspace = true, default-features = false, features = ["async"] }
 zeroize = "1"
 

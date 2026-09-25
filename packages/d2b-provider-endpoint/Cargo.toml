@@ -28,7 +28,7 @@ parking_lot = "0.12"
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [[test]]
 name = "registration"

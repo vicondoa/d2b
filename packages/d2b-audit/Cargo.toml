@@ -9,8 +9,8 @@ license = "Apache-2.0"
 d2b-telemetry = { path = "../d2b-telemetry", version = "0.0.0-bootstrap" }
 libc = "0.2"
 rustix = { workspace = true }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # U33: this crate does not inherit `[workspace.lints]` (it carries its own lint
 # posture), but `clippy.toml` at the workspace root arms

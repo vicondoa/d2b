@@ -19,7 +19,6 @@ d2b-provider-shell-terminal = { path = "../d2b-provider-shell-terminal", version
 d2b-provider-wayland-policy = { path = "../d2b-provider-wayland-policy", version = "0.0.0-bootstrap" }
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
-serde_json.workspace = true
 
 [dev-dependencies]
 async-trait = "0.1"

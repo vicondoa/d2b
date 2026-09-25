@@ -32,7 +32,7 @@ sha2 = { workspace = true }
 # backpressure sleep, `sync` carries the stream's round-trip guard and the
 # signal waiter's notify, and `macros` provides the terminal loop's `select!`.
 # No scheduling feature beyond the single-threaded `rt` is used.
-tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time", "io-util"] }
 
 [dev-dependencies]
 tempfile = "3"

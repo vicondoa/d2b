@@ -22,7 +22,6 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -35,7 +34,6 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
@@ -48,7 +46,7 @@ d2b_rust_binary(
             "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
             "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, cargo_only = True),
+    ],
 )
 
 d2b_rust_binary(
@@ -59,7 +57,7 @@ d2b_rust_binary(
             "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
             "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, cargo_only = True),
+    ],
 )
 
 d2b_rust_test(
@@ -93,7 +91,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_managed_identity",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -109,7 +106,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
         ":d2b_provider_credential_managed_identity",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -126,7 +122,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_managed_identity",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -142,7 +137,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_managed_identity",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -158,7 +152,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_managed_identity",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -170,7 +163,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_managed_identity",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -182,7 +174,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_managed_identity",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
@@ -202,7 +193,6 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
         ":d2b_provider_credential_managed_identity",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

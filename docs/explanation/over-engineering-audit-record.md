@@ -807,3 +807,118 @@ unchanged from the pinned case), and the privileges-json drift surface eval
 (green, `expr == expected == []`). The commit-triggered gates (Bazel `gen_*_drift`,
 `make test-policy`, the rest of the Nix surface suite, formatters, and lints(
 were not run by the closing unit; they run once after the closing unit lands.
+
+## Remediation outcomes (2026-09-24)
+
+Per-lane execution outcomes for units U2-U100, extracted from each lane file's
+trailing outcome block (`## U<wave> execution/outcome` sections). Counts are
+findings applied / skipped (stale, refused, deferred, or already landed) in the
+remediation waves U1-U7 + U100. Lanes marked "ship"/"net 0" had no executable findings.
+
+| Lane | Applied | Skipped | Outcome |
+|---|---|---|---|
+| U2 d2b-realm-core | 0 | 0 | Crate deleted via U104 (fcb241985); lane itself net 0. |
+| U3 d2b-contracts | 2 | 1 | F5+F6 applied; F1 skipped (reversed per U97/U104); F2-F4 already applied at HEAD. |
+| U4 d2b-contracts-broker | 0 | 0 | No dead surface; ledger honored. |
+| U5 d2b-contracts-control | 3 | 0 | F1-F3 applied (wire-twin families, cli_output Vm* families, terminal_wire conversions). |
+| U6 d2b-contracts-provider | 0 | 0 | No findings. |
+| U7 d2b-contracts-resource | 0 | 0 | Lane net zero; #C5/#C4/#B9 not class-(b) executable. |
+| U8 d2b-contracts-zone-session | 1 | 0 | Five dead *StatusResource projections applied. |
+| U9 d2b-resource-types | 0 | 0 | No findings. |
+| U10 d2b-resource-api | 9 | 4 | 9/13 Debug impls folded to redacted_debug!; 4 generic impls skipped (macro not byte-compatible). |
+| U11 d2b-core | 0 | 0 | Ledger honored; net -1 line. |
+| U12 d2b-bus | 1 | 0 | Relay island (7 modules) + 4 shims deleted; d2b_audit edge removed. |
+| U13 d2b-zone-routing | 1 | 0 | Redacted-Debug mechanism folded onto one crate-internal macro. |
+| U14 d2b-resource-runtime | 1 | 3 | LookupPlane/LookupDisposition/ResourceContext cuts applied; 3 skipped (incomplete/stale claims, reverted register). |
+| U15 d2b-resource-compiler | 0 | 0 | Net 0; no new findings. |
+| U16 d2b-resource-client | 1 | 0 | ZoneServiceClient alias deleted. |
+| U17 d2b-session | 1 | 0 | src/audit.rs module deleted. |
+| U18 d2b-session-unix | 1 | 0 | is_guest_control_transport deleted. |
+| U19 d2bd-runtime | 1 | 1 | host_mode.rs + dead surface applied; 1 stale claim skipped (autostart report live). |
+| U20 d2bd | 19 | 0 | All 19 named zero-caller fns + Wave6RealBoundary fixture deleted. |
+| U21 d2b-broker | 1 | 0 | zone_identity.rs deleted; finding 2 already applied at HEAD (U4 migration). |
+| U22 d2b-broker-composition | 2 | 0 | PureTransformClaim::operation() + unreachable admit branch deleted. |
+| U23 d2b-broker-fixture-handlers | 2 | 0 | Four dead exports + doc trim applied. |
+| U24 d2b-broker-fixture-syscall-surface | 0 | 0 | Nothing cut; net -0 lines, -0 deps. |
+| U25 d2b-core-controller | 1 | 3 | 12 redaction Debug impls folded; drain_guest + recovery-receipt family applied; 3 skipped (stale/live claims). |
+| U26 d2b-controller-toolkit | 0 | 0 | No findings. |
+| U27 d2b-provider-test-controller | 0 | 0 | No findings. |
+| U28 d2b-process-conformance | 0 | 0 | No-op: sole finding already landed via U61. |
+| U29 xtask | 0 | 0 | No findings executed; async-gate surface flagged as unaudited follow-up. |
+| U30 d2b-provider | 0 | 0 | Net 0. |
+| U31 d2b-provider-toolkit | 0 | 0 | Lean already; ship. |
+| U32 d2b-provider-activation-nixos | 0 | 0 | Net 0; ledger applied rows verified. |
+| U33 d2b-provider-config-nixos | 3 | 0 | ConfigServiceDescriptor chain + dead accessors + Caller variant collapse applied. |
+| U34 d2b-provider-audio-pipewire | 3 | 0 | argv.rs + telemetry.rs + manifest.rs islands deleted. |
+| U35 d2b-provider-clipboard-wayland | 0 | 0 | Lean already; ship. |
+| U36 d2b-provider-display-wayland | 7 | 0 | attribution.rs, process test-only surface, principal_release_receipt, object_forwarding, GlobalOverride, bridge test-only surface, nix feature fix. |
+| U37 d2b-provider-notification-desktop | 0 | 0 | Prior #S46-#S50 applied; F37-1 new finding not in wave scope. |
+| U38 d2b-provider-guest | 3 | 0 | ResourceUid::from_bytes + 27 re-export arms + typed validators applied. |
+| U39 d2b-provider-guest-azure-container-apps | 10 | 0 | All 10 executable findings applied. |
+| U40 d2b-provider-guest-azure-virtual-machine | 0 | 0 | Lean already; ship. |
+| U41 d2b-provider-guest-cloud-hypervisor | 0 | 0 | Ledger rows honored; no new. |
+| U42 d2b-provider-guest-qemu-media | 0 | 0 | Consistency notes only. |
+| U43 d2b-provider-shell-terminal | 0 | 1 | Finding 1 stale (types absent at HEAD); finding 2 refused per ledger. |
+| U44 d2b-provider-transport-azure-relay | 0 | 0 | No new findings. |
+| U45 d2b-provider-transport-unix | 0 | 0 | Net 0; nothing removable. |
+| U46 d2b-provider-transport-vsock | 5 | 0 | 4 U1 findings + KTD2 framing alignment applied. |
+| U47 d2b-provider-system-core | 0 | 0 | No zero-caller item found. |
+| U48 d2b-provider-process-systemd | 0 | 0 | No new findings. |
+| U49 d2b-provider-process-minijail | 3 | 0 | zone-session + serde deps dropped; PROVIDER_REF const applied. |
+| U50 d2b-provider-volume-local | 0 | 0 | Verified applied deletions; no new. |
+| U51 d2b-provider-volume-virtiofs | 7 | 0 | All 7 findings applied. |
+| U52 d2b-provider-supervisor | 0 | 0 | No new findings. |
+| U53 d2b-provider-credential-secret-service | 2 | 0 | Deadline trio + env-scan folded onto toolkit. |
+| U54 d2b-provider-credential-entra | 1 | 0 | Family findings applied; R4 divergence noted (operation_deadline kept in-crate). |
+| U55 d2b-provider-credential-managed-identity | 1 | 0 | Family findings applied. |
+| U56 d2b-provider-credential | 0 | 0 | Consumer crate; nothing to apply. |
+| U57 d2b-provider-network-local | 0 | 0 | No new findings (sha2 row owned by U100). |
+| U58 d2b-provider-device | 2 | 0 | vocabulary.rs + RecordingEffects deleted. |
+| U59 d2b-provider-device-gpu | 7 | 0 | All 7 findings applied. |
+| U60 d2b-provider-device-security-key | 0 | 0 | No dead surface beyond dossier-pinned relay. |
+| U61 d2b-provider-device-tpm | 1 | 0 | Cross-crate cut: children_have_verified_stop_proofs deleted. |
+| U62 d2b-provider-device-usbip | 0 | 0 | Net 0 new lines. |
+| U63 d2b-provider-observability-otel | 0 | 0 | No findings. |
+| U64 d2b-provider-process | 0 | 0 | None new; ship. |
+| U65 d2b-provider-host | 4 | 0 | All 4 findings applied. |
+| U66 d2b-provider-user | 3 | 0 | All 3 findings applied. |
+| U67 d2b-provider-endpoint | 3 | 0 | All 3 findings applied. |
+| U68 d2b-provider-telemetry-service | 1 | 0 | TELEMETRY_SERVICE_VERBS folded to CONVERTED_TYPE_VERBS. |
+| U69 d2b-provider-telemetry-binding | 0 | 1 | Verb-list row already applied at HEAD. |
+| U70 d2b-provider-volume | 0 | 0 | No findings. |
+| U71 d2b-provider-volume-binding | 0 | 0 | No zero-caller surface. |
+| U72 d2b-provider-wayland-policy | 0 | 0 | Lean already; ship. |
+| U73 d2b-provider-wayland-session | 0 | 0 | No findings. |
+| U74 d2b-provider-audio-service | 1 | 0 | AudioServiceDriver alias deleted. |
+| U75 d2b-provider-audio-binding | 0 | 0 | No findings. |
+| U76 d2b-provider-shell-pool | 0 | 0 | Net 0; lean at crate level. |
+| U77 d2b-provider-shell-session | 0 | 0 | Net 0; family rows already worked. |
+| U78 d2b-provider-zone | 0 | 0 | Lean already; ship. |
+| U79 d2b-provider-zone-link | 0 | 0 | Crate lean at HEAD. |
+| U80 d2b-provider-provider | 0 | 0 | No new findings. |
+| U81 d2b-provider-role | 5 | 0 | All 5 findings applied (incl. tokio -> dev-deps). |
+| U82 d2b-provider-role-binding | 0 | 0 | Ledger honored; tokio dev-move applied via U100. |
+| U83 d2b-provider-quota | 1 | 0 | Typed spec surface (373 lines) deleted. |
+| U84 d2b-provider-emergency-policy | 0 | 0 | No new evidence; ledger honored. |
+| U85 d2b-provider-resource-export | 0 | 0 | No new findings. |
+| U86 d2b-provider-resource-import | 0 | 0 | Nothing dead to cut. |
+| U87 d2b-provider-command | 0 | 0 | No findings warranted. |
+| U88 d2b-provider-operation | 0 | 0 | No findings. |
+| U89 d2b-provider-seccomp-profile | 3 | 0 | All 3 findings applied (incl. serde_json -> dev-deps). |
+| U90 d2b | 1 | 0 | Hand-rolled FIPS SHA-256 repointed to crate sha256_hex; -99 lines. |
+| U91 d2b-host | 11 | 4 | 11/17 findings applied; 3 stale + 1 deferred skipped. |
+| U92 d2b-host-activation-helper | 2 | 0 | Twin tree deleted + --no-follow-symlinks arm dropped. |
+| U93 d2b-unsafe-local-helper | 4 | 0 | with_paths/state_home/hex dedup/d2b-core dep; -35 lines, -1 dep. |
+| U94 d2b-sk-frontend | 4 | 0 | Tautological tests, write-only fields, VsockAllocatorLink::host, exit_on_error applied. |
+| U95 d2b-audit | 0 | 0 | Zero in-scope deletions. |
+| U96 d2b-telemetry | 0 | 0 | Ship; no net lines to cut. |
+| U97 shared-types-consistency | 2 | 0 | uuid-renderer (12 sites) + verb-list (11/12 copies) folded. |
+| U98 cross-crate-duplication | 3 | 3 | uuid/civil-date/hex folds applied; vsock-framing + credential-deadline + test-support-feature skipped (owned by later waves). |
+| U99 generated-xtask-authority | 5 | 0 | syn parser, authority_common fold, gen-resource-schemas + 6 nix wrappers, zone_schema emitter, generated mod.rs; 2 rows remain open. |
+| U100 workspace-deps | 13 | 1 | See lane outcome below; 1 row skipped (d2b crate d2b-contracts claim stale at HEAD). |
+
+**Totals (approximate):** 168 findings applied, 22 findings skipped across U2-U100. Net tree movement vs `origin/v3` per `git diff --shortstat`: 410 files changed, +5,435/-34,014 (~-28.6k net lines; includes U1-U7 code cuts, U99 generator cuts, and U100 dep rows; manifest-only diff is -31 lines across 7 files plus the U100 wave's ~-40 lines across 78 manifests).
+
+**Follow-ups still open (plan deferred section):**
+- **xtask async_gate audit** - PR #600 (`4d26998d8`) grew `packages/xtask/src/async_gate.rs` by ~+1,300 lines and added `packages/xtask/data/async-gate-inventory.json` after the U29/U99 lanes were written; that surface is unaudited and must be covered before acting on any xtask finding (U29 addendum + U99 lane note).
+- **labs decoration dead-code** - `labs/window-chrome/proxy` fails `cargo check -D warnings` with 7 dead-code denies in `src/decoration.rs` (VERTICAL_LABEL_* consts, draw_vertical_label, RotatedGlyph, draw_rotated_glyph); labs are out of audit scope and disposition is ADR 0047's (audit README note).

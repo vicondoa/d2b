@@ -28,14 +28,14 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror = "2"
-tokio = { version = "1", features = ["sync"] }
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 async-trait = "0.1"
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-resource-runtime = { path = "../d2b-resource-runtime", version = "0.0.0-bootstrap" }
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
 
 [features]
 test-support = []
