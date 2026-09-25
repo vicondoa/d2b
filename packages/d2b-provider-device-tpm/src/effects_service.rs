@@ -1199,7 +1199,7 @@ async fn deletion_targets_the_declared_rows() {
                 "Process/swtpm-tpm-0"
             );
         }
-        let calls = runtime.lease_calls.lock().expect("lease calls");
+        let calls = runtime.lease_calls.lock().expect("lease calls"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         assert_eq!(
             calls.as_slice(),
             [("work-vm".to_owned(), "operation-1".to_owned())],
@@ -1241,7 +1241,7 @@ async fn deletion_targets_the_declared_rows() {
             operation_id: &str,
         ) -> Result<(), TpmResourceEffectError> {
             self.lease_calls
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .expect("lease calls")
                 .push((vm_id.to_owned(), operation_id.to_owned()));
             Ok(())

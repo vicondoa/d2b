@@ -199,6 +199,12 @@ mod tests {
         );
     }
 
+    /// Remove one test socket path, ignoring absence.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn remove_socket(socket: &std::path::Path) {
+        let _ = std::fs::remove_file(socket);
+    }
+
     /// Serve one `vm.info` HTTP-over-unix exchange for the given wire state,
     /// and return the socket path the poll reads.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -252,7 +258,7 @@ mod tests {
                 api_socket: Some(socket.clone()),
             };
             assert_eq!(provider.poll_state(&target).await, expected, "state {state}");
-            let _ = std::fs::remove_file(&socket);
+            remove_socket(&socket);
         }
 
         // An unreachable socket is an error, and errors answer Unknown.
