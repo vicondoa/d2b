@@ -286,7 +286,12 @@ fn network_spec(spec: &Value) -> Result<NetworkSpec, ()> {
             spec.remove(field);
         }
     }
-    serde_json::from_value(spec_value).map_err(|_| ())
+    serde_json::from_value(spec_value).map_err(|error| {
+        tracing::warn!(
+            error = %error,
+            "stored network spec failed to parse",
+        );
+    })
 }
 
 /// The Network family's desired children: the config Volume, the net-VM
