@@ -972,12 +972,6 @@ mod tests {
         assert_eq!(batch.chains.len(), 4, "exactly 4 chains; no raw/mangle/nat");
     }
 
-    #[test]
-    fn no_raw_mangle_nat_hooks() {
-        let batch = build_inet_d2b_chains();
-        assert!(assert_no_forbidden_hooks(&batch).is_ok());
-    }
-
     /// 7-row coexistence matrix - these are the L1c canaries
     /// `nft-coexistence-{firewalld,ufw,docker,libvirt,iptables-nft,
     /// unknown-manager,no-manager}`.

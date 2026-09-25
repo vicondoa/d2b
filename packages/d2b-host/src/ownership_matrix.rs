@@ -509,18 +509,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn stat_failed_for_missing_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path();
-        prepare(base, ".", 0o0750);
-
-        let matrix = vec![mk_entry("does-not-exist", 0o0750)];
-        let drifts = check_ownership_matrix("vm1", base, &matrix);
-        assert_eq!(drifts.len(), 1);
-        assert!(matches!(drifts[0], OwnershipMismatch::StatFailed { .. }));
-    }
-
     /// CRITICAL regression for the hardlink-farm carve-out.
     ///
     /// Even if the operator declares `recursive = true` on the

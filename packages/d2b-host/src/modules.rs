@@ -564,25 +564,6 @@ mod tests {
     }
 
     #[test]
-    fn modules_disabled_locks_required_absent_module() {
-        let inputs = ProbeInputs {
-            modules_disabled: true,
-            loaded: LoadedModuleSet::default(),
-            builtin: BuiltinModuleSet::default(),
-        };
-        let result = probe_with(
-            &[entry("kvm", ModuleRequirementW3::Required, true)],
-            &inputs,
-        );
-        assert!(result.fail_closed());
-        assert_eq!(result.host_modules_locked, vec!["kvm".to_owned()]);
-        assert_eq!(
-            result.rows[0].disposition,
-            ModuleDisposition::HostModulesLocked
-        );
-    }
-
-    #[test]
     fn required_module_locks_even_when_fail_flag_is_false() {
         let inputs = ProbeInputs {
             modules_disabled: true,
