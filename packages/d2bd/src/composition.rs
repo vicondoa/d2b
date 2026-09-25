@@ -25645,8 +25645,11 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(test_root),
+        ignore = "P2fu1 software-r2 (longstanding pre-existing): same root/owner requirement as vm_start_broker_unreachable_returns_broker_error - the store-view sync enforces production bundle ownership policy (root:d2bd:0640), so the fixture must run as root. The flaky-ignore it replaced was a misdiagnosis of this same deterministic ownership failure."
+    )]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[ignore = "flaky on shared hosts; Unix socket reuse races"]
     fn vm_start_drives_supervisor_dag_in_topo_order() {
         use d2b_contracts_broker::broker_wire::{BrokerRequest, RunnerRole};
 
@@ -27099,7 +27102,6 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    #[ignore = "flaky on shared hosts; SIGKILL escalation timing varies"]
     fn vm_stop_escalates_to_sigkill_after_term_timeout() {
         let state =
             test_state_with_broker_socket(unreachable_broker_socket_path("vm-stop-sigkill"));
