@@ -71,6 +71,67 @@ pub struct DisplayDependencyEvidence {
     pub(crate) session_digest: [u8; 32],
 }
 
+/// Validate the Core-authenticated display route shape: canonical display
+/// Provider, display v3 service, UnixPeer evidence, Local locality, a User
+/// subject, nonzero generations, and a Host execution context.
+fn validate_authenticated_route_shape(
+    provider_ref: &ResourceRef,
+    service: &str,
+    evidence_class: EvidenceClass,
+    locality: Locality,
+    subject_type: &str,
+    reconnect_generation: u64,
+    provider_generation: u64,
+    host_execution_type: &str,
+    controller_generation: u64,
+) -> Result<(), &'static str> {
+    if provider_ref.to_canonical_string() != DISPLAY_PROVIDER_REF
+        || service != "d2b.display.v3"
+        || evidence_class != EvidenceClass::UnixPeer
+        || locality != Locality::Local
+        || subject_type != "User"
+        || reconnect_generation == 0
+        || provider_generation == 0
+        || host_execution_type != "Host"
+        || controller_generation == 0
+    {
+        return Err("clipboard-display-unauthenticated");
+    }
+    Ok(())
+}
+
+/// Validate the daemon-authenticated display route shape: the canonical
+/// display Provider, display v3 service, UnixPeer evidence, Local locality,
+/// a Guest subject, a committed User reference, nonzero generations, and a
+/// Host execution context.
+fn validate_committed_display_route_shape(
+    provider_ref: &ResourceRef,
+    service: &str,
+    evidence_class: EvidenceClass,
+    locality: Locality,
+    subject_type: &str,
+    user_ref_type: &str,
+    reconnect_generation: u64,
+    provider_generation: u64,
+    host_execution_type: &str,
+    controller_generation: u64,
+) -> Result<(), &'static str> {
+    if provider_ref.to_canonical_string() != DISPLAY_PROVIDER_REF
+        || service != "d2b.display.v3"
+        || evidence_class != EvidenceClass::UnixPeer
+        || locality != Locality::Local
+        || subject_type != "Guest"
+        || user_ref_type != "User"
+        || reconnect_generation == 0
+        || provider_generation == 0
+        || host_execution_type != "Host"
+        || controller_generation == 0
+    {
+        return Err("clipboard-display-unauthenticated");
+    }
+    Ok(())
+}
+
 impl DisplayDependencyEvidence {
     /// Consume a Core-authenticated display route.
     ///
@@ -87,26 +148,23 @@ impl DisplayDependencyEvidence {
         let Some(provider_generation) = route.provider_generation() else {
             return Err("clipboard-display-unauthenticated");
         };
-        if provider_ref.to_canonical_string() != DISPLAY_PROVIDER_REF
-            || route.service().as_str() != "d2b.display.v3"
-            || route.evidence_class() != EvidenceClass::UnixPeer
-            || route.locality() != Locality::Local
-            || route.subject_ref().resource_type().as_str() != "User"
-            || route.reconnect_generation().get() == 0
-            || provider_generation.get() == 0
-        {
-            return Err("clipboard-display-unauthenticated");
-        }
         let Some(host_execution_ref) = route.context().execution_ref() else {
             return Err("clipboard-display-unauthenticated");
         };
         let Some(controller_generation) = route.controller_generation() else {
             return Err("clipboard-display-unauthenticated");
         };
-        if host_execution_ref.resource_type().as_str() != "Host" || controller_generation.get() == 0
-        {
-            return Err("clipboard-display-unauthenticated");
-        }
+        validate_authenticated_route_shape(
+            provider_ref,
+            route.service().as_str(),
+            route.evidence_class(),
+            route.locality(),
+            route.subject_ref().resource_type().as_str(),
+            route.reconnect_generation().get(),
+            provider_generation.get(),
+            host_execution_ref.resource_type().as_str(),
+            controller_generation.get(),
+        )?;
         let mut digest = Sha256::new();
         digest.update(provider_ref.to_canonical_string().as_bytes());
         digest.update([0]);
@@ -147,27 +205,24 @@ impl DisplayDependencyEvidence {
         let Some(provider_generation) = route.provider_generation() else {
             return Err("clipboard-display-unauthenticated");
         };
-        if provider_ref.to_canonical_string() != DISPLAY_PROVIDER_REF
-            || route.service().as_str() != "d2b.display.v3"
-            || route.evidence_class() != EvidenceClass::UnixPeer
-            || route.locality() != Locality::Local
-            || route.subject_ref().resource_type().as_str() != "Guest"
-            || user_ref.resource_type().as_str() != "User"
-            || route.reconnect_generation().get() == 0
-            || provider_generation.get() == 0
-        {
-            return Err("clipboard-display-unauthenticated");
-        }
         let Some(host_execution_ref) = route.context().execution_ref() else {
             return Err("clipboard-display-unauthenticated");
         };
         let Some(controller_generation) = route.controller_generation() else {
             return Err("clipboard-display-unauthenticated");
         };
-        if host_execution_ref.resource_type().as_str() != "Host" || controller_generation.get() == 0
-        {
-            return Err("clipboard-display-unauthenticated");
-        }
+        validate_committed_display_route_shape(
+            provider_ref,
+            route.service().as_str(),
+            route.evidence_class(),
+            route.locality(),
+            route.subject_ref().resource_type().as_str(),
+            user_ref.resource_type().as_str(),
+            route.reconnect_generation().get(),
+            provider_generation.get(),
+            host_execution_ref.resource_type().as_str(),
+            controller_generation.get(),
+        )?;
         let mut digest = Sha256::new();
         digest.update(provider_ref.to_canonical_string().as_bytes());
         digest.update([0]);
@@ -340,6 +395,68 @@ impl core::fmt::Debug for ClipboardController {
 mod tests {
     use super::*;
 
+    const DISPLAY_SERVICE: &str = "d2b.display.v3";
+
+    fn display_provider() -> ResourceRef {
+        ResourceRef::parse(DISPLAY_PROVIDER_REF).unwrap()
+    }
+
+    fn assert_authenticated_shape_rejected(
+        provider_ref: &ResourceRef,
+        service: &str,
+        evidence_class: EvidenceClass,
+        locality: Locality,
+        subject_type: &str,
+        reconnect_generation: u64,
+        provider_generation: u64,
+        host_execution_type: &str,
+        controller_generation: u64,
+    ) {
+        assert_eq!(
+            validate_authenticated_route_shape(
+                provider_ref,
+                service,
+                evidence_class,
+                locality,
+                subject_type,
+                reconnect_generation,
+                provider_generation,
+                host_execution_type,
+                controller_generation,
+            ),
+            Err("clipboard-display-unauthenticated")
+        );
+    }
+
+    fn assert_committed_shape_rejected(
+        provider_ref: &ResourceRef,
+        service: &str,
+        evidence_class: EvidenceClass,
+        locality: Locality,
+        subject_type: &str,
+        user_ref_type: &str,
+        reconnect_generation: u64,
+        provider_generation: u64,
+        host_execution_type: &str,
+        controller_generation: u64,
+    ) {
+        assert_eq!(
+            validate_committed_display_route_shape(
+                provider_ref,
+                service,
+                evidence_class,
+                locality,
+                subject_type,
+                user_ref_type,
+                reconnect_generation,
+                provider_generation,
+                host_execution_type,
+                controller_generation,
+            ),
+            Err("clipboard-display-unauthenticated")
+        );
+    }
+
     fn dependency(provider_ref: &str) -> DisplayDependencyEvidence {
         DisplayDependencyEvidence {
             provider_ref: ResourceRef::parse(provider_ref).unwrap(),
@@ -350,6 +467,101 @@ mod tests {
             reconnect_generation: 1,
             controller_generation: 1,
             session_digest: [1; 32],
+        }
+    }
+
+    #[test]
+    fn authenticated_route_shape_accepts_only_the_canonical_user_route() {
+        assert_eq!(
+            validate_authenticated_route_shape(
+                &display_provider(),
+                DISPLAY_SERVICE,
+                EvidenceClass::UnixPeer,
+                Locality::Local,
+                "User",
+                1,
+                1,
+                "Host",
+                1,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn authenticated_route_shape_rejects_each_wrong_value() {
+        let cases: [(&str, &str, EvidenceClass, Locality, &str, u64, u64, &str, u64); 9] = [
+            ("Provider/other", DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "User", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, "d2b.other.v3", EvidenceClass::UnixPeer, Locality::Local, "User", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::EnrolledKk, Locality::Local, "User", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Remote, "User", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "Guest", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "User", 0, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "User", 1, 0, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "User", 1, 1, "Guest", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "User", 1, 1, "Host", 0),
+        ];
+        for (provider, service, evidence_class, locality, subject, reconnect, provider_generation, host, controller) in cases {
+            assert_authenticated_shape_rejected(
+                &ResourceRef::parse(provider).unwrap(),
+                service,
+                evidence_class,
+                locality,
+                subject,
+                reconnect,
+                provider_generation,
+                host,
+                controller,
+            );
+        }
+    }
+
+    #[test]
+    fn committed_display_route_shape_accepts_only_the_canonical_guest_route() {
+        assert_eq!(
+            validate_committed_display_route_shape(
+                &display_provider(),
+                DISPLAY_SERVICE,
+                EvidenceClass::UnixPeer,
+                Locality::Local,
+                "Guest",
+                "User",
+                1,
+                1,
+                "Host",
+                1,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn committed_display_route_shape_rejects_each_wrong_value() {
+        let cases: [(&str, &str, EvidenceClass, Locality, &str, &str, u64, u64, &str, u64); 10] = [
+            ("Provider/other", DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "Guest", "User", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, "d2b.other.v3", EvidenceClass::UnixPeer, Locality::Local, "Guest", "User", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::EnrolledKk, Locality::Local, "Guest", "User", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Remote, "Guest", "User", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "User", "User", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "Guest", "Guest", 1, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "Guest", "User", 0, 1, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "Guest", "User", 1, 0, "Host", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "Guest", "User", 1, 1, "Guest", 1),
+            (DISPLAY_PROVIDER_REF, DISPLAY_SERVICE, EvidenceClass::UnixPeer, Locality::Local, "Guest", "User", 1, 1, "Host", 0),
+        ];
+        for (provider, service, evidence_class, locality, subject, user_ref, reconnect, provider_generation, host, controller) in cases {
+            assert_committed_shape_rejected(
+                &ResourceRef::parse(provider).unwrap(),
+                service,
+                evidence_class,
+                locality,
+                subject,
+                user_ref,
+                reconnect,
+                provider_generation,
+                host,
+                controller,
+            );
         }
     }
 

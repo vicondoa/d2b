@@ -198,6 +198,28 @@ mod tests {
     }
 
     #[test]
+    fn cancel_picker_clears_picker_open_and_armed_states() {
+        let mut arming = FallbackArming::default();
+        assert_eq!(arming.cancel_picker(), FallbackTransition::Idle);
+        assert_eq!(arming.state(), &FallbackState::Idle);
+
+        arming.capture_target_before_picker(target(7, "firefox"));
+        assert_eq!(
+            arming.cancel_picker(),
+            FallbackTransition::Cleared(FallbackClearReason::PickerCancelled)
+        );
+        assert_eq!(arming.state(), &FallbackState::Idle);
+
+        arming.capture_target_before_picker(target(7, "firefox"));
+        arming.arm_selected_entry("entry-a".to_owned(), Instant::now(), Duration::from_secs(2));
+        assert_eq!(
+            arming.cancel_picker(),
+            FallbackTransition::Cleared(FallbackClearReason::PickerCancelled)
+        );
+        assert_eq!(arming.state(), &FallbackState::Idle);
+    }
+
+    #[test]
     fn clears_on_timeout_and_new_native_selection() {
         let mut arming = FallbackArming::default();
         let now = Instant::now();
