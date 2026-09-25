@@ -743,12 +743,17 @@ pub async fn finalize_device_tpm_controller(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::path::Path;
     use std::sync::Mutex;
+    use std::time::Duration;
 
+    use d2b_contracts_broker::broker_wire::BrokerCallerRole;
     use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance};
     use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::ResourceStatus;
+
+    use crate::facets::TpmRuntime;
 
     use super::*;
 
@@ -1058,7 +1063,7 @@ mod tests {
     /// reference through the same child surface.
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn deletion_targets_the_declared_rows() {
+async fn deletion_targets_the_declared_rows() {
         let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
         let rows = rows(&children);
         rows.delete(&rows.process_ref().unwrap()).await.expect("stop");
@@ -1069,6 +1074,227 @@ mod tests {
                 "Process/swtpm-tpm-0".to_owned(),
                 "EphemeralProcess/swtpm-flush-tpm-0".to_owned(),
             ]
+        );
+    }
+
+    /// A production port never reads another Device's uid, ref, or
+    /// execution as its own (the adoption owner fence).
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn ensure_state_volume_rejects_a_mismatched_identity() {
+        let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
+        let decision = LegacyTpmMigrationDecision::not_applicable("work-vm", "legacy-swtpm:vm:work");
+        let port = make_port(
+            crate::test_support::recording_facets(),
+            &children,
+            decision,
+            "legacy-swtpm:vm:work",
+        );
+        let uid = ResourceUid::parse(DEVICE_UID).unwrap();
+        let device = ResourceRef::parse(DEVICE_REF).unwrap();
+        let execution = ResourceRef::parse(EXECUTION_REF).unwrap();
+        for (uid, reference, execution) in [
+            (
+                ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+                device.clone(),
+                execution.clone(),
+            ),
+            (
+                uid.clone(),
+                ResourceRef::parse("Device/tpm-1").unwrap(),
+                execution.clone(),
+            ),
+            (
+                uid.clone(),
+                device.clone(),
+                ResourceRef::parse("Host/other").unwrap(),
+            ),
+        ] {
+            assert_eq!(
+                port.ensure_state_volume(&uid, &reference, &execution).await.unwrap_err(),
+                TpmResourceEffectError::StateIntegrity
+            );
+        }
+    }
+
+    /// The migration decision gates port admission closed: a decision that
+    /// still requires migration, or whose intent no longer binds, fails
+    /// before any state-directory preparation runs.
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn ensure_state_volume_fails_closed_on_requiring_or_unbound_migration() {
+        let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
+        let uid = ResourceUid::parse(DEVICE_UID).unwrap();
+        let device = ResourceRef::parse(DEVICE_REF).unwrap();
+        let execution = ResourceRef::parse(EXECUTION_REF).unwrap();
+
+        let decision = LegacyTpmMigrationDecision::adoption_required(
+            "work-vm",
+            "legacy-swtpm:vm:work",
+            "legacy-swtpm:vm:work",
+        );
+        let port = make_port(
+            crate::test_support::recording_facets(),
+            &children,
+            decision,
+            "legacy-swtpm:vm:work",
+        );
+        assert_eq!(
+            port.ensure_state_volume(&uid, &device, &execution).await.unwrap_err(),
+            TpmResourceEffectError::StateIntegrity
+        );
+
+        let decision = LegacyTpmMigrationDecision::not_applicable("work-vm", "legacy-swtpm:vm:work");
+        let port = make_port(
+            crate::test_support::recording_facets(),
+            &children,
+            decision,
+            "legacy-swtpm:vm:other",
+        );
+        assert_eq!(
+            port.ensure_state_volume(&uid, &device, &execution).await.unwrap_err(),
+            TpmResourceEffectError::StateIntegrity
+        );
+
+        // A decision that never applied passes the gates and fails closed when
+        // the trusted bundle cannot be loaded (retired-arm load-failure parity).
+        let decision = LegacyTpmMigrationDecision::not_applicable("work-vm", "legacy-swtpm:vm:work");
+        let port = make_port(
+            crate::test_support::recording_facets(),
+            &children,
+            decision,
+            "legacy-swtpm:vm:work",
+        );
+        assert_eq!(
+            port.ensure_state_volume(&uid, &device, &execution).await.unwrap_err(),
+            TpmResourceEffectError::Transient
+        );
+    }
+
+    /// The Core-issued lifecycle lease is consumed at most once per port:
+    /// the second launchable pass retires without re-consuming.
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn the_lifecycle_lease_is_consumed_at_most_once() {
+        let children = RecordingChildSurface::for_device(&ResourceRef::parse(DEVICE_REF).unwrap());
+        children.publish(STATE_VOLUME, ResourceStatus::Ready);
+        children.publish("Process/swtpm-tpm-0", ResourceStatus::Ready);
+
+        let runtime = Arc::new(RecordingRuntime::default());
+        let facets = TpmEffectFacets { runtime: runtime.clone() };
+        let decision = LegacyTpmMigrationDecision::not_applicable("work-vm", "legacy-swtpm:vm:work");
+        let port = make_port(facets, &children, decision, "legacy-swtpm:vm:work");
+        let uid = ResourceUid::parse(DEVICE_UID).unwrap();
+        let execution = ResourceRef::parse(EXECUTION_REF).unwrap();
+        let volume = ResourceRef::parse(STATE_VOLUME).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                port
+                    .request_swtpm_process(&uid, &volume, &execution)
+                    .await
+                    .unwrap()
+                    .to_canonical_string(),
+                "Process/swtpm-tpm-0"
+            );
+        }
+        let calls = runtime.lease_calls.lock().expect("lease calls");
+        assert_eq!(
+            calls.as_slice(),
+            [("work-vm".to_owned(), "operation-1".to_owned())],
+        );
+    }
+
+    /// A test-helper runtime that records lifecycle-lease consumption instead
+    /// of failing closed.
+
+    #[derive(Default)]
+    struct RecordingRuntime {
+        socket_path: PathBuf,
+        lease_calls: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TpmRuntime for RecordingRuntime {
+        fn broker_socket_path(&self) -> &Path {
+            &self.socket_path
+        }
+
+        fn caller_role(&self) -> BrokerCallerRole {
+            BrokerCallerRole::AdminUid { uid: 0 }
+        }
+
+        fn kernel_io_timeout(&self) -> Duration {
+            Duration::from_secs(5)
+        }
+
+        async fn load_bundle(
+            &self,
+        ) -> Result<Arc<BundleResolver>, TpmResourceEffectError> {
+            Err(TpmResourceEffectError::Transient)
+        }
+
+        async fn consume_lifecycle_lease(
+            &self,
+            vm_id: &str,
+            operation_id: &str,
+        ) -> Result<(), TpmResourceEffectError> {
+            self.lease_calls
+                .lock()
+                .expect("lease calls")
+                .push((vm_id.to_owned(), operation_id.to_owned()));
+            Ok(())
+        }
+    }
+
+    /// One production-port instance over scripted rows and a facet set.
+
+    fn make_port<'a>(
+        facets: TpmEffectFacets,
+        children: &'a RecordingChildSurface,
+        decision: LegacyTpmMigrationDecision,
+        intent: &str,
+    ) -> LiveTpmResourceEffectPort<'a> {
+        LiveTpmResourceEffectPort {
+            facets,
+            vm_id: VmId::new("work-vm"),
+            zone: ZONE.to_owned(),
+            migration_intent_ref: BundleOpId::new(intent),
+            migration_decision: decision,
+            rows: rows(children),
+            device_uid: ResourceUid::parse(DEVICE_UID).expect("device uid"),
+            device_ref: ResourceRef::parse(DEVICE_REF).expect("device ref"),
+            execution_ref: ResourceRef::parse(EXECUTION_REF).expect("execution ref"),
+            operation_id: "operation-1".to_owned(),
+            lifecycle_lease_consumed: tokio::sync::Mutex::new(false),
+        }
+    }
+
+    /// Malformed manager-child documents fail closed before any mutation: a
+    /// missing type, metadata.name, or spec is rejected, and an
+    /// unparseable type/name pair can never name a row.
+
+    #[test]
+    fn declared_child_rejects_malformed_documents() {
+        for document in [
+            serde_json::json!({"metadata": {"name": "a"}, "spec": {}}),
+            serde_json::json!({"type": "Volume", "spec": {}}),
+            serde_json::json!({"type": "Volume", "metadata": {"name": "a"}}),
+        ] {
+            assert_eq!(
+                declared_child(document).unwrap_err(),
+                TpmResourceEffectError::EffectRejected
+            );
+        }
+        assert_eq!(
+            declared_child(serde_json::json!({
+                "type": "Volume",
+                "metadata": {"name": ""},
+                "spec": {},
+            }))
+            .unwrap_err(),
+            TpmResourceEffectError::InvalidDevice
         );
     }
 }
