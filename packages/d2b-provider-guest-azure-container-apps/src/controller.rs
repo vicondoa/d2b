@@ -413,17 +413,19 @@ where
             };
         }
         if self.finalization_stage == AcaFinalizationStage::Stop {
-            let record = self
+            let record_id = self
                 .observed
-                .clone()
-                .ok_or(AcaControllerError::SandboxUnavailable)?;
+                .as_ref()
+                .ok_or(AcaControllerError::SandboxUnavailable)?
+                .id
+                .clone();
             let stopped = self
                 .with_lease(
                     operation_id.clone(),
                     AcaCredentialPurpose::Stop,
                     deadline_remaining_ms,
                     move |control, lease, context| async move {
-                        control.stop_sandbox(&lease, &context, &record.id).await
+                        control.stop_sandbox(&lease, &context, &record_id).await
                     },
                 )
                 .await?;
@@ -465,11 +467,17 @@ where
                 self.finalization_stage = AcaFinalizationStage::Stop;
                 return Ok(());
             }
-            let record = self
+            let record_id = self
                 .observed
-                .clone()
-                .ok_or(AcaControllerError::SandboxUnavailable)?;
-            if record.lifecycle == AcaSandboxLifecycle::Stopping {
+                .as_ref()
+                .ok_or(AcaControllerError::SandboxUnavailable)?
+                .id
+                .clone();
+            if self
+                .observed
+                .as_ref()
+                .is_some_and(|record| record.lifecycle == AcaSandboxLifecycle::Stopping)
+            {
                 return Ok(());
             }
             let outcome = self
@@ -478,7 +486,7 @@ where
                     AcaCredentialPurpose::Destroy,
                     deadline_remaining_ms,
                     move |control, lease, context| async move {
-                        control.delete_sandbox(&lease, &context, &record.id).await
+                        control.delete_sandbox(&lease, &context, &record_id).await
                     },
                 )
                 .await?;
@@ -497,8 +505,9 @@ where
         deadline_remaining_ms: u32,
         record: AcaSandboxRecord,
     ) -> Result<AcaReconcileOutcome, AcaControllerError> {
-        self.observed = Some(record.clone());
-        match record.lifecycle {
+        let lifecycle = record.lifecycle;
+        self.observed = Some(record);
+        match lifecycle {
             AcaSandboxLifecycle::Running => {
                 match self
                     .health(operation_id.clone(), deadline_remaining_ms)
@@ -524,7 +533,7 @@ where
             }
             AcaSandboxLifecycle::Suspended | AcaSandboxLifecycle::Stopped => {
                 self.phase = AcaPhase::Starting;
-                let id = record.id.clone();
+                let id = self.observed.take().expect("stored above").id;
                 let resumed = self
                     .with_lease(
                         operation_id.clone(),
@@ -564,10 +573,10 @@ where
                 }
             }
             AcaSandboxLifecycle::Creating | AcaSandboxLifecycle::Stopping => {
-                self.readiness_retry(record.lifecycle)
+                self.readiness_retry(lifecycle)
             }
             AcaSandboxLifecycle::Failed | AcaSandboxLifecycle::Unknown => {
-                self.readiness_retry(record.lifecycle)
+                self.readiness_retry(lifecycle)
             }
         }
     }
@@ -887,9 +896,10 @@ where
 fn one_candidate(
     candidates: AcaSandboxCandidates,
 ) -> Result<Option<AcaSandboxRecord>, AcaControllerError> {
-    match candidates.as_slice() {
-        [] => Ok(None),
-        [candidate] => Ok(Some(candidate.clone())),
+    let mut candidates = candidates.into_iter();
+    match (candidates.next(), candidates.next()) {
+        (Some(candidate), None) => Ok(Some(candidate)),
+        (None, None) => Ok(None),
         _ => Err(AcaControllerError::AmbiguousAdoption),
     }
 }
@@ -898,12 +908,11 @@ fn one_disk_image(
     candidates: crate::AcaDiskImageCandidates,
     generation: u64,
 ) -> Result<Option<AcaDiskImageRecord>, AcaControlError> {
-    match candidates.as_slice() {
-        [] => Ok(None),
-        [candidate] if candidate.generation == generation => Ok(Some(candidate.clone())),
-        [..] if candidates.as_slice().len() == 1 => {
-            Err(AcaControlError::new(AcaControlErrorKind::Conflict))
-        }
+    let mut candidates = candidates.into_iter();
+    match (candidates.next(), candidates.next()) {
+        (Some(candidate), None) if candidate.generation == generation => Ok(Some(candidate)),
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(AcaControlError::new(AcaControlErrorKind::Conflict)),
         _ => Err(AcaControlError::new(AcaControlErrorKind::Ambiguous)),
     }
 }

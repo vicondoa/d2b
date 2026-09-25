@@ -11,13 +11,16 @@ use crate::{EstablishedHandshake, Result, SessionError};
 
 const REPLAY_CACHE_ENTRIES: usize = 1_024;
 
+/// A protected record ready for the wire.
 pub struct ProtectedRecord(Vec<u8>);
 
 impl ProtectedRecord {
+    /// Borrow the wire bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
+    /// Consume the record into its wire bytes.
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
     }
@@ -33,6 +36,7 @@ impl fmt::Debug for ProtectedRecord {
     }
 }
 
+/// Encrypts and decrypts records for one session generation.
 pub struct RecordProtector {
     transport: TransportState,
     limits: LimitProfile,
@@ -43,6 +47,7 @@ pub struct RecordProtector {
 }
 
 impl RecordProtector {
+    /// Construct a protector from an established handshake.
     pub fn from_handshake(handshake: EstablishedHandshake) -> Self {
         Self {
             transport: handshake.transport,
@@ -59,6 +64,14 @@ impl RecordProtector {
         self.generation
     }
 
+    /// Encrypt one record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::ArithmeticOverflow`] on length overflow,
+    /// [`SessionErrorCode::QueueBackpressure`] when the ciphertext exceeds the
+    /// configured bound, and [`SessionErrorCode::AuthenticationFailed`] when the
+    /// transport refuses the message.
     pub fn protect(
         &mut self,
         kind: RecordKind,
@@ -104,6 +117,16 @@ impl RecordProtector {
         Ok(ProtectedRecord(wire))
     }
 
+    /// Decrypt and validate one received record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::RecordTruncated`] or
+    /// [`SessionErrorCode::RecordMalformed`] for malformed wire shapes,
+    /// [`SessionErrorCode::RecordReplay`] for a replayed ciphertext,
+    /// [`SessionErrorCode::AuthenticationFailed`] when decryption fails,
+    /// [`SessionErrorCode::GenerationMismatch`] for a foreign generation, and
+    /// [`SessionErrorCode::RecordOutOfOrder`] when the sequence is not accepted.
     pub fn unprotect(&mut self, wire: &[u8]) -> Result<(RecordHeader, Vec<u8>)> {
         if wire.len() < RECORD_LENGTH_BYTES as usize {
             return Err(SessionError::new(SessionErrorCode::RecordTruncated));

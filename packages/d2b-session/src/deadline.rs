@@ -4,6 +4,7 @@ use d2b_contracts_zone_session::v3::component_session::{RequestEnvelope, Session
 
 use crate::{Result, SessionError};
 
+/// Budgets one request's remaining time across wall-clock and monotonic sources.
 pub struct DeadlineBudget {
     envelope: RequestEnvelope,
     service_max_lifetime_ms: u64,
@@ -11,6 +12,12 @@ pub struct DeadlineBudget {
 }
 
 impl DeadlineBudget {
+    /// Admit a request envelope against the service lifetime and peer timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns the envelope admission error when the request is already expired,
+    /// and [`SessionErrorCode::ArithmeticOverflow`] when the deadline overflows.
     pub fn admit(
         envelope: RequestEnvelope,
         local_wall_clock_ms: u64,
@@ -34,10 +41,17 @@ impl DeadlineBudget {
         })
     }
 
+    /// Return the absolute expiry in unix milliseconds.
     pub fn absolute_expiry_unix_ms(&self) -> u64 {
         self.envelope.expires_at_unix_ms
     }
 
+    /// Return the remaining budget in nanoseconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::DeadlineExpired`] when the monotonic deadline
+    /// passed or the envelope admits no remaining time.
     pub fn remaining_nanos(
         &self,
         local_wall_clock_ms: u64,
@@ -61,6 +75,11 @@ impl DeadlineBudget {
             .map_err(|_| SessionError::new(SessionErrorCode::DeadlineExpired))
     }
 
+    /// Build a ttrpc context carrying the remaining timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionErrorCode::DeadlineExpired`] when the budget is exhausted.
     pub fn ttrpc_context(
         &self,
         local_wall_clock_ms: u64,
@@ -73,6 +92,7 @@ impl DeadlineBudget {
         ))
     }
 
+    /// Normalize a peer timeout: non-positive values become `None`.
     pub fn peer_timeout(timeout_nano: i64) -> Option<u64> {
         u64::try_from(timeout_nano).ok().filter(|value| *value != 0)
     }
