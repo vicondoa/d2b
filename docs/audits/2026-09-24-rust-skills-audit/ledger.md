@@ -10,14 +10,22 @@ Every id must appear exactly once and end `applied`, `already-fixed`, `policy-co
 
 ## Baseline record (gate set at the untouched head)
 
-Filled by wave 0 from `.scratch/w0-baseline/` runs; see the wave-0 commit message for the recorded result.
+Measured at `147a536a0` in a dedicated gates worktree before any wave-0 fix landed. The whole gate set is green at the baseline, so a wave's bar is to stay green rather than to improve a red gate; any red a wave introduces is its own.
 
 | gate | command | result at baseline | attribution |
 | --- | --- | --- | --- |
-| security scan | `D2B_SCAN_BASE_SHA=6ebdd4cec tests/tools/security-scan.sh` | pending | - |
-| blocking census | `make check-census` | pending | - |
-| Layer-1 aggregate | `make check` | pending | - |
-| host integration | `make test-host-integration` | pending | - |
+| security scan | `D2B_SCAN_BASE_SHA=6ebdd4cec tests/tools/security-scan.sh` | pass (clean) | none |
+| blocking census | `make check-census` | pass (no crate above its committed baseline) | none |
+| Layer-1 aggregate | `make check` | pass (988 of 988 tests) | none |
+| host integration | `make test-host-integration` | pass (11 of 11 vmChecks) | Attic closure-upload warning only, non-fatal |
+
+## Wave gates
+
+Each wave closes on the same gate set, run on the wave's integrated head in the gates worktree. `base` is the commit the scan measures changed lines against.
+
+| wave | head | security scan | census | Layer-1 aggregate | host integration | notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| U1 | `628e27af1` | pending | pending | pending | pending | - |
 
 ## Findings (965 rows)
 
