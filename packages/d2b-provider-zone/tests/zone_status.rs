@@ -1,6 +1,6 @@
 use d2b_contracts_resource::v3::{ResourcePhase, Timestamp};
 use d2b_contracts_zone_session::v3::{ZoneHandlerName, ZoneHandlerPhase, ZoneHandlerStatus};
-use d2b_provider_zone::zone_status::{
+use d2b_provider_zone::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
 
