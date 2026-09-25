@@ -276,7 +276,7 @@ impl SeqpacketSocket {
         let payload_capacity = usize::try_from(limits.protected_ciphertext_bytes)
             .map_err(|_| UnixSessionError::PayloadLimit)?;
         let mut ready = self.io.readable().await.map_err(io_error)?;
-        let mut packets = Vec::new();
+        let mut packets = Vec::with_capacity(fairness_budget);
         while packets.len() < fairness_budget {
             match ready.try_io(|inner| recv_one(inner.get_ref(), payload_capacity, capacity.bytes))
             {
@@ -326,7 +326,7 @@ impl SeqpacketSocket {
         }
         let mut ready = self.io.writable().await.map_err(io_error)?;
         let mut sent = 0;
-        let mut sent_packets = Vec::new();
+        let mut sent_packets = Vec::with_capacity(fairness_budget);
         while sent < fairness_budget {
             let Some(packet) = queue.front() else {
                 return Ok(SendBurst {

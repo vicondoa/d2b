@@ -548,9 +548,9 @@ impl UnixSeqpacketTransport {
         if attachments.len() > usize::from(self.policy.max_per_packet) {
             return Err(UnixSessionError::CreditExceeded);
         }
-        let mut files = Vec::new();
-        let mut identities: Vec<(ObjectIdentity, bool)> = Vec::new();
-        let mut retained_receive_credits = Vec::new();
+        let mut files = Vec::with_capacity(attachments.len());
+        let mut identities: Vec<(ObjectIdentity, bool)> = Vec::with_capacity(attachments.len());
+        let mut retained_receive_credits = Vec::with_capacity(attachments.len());
         for attachment in attachments {
             let descriptor = attachment
                 .descriptor()
