@@ -1445,6 +1445,7 @@ dependencies = [
  "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-core-controller",
+ "d2b-resource-client",
  "d2b-session",
  "d2b-session-unix",
  "serde",
