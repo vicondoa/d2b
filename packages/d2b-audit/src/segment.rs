@@ -167,7 +167,7 @@ impl SegmentWriter {
     /// # Examples
     ///
     /// ```
-    /// use d2b_audit::SegmentWriter;
+    /// use d2b_audit::segment::SegmentWriter;
     ///
     /// let directory = std::env::temp_dir().join(format!(
     ///     "d2b-audit-segment-writer-doc-{}",

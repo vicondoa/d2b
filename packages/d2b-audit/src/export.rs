@@ -67,7 +67,7 @@ pub fn export_segments(directory: impl AsRef<Path>) -> io::Result<Vec<ExportLine
 /// Export a lexical segment range while validating the selected chain.
 ///
 /// `after` and `before` are exclusive filename boundaries. They accept only
-/// the basename shape produced by [`SegmentWriter`](crate::SegmentWriter);
+/// the basename shape produced by [`SegmentWriter`](crate::segment::SegmentWriter);
 /// accepting a path here would turn an export filter into a filesystem
 /// traversal surface.
 ///

@@ -435,7 +435,8 @@ impl AuditRecord {
     /// # Examples
     ///
     /// ```
-    /// use d2b_audit::{AuditRecord, AuditRecordFields, ProcessEffectFields, genesis_hash};
+    /// use d2b_audit::record_types::{AuditRecord, AuditRecordFields, ProcessEffectFields};
+    /// use d2b_audit::genesis_hash;
     ///
     /// let record = AuditRecord::new(
     ///     1,
