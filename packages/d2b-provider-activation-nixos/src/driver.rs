@@ -423,7 +423,7 @@ impl ResourceDriverFactory for ActivationDriverFactory {
 // ---------------------------------------------------------------------------
 
 /// One `NixosGeneration` resource's driver.
-pub struct ActivationDriver {
+pub(crate) struct ActivationDriver {
     zone: String,
     effects: Arc<dyn ActivationDriverEffects>,
     verifier: Arc<dyn ActivationApplicationVerifier>,
