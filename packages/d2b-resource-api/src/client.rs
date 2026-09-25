@@ -110,7 +110,7 @@ where
     pub async fn scoped_commit_batch(
         &self,
         request: wire::CommitBatchRequest,
-        scoped_mutations: Vec<ScopedResourceMutation>,
+        scoped_mutations: &[ScopedResourceMutation],
     ) -> wire::CommitBatchResponse {
         self.service
             .commit_scoped_batch(self.trusted(request), scoped_mutations)
