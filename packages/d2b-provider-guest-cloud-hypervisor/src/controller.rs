@@ -15,7 +15,7 @@ use d2b_core_controller::{ResourceKey, ObservedChild, OwnerIndex, OwnerLimits};
 
 use crate::{
     adoption::ProcessAdoptionStatus,
-    bootstrap_graph::{BootstrapGraph, DependencyReadiness, GuestChildGraphPlan},
+    bootstrap_graph::{BootstrapGraph, DependencyReadiness, GuestChildGraphPlan, VmmReadinessSnapshot},
     descriptor::{
         GuestSetupDescriptor, GuestSetupDescriptorError, GuestSetupDescriptorVerifier,
         VerifiedGuestSetupDescriptor,
@@ -659,13 +659,13 @@ impl GuestDependencySnapshot {
         let devices_ready = self.devices_ready(graph);
         let networks_ready = self.networks_ready(graph);
         let volumes_ready = self.volumes_ready(graph);
-        let eligibility = graph.vmm_lifecycle(
+        let eligibility = graph.vmm_lifecycle(VmmReadinessSnapshot {
             devices_ready,
             networks_ready,
             volumes_ready,
-            self.bindings_ready(graph),
-            self.setup_ready,
-        );
+            bindings_ready: self.bindings_ready(graph),
+            setup_ready: self.setup_ready,
+        });
         let mut conditions = Vec::new();
         if !devices_ready {
             conditions.push(GuestCondition::DeviceDependencyNotReady);
