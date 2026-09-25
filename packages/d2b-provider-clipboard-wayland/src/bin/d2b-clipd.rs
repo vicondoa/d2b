@@ -198,7 +198,9 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
 
     // ── Niri IPC event stream thread ─────────────────────────────────────────
     if let Some(ref socket) = niri_socket {
-        spawn_niri_event_thread(socket.clone(), niri_tx);
+        if let Err(error) = spawn_niri_event_thread(socket.clone(), niri_tx) {
+            log::error!("d2b-clipd: failed to spawn niri event thread: {error}");
+        }
     } else {
         log::warn!("d2b-clipd: NIRI_SOCKET not set; focused-window attribution unavailable");
     }
@@ -3500,7 +3502,7 @@ enum NiriMessage {
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn spawn_niri_event_thread(socket: PathBuf, tx: mpsc::Sender<NiriMessage>) {
+fn spawn_niri_event_thread(socket: PathBuf, tx: mpsc::Sender<NiriMessage>) -> Result<(), std::io::Error> {
     std::thread::Builder::new()
         .name("d2b-clipd-niri".to_owned())
         .spawn(move || {
@@ -3542,8 +3544,8 @@ fn spawn_niri_event_thread(socket: PathBuf, tx: mpsc::Sender<NiriMessage>) {
                     }
                 }
             }
-        })
-        .expect("niri thread spawn");
+        })?;
+    Ok(())
 }
 
 fn drain_niri_channel(
