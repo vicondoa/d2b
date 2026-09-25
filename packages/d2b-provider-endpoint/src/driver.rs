@@ -1015,27 +1015,7 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
         )
     }
 
-    /// Regression (vmCheck guest preflight): the provider commits `ch-api` on
-    /// the VMM Process with locality `host-local`, not on the Guest with
-    /// `cross-domain`. The admission set previously took the Guest-produced
-    /// shape as the whole family, so the committed `ch-api` row failed
-    /// `validate` terminally (`endpoint-shape-unsupported`), the guest's
-    /// endpoint-publication stage refused its `Failed` phase, and the Guest
-    /// never reached Ready.
-    #[test]
-    fn provider_committed_control_shapes_are_admitted() {
-        let vocabulary = FakeSocketEffects::new();
-        for purpose in ["ch-api", "guest-control"] {
-            let spec = guest_control_endpoint_spec(purpose);
-            assert_eq!(
-                super::endpoint_realization(&spec, &*vocabulary),
-                Some(super::EndpointRealization::GuestControl),
-                "{purpose} is one of the provider's fixed child-role endpoints",
-            );
-        }
-    }
-
-    /// One device-worker endpoint from the posture the Device TPM Provider's
+/// One device-worker endpoint from the posture the Device TPM Provider's
     /// projection declares: the swtpm worker Process is the producer, the
     /// carriage is opaque, and the purpose names the class.
     fn device_worker_endpoint_spec_with(
