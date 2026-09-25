@@ -139,10 +139,10 @@ fn run(args_iter: impl IntoIterator<Item = String>) -> Result<(), String> {
         .map(PathBuf::from);
     let picker = args.picker.clone().or(picker_from_config);
     let bridge_peers = parse_bridge_peers(&config_json)?;
-    if let Some(p) = &args.picker
+    if let Some(p) = &picker
         && !p.is_absolute()
     {
-        return Err(format!("--picker path must be absolute: {}", p.display()));
+        return Err(format!("picker path must be absolute: {}", p.display()));
     }
     if !args.bridge_root.is_absolute() {
         return Err(format!(
