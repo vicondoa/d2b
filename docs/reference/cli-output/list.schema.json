@@ -7,6 +7,7 @@
   },
   "definitions": {
     "ListItemOutputV2": {
+      "description": "One `d2b vm list` row.",
       "type": "object",
       "required": [
         "graphics",
@@ -114,6 +115,7 @@
       "additionalProperties": false
     },
     "QemuMediaRegistryStatus": {
+      "description": "The media registry's convergence state for one source.",
       "type": "object",
       "required": [
         "state"
@@ -132,6 +134,7 @@
       "additionalProperties": false
     },
     "QemuMediaRunnerStatus": {
+      "description": "Runner-side QMP media state for one VM.",
       "type": "object",
       "required": [
         "preContProgress",
@@ -158,6 +161,7 @@
       "additionalProperties": false
     },
     "QemuMediaSourceStatus": {
+      "description": "One attached media source's status.",
       "type": "object",
       "required": [
         "format",
@@ -190,6 +194,7 @@
       "additionalProperties": false
     },
     "QemuMediaStatus": {
+      "description": "Optional guest-media status attached to a VM row.",
       "type": "object",
       "required": [
         "firmwareMode",
@@ -213,6 +218,7 @@
       "additionalProperties": false
     },
     "VmAutostartPosture": {
+      "description": "Whether a VM is set to autostart, with the reason.",
       "type": "object",
       "required": [
         "mode",

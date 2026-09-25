@@ -798,6 +798,7 @@
       ]
     },
     "AuditRequest": {
+      "description": "`audit` query: filter, format, cursor, and page limit.",
       "type": "object",
       "properties": {
         "cursor": {
@@ -877,6 +878,7 @@
       "additionalProperties": false
     },
     "AuditSelector": {
+      "description": "Audit entry filters: scope, severity, and outcome facets.",
       "type": "object",
       "properties": {
         "env": {
@@ -960,6 +962,7 @@
       "additionalProperties": false
     },
     "BridgeCheck": {
+      "description": "One bridge-presence check result.",
       "type": "object",
       "required": [
         "bridge",
@@ -4500,31 +4503,31 @@
       "additionalProperties": false
     },
     "FdKind": {
-      "description": "The kernel kind one forwarded descriptor must present.from\n\nThe kind is declared per descriptor on the wire,index-aligned with the fd-index declarations,and validated against the received descriptor's fstat mode on the receiving leg;a mismatch is the [`FD_LEG`] refusal。",
+      "description": "The kernel kind one forwarded descriptor must present. From\n\nThe kind is declared per descriptor on the wire, index-aligned with the fd-index declarations, and validated against the received descriptor's fstat mode on the receiving leg; a mismatch is the [`FD_LEG`] refusal.",
       "oneOf": [
         {
-          "description": "A FIFO (pipe) end。",
+          "description": "A FIFO (pipe) end.",
           "type": "string",
           "enum": [
             "fifo"
           ]
         },
         {
-          "description": "A socket。",
+          "description": "A socket.",
           "type": "string",
           "enum": [
             "socket"
           ]
         },
         {
-          "description": "A character device。",
+          "description": "A character device.",
           "type": "string",
           "enum": [
             "char-device"
           ]
         },
         {
-          "description": "A block device。",
+          "description": "A block device.",
           "type": "string",
           "enum": [
             "block-device"
@@ -4538,14 +4541,14 @@
           ]
         },
         {
-          "description": "A regular file。",
+          "description": "A regular file.",
           "type": "string",
           "enum": [
             "regular"
           ]
         },
         {
-          "description": "A directory。",
+          "description": "A directory.",
           "type": "string",
           "enum": [
             "directory"
@@ -5148,6 +5151,7 @@
       "minimum": 0.0
     },
     "ListEntry": {
+      "description": "One `list` result row.",
       "type": "object",
       "required": [
         "graphics",
@@ -5265,6 +5269,7 @@
       "additionalProperties": false
     },
     "ListRequest": {
+      "description": "`list` query filters: an optional environment and VM name.",
       "type": "object",
       "properties": {
         "env": {
@@ -6507,6 +6512,7 @@
       ]
     },
     "PublicVmServices": {
+      "description": "The observed service-state map of one VM.",
       "type": "object",
       "required": [
         "d2b",
@@ -6892,6 +6898,7 @@
       "additionalProperties": false
     },
     "QemuMediaRegistryStatus": {
+      "description": "The media registry's convergence state for one source.",
       "type": "object",
       "required": [
         "state"
@@ -6910,6 +6917,7 @@
       "additionalProperties": false
     },
     "QemuMediaRunnerStatus": {
+      "description": "Runner-side QMP media state for one VM.",
       "type": "object",
       "required": [
         "preContProgress",
@@ -6936,6 +6944,7 @@
       "additionalProperties": false
     },
     "QemuMediaSourceStatus": {
+      "description": "One attached media source's status.",
       "type": "object",
       "required": [
         "format",
@@ -6968,6 +6977,7 @@
       "additionalProperties": false
     },
     "QemuMediaStatus": {
+      "description": "Optional guest-media status attached to a VM row.",
       "type": "object",
       "required": [
         "firmwareMode",
@@ -7294,6 +7304,7 @@
       "additionalProperties": false
     },
     "RuntimeSummary": {
+      "description": "The active runner plus its capability and service summaries.",
       "type": "object",
       "required": [
         "detail"
@@ -7835,6 +7846,7 @@
       "additionalProperties": false
     },
     "StatusRequest": {
+      "description": "`status` query: optionally check bridges and select one VM.",
       "type": "object",
       "properties": {
         "checkBridges": {
@@ -7968,6 +7980,7 @@
       "additionalProperties": false
     },
     "TerminalSize": {
+      "description": "Terminal dimensions in rows and columns.",
       "type": "object",
       "required": [
         "cols",
@@ -7975,11 +7988,13 @@
       ],
       "properties": {
         "cols": {
+          "description": "Column count.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
         },
         "rows": {
+          "description": "Row count.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -7988,10 +8003,22 @@
       "additionalProperties": false
     },
     "TerminalStream": {
-      "type": "string",
-      "enum": [
-        "stdout",
-        "stderr"
+      "description": "Which output stream a terminal read targets.",
+      "oneOf": [
+        {
+          "description": "Standard output.",
+          "type": "string",
+          "enum": [
+            "stdout"
+          ]
+        },
+        {
+          "description": "Standard error.",
+          "type": "string",
+          "enum": [
+            "stderr"
+          ]
+        }
       ]
     },
     "UsbProbeEntryKind": {
@@ -8281,6 +8308,7 @@
       ]
     },
     "UsbipProbeEntry": {
+      "description": "One USBIP probe entry describing a bus, its owner, and the next action.",
       "type": "object",
       "required": [
         "busId",
@@ -8291,9 +8319,11 @@
       ],
       "properties": {
         "busId": {
+          "description": "Physical bus id probed.",
           "type": "string"
         },
         "candidateBusIds": {
+          "description": "Alternate bus ids that match the declaration.",
           "type": "array",
           "items": {
             "type": "string"
@@ -8317,9 +8347,11 @@
           ]
         },
         "env": {
+          "description": "Environment the VM belongs to.",
           "type": "string"
         },
         "followUpCommand": {
+          "description": "Command the operator should run next.",
           "type": [
             "string",
             "null"
@@ -8351,15 +8383,18 @@
           "$ref": "#/definitions/UsbProbeEntryKind"
         },
         "lockPath": {
+          "description": "Broker claim lock path.",
           "type": "string"
         },
         "mediaRef": {
+          "description": "Media resource bound to the slot, if any.",
           "type": [
             "string",
             "null"
           ]
         },
         "ownerVm": {
+          "description": "VM currently holding the claim, if any.",
           "type": [
             "string",
             "null"
@@ -8372,19 +8407,26 @@
           }
         },
         "slot": {
+          "description": "Attached USB slot, if any.",
           "type": [
             "string",
             "null"
           ]
         },
         "sourceKind": {
+          "description": "How the device was discovered.",
           "type": [
             "string",
             "null"
           ]
         },
         "status": {
-          "$ref": "#/definitions/UsbipProbeStatus"
+          "description": "Claim status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipProbeStatus"
+            }
+          ]
         },
         "topologyPolicy": {
           "default": {
@@ -8398,6 +8440,7 @@
           ]
         },
         "vm": {
+          "description": "VM this entry describes.",
           "type": "string"
         }
       },
@@ -8616,6 +8659,7 @@
       "type": "string"
     },
     "VmAutostartPosture": {
+      "description": "Whether a VM is set to autostart, with the reason.",
       "type": "object",
       "required": [
         "mode",
@@ -8632,6 +8676,7 @@
       "additionalProperties": false
     },
     "VmLifecycle": {
+      "description": "The lifecycle envelope of one VM.",
       "type": "object",
       "required": [
         "pendingRestart",
@@ -8721,6 +8766,7 @@
       ]
     },
     "VmStatus": {
+      "description": "One `status` VM row.",
       "type": "object",
       "required": [
         "bridgeChecks",
@@ -8982,6 +9028,7 @@
       "additionalProperties": false
     },
     "WorkloadListArgs": {
+      "description": "Workload-list query; the realm filters the result.",
       "type": "object",
       "properties": {
         "realm": {

@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "UsbProbeOutputV1",
+  "description": "`usb probe` output: the command echo plus one entry per probed device.",
   "type": "object",
   "required": [
     "command",
@@ -174,6 +175,7 @@
       ]
     },
     "UsbipProbeEntry": {
+      "description": "One USBIP probe entry describing a bus, its owner, and the next action.",
       "type": "object",
       "required": [
         "busId",
@@ -184,9 +186,11 @@
       ],
       "properties": {
         "busId": {
+          "description": "Physical bus id probed.",
           "type": "string"
         },
         "candidateBusIds": {
+          "description": "Alternate bus ids that match the declaration.",
           "type": "array",
           "items": {
             "type": "string"
@@ -210,9 +214,11 @@
           ]
         },
         "env": {
+          "description": "Environment the VM belongs to.",
           "type": "string"
         },
         "followUpCommand": {
+          "description": "Command the operator should run next.",
           "type": [
             "string",
             "null"
@@ -244,15 +250,18 @@
           "$ref": "#/definitions/UsbProbeEntryKind"
         },
         "lockPath": {
+          "description": "Broker claim lock path.",
           "type": "string"
         },
         "mediaRef": {
+          "description": "Media resource bound to the slot, if any.",
           "type": [
             "string",
             "null"
           ]
         },
         "ownerVm": {
+          "description": "VM currently holding the claim, if any.",
           "type": [
             "string",
             "null"
@@ -265,19 +274,26 @@
           }
         },
         "slot": {
+          "description": "Attached USB slot, if any.",
           "type": [
             "string",
             "null"
           ]
         },
         "sourceKind": {
+          "description": "How the device was discovered.",
           "type": [
             "string",
             "null"
           ]
         },
         "status": {
-          "$ref": "#/definitions/UsbipProbeStatus"
+          "description": "Claim status.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UsbipProbeStatus"
+            }
+          ]
         },
         "topologyPolicy": {
           "default": {
@@ -291,6 +307,7 @@
           ]
         },
         "vm": {
+          "description": "VM this entry describes.",
           "type": "string"
         }
       },

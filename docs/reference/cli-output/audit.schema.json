@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AuditOutputV2",
+  "description": "Full `d2b audit` output: host posture plus per-VM sidecar evidence.",
   "type": "object",
   "required": [
     "autoUpgrade_commits_lock",
@@ -83,6 +84,7 @@
   "additionalProperties": false,
   "definitions": {
     "AuditBridgeIsolationOutputV2": {
+      "description": "One bridge's isolation audit evidence.",
       "type": "object",
       "required": [
         "bridge",
@@ -107,6 +109,7 @@
       "additionalProperties": false
     },
     "AuditSidecarsOutputV2": {
+      "description": "One VM's gpu/snd sidecar audit evidence.",
       "type": "object",
       "required": [
         "gpu_active",
@@ -131,6 +134,7 @@
       "additionalProperties": false
     },
     "AuditSshOutputV2": {
+      "description": "One VM's sshd password-authentication audit evidence.",
       "type": "object",
       "properties": {
         "PasswordAuthentication": {
@@ -143,6 +147,7 @@
       "additionalProperties": false
     },
     "AuditUsbipEnvOutputV2": {
+      "description": "One environment's usbipd audit evidence.",
       "type": "object",
       "required": [
         "backend_active",
@@ -163,6 +168,7 @@
       "additionalProperties": false
     },
     "AuditVirtiofsdOutputV2": {
+      "description": "One VM's virtiofsd audit evidence.",
       "type": "object",
       "required": [
         "caps_dropped",
