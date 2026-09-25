@@ -10077,7 +10077,7 @@ fn public_update_finalizers_request(
     let uid = request
         .get("uid")
         .and_then(Value::as_str)
-        .map(|value| ResourceUid::parse(value))
+        .map(ResourceUid::parse)
         .transpose()
         .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
     let expected_revision =
@@ -10119,7 +10119,7 @@ fn public_delete_request_from_current(
     let mut uid = request
         .get("uid")
         .and_then(Value::as_str)
-        .map(|value| ResourceUid::parse(value))
+        .map(ResourceUid::parse)
         .transpose()
         .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
     if uid.is_none() && expected_revision.is_some() {

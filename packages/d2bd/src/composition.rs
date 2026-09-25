@@ -3256,7 +3256,7 @@ fn production_process_resource_port(
         .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
-        .and_then(|plane| plane.zone(&zone).ok())
+        .and_then(|plane| plane.zone(zone).ok())
         .and_then(|runtime| runtime.process_resource_client())
     else {
         return RoutedProcessResourcePort(None);
@@ -21270,7 +21270,7 @@ fn public_qemu_media_status(
                 .sources
                 .iter()
                 .filter(|source| source.vm == vm)
-                .map(|source| qemu_media_source_status(source))
+                .map(qemu_media_source_status)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
