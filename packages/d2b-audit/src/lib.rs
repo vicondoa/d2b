@@ -4,7 +4,8 @@
 
 pub mod evidence_chain;
 pub mod export;
-pub mod generated;
+mod generated;
+pub use generated::audit_catalog::admits_mutation_verb;
 pub mod hash_chain;
 pub mod operation;
 pub mod rate_limit;
