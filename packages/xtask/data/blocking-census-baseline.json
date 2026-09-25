@@ -6255,7 +6255,7 @@
       "std::fs::read": 0,
       "std::fs::read_dir": 0,
       "std::fs::read_link": 0,
-      "std::fs::read_to_string": 9,
+      "std::fs::read_to_string": 11,
       "std::fs::remove_dir_all": 1,
       "std::fs::remove_file": 0,
       "std::fs::rename": 0,
