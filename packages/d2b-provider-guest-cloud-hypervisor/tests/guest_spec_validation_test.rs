@@ -103,15 +103,6 @@ fn descriptor_semantic_tokens_are_exact() {
         .is_err()
     );
     assert!(BootstrapHandoff::new("allocator", 30_000).is_err());
-    assert!(
-        d2b_provider_guest_cloud_hypervisor::identity::derive_private_runtime_scope(
-            &ResourceUid::parse("223e4567-e89b-42d3-a456-426614174000").unwrap(),
-            &ResourceUid::parse("323e4567-e89b-42d3-a456-426614174000").unwrap(),
-            "socket",
-            ResourceGeneration::new(1).unwrap(),
-        )
-        .is_err()
-    );
 }
 
 #[test]

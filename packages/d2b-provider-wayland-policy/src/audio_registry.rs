@@ -265,7 +265,7 @@ impl AudioResourceRuntime {
         let promoted = if let Some(old) = self.bindings.get_mut(&key) {
             if let Some(controller) = old.controller.as_mut() {
                 controller
-                    .finalize_shared(old.lease)
+                    .finalize(old.lease)
                     .map_err(AudioResourceRuntimeError::Controller)?
             } else {
                 None
@@ -358,7 +358,7 @@ impl AudioResourceRuntime {
         let promoted = if let Some(record) = self.bindings.get_mut(&key) {
             if let Some(controller) = record.controller.as_mut() {
                 controller
-                    .finalize_shared(record.lease)
+                    .finalize(record.lease)
                     .map_err(AudioResourceRuntimeError::Controller)?
             } else {
                 None

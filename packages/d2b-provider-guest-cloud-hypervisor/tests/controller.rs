@@ -6,7 +6,7 @@ use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_provider_guest_cloud_hypervisor::{
-    AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph,
+    AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, BootstrapGraph, ChildRole,
     CloudHypervisorController, CloudHypervisorResourceApiError, CloudHypervisorResourceRequest,
     CloudHypervisorResourceResponse, GuestGenerationSet, GuestSnapshot,
 };
@@ -246,8 +246,12 @@ fn same_guest_name_in_different_zones_has_distinct_private_runtime_identity() {
     .unwrap();
 
     assert_ne!(
-        controller.private_runtime_scope(&first, "vmm").unwrap(),
-        controller.private_runtime_scope(&second, "vmm").unwrap()
+        controller
+            .private_runtime_scope(&first, ChildRole::VmmProcess)
+            .unwrap(),
+        controller
+            .private_runtime_scope(&second, ChildRole::VmmProcess)
+            .unwrap()
     );
 }
 

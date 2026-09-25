@@ -1804,7 +1804,7 @@ where
     pub fn private_runtime_scope(
         &self,
         guest: &GuestSnapshot,
-        role: &str,
+        role: ChildRole,
     ) -> Result<PrivateRuntimeScope, CloudHypervisorError> {
         derive_private_runtime_scope(
             guest.zone_uid(),
