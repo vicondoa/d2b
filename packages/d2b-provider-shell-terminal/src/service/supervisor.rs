@@ -85,6 +85,11 @@ pub struct AttachRequest {
 
 impl AttachRequest {
     /// Construct an attach request for one exact supervisor generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::CapacityOutOfRange`] when the tail
+    /// byte budget exceeds the ring ceiling.
     pub fn new(expected_generation: u64, tail_bytes: u64) -> Result<Self, ShellTerminalError> {
         if tail_bytes > 1024 * 1024 {
             return Err(ShellTerminalError::CapacityOutOfRange);
@@ -422,6 +427,13 @@ impl ShellAuthorityLedger {
 
     /// Validate that a Provider-reconstructed session still matches the
     /// authority ledger without touching its test-only Process map.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::SupervisorAmbiguous`] when the
+    /// session is not projected and
+    /// [`ShellTerminalError::StaleSessionGeneration`] when the fingerprint
+    /// no longer matches.
     pub fn validate_session(&self, session: &ShellSession) -> Result<(), ShellTerminalError> {
         let state = self.lock()?;
         let Some(entry) = state.sessions.get(session.name()) else {
@@ -596,11 +608,13 @@ impl ShellAuthorityPort for ShellAuthorityLedger {
         retired_identity: Option<&SupervisorIdentity>,
     ) -> Result<SessionGrant, ShellTerminalError> {
         let mut state = self.lock()?;
-        let current_identity = Self::session_mut(&mut state, session)?
-            .supervisor_identity
-            .clone();
-        if current_identity.as_ref() != retired_identity {
-            return Err(ShellTerminalError::SupervisorAmbiguous);
+        {
+            let current_identity = Self::session_mut(&mut state, session)?
+                .supervisor_identity
+                .as_ref();
+            if current_identity != retired_identity {
+                return Err(ShellTerminalError::SupervisorAmbiguous);
+            }
         }
         let capability_id = state
             .next_capability

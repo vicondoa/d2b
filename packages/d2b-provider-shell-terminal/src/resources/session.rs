@@ -52,6 +52,11 @@ impl std::fmt::Debug for ShellSession {
 
 impl ShellSession {
     /// Create a session by freezing placement and shell fields from its pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns the name-validation or capacity refusal the underlying
+    /// resource-name construction reports.
     pub fn from_pool(
         pool: &ShellPool,
         name: impl Into<String>,
