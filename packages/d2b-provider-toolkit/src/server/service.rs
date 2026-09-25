@@ -19,7 +19,7 @@ use d2b_contracts_resource::v3::identity::ServiceName;
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceRef, execution_policy::BoundedToken,
 };
-use d2b_contracts_zone_session::v3::{component_session::RequestId, zone_routing::ZonePath};
+use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 use d2b_session::{AuthenticatedSessionRouteBinding, Cancellation, ComponentSessionDriver};
 use tokio::sync::Notify;
 
@@ -170,11 +170,6 @@ impl<S> GeneratedProviderServiceServer<S> {
         self.adapter.bind_authenticated_route(route)
     }
 
-    /// Borrow the generated service descriptor.
-    pub const fn generated_service(&self) -> &GeneratedServiceDescriptor {
-        &self.generated
-    }
-
     /// Return whether new requests are accepted.
     pub fn is_accepting(&self) -> bool {
         self.state.accepting.load(Ordering::Acquire)
@@ -291,11 +286,6 @@ where
     /// while keeping service stubs owned by the v3 contract generator.
     pub fn generated_services(&self) -> Vec<GeneratedServiceDescriptor> {
         vec![self.generated.clone()]
-    }
-
-    /// Encode a response correlation without exposing request contents.
-    pub fn response_request_id<'a>(&self, request_id: &'a RequestId) -> &'a RequestId {
-        request_id
     }
 }
 
