@@ -41,7 +41,6 @@ impl BootstrapProvider {
 pub enum ZoneAdmissionError {
     PeerUidMismatch,
     InvalidPeerUid,
-    ZoneInvalid,
 }
 
 impl fmt::Display for ZoneAdmissionError {
@@ -49,7 +48,6 @@ impl fmt::Display for ZoneAdmissionError {
         formatter.write_str(match self {
             Self::PeerUidMismatch => "zone-bootstrap-peer-uid-mismatch",
             Self::InvalidPeerUid => "zone-bootstrap-peer-uid-invalid",
-            Self::ZoneInvalid => "zone-bootstrap-zone-invalid",
         })
     }
 }
