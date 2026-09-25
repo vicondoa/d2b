@@ -9,24 +9,37 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+/// Which output stream a terminal read targets.
 pub enum TerminalStream {
+    /// Standard output.
     Stdout,
+    /// Standard error.
     Stderr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Terminal dimensions in rows and columns.
 pub struct TerminalSize {
+    /// Row count.
     pub rows: u32,
+    /// Column count.
     pub cols: u32,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One stdin write to a terminal session.
+///
+/// The session identifier is redacted in `Debug`.
 pub struct TerminalWriteStdin {
+    /// Session identifier.
     pub session: String,
+    /// Byte offset this chunk continues from.
     pub offset: u64,
+    /// Base64-encoded chunk bytes.
     pub chunk_base64: String,
+    /// Whether this chunk closes stdin.
     #[serde(default)]
     pub eof: bool,
 }
@@ -44,13 +57,22 @@ impl std::fmt::Debug for TerminalWriteStdin {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One output read from a terminal session.
+///
+/// The session identifier is redacted in `Debug`.
 pub struct TerminalReadOutput {
+    /// Session identifier.
     pub session: String,
+    /// Stream to read from.
     pub stream: TerminalStream,
+    /// Byte offset to read from.
     pub offset: u64,
+    /// Maximum bytes to return.
     pub max_len: u64,
+    /// Whether to block until output is available.
     #[serde(default)]
     pub wait: bool,
+    /// Bound on the wait, in milliseconds.
     #[serde(default)]
     pub timeout_ms: u64,
 }
@@ -70,10 +92,17 @@ impl std::fmt::Debug for TerminalReadOutput {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One resize request for a terminal session.
+///
+/// The session identifier is redacted in `Debug`.
 pub struct TerminalResize {
+    /// Session identifier.
     pub session: String,
+    /// New row count.
     pub rows: u32,
+    /// New column count.
     pub cols: u32,
+    /// Caller-supplied operation id for correlation.
     #[serde(default)]
     pub op_id: u64,
 }
@@ -91,26 +120,38 @@ impl std::fmt::Debug for TerminalResize {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Result of one terminal stdin write.
 pub struct TerminalWriteStdinResult {
+    /// Bytes accepted by the session.
     pub accepted_len: u64,
+    /// Offset the next chunk should continue from.
     pub next_offset: u64,
+    /// Whether the write was backpressured.
     #[serde(default)]
     pub backpressured: bool,
+    /// Whether stdin is now closed.
     #[serde(default)]
     pub stdin_closed: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One output chunk read from a terminal session.
 pub struct TerminalReadOutputChunk {
+    /// Base64-encoded output bytes.
     pub data_base64: String,
+    /// Offset the next read should continue from.
     pub next_offset: u64,
+    /// Whether this chunk is the last output.
     #[serde(default)]
     pub eof: bool,
+    /// Bytes dropped because the ring buffer overflowed.
     #[serde(default)]
     pub dropped_bytes: u64,
+    /// Whether the chunk was truncated to the requested bound.
     #[serde(default)]
     pub truncated: bool,
+    /// Whether the read timed out before output arrived.
     #[serde(default)]
     pub timed_out: bool,
 }
