@@ -51,8 +51,8 @@ Use this index, then open the focused document instead of expanding this file.
 | Product purpose and current direction | [`STRATEGY.md`](./STRATEGY.md), [`README.md`](./README.md), [`docs/explanation/design.md`](./docs/explanation/design.md) |
 | Add, move, or retire tests | [`tests/AGENTS.md`](./tests/AGENTS.md) |
 | Worktrees, review, PRs, merge, and disk hygiene | [`docs/contributing/workflow.md`](./docs/contributing/workflow.md), especially the [reviewed-head lifecycle](./docs/contributing/workflow.md#reviewed-head-pr-lifecycle) |
-|Changelog or commit grammar|[`docs/contributing/changelog-and-commits.md`](./docs/contributing/changelog-and-commits.md)|
-|Codegraph MCP server and per-clone index init|[`.omp/mcp.json`](./.omp/mcp.json) wires the codegraph MCP server for omp sessions (the devShell provides node for its `npx` launch); run `nix develop -c codegraph init` once per fresh clone to build the gitignored `.codegraph/` index|
+| Changelog or commit grammar | [`docs/contributing/changelog-and-commits.md`](./docs/contributing/changelog-and-commits.md) |
+| Codegraph MCP server and per-clone index init | [`.omp/mcp.json`](./.omp/mcp.json) wires the codegraph MCP server for omp sessions (the devShell provides node for its `npx` launch); run `nix develop -c codegraph init` once per fresh clone to build the gitignored `.codegraph/` index |
 | Gates, heavy lanes, and build profiles | [`docs/contributing/gates-and-lints.md`](./docs/contributing/gates-and-lints.md) |
 | Architecture and per-Guest/provider features | [`docs/contributing/architecture.md`](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Critical subsystem invariants | [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md) |
