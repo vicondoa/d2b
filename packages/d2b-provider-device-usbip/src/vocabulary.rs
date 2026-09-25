@@ -67,6 +67,10 @@ impl std::error::Error for UsbipBindClassError {}
 /// The family binds physical USB devices only; a bind for a device selected
 /// under any other `busClass` (hidraw, drm, pci, tpm) is refused closed
 /// rather than admitted by default.
+/// # Errors
+///
+/// Returns [`UsbipBindClassError::ClassNotDeclared`] when the bus class
+/// is not the family's declared USBIP class.
 pub fn admit_bind_bus_class(bus_class: &str) -> Result<(), UsbipBindClassError> {
     if bus_class == USBIP_BUS_CLASS {
         Ok(())

@@ -73,6 +73,12 @@ pub struct UsbipArbitrator {
 
 impl UsbipArbitrator {
     /// Construct an arbiter after validating the Device claim ceiling.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UsbipClaimError::ArbitrationViolation`] when the claim
+    /// ceiling is outside `1..=16` or an exclusive arbitration requests a
+    /// ceiling other than one.
     pub fn new(
         arbitration: DeviceArbitration,
         max_claims: u32,
