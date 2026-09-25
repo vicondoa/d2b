@@ -8167,9 +8167,7 @@ fn record_workload_availability_metrics(
             } else {
                 "not-applicable"
             };
-            *counts
-                .get_mut(&(provider, component, selected))
-                .expect("bounded workload availability tuple") += 1;
+            *counts.entry((provider, component, selected)).or_insert(0) += 1;
         }
     }
     let samples = counts
