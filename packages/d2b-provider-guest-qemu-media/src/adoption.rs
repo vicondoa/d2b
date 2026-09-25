@@ -84,4 +84,29 @@ mod tests {
         assert!(!identity.matches_process_token("actual-qemu-binary"));
     }
 
+    /// The security error path: any identity mismatch quarantines the
+    /// process instead of adopting it, and only an exact match adopts.
+    #[test]
+    fn verify_identity_quarantines_any_mismatch() {
+        let expected = ProcessIdentity::for_test("expected");
+        let mut observed = ProcessIdentity::for_test("observed");
+        assert_eq!(
+            verify_identity(&expected, &observed),
+            AdoptionOutcome::Quarantined,
+            "a digest mismatch quarantines"
+        );
+        observed.pid = expected.pid + 1;
+        assert_eq!(
+            verify_identity(&expected, &observed),
+            AdoptionOutcome::Quarantined,
+            "a pid mismatch quarantines"
+        );
+        observed = expected.clone();
+        assert_eq!(
+            verify_identity(&expected, &observed),
+            AdoptionOutcome::Adopted,
+            "an exact match adopts"
+        );
+    }
+
     }
