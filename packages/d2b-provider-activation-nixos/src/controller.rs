@@ -580,30 +580,35 @@ impl ActivationTrust {
     ) -> Result<(), ActivationVerificationError> {
         if self.trust_epoch == 0 || self.trust_epoch != expected.trust_epoch {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::TrustEpochMismatch,
                 "activation verification refused: trust epoch mismatch",
             );
             return Err(ActivationVerificationError::TrustEpochMismatch);
         }
         if self.revocation_ref != expected.revocation_ref {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::RevocationRefMismatch,
                 "activation verification refused: revocation reference mismatch",
             );
             return Err(ActivationVerificationError::RevocationRefMismatch);
         }
         if self.revocation_status != TrustStatus::Clear || self.deny_status != TrustStatus::Clear {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::TrustDenied,
                 "activation verification refused: trust or deny status not clear",
             );
             return Err(ActivationVerificationError::TrustDenied);
         }
         if self.publisher_root.is_empty() || self.publisher_root != expected.publisher_root {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::PublisherRootMismatch,
                 "activation verification refused: publisher root mismatch",
             );
             return Err(ActivationVerificationError::PublisherRootMismatch);
         }
         if self.signature_id.is_empty() || self.signature_id != expected.signature_id {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::SignatureIdMismatch,
                 "activation verification refused: signature identifier mismatch",
             );
             return Err(ActivationVerificationError::SignatureIdMismatch);
@@ -613,6 +618,7 @@ impl ActivationTrust {
             || activation_catalog_digest != expected.artifact_catalog_digest
         {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::ArtifactCatalogDigestMismatch,
                 "activation verification refused: artifact catalog digest mismatch",
             );
             return Err(ActivationVerificationError::ArtifactCatalogDigestMismatch);
@@ -620,12 +626,14 @@ impl ActivationTrust {
         let actual_artifact_digest = sha256_digest(artifact_bytes);
         if actual_artifact_digest != expected.artifact_digest {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::ArtifactDigestMismatch,
                 "activation verification refused: artifact digest mismatch",
             );
             return Err(ActivationVerificationError::ArtifactDigestMismatch);
         }
         if self.public_key.len() != 32 || self.signature.len() != 64 {
             tracing::warn!(
+                refusal = ?ActivationVerificationError::InvalidEvidence,
                 "activation verification refused: trust evidence malformed",
             );
             return Err(ActivationVerificationError::InvalidEvidence);
@@ -634,6 +642,7 @@ impl ActivationTrust {
             .verify(&expected.signed_payload, &self.signature)
             .map_err(|_| {
                 tracing::warn!(
+                    refusal = ?ActivationVerificationError::SignatureInvalid,
                     "activation verification refused: Ed25519 signature invalid",
                 );
                 ActivationVerificationError::SignatureInvalid
