@@ -156,7 +156,6 @@ impl DisplayDependencyEvidence {
     }
 
     /// Resolve one display dependency from an authenticated display route.
-    #[allow(dead_code)]
     pub(crate) fn from_route(
         route: AuthenticatedSessionRouteBinding,
         state: DisplayDependencyState,
@@ -1017,7 +1016,8 @@ impl NotificationController {
     }
 
     /// Reconcile configured Guest source endpoints and the host sink.
-    pub fn reconcile_sources(
+    #[cfg(test)]
+    pub(crate) fn reconcile_sources(
         &mut self,
         display: &DisplayDependencyEvidence,
         config: &NotificationProviderConfig,
@@ -1321,33 +1321,6 @@ impl NotificationController {
         Ok(())
     }
 
-    /// Reconcile from a Core-authenticated display route.
-    ///
-    /// `None` is the fail-closed dependency state and drains every owned
-    /// source/sink endpoint. A route is accepted only when the sealed
-    /// ComponentSession authority has bound the display Provider, local Unix
-    /// evidence, a User subject, and a non-zero Provider generation.
-    pub fn reconcile_authenticated_display(
-        &mut self,
-        display: Option<AuthenticatedSessionRouteBinding>,
-        config: &NotificationProviderConfig,
-        source_sessions: &[SessionEvidence],
-    ) -> Result<SourceReconcileResult, &'static str> {
-        let Some(proof) = display else {
-            let result = self.drain_plan();
-            self.clear_reconciliation();
-            return Ok(result);
-        };
-        let evidence = match DisplayDependencyEvidence::from_authenticated_route(proof) {
-            Ok(evidence) => evidence,
-            Err(error) => {
-                self.clear_reconciliation();
-                return Err(error);
-            }
-        };
-        self.reconcile_sources(&evidence, config, source_sessions)
-    }
-
     /// Reconcile display and Guest-source ownership through the effect
     /// boundary, including fail-closed cleanup when the dependency vanishes.
     pub fn reconcile_authenticated_display_with_effects<E: SourceProcessEffectPort>(
@@ -1409,7 +1382,8 @@ impl NotificationController {
     }
 
     /// Drain and forget all source endpoints during shutdown or finalization.
-    pub fn drain_sources(&mut self) -> Vec<ResourceRef> {
+    #[cfg(test)]
+    pub(crate) fn drain_sources(&mut self) -> Vec<ResourceRef> {
         let drained = self.active_sources.keys().cloned().collect();
         self.clear_reconciliation();
         drained
