@@ -1786,6 +1786,7 @@ dependencies = [
  "d2b-session-unix",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

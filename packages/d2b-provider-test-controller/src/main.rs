@@ -32,6 +32,7 @@ enum SessionDisposition {
 // CLI entry point: drives the runtime synchronously at process start.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn main() {
+    tracing_subscriber::fmt::init();
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -160,8 +161,8 @@ async fn run_session(
                         warn!(reason = %e, "controller assignment stream reopen after reset failed; reconnecting");
                     })?;
             }
-            Ok(Ok(SessionEvent::NamedStream(_))) => {
-                warn!("controller received an unexpected named stream; reconnecting");
+            Ok(Ok(SessionEvent::NamedStream(event))) => {
+                warn!(stream = ?event.stream(), "controller received an unexpected named stream; reconnecting");
                 return Ok(SessionDisposition::Reconnect);
             }
             Ok(Ok(_)) | Err(_) => {}
@@ -170,8 +171,8 @@ async fn run_session(
                 return Ok(SessionDisposition::Reconnect);
             }
         }
-        if session.drive_keepalive(Instant::now()).await.is_err() {
-            warn!("controller keepalive drive failed; reconnecting");
+        if let Err(e) = session.drive_keepalive(Instant::now()).await {
+            warn!(reason = %e, "controller keepalive drive failed; reconnecting");
             return Ok(SessionDisposition::Reconnect);
         }
     }
@@ -183,8 +184,12 @@ fn should_reconnect(reason: CloseReason) -> bool {
 
 async fn send_bootstrap(bootstrap: &SeqpacketSocket, daemon_endpoint: OwnedFd) -> Result<(), ()> {
     let policy = controller_bootstrap_attachment_policy();
-    let capacity = AncillaryCapacity::from_policy(policy).map_err(|_| ())?;
-    let scopes = controller_credit_scopes().map_err(|_| ())?;
+    let capacity = AncillaryCapacity::from_policy(policy).map_err(|e| {
+        warn!(reason = %e, "controller bootstrap send failed: ancillary capacity setup failed");
+    })?;
+    let scopes = controller_credit_scopes().map_err(|e| {
+        warn!(reason = ?e, "controller bootstrap send failed: credit scope setup failed");
+    })?;
     let packet = d2b_session_unix::OutboundPacket::with_current_credentials(
         d2b_session_unix::CONTROLLER_BOOTSTRAP_PROTOCOL_MARKER.to_vec(),
         vec![Arc::new(daemon_endpoint)],
@@ -192,15 +197,21 @@ async fn send_bootstrap(bootstrap: &SeqpacketSocket, daemon_endpoint: OwnedFd) -
         capacity,
         &scopes,
     )
-    .map_err(|_| ())?;
+    .map_err(|e| {
+        warn!(reason = %e, "controller bootstrap send failed: packet build failed");
+    })?;
     let mut queue = VecDeque::from([packet]);
     let sent = tokio::time::timeout(
         CONTROLLER_BOOTSTRAP_TIMEOUT,
         bootstrap.send_burst(&mut queue, capacity, 1),
     )
     .await
-    .map_err(|_| ())?
-    .map_err(|_| ())?;
+    .map_err(|e| {
+        warn!(reason = %e, "controller bootstrap send failed: send timed out");
+    })?
+    .map_err(|e| {
+        warn!(reason = %e, "controller bootstrap send failed: send burst failed");
+    })?;
     if sent.sent.len() != 1 || !queue.is_empty() {
         return Err(());
     }
@@ -222,11 +233,15 @@ fn controller_transport(
         policy.transport_binding.locality,
         policy.limits,
         policy.attachment_policy,
-        controller_credit_scopes().map_err(|_| ())?,
+        controller_credit_scopes().map_err(|e| {
+            warn!(reason = ?e, "controller transport build failed: credit scope setup failed");
+        })?,
         resolver,
         PeerIdentityPolicy::inherited_socketpair(expected_peer),
     )
-    .map_err(|_| ())
+    .map_err(|e| {
+        warn!(reason = %e, "controller transport build failed: transport construction failed");
+    })
 }
 
 #[cfg(test)]
