@@ -16707,10 +16707,6 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
-    #[cfg_attr(
-        not(test_root),
-        ignore = "v1.1.1fu11: requires write access to /var/lib/d2b/runtime/ which only root can do; run with --cfg test_root in a privileged test environment"
-    )]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn dispatch_request_writes_typed_op_audit_records_for_all_live_arms() {
         use d2b_contracts::types::{BundleOpId, ScopeId, TracingSpanId, VmId};
@@ -16815,7 +16811,10 @@ mod tests {
             OperationFields::Hello {
                 client_version: "1.2.3".to_owned(),
             },
-            Some("usb-start-0000000000000001"),
+            // The Hello wire frame carries no tracing span; the arm
+            // records None (the span is only set from the request's
+            // tracing_span_id field).
+            None,
         );
         match hello.response {
             BrokerResponse::Hello(response) => {
