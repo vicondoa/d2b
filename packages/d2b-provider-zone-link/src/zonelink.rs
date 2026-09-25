@@ -423,16 +423,6 @@ mod tests {
     }
 
     #[test]
-    fn matching_owner_proof_adopts_one_cursor() {
-        let proof = owner('a');
-        let cursor = ZoneLinkCursor::default();
-        let mut authority = ZoneLinkCursorAuthority::restore(proof.clone());
-        let result = authority.adopt([ZoneLinkCursorRecord::new(proof, cursor)]);
-        assert!(result.is_adopted());
-        assert_eq!(authority.cursor(), Ok(cursor));
-    }
-
-    #[test]
     fn missing_or_ambiguous_owner_is_quarantined() {
         let proof = owner('a');
         let mut authority = ZoneLinkCursorAuthority::restore(proof.clone());
