@@ -74,14 +74,18 @@ fn exact_role_subresource_matrix_is_closed() {
     ] {
         let permission =
             RolePermission::new(CredentialResourceVerb::UseCredential, method.subresource());
-        assert!(authorize_operation(method, &[method.operation_class()], &permission).is_ok());
+        assert!(
+            authorize_operation(method, &[method.operation_class()], &permission).is_ok(),
+            "method: {method:?}"
+        );
         assert!(
             authorize_operation(
                 method,
                 &[method.operation_class()],
                 &RolePermission::new(CredentialResourceVerb::UseCredential, "*"),
             )
-            .is_err()
+            .is_err(),
+            "method: {method:?}"
         );
     }
 }

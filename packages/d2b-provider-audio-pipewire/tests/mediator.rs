@@ -22,4 +22,6 @@ fn projection_cannot_open_pipewire_and_failed_set_preserves_state() {
         Err(AudioMediatorError::ProjectionCannotOpenPipewire)
     );
     assert_eq!(mediator.readiness(), AudioReadiness::Unavailable);
+    assert_eq!(mediator.grant(), AudioGrant::Off);
+    assert_eq!(mediator.level(), None);
 }
