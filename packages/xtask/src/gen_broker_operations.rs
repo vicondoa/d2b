@@ -769,7 +769,7 @@ fn write(
     Ok(path)
 }
 
-fn string_list(items: impl IntoIterator<Item = String>, indent: &str) -> String {
+fn string_list<'a>(items: impl IntoIterator<Item = &'a str>, indent: &str) -> String {
     items
         .into_iter()
         .map(|item| format!("{indent}\"{item}\",\n"))
@@ -838,10 +838,10 @@ fn optional_str_list(fields: &[String]) -> String {
     )
 }
 
-fn profile_catalog(rows: &[Row], profile: &str) -> Vec<String> {
+fn profile_catalog<'a>(rows: &'a [Row], profile: &str) -> Vec<&'a str> {
     rows.iter()
         .filter(|row| row.profiles.iter().any(|item| item == profile))
-        .filter_map(|row| row.wire_variant.clone())
+        .filter_map(|row| row.wire_variant.as_deref())
         .collect()
 }
 
