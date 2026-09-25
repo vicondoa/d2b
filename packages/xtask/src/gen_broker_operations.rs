@@ -977,14 +977,17 @@ fn generate_catalog(catalog: &Catalog) -> String {
         ));
         rows.push_str(&format!("            destructive: {},\n", row.authz.destructive));
         rows.push_str(&format!(
-            "            secret_access: \"{}\",\n",
+            "            secret_access: SecretAccess::{},\n",
             row.authz.secret_access
         ));
         rows.push_str(&format!(
-            "            broker_required: \"{}\",\n",
+            "            broker_required: BrokerRequirement::{},\n",
             row.authz.broker_required
         ));
-        rows.push_str(&format!("            audit_mode: \"{}\",\n", row.authz.audit_mode));
+        rows.push_str(&format!(
+            "            audit_mode: AuditMode::{},\n",
+            row.authz.audit_mode
+        ));
         rows.push_str("        },\n");
         rows.push_str(&format!(
             "        payload_provenance: PayloadProvenance::{},\n",
