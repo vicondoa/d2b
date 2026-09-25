@@ -6,6 +6,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use syn::spanned::Spanned;
+
 use clap_complete::{
     generate,
     shells::{Bash, Fish, Zsh},
@@ -1038,10 +1040,12 @@ fn parse_rust_items(
         .to_string_lossy()
         .replace('\\', "/");
     let syntax: syn::File = syn::parse_str(&text)?;
+    let offsets = LineOffsets::new(&text);
 
     let mut items = Vec::new();
     let mut collector = IpcItemCollector {
         text: &text,
+        offsets: &offsets,
         file_rel: &file_rel,
         items: &mut items,
     };
@@ -1056,6 +1060,7 @@ fn parse_rust_items(
 /// collected, exactly like the line scanner's skip.
 struct IpcItemCollector<'a> {
     text: &'a str,
+    offsets: &'a LineOffsets,
     file_rel: &'a str,
     items: &'a mut Vec<RustItem>,
 }
@@ -1065,16 +1070,10 @@ impl<'ast> syn::visit::Visit<'ast> for IpcItemCollector<'_> {
         if !matches!(item.vis, syn::Visibility::Public(_)) {
             return;
         }
-        // Tuple and unit structs carry no brace; their body is empty.
-        let body = match &item.fields {
-            syn::Fields::Named(fields) => slice_source(
-                self.text,
-                fields.brace_token.span.open(),
-                fields.brace_token.span.close(),
-            ),
-            _ => String::new(),
+        let fields = match &item.fields {
+            syn::Fields::Named(fields) => collect_named_fields(self.text, self.offsets, fields),
+            _ => Vec::new(),
         };
-        let fields = parse_fields(&extract_body(&body));
         self.items.push(RustItem {
             name: item.ident.to_string(),
             kind: ItemKind::Struct,
@@ -1089,12 +1088,35 @@ impl<'ast> syn::visit::Visit<'ast> for IpcItemCollector<'_> {
         if !matches!(item.vis, syn::Visibility::Public(_)) {
             return;
         }
-        let body = slice_source(
-            self.text,
-            item.brace_token.span.open(),
-            item.brace_token.span.close(),
-        );
-        let variants = parse_variants(&extract_body(&body));
+        let variants = item
+            .variants
+            .iter()
+            .map(|variant| {
+                let name = variant.ident.to_string();
+                let shape = match &variant.fields {
+                    syn::Fields::Unit => "unit".to_string(),
+                    syn::Fields::Named(fields) => {
+                        let fields = collect_named_fields(self.text, self.offsets, fields);
+                        if fields.is_empty() {
+                            "struct {}".to_string()
+                        } else {
+                            format!("struct {{ {} }}", render_fields(&fields))
+                        }
+                    }
+                    syn::Fields::Unnamed(fields) => {
+                        let tys = fields
+                            .unnamed
+                            .iter()
+                            .map(|field| {
+                                normalize_ws(&slice_span(self.text, self.offsets, Spanned::span(&field.ty)))
+                            })
+                            .collect::<Vec<_>>();
+                        format!("({})", tys.join(", "))
+                    }
+                };
+                Variant { name, shape }
+            })
+            .collect();
         self.items.push(RustItem {
             name: item.ident.to_string(),
             kind: ItemKind::Enum,
@@ -1106,140 +1128,56 @@ impl<'ast> syn::visit::Visit<'ast> for IpcItemCollector<'_> {
     }
 }
 
-/// The original source text between a braced group's delimiters (the item's
-/// body between its `{` and `}`), so the field/variant extraction below sees
-/// exactly the bytes the previous line-join produced.
-fn slice_source(text: &str, open: proc_macro2::Span, close: proc_macro2::Span) -> String {
-    let start = open.start();
-    let end = close.end();
-    text[line_col_to_offset(text, start.line, start.column)
-        ..line_col_to_offset(text, end.line, end.column)]
-        .to_owned()
+/// Line start offsets, so a span position resolves to a byte offset in O(1)
+/// instead of a per-span scan of the whole file.
+struct LineOffsets {
+    starts: Vec<usize>,
 }
 
-/// Byte offset of a 1-based line / 0-based column position.
-fn line_col_to_offset(text: &str, line: usize, column: usize) -> usize {
-    let mut offset = 0;
-    for (index, line_text) in text.split_inclusive('\n').enumerate() {
-        if index + 1 == line {
-            return offset + column;
+impl LineOffsets {
+    fn new(text: &str) -> Self {
+        Self {
+            starts: std::iter::once(0)
+                .chain(
+                    text.split_inclusive('\n')
+                        .scan(0usize, |offset, line| {
+                            *offset += line.len();
+                            Some(*offset)
+                        }),
+                )
+                .collect(),
         }
-        offset += line_text.len();
     }
-    offset
+
+    /// Byte offset of a 1-based line / 0-based column position.
+    fn offset(&self, position: proc_macro2::LineColumn) -> usize {
+        self.starts[position.line - 1] + position.column
+    }
 }
 
-fn extract_body(item_text: &str) -> String {
-    let Some(open) = item_text.find('{') else {
-        return String::new();
-    };
-    let Some(close) = item_text.rfind('}') else {
-        return String::new();
-    };
-    item_text[open + 1..close].to_string()
+/// The original source text a span covers, so the rendered type text stays
+/// byte-identical to what the hand-rolled scanners used to slice.
+fn slice_span(text: &str, offsets: &LineOffsets, span: proc_macro2::Span) -> String {
+    text[offsets.offset(span.start())..offsets.offset(span.end())].to_owned()
 }
 
-fn parse_fields(body: &str) -> Vec<Field> {
-    split_top_level_entries(&strip_non_code_lines(body))
-        .into_iter()
-        .filter_map(|entry| {
-            let trimmed = entry.trim();
-            let (name, ty) = trimmed.split_once(':')?;
-            Some(Field {
-                name: name.trim().trim_start_matches("pub ").trim().to_string(),
-                ty: normalize_ws(ty),
-            })
+/// The named fields of a struct or struct-like variant, with each type text
+/// taken from the original source via its span.
+fn collect_named_fields(
+    text: &str,
+    offsets: &LineOffsets,
+    fields: &syn::FieldsNamed,
+) -> Vec<Field> {
+    fields
+        .named
+        .iter()
+        .filter_map(|field| {
+            let name = field.ident.as_ref()?.to_string();
+            let ty = normalize_ws(&slice_span(text, offsets, Spanned::span(&field.ty)));
+            Some(Field { name, ty })
         })
         .collect()
 }
-
-fn parse_variants(body: &str) -> Vec<Variant> {
-    split_top_level_entries(&strip_non_code_lines(body))
-        .into_iter()
-        .filter_map(|entry| {
-            let trimmed = entry.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-            let name = trimmed
-                .chars()
-                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-                .collect::<String>();
-            if name.is_empty() {
-                return None;
-            }
-            let rest = trimmed[name.len()..].trim();
-            let shape = if rest.is_empty() {
-                "unit".to_string()
-            } else if rest.starts_with('{') {
-                let fields = parse_fields(&extract_body(rest));
-                if fields.is_empty() {
-                    "struct {}".to_string()
-                } else {
-                    format!("struct {{ {} }}", render_fields(&fields))
-                }
-            } else {
-                normalize_ws(rest)
-            };
-            Some(Variant { name, shape })
-        })
-        .collect()
-}
-
-fn strip_non_code_lines(body: &str) -> String {
-    body.lines()
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            !trimmed.is_empty()
-                && !trimmed.starts_with("///")
-                && !trimmed.starts_with("//!")
-                && !trimmed.starts_with("//")
-                && !trimmed.starts_with("#")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn split_top_level_entries(input: &str) -> Vec<String> {
-    let mut entries = Vec::new();
-    let mut current = String::new();
-    let mut paren = 0i32;
-    let mut brace = 0i32;
-    let mut bracket = 0i32;
-    let mut angle = 0i32;
-
-    for ch in input.chars() {
-        match ch {
-            '(' => paren += 1,
-            ')' => paren -= 1,
-            '{' => brace += 1,
-            '}' => brace -= 1,
-            '[' => bracket += 1,
-            ']' => bracket -= 1,
-            '<' => angle += 1,
-            '>' if angle > 0 => {
-                angle -= 1;
-            }
-            ',' if paren == 0 && brace == 0 && bracket == 0 && angle == 0 => {
-                let trimmed = current.trim();
-                if !trimmed.is_empty() {
-                    entries.push(trimmed.to_string());
-                }
-                current.clear();
-                continue;
-            }
-            _ => {}
-        }
-        current.push(ch);
-    }
-
-    let trimmed = current.trim();
-    if !trimmed.is_empty() {
-        entries.push(trimmed.to_string());
-    }
-    entries
-}
-
 fn normalize_ws(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -1613,3 +1551,4 @@ mod schema_tests {
         }
     }
 }
+
