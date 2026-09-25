@@ -3162,6 +3162,10 @@ mod tests {
             BrokerCallerRole::RootUid { uid: 0 }.for_display(),
             "d2b-root"
         );
+        assert_eq!(
+            BrokerCallerRole::HostShutdownUid { uid: 0 }.for_display(),
+            "d2b-host-shutdown"
+        );
     }
 
     #[test]
@@ -3995,7 +3999,9 @@ mod tests {
         // token so wire compatibility is stable across daemon /
         // broker upgrades.
         let pairs = [
+            (RunnerRole::ProviderController, "\"provider-controller\""),
             (RunnerRole::CloudHypervisor, "\"cloud-hypervisor\""),
+            (RunnerRole::QemuMedia, "\"qemu-media\""),
             (RunnerRole::ActivationNixos, "\"activation-nixos-runner\""),
             (RunnerRole::Virtiofsd, "\"virtiofsd\""),
             (RunnerRole::Swtpm, "\"swtpm\""),
