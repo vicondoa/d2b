@@ -31,11 +31,7 @@ pub enum LayoutPhase {
 impl LayoutPhase {
     /// Fold two phases, keeping the more severe one.
     pub fn worse(self, other: Self) -> Self {
-        if self as u8 >= other as u8 {
-            self
-        } else {
-            other
-        }
+        self.max(other)
     }
 }
 

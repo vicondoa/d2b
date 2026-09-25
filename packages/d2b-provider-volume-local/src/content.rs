@@ -116,6 +116,13 @@ pub struct ContentFile {
 
 impl ContentFile {
     /// Construct a file and derive its canonical SHA-256 digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VolumeLocalError::InvalidSpec`] when the path is not a
+    /// valid anchored relative path, the owner or group is not a `User`
+    /// reference, the mode is not a valid octal string, or the size
+    /// exceeds the content ceiling.
     pub fn new(
         path: impl Into<String>,
         owner: ResourceRef,
@@ -212,6 +219,13 @@ pub struct ContentProjection {
 
 impl ContentProjection {
     /// Construct and validate a complete content declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VolumeLocalError::InvalidSpec`] when the ownership marker
+    /// is unbounded, the file set is empty or over the ceiling, a file
+    /// fails its own validation, two files share a path, the total byte
+    /// size exceeds the ceiling, or the content digest does not match.
     pub fn new(
         volume_uid: ResourceUid,
         provenance: ContentProvenance,
@@ -235,6 +249,12 @@ impl ContentProjection {
     }
 
     /// Parse and validate a serialized content projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VolumeLocalError::InvalidSpec`] when the value does not
+    /// deserialize as a content projection or the projection fails
+    /// validation.
     pub fn from_value(value: &serde_json::Value) -> Result<Self, VolumeLocalError> {
         let projection: Self =
             serde_json::from_value(value.clone()).map_err(|_| VolumeLocalError::InvalidSpec)?;

@@ -145,6 +145,13 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
     }
 
     /// Reconcile one Volume and return its public status projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the layout or attachment admission error the underlying
+    /// pass reports (spec, source, entry, quota, or effect failures), and
+    /// [`VolumeLocalError::InvalidSpec`] when the provider content block is
+    /// missing or malformed.
     pub async fn reconcile(
         &self,
         volume_uid: &ResourceUid,

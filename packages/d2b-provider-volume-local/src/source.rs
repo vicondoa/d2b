@@ -127,6 +127,17 @@ impl SourcePolicyCatalog {
 
 /// Validate source-kind-specific constraints that are not represented by the
 /// current base contract constructor.
+///
+/// # Errors
+///
+/// Returns [`VolumeLocalError::SourceKindVolumeKindMismatch`] when the
+/// source kind is paired with an incompatible Volume kind,
+/// [`VolumeLocalError::TmpfsQuotaMissing`] or
+/// [`VolumeLocalError::BlockImageQuotaMissing`] when the required quota
+/// ceilings are absent, [`VolumeLocalError::BlockImageTransportMismatch`]
+/// when a block-image attachment does not use virtio-blk, and
+/// [`VolumeLocalError::InvalidSpec`] for the remaining constraint
+/// violations.
 pub fn validate_source_spec(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
     match spec.source().settings().kind() {
         SourceKind::LocalPath => {

@@ -71,6 +71,19 @@ pub struct AttachmentPlan {
 /// outside the frozen serving default, and a second virtiofs attachment
 /// naming a (guest, mount path) pair that an earlier attachment already
 /// claimed (AE5).
+///
+/// # Errors
+///
+/// Returns [`VolumeLocalError::ViewNotFound`] when an attachment names an
+/// undeclared view, [`VolumeLocalError::ViewRightsInsufficient`] when the
+/// requested access exceeds the view's rights,
+/// [`VolumeLocalError::SingleWriterConflict`] for a second simultaneous
+/// writer, [`VolumeLocalError::SharedWriteUnsupported`] when the Provider
+/// does not declare shared write,
+/// [`VolumeLocalError::AttachmentSettingsUnsupported`] for non-default
+/// virtiofs serving settings, and
+/// [`VolumeLocalError::DuplicateMountPath`] when two virtiofs attachments
+/// claim the same guest mount path.
 pub fn admit_attachments(
     spec: &VolumeSpec,
     supports_shared_write: bool,
