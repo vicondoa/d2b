@@ -264,7 +264,12 @@ pub struct FirewallDigest([u8; 32]);
 impl FirewallDigest {
     /// Render hexadecimal bytes for the bounded provider status field.
     pub fn to_hex(&self) -> String {
-        self.0.iter().map(|byte| format!("{byte:02x}")).collect()
+        use std::fmt::Write;
+        let mut out = String::with_capacity(64);
+        for byte in &self.0 {
+            write!(out, "{byte:02x}").expect("writing to String is infallible");
+        }
+        out
     }
 }
 
