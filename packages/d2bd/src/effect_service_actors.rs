@@ -171,7 +171,7 @@ impl EffectServiceBinding {
     /// The current generational revision. A respawn or republish bumps it;
     /// compare a captured value against this to detect staleness.
     pub fn revision(&self) -> u64 {
-        self.revision.load(Ordering::SeqCst)
+        self.revision.load(Ordering::Relaxed)
     }
 
     /// The actor generation this binding currently names. After a respawn
@@ -512,7 +512,7 @@ impl EffectServiceSupervisorState {
             // Respawn or republish of a live service: bump its generation
             // and point the shared binding at the fresh actor.
             Some(existing) => {
-                existing.revision.fetch_add(1, Ordering::SeqCst);
+                existing.revision.fetch_add(1, Ordering::Relaxed);
                 existing.actor = actor.clone();
                 existing.decl = row.decl;
                 existing.clone()
