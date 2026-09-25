@@ -80,9 +80,17 @@ impl AuditWriteClass {
     }
 }
 
+/// Aggregated audit-drop counts: how many privileged and unprivileged
+/// records were rate-limited rather than durably written.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AuditDropSummary {
+    /// Privileged-class records dropped by the rate limiter.
+
     pub privileged_rate_limited: u64,
+    /// Unprivileged-class records dropped by the rate limiter.
+
+
+
     pub unprivileged_rate_limited: u64,
 }
 
@@ -120,16 +128,50 @@ impl AuditDropWarningState {
     }
 }
 
+/// One legacy JSONL audit record, consumed by the socket-acl gate:
+/// `ts` / `op` identify the operation, `disposition` the authz outcome class
+/// (`allowed` / `denied-*` / `errored`), `outcome` the finer result
+/// spelling, and the optional error fields carry the failure detail.
 #[derive(Clone)]
 pub struct AuditEntry<'a> {
+    /// Monotonic timestamp, microseconds since an arbitrary epoch.
+
     pub ts: u128,
+    /// The audited operation name.
+
     pub op: &'a str,
+    /// The caller's uid.
+
+
     pub caller_uid: u32,
+    /// The caller's gid, when known.
+
+
+
     pub caller_gid: Option<u32>,
+    /// The authz outcome class.
+
+
+
     pub disposition: &'a str,
+    /// The opaque target operation id, when the operation names one.
+
+
+
     pub opaque_target_id: &'a str,
+    /// The finer result spelling (`ok`/refusal/error kind).)
+
+
+
     pub outcome: &'a str,
+    /// The error kind, when the outcome is an error.
+
+
+
     pub error_kind: Option<&'a str>,
+    /// The error detail, when present.
+
+
     pub error_message: Option<&'a str>,
 }
 
@@ -413,6 +455,12 @@ impl DailyAppender {
 }
 
 impl AuditLog {
+    /// Open the broker's audit log under `audit_dir`, the daemon's entry
+    /// point: runs the full bootstrap/poison barrier (symlink refusal,
+    /// directory lock, reconciliation, appender setup, prune) on the
+    /// worker before returning, so a fresh writer never observes a
+    /// half-opened directory.
+
     pub fn open(
         audit_dir: &Path,
         expected_gid: u32,
@@ -1026,6 +1074,8 @@ impl AuditLog {
         self.write_op_record(&record)
     }
 
+    /// Query the rate-limited drop counters, merging the worker-side counts
+    /// with the caller-side queue-full drops the worker never saw.
     pub fn audit_drop_summary(&self) -> io::Result<AuditDropSummary> {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         let mut summary = self.submit(
