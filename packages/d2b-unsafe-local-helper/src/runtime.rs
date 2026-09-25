@@ -258,6 +258,20 @@ impl<M: UserScopeManager> fmt::Debug for ScopeRuntime<M> {
     }
 }
 
+impl ScopeInspection {
+    /// The state a snapshot reports for this inspection: the inspected state
+    /// only when the identity matches, otherwise [`HelperScopeState::Degraded`].
+    fn observable_state(&self) -> HelperScopeState {
+        match self {
+            ScopeInspection {
+                state,
+                identity_matches: true,
+            } => *state,
+            _ => HelperScopeState::Degraded,
+        }
+    }
+}
+
 impl<M: UserScopeManager> ScopeRuntime<M> {
     pub fn new(manager: M, wayland_proxy_binary: PathBuf) -> Result<Self, RuntimeError> {
         let uid = get_current_uid();
@@ -500,11 +514,8 @@ impl<M: UserScopeManager> ScopeRuntime<M> {
             } else {
                 let verified = entry.verified();
                 match self.manager.inspect_scope(&verified) {
-                    Ok(ScopeInspection {
-                        state,
-                        identity_matches: true,
-                    }) => state,
-                    _ => HelperScopeState::Degraded,
+                    Ok(inspection) => inspection.observable_state(),
+                    Err(_) => HelperScopeState::Degraded,
                 }
             };
             let scope = entry.verified().wire_identity();
@@ -1563,18 +1574,19 @@ mod tests {
 
     #[test]
     fn adoption_degrades_identity_ambiguity_without_stopping_scope() {
-        let inspection = ScopeInspection {
+        let mismatched = ScopeInspection {
             state: HelperScopeState::Active,
             identity_matches: false,
         };
-        let state = match inspection {
-            ScopeInspection {
-                state,
-                identity_matches: true,
-            } => state,
-            _ => HelperScopeState::Degraded,
+        assert_eq!(
+            mismatched.observable_state(),
+            HelperScopeState::Degraded
+        );
+        let matched = ScopeInspection {
+            state: HelperScopeState::Starting,
+            identity_matches: true,
         };
-        assert_eq!(state, HelperScopeState::Degraded);
+        assert_eq!(matched.observable_state(), HelperScopeState::Starting);
     }
 
     #[test]
