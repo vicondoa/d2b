@@ -416,3 +416,174 @@ impl fmt::Display for GpuAuthorityError {
 }
 
 impl std::error::Error for GpuAuthorityError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn uid(value: &str) -> ResourceUid {
+        ResourceUid::parse(value).unwrap()
+    }
+
+    fn owner_proof() -> GpuOwnerProof {
+        GpuOwnerProof::new(
+            ResourceRef::parse("Zone/dev").unwrap(),
+            ResourceRef::parse("Guest/workload").unwrap(),
+            uid("123e4567-e89b-42d3-a456-426614174000"),
+            uid("223e4567-e89b-42d3-a456-426614174001"),
+            ResourceGeneration::new(1).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn admission(
+        backing: GpuBackingToken,
+        platform: GpuPlatformToken,
+        arbitration: DeviceArbitration,
+        max_holders: u32,
+        render_node_only: bool,
+        principal: GpuPrincipalToken,
+    ) -> Result<GpuAuthorityAdmission, GpuAuthorityError> {
+        GpuAuthorityAdmission::new(
+            owner_proof(),
+            backing,
+            platform,
+            arbitration,
+            max_holders,
+            render_node_only,
+            principal,
+        )
+    }
+
+    #[test]
+    fn admission_rejects_zero_identities_and_arbitration_contradictions() {
+        let backing = GpuBackingToken::from_core([7; 32]);
+        let platform = GpuPlatformToken::from_core([8; 32]);
+        let principal = GpuPrincipalToken::from_core([9; 32]);
+        let cases = [
+            (
+                GpuBackingToken::from_core([0; 32]),
+                platform.clone(),
+                DeviceArbitration::Exclusive,
+                1,
+                false,
+                principal.clone(),
+                GpuAuthorityError::StaleDeviceIdentity,
+            ),
+            (
+                backing.clone(),
+                GpuPlatformToken::from_core([0; 32]),
+                DeviceArbitration::Exclusive,
+                1,
+                false,
+                principal.clone(),
+                GpuAuthorityError::StaleDeviceIdentity,
+            ),
+            (
+                backing.clone(),
+                platform.clone(),
+                DeviceArbitration::Exclusive,
+                1,
+                false,
+                GpuPrincipalToken::from_core([0; 32]),
+                GpuAuthorityError::StaleDeviceIdentity,
+            ),
+            (
+                backing.clone(),
+                platform.clone(),
+                DeviceArbitration::Exclusive,
+                0,
+                false,
+                principal.clone(),
+                GpuAuthorityError::ArbitrationViolation,
+            ),
+            (
+                backing.clone(),
+                platform.clone(),
+                DeviceArbitration::Exclusive,
+                17,
+                false,
+                principal.clone(),
+                GpuAuthorityError::ArbitrationViolation,
+            ),
+            (
+                backing.clone(),
+                platform.clone(),
+                DeviceArbitration::Exclusive,
+                2,
+                false,
+                principal.clone(),
+                GpuAuthorityError::ArbitrationViolation,
+            ),
+            (
+                backing.clone(),
+                platform.clone(),
+                DeviceArbitration::Exclusive,
+                2,
+                true,
+                principal.clone(),
+                GpuAuthorityError::ArbitrationViolation,
+            ),
+            (
+                backing.clone(),
+                platform.clone(),
+                DeviceArbitration::Shared,
+                2,
+                false,
+                principal.clone(),
+                GpuAuthorityError::ArbitrationViolation,
+            ),
+            (
+                backing,
+                platform,
+                DeviceArbitration::Shared,
+                0,
+                true,
+                principal,
+                GpuAuthorityError::ArbitrationViolation,
+            ),
+        ];
+        for (i, (backing, platform, arbitration, max_holders, render_node_only, principal, expected)) in
+            cases.into_iter().enumerate()
+        {
+            assert_eq!(
+                admission(
+                    backing,
+                    platform,
+                    arbitration,
+                    max_holders,
+                    render_node_only,
+                    principal,
+                ),
+                Err(expected),
+                "case {i}: expected {expected:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn admission_accepts_exclusive_and_shared_legal_combinations() {
+        let backing = GpuBackingToken::from_core([7; 32]);
+        let platform = GpuPlatformToken::from_core([8; 32]);
+        let principal = GpuPrincipalToken::from_core([9; 32]);
+        for (arbitration, max_holders, render_node_only) in [
+            (DeviceArbitration::Exclusive, 1, false),
+            (DeviceArbitration::Exclusive, 1, true),
+            (DeviceArbitration::Shared, 1, true),
+            (DeviceArbitration::Shared, 16, true),
+        ] {
+            assert!(
+                admission(
+                    backing.clone(),
+                    platform.clone(),
+                    arbitration,
+                    max_holders,
+                    render_node_only,
+                    principal.clone(),
+                )
+                .is_ok(),
+                "legal combination {arbitration:?}/{max_holders}/{render_node_only} rejected",
+            );
+        }
+    }
+}
