@@ -2105,7 +2105,9 @@ impl OperationDispatcher for KernelDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{BrokerAuthzFacets, DeadlineTier, OperationOwner};
+    use crate::catalog::{
+        AuditMode, BrokerAuthzFacets, BrokerRequirement, DeadlineTier, OperationOwner, SecretAccess,
+    };
     use crate::forwarding::{
         ForwardFuture, ForwardedOperation, OperationForwarder, SocketForwarder,
     };
@@ -2299,9 +2301,9 @@ mod tests {
                 scope: "per-zone",
                 allowed_groups: groups,
                 destructive: false,
-                secret_access: "None",
-                broker_required: "Yes",
-                audit_mode: "yes",
+                secret_access: SecretAccess::None,
+                broker_required: BrokerRequirement::Yes,
+                audit_mode: AuditMode::Yes,
             },
             payload_provenance: PayloadProvenance::Request,
             payload_fields: fields,

@@ -95,12 +95,19 @@ pub struct BrokerAuthzFacets {
     /// changes are possible.
     pub destructive: bool,
     /// Secret exposure class.
-    pub secret_access: &'static str,
+    pub secret_access: SecretAccess,
     /// Broker-use class.
-    pub broker_required: &'static str,
+    pub broker_required: BrokerRequirement,
     /// Audit mode.
-    pub audit_mode: &'static str,
+    pub audit_mode: AuditMode,
 }
+
+/// The typed authorization classes the committed facets name.
+///
+/// The catalog view emits the committed authz facets as these enums (the
+/// same typed forms the sibling authz view in `d2b-core` emits), so a row
+/// cannot carry a class the privilege model does not name.
+pub use d2b_core::privileges::{AuditMode, BrokerRequirement, SecretAccess};
 
 /// The declared durability facet of one state cell.
 ///
