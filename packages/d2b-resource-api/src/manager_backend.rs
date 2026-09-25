@@ -1111,21 +1111,10 @@ impl ManagerBackend {
         let Some(owner_uid) = row.owner_uid else {
             return Ok(None);
         };
-        let views = self
-            .manager
-            .list(ResourceSelector::default())
+        self.manager
+            .key_for_uid(owner_uid)
             .await
-            .map_err(map_manager_error)?;
-        Ok(views
-            .iter()
-            .find(|view| view.uid == owner_uid)
-            .map(|view| {
-                RuntimeResourceKey::new(
-                    view.key.zone.clone(),
-                    view.key.type_name.clone(),
-                    view.key.name.clone(),
-                )
-            }))
+            .map_err(map_manager_error)
     }
 }
 

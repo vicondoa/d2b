@@ -336,6 +336,12 @@ pub enum ResourceManagerMsg {
         selector: ResourceSelector,
         reply: oneshot::Sender<Result<Vec<ResourceView>, ResourceError>>,
     },
+    /// Stable-uid to manager-key resolution through the uid index (KTD2):
+    /// `None` when no row with that uid is in this manager.
+    KeyForUid {
+        uid: [u8; 16],
+        reply: oneshot::Sender<Result<Option<ResourceKey>, ResourceError>>,
+    },
     /// External API watch (R23): served from the in-memory hub; replay plus
     /// live delivery is gap-free within the daemon epoch.
     Watch {
@@ -1003,6 +1009,9 @@ impl Actor for ResourceManager {
                     .collect();
                 reply.send(Ok(views)).ok();
             }
+            ResourceManagerMsg::KeyForUid { uid, reply } => {
+                reply.send(Ok(state.by_uid.get(&uid).cloned())).ok();
+            }
             ResourceManagerMsg::Watch { selector, after, reply } => {
                 // One manager serializes list snapshots, revisions, and watch
                 // registration, so the list/watch handoff stays gap-free
@@ -1594,6 +1603,19 @@ impl ResourceManagerClient {
         selector: ResourceSelector,
     ) -> Result<Vec<ResourceView>, ResourceError> {
         self.rpc(|reply| ResourceManagerMsg::List { selector, reply }).await
+    }
+
+    /// The manager key for one stable row uid, resolved through the manager's
+    /// uid index; `None` when no row with that uid is in this manager.
+    ///
+    /// # Errors
+    ///
+    /// [`ResourceError::ManagerUnavailable`] when the request cannot be routed.
+    pub async fn key_for_uid(
+        &self,
+        uid: [u8; 16],
+    ) -> Result<Option<ResourceKey>, ResourceError> {
+        self.rpc(|reply| ResourceManagerMsg::KeyForUid { uid, reply }).await
     }
 
     /// Open a gap-free watch on matching changes: the registration atomically
