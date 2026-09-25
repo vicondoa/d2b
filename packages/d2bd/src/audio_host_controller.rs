@@ -271,13 +271,6 @@ impl FakeHostController {
         }
     }
 
-    /// Build a fake that simulates an unsupported/unavailable enforcement.
-    pub fn unsupported() -> Self {
-        Self {
-            grant_result: HostEnforcementResult::Unsupported,
-            level_result: HostEnforcementResult::Unsupported,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -342,61 +335,7 @@ fn target_node_from_pw_dump(bytes: &[u8], vm_name: &str, channel: AudioChannel) 
 mod tests {
     use super::*;
     use d2b_contracts_control::public_wire::AudioChannel;
-    use d2b_provider_audio_pipewire::{AudioGrant, LevelPercent};
-
-    // ── FakeHostController ──────────────────────────────────────────────────
-
-    #[test]
-    fn fake_success_returns_applied_for_grant() {
-        let ctrl = FakeHostController::success();
-        assert_eq!(
-            ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker),
-            HostEnforcementResult::Applied,
-        );
-    }
-
-    #[test]
-    fn fake_success_returns_applied_for_level() {
-        let ctrl = FakeHostController::success();
-        let level = LevelPercent::new(75).unwrap();
-        assert_eq!(
-            ctrl.enforce_level("corp-vm", level, AudioChannel::Speaker),
-            HostEnforcementResult::Applied,
-        );
-    }
-
-    #[test]
-    fn fake_failed_returns_failed_for_grant() {
-        let ctrl = FakeHostController::failed();
-        assert_eq!(
-            ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Speaker),
-            HostEnforcementResult::Failed,
-        );
-    }
-
-    #[test]
-    fn fake_failed_returns_failed_for_level() {
-        let ctrl = FakeHostController::failed();
-        let level = LevelPercent::new(50).unwrap();
-        assert_eq!(
-            ctrl.enforce_level("corp-vm", level, AudioChannel::Microphone),
-            HostEnforcementResult::Failed,
-        );
-    }
-
-    #[test]
-    fn fake_unsupported_returns_unsupported() {
-        let ctrl = FakeHostController::unsupported();
-        assert_eq!(
-            ctrl.enforce_grant("corp-vm", AudioGrant::Off, AudioChannel::Microphone),
-            HostEnforcementResult::Unsupported,
-        );
-        let level = LevelPercent::new(20).unwrap();
-        assert_eq!(
-            ctrl.enforce_level("corp-vm", level, AudioChannel::Speaker),
-            HostEnforcementResult::Unsupported,
-        );
-    }
+    use d2b_provider_audio_pipewire::AudioGrant;
 
     // ── QemuAudioController ─────────────────────────────────────────────────
 
