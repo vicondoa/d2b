@@ -88,6 +88,12 @@ impl FixedEffectAdapter {
     }
 
     /// Validate the fixed socket instance before any ticket is delivered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FixedEffectError::Broker`] when the broker socket instance
+    /// fails validation.
+    
     pub fn validate_instance(&self) -> Result<(), FixedEffectError> {
         self.broker
             .validate_instance()
@@ -107,7 +113,14 @@ impl FixedEffectAdapter {
         }
     }
 
-    pub fn dispatch(
+    /// Dispatch one effect through the fixed adapter after admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FixedEffectError::EffectClassDenied`] when the daemon
+    /// mode does not admit the class,and [`FixedEffectError::Broker`] when
+    /// the broker dispatch fails.
+        pub fn dispatch(
         &self,
         class: ProviderEffectClass,
         request: BrokerRequest,
@@ -801,6 +814,14 @@ impl ProviderLifecycleDispatch {
     }
 
     /// Admit one request after checking caller role, Zone, and deduplication.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderEffectError::CallerRoleDenied`],
+    /// [`ProviderEffectError::ZoneMismatch`],
+    /// [`ProviderEffectError::StopOnlyLease`], or
+    /// [`ProviderEffectError::StateUnavailable`].
+    ///
     pub fn admit(
         &self,
         caller: &BrokerCallerRole,
