@@ -457,7 +457,11 @@ pub fn scratch_root(test_name: &str) -> PathBuf {
     let base = std::env::var_os("TEST_TMPDIR")
         .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
+        .or_else(|| {
+            std::env::var_os("CARGO_MANIFEST_DIR")
+                .map(PathBuf::from)
+                .map(|dir| dir.join("target"))
+        })
         .unwrap_or_else(std::env::temp_dir);
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     let root = {
