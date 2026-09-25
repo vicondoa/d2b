@@ -348,6 +348,9 @@ impl ReceivedPacketState {
     }
 }
 
+/// The session-facing seqpacket transport: packet-atomic framing,
+/// credit-bound dispatch, and attachment enforcement over one
+/// [`SeqpacketSocket`].
 pub struct UnixSeqpacketTransport {
     socket: Arc<SeqpacketSocket>,
     class: TransportClass,
@@ -375,6 +378,14 @@ impl fmt::Debug for UnixSeqpacketTransport {
 }
 
 impl UnixSeqpacketTransport {
+    /// Construct a session transport after validating the attachment
+    /// policy against the peer identity policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnixSessionError` when the policy combination is invalid
+    /// for the transport class or the ancillary capacity cannot satisfy
+    /// the policy.
     pub fn new(
         socket: SeqpacketSocket,
         locality: Locality,
@@ -674,6 +685,8 @@ impl OwnedTransport for UnixSeqpacketTransport {
     }
 }
 
+/// The session-facing message-stream transport: length-prefixed framming
+/// with resumable partial sends and receives over one [`StreamSocket`].
 pub struct UnixStreamTransport {
     socket: Arc<StreamSocket>,
     locality: Locality,

@@ -187,6 +187,11 @@ pub struct SendBurst {
     pub drained_to_would_block: bool,
 }
 
+/// An owned SOCK_SEQPACKET socket over the async readiness surface.
+///
+/// Packet-burst sends and receives are cancellation-safe:partial bursts
+/// are retained across an await.
+
 pub struct SeqpacketSocket {
     io: AsyncFd<OwnedFd>,
     received_any: AtomicBool,
@@ -199,6 +204,13 @@ impl fmt::Debug for SeqpacketSocket {
 }
 
 impl SeqpacketSocket {
+    /// Take ownership of one validated seqpacket socket.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnixSessionError` when the descriptor is not a
+    /// seqpacket socket or cannot be registered on the async surface.
+
     pub fn from_owned(fd: OwnedFd) -> Result<Self, UnixSessionError> {
         validate_socket(&fd, SocketType::SEQPACKET)?;
         Ok(Self {
@@ -206,6 +218,15 @@ impl SeqpacketSocket {
             received_any: AtomicBool::new(false),
         })
     }
+
+    /// Adopt a parent-prearmed seqpacket socket after verifying its
+    /// prearment contract. 
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnixSessionError` when the descriptor fails the prearmed
+    /// contract (socket type, async registration, or `passcred`
+    /// not prearmed).
 
     pub fn from_parent_prearmed(fd: OwnedFd) -> Result<Self, UnixSessionError> {
         verify_parent_prearmed(&fd)?;
@@ -219,6 +240,11 @@ impl SeqpacketSocket {
     /// the controller can receive it across `execve`. This function validates
     /// that well-known descriptor without closing it, rearms close-on-exec,
     /// and then takes ownership before any session use.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnixSessionError` when the inherited descriptor cannot
+    /// be duplicated or fails the prearmed contract.
     pub fn from_inherited_fd(raw_fd: RawFd) -> Result<Self, UnixSessionError> {
         let fd = duplicate_inherited_fd(raw_fd)?;
         let socket = Self::from_parent_prearmed(fd)?;
