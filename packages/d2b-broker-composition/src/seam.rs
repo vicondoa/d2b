@@ -268,10 +268,9 @@ fn admit(declaration: &HandlerDeclaration) -> Result<(), RoutingRefusal> {
 /// (AE3's runtime half - the interface, not process isolation, is the
 /// boundary).
 pub fn state_cell<'a>(
-    invocation: &'a DirectInvocation<'a>,
+    _invocation: &'a DirectInvocation<'a>,
     _cell: &str,
 ) -> Option<&'a StateCellHandle<'a>> {
-    let _ = invocation;
     None
 }
 
