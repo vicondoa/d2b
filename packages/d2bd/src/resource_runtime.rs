@@ -35,7 +35,7 @@ use d2b_contracts_resource::v3::identity::{
     AuthenticatedSubjectContext, EvidenceClass, ReconnectGeneration,
 };
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, ControllerGeneration, DesiredLifecycle,
+    CanonicalJsonValue, ControllerGeneration, DEFAULT_REQUEST_DEADLINE_MS, DesiredLifecycle,
     PlacementTargetKind, ResourceBundleGenerationId, ResourceEnvelope, ResourceGeneration,
     ResourceErrorKind, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid,
     ZoneId, ZoneRevision,
@@ -178,7 +178,7 @@ fn trusted_provider_resource_types() -> Result<Vec<ResourceTypeName>, ResourceRu
         .filter(|resource_type| resource_type.contains(".d2bus.org."))
     {
         resource_types.insert(
-            ResourceTypeName::parse(resource_type.to_owned())
+            ResourceTypeName::parse(resource_type)
                 .map_err(|_| ResourceRuntimeError::HandlerNotReady)?,
         );
     }
@@ -356,9 +356,8 @@ async fn committed_controller_provider_identities(
         if !provider_refs.contains(&row.resource_ref) {
             continue;
         }
-        let expected_ref = row.resource_ref.clone();
-        let (_, uid, generation, _, _) = committed_provider_spec(zone, &row, &expected_ref)?;
-        identities.insert(expected_ref, (uid, generation));
+        let (_, uid, generation, _, _) = committed_provider_spec(zone, &row, &row.resource_ref)?;
+        identities.insert(row.resource_ref, (uid, generation));
     }
     Ok(identities)
 }
@@ -4552,11 +4551,10 @@ impl ZoneResourceRuntime {
             return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
         }
         let plane = self.manager_plane_view()?;
-        let resource = current_committed_resource(
+        let resource = committed_resource(
             plane.as_ref(),
             &self.zone,
             identity.wayland_session_ref(),
-            "interaction-wayland-session-current",
         )
         .await?;
         let spec = committed_wayland_session_spec(&self.zone, &resource)?;
@@ -4622,7 +4620,7 @@ impl ZoneResourceRuntime {
         &self,
         resource_type: &str,
     ) -> Result<Vec<Value>, ResourceRuntimeError> {
-        ResourceTypeName::parse(resource_type.to_owned())
+        ResourceTypeName::parse(resource_type)
             .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
         self.manager_stored_rows(resource_type)
             .await?
@@ -6893,7 +6891,6 @@ impl ControllerSessionCoordinator {
             // registrar, and a dropped one leaves the internal session
             // unrenewable (its renewals refuse `AuthenticationUnavailable`).
             *self.registrar.lock().await = Some(registrar);
-            let setup = setup;
             match setup {
                 Ok((
                     ingress,
@@ -8291,7 +8288,10 @@ impl ZoneResourceRuntime {
                         ResourceRef::parse(value).map_err(|_| ResourceRuntimeError::RequestInvalid)
                     })?;
                 let mut meta = public_request_meta(operation_id);
-                meta.deadline_ms = 30_000;
+                // The peer service applies `DEFAULT_REQUEST_DEADLINE_MS` when
+                // the deadline is absent; set it explicitly so this public
+                // get is bounded by the same canonical 30s cap.
+                meta.deadline_ms = DEFAULT_REQUEST_DEADLINE_MS;
                 let response = client
                     .get(wire::GetRequest {
                         meta: protobuf::MessageField::some(meta),
@@ -8387,7 +8387,7 @@ impl ZoneResourceRuntime {
             "Get" => {
                 let target = public_target_ref(request)?;
                 let mut meta = public_request_meta(operation_id);
-                meta.deadline_ms = 30_000;
+                meta.deadline_ms = DEFAULT_REQUEST_DEADLINE_MS;
                 let response = client
                     .get(
                         ttrpc::context::Context::default(),
@@ -9165,22 +9165,6 @@ async fn committed_resource(
     validate_committed_resource(zone, resource_ref, resource)
 }
 
-async fn current_committed_resource(
-    plane: &dyn ControllerPlaneView,
-    zone: &ZoneId,
-    resource_ref: &ResourceRef,
-    _operation_id: &str,
-) -> Result<StoredResource, ResourceRuntimeError> {
-    if !is_supported_committed_resource_ref(resource_ref) {
-        return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
-    }
-    let resource = bridge_manager_row(plane, resource_ref)
-        .await
-        .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-        .ok_or(ResourceRuntimeError::InteractionConfigurationUnavailable)?;
-    validate_committed_resource(zone, resource_ref, resource)
-}
-
 fn is_supported_committed_resource_ref(resource_ref: &ResourceRef) -> bool {
     matches!(
         resource_ref.resource_type().as_str(),
@@ -9908,7 +9892,7 @@ fn manager_plane_seal_identity(
         .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?;
     let uid = match zone_uid {
         Some(uid) => uid,
-        None => ResourceUid::parse(MANAGER_PLANE_SEAL_UID.to_owned())
+        None => ResourceUid::parse(MANAGER_PLANE_SEAL_UID)
             .map_err(|_| ResourceRuntimeError::StoreSealUnavailable)?,
     };
     Ok(d2b_contracts_resource::v3::StoreSealIdentity::new(
@@ -9928,7 +9912,7 @@ async fn public_create_request(
         .and_then(Value::as_str)
         .ok_or(ResourceRuntimeError::RequestInvalid)
         .and_then(|value| {
-            ResourceTypeName::parse(value.to_owned())
+            ResourceTypeName::parse(value)
                 .map_err(|_| ResourceRuntimeError::RequestInvalid)
         })?;
     let input = request
@@ -10093,7 +10077,7 @@ fn public_update_finalizers_request(
     let uid = request
         .get("uid")
         .and_then(Value::as_str)
-        .map(|value| ResourceUid::parse(value.to_owned()))
+        .map(|value| ResourceUid::parse(value))
         .transpose()
         .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
     let expected_revision =
@@ -10135,7 +10119,7 @@ fn public_delete_request_from_current(
     let mut uid = request
         .get("uid")
         .and_then(Value::as_str)
-        .map(|value| ResourceUid::parse(value.to_owned()))
+        .map(|value| ResourceUid::parse(value))
         .transpose()
         .map_err(|_| ResourceRuntimeError::RequestInvalid)?;
     if uid.is_none() && expected_revision.is_some() {
@@ -10209,7 +10193,7 @@ fn public_uid(resource: &Value) -> Result<ResourceUid, ResourceRuntimeError> {
         .and_then(Value::as_str)
         .ok_or(ResourceRuntimeError::ResponseInvalid)
         .and_then(|value| {
-            ResourceUid::parse(value.to_owned()).map_err(|_| ResourceRuntimeError::ResponseInvalid)
+            ResourceUid::parse(value).map_err(|_| ResourceRuntimeError::ResponseInvalid)
         })
 }
 
@@ -10239,7 +10223,7 @@ where
     S: d2b_resource_api::ResourceStoreBackend,
 {
     let mut meta = public_request_meta(operation_id);
-    meta.deadline_ms = 30_000;
+    meta.deadline_ms = DEFAULT_REQUEST_DEADLINE_MS;
     let response = client
         .get(wire::GetRequest {
             meta: protobuf::MessageField::some(meta),
@@ -10277,7 +10261,7 @@ async fn gateway_get_resource(
     operation_id: &str,
 ) -> Result<Value, ResourceRuntimeError> {
     let mut meta = public_request_meta(operation_id);
-    meta.deadline_ms = 30_000;
+    meta.deadline_ms = DEFAULT_REQUEST_DEADLINE_MS;
     let response = client
         .get(
             ttrpc::context::Context::default(),
@@ -11075,11 +11059,11 @@ fn parse_network_marker(marker: &str) -> Option<(NetworkAdmissionKey, String)> {
     let (network, rest) = rest.split_once(":generation:")?;
     let (generation, rest) = rest.split_once(":attachment:")?;
     let (attachment, bundle) = rest.split_once(":bundle:")?;
-    let zone_uid = ResourceUid::parse(zone.to_owned()).ok()?;
-    let network_uid = ResourceUid::parse(network.to_owned()).ok()?;
+    let zone_uid = ResourceUid::parse(zone).ok()?;
+    let network_uid = ResourceUid::parse(network).ok()?;
     let network_generation = ResourceGeneration::new(generation.parse().ok()?).ok()?;
     let attachment_generation = ResourceGeneration::new(attachment.parse().ok()?).ok()?;
-    let bundle_generation = ResourceBundleGenerationId::parse(bundle.to_owned()).ok()?;
+    let bundle_generation = ResourceBundleGenerationId::parse(bundle).ok()?;
     Some((
         NetworkAdmissionKey::new(
             zone_uid,
