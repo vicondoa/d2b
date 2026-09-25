@@ -265,6 +265,26 @@ fn azure_wire_enums_use_adr_values() {
     );
 }
 
+#[test]
+fn azure_vm_update_resize_round_trips_with_the_plain_string_wire_shape() {
+    let update = AzureVmUpdate::Resize {
+        size: OpaqueAzureRef::parse("standard-d8").unwrap(),
+    };
+    let encoded = serde_json::to_value(&update).unwrap();
+    assert_eq!(
+        encoded,
+        serde_json::json!({ "resize": { "size": "standard-d8" } })
+    );
+    assert_eq!(
+        serde_json::from_value::<AzureVmUpdate>(encoded).unwrap(),
+        update
+    );
+    assert!(
+        serde_json::from_str::<AzureVmUpdate>(r#"{"resize":{"size":""}}"#).is_err(),
+        "the size SKU is validated at the deserialization boundary"
+    );
+}
+
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn absent_vm_starts_non_blocking_provision() {
@@ -273,9 +293,9 @@ async fn absent_vm_starts_non_blocking_provision() {
         state: AzureVmState::Absent,
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(
         provider,
         settings,
@@ -300,9 +320,9 @@ async fn observed_provisioning_vm_is_not_provisioned_again_after_restart() {
         state: AzureVmState::Provisioning,
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller =
         AzureVmController::new(provider, settings, effect, credential(), None).unwrap();
 
@@ -319,9 +339,9 @@ async fn observed_provisioning_vm_is_not_provisioned_again_after_restart() {
 async fn poll_rejects_an_operation_handle_that_is_not_current() {
     let (provider, settings) = config();
     let state = Arc::new(Mutex::new(FakeState::default()));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller =
         AzureVmController::new(provider, settings, effect, credential(), None).unwrap();
     controller.reconcile("zone", "guest", 1).await.unwrap();
@@ -347,7 +367,7 @@ async fn finalize_preserves_the_first_delete_operation_id() {
         tags: Some(expected_tag_digest()),
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect { state });
+    let effect = FakeEffect { state };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
@@ -370,13 +390,12 @@ async fn recovery_state_restores_opaque_lro_without_secret_material() {
         polls: vec![LroStatus::Succeeded, LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
-        state: Arc::clone(&state),
-    });
     let controller = AzureVmController::new(
         provider.clone(),
         settings.clone(),
-        Arc::clone(&effect),
+        FakeEffect {
+            state: Arc::clone(&state),
+        },
         credential(),
         Some(BootstrapPsk::from_bytes(b"one-time").unwrap()),
     )
@@ -391,7 +410,9 @@ async fn recovery_state_restores_opaque_lro_without_secret_material() {
     let mut restored = AzureVmController::new(
         provider,
         settings,
-        effect,
+        FakeEffect {
+            state: Arc::clone(&state),
+        },
         credential(),
         Some(BootstrapPsk::from_bytes(b"one-time").unwrap()),
     )
@@ -412,9 +433,9 @@ async fn restart_adopts_only_tagged_running_vm() {
         tags: Some(expected_tag_digest()),
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
@@ -437,7 +458,7 @@ async fn delete_keeps_finalizer_until_lro_completion() {
         polls: vec![LroStatus::Succeeded, LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect { state });
+    let effect = FakeEffect { state };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
@@ -470,7 +491,7 @@ async fn running_vm_waits_for_authenticated_enrollment() {
         tags: Some(expected_tag_digest()),
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect { state });
+    let effect = FakeEffect { state };
     let mut controller =
         AzureVmController::new(provider, settings, effect, credential(), None).unwrap();
     assert!(matches!(
@@ -492,9 +513,9 @@ async fn ready_vm_accepts_typed_resize_and_commits_after_lro() {
         polls: vec![LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
@@ -506,7 +527,7 @@ async fn ready_vm_accepts_typed_resize_and_commits_after_lro() {
                 "guest",
                 1,
                 AzureVmUpdate::Resize {
-                    size: "standard-d8".into(),
+                    size: OpaqueAzureRef::parse("standard-d8").unwrap(),
                 },
             )
             .await
@@ -539,9 +560,9 @@ async fn failed_update_lro_honors_pending_delete_intent() {
         ],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
@@ -552,7 +573,7 @@ async fn failed_update_lro_honors_pending_delete_intent() {
             "guest",
             1,
             AzureVmUpdate::Resize {
-                size: "standard-d8".into(),
+                size: OpaqueAzureRef::parse("standard-d8").unwrap(),
             },
         )
         .await
@@ -589,9 +610,9 @@ async fn restart_with_pending_delete_never_reprovisions_an_absent_vm() {
         polls: vec![LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .restore_recovery_state(AzureVmRecoveryState {
@@ -634,7 +655,7 @@ async fn foreign_tags_are_not_adopted() {
         tags: Some(TagDigest::from_core([9; 32])),
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect { state });
+    let effect = FakeEffect { state };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
@@ -656,9 +677,9 @@ async fn restart_finalization_reobserves_before_clearing_finalizer() {
         polls: vec![LroStatus::Succeeded, LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
@@ -687,9 +708,9 @@ async fn provisioning_lro_delivers_psk_before_bootstrap_phase() {
         polls: vec![LroStatus::Succeeded, LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(
         provider,
         settings,
@@ -725,9 +746,9 @@ async fn failed_extension_lro_redelivers_psk_without_losing_secret() {
         ],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(
         provider,
         settings,
@@ -768,9 +789,9 @@ async fn transient_extension_failure_does_not_consume_delivery_attempt() {
         extension_failures: 1,
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let mut controller = AzureVmController::new(
         provider,
         settings,
@@ -808,7 +829,7 @@ async fn running_vm_fails_closed_at_bootstrap_deadline() {
         tags: Some(expected_tag_digest()),
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect { state });
+    let effect = FakeEffect { state };
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_clock(Arc::new(FixedClock(Arc::clone(&now))));
@@ -830,9 +851,9 @@ async fn bootstrap_deadline_retries_failed_extension_cleanup() {
         polls: vec![LroStatus::Succeeded],
         ..FakeState::default()
     }));
-    let effect = Arc::new(FakeEffect {
+    let effect = FakeEffect {
         state: Arc::clone(&state),
-    });
+    };
     let now = Arc::new(Mutex::new(60_000));
     let controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()

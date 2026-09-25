@@ -80,7 +80,7 @@ pub enum AzureVmUpdate {
     /// Resize the VM to a new Azure size SKU.
     Resize {
         /// New size SKU.
-        size: String,
+        size: d2b_contracts::OpaqueAzureRef,
     },
     /// Attach a provider-owned data disk.
     AttachDisk {
@@ -179,7 +179,7 @@ impl fmt::Debug for AzureVmStatus {
 pub struct AzureVmController<E> {
     provider_config: AzureVmConfig,
     settings: AzureVmGuestSettings,
-    effect: Arc<E>,
+    effect: E,
     credentials: Arc<dyn AzureCredentialPort>,
     phase: AzureVmPhase,
     finalizer: bool,
@@ -208,7 +208,7 @@ where
     pub fn new(
         provider_config: AzureVmConfig,
         settings: AzureVmGuestSettings,
-        effect: Arc<E>,
+        effect: E,
         credentials: Arc<dyn AzureCredentialPort>,
         bootstrap_psk: Option<BootstrapPsk>,
     ) -> Result<Self, AzureVmError> {
@@ -346,6 +346,7 @@ where
     /// variants) for retryable effect failures, and the fatal variants
     /// (`BootstrapFailed`, `ArmProvisioningFailed`, `ArmCredentialDenied`)
     /// when an effect cannot be retried.
+    #[tracing::instrument(skip_all, fields(provider = "runtime-azure-virtual-machine"))]
     pub async fn reconcile(
         &mut self,
         zone_uid: &str,
@@ -362,7 +363,6 @@ where
             tracing::warn!(
                 zone = %zone_uid,
                 resource = %guest_uid,
-                provider = "runtime-azure-virtual-machine",
                 "bootstrap deadline previously failed; failing generation"
             );
             self.phase = AzureVmPhase::Failed;
@@ -420,7 +420,6 @@ where
                 tracing::warn!(
                     zone = %zone_uid,
                     resource = %guest_uid,
-                    provider = "runtime-azure-virtual-machine",
                     state = ?state,
                     "VM provisioning state failed or unknown"
                 );
@@ -438,6 +437,7 @@ where
     /// missing, [`AzureVmError::Ambiguous`] when the observed VM identity
     /// does not match the tag digest, and the ARM effect variants for
     /// retryable and fatal effect failures.
+    #[tracing::instrument(skip_all, fields(provider = "runtime-azure-virtual-machine"))]
     pub async fn adopt(&mut self) -> Result<AzureVmReconcileOutcome, AzureVmError> {
         if !self.finalizer {
             return Err(AzureVmError::InvalidConfiguration);
@@ -446,8 +446,6 @@ where
         let (state, handle, tags) = self.effect.get_vm_state(&self.settings, &token).await?;
         if state != AzureVmState::Running {
             tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
                 state = ?state,
                 "adoption refused: VM is not running"
             );
@@ -472,22 +470,19 @@ where
     /// Returns [`AzureVmError::InvalidOperationHandle`] when the supplied
     /// handle is not the current operation, and the ARM effect variants for
     /// retryable and fatal polling failures.
+    #[tracing::instrument(skip_all, fields(provider = "runtime-azure-virtual-machine"))]
     pub async fn poll_operation(
         &mut self,
         operation: crate::effect::AzureOperationHandle,
     ) -> Result<AzureVmReconcileOutcome, AzureVmError> {
         if self.operation.as_ref() != Some(&operation) {
             tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
                 "poll called with a foreign operation handle"
             );
             return Err(AzureVmError::InvalidOperationHandle);
         }
         if self.operation_expired() {
             tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
                 phase = ?self.phase,
                 "long-running operation exceeded maximum age; abandoning"
             );
@@ -507,8 +502,6 @@ where
             }),
             LroStatus::Failed => {
                 tracing::warn!(
-                    resource_group = %self.settings.resource_group,
-                    provider = "runtime-azure-virtual-machine",
                     phase = ?self.phase,
                     "long-running operation failed"
                 );
@@ -547,8 +540,6 @@ where
                             self.effect.get_vm_state(&self.settings, &token).await?;
                         if state != AzureVmState::Running {
                             tracing::warn!(
-                                resource_group = %self.settings.resource_group,
-                                provider = "runtime-azure-virtual-machine",
                                 state = ?state,
                                 "VM not running after provision LRO succeeded"
                             );
@@ -577,8 +568,6 @@ where
                         self.bootstrap_psk = None;
                         if self.bootstrap_deadline_failed {
                             tracing::warn!(
-                                resource_group = %self.settings.resource_group,
-                                provider = "runtime-azure-virtual-machine",
                                 "bootstrap deadline failed; refusing to mark VM ready"
                             );
                             self.phase = AzureVmPhase::Failed;
@@ -596,8 +585,6 @@ where
                             Some(update) => update,
                             None => {
                                 tracing::warn!(
-                                    resource_group = %self.settings.resource_group,
-                                    provider = "runtime-azure-virtual-machine",
                                     "reconfiguration LRO succeeded without pending update"
                                 );
                                 return Err(AzureVmError::Ambiguous);
@@ -605,8 +592,6 @@ where
                         };
                         if let Err(error) = self.apply_update(update) {
                             tracing::warn!(
-                                resource_group = %self.settings.resource_group,
-                                provider = "runtime-azure-virtual-machine",
                                 code = error.code(),
                                 "applied update rejected during reconfiguration"
                             );
@@ -638,6 +623,7 @@ where
     /// when the update contradicts the current VM shape,
     /// [`AzureVmError::Ambiguous`] when the owned VM identity is absent,
     /// and the ARM effect variants for retryable and fatal failures.
+    #[tracing::instrument(skip_all, fields(provider = "runtime-azure-virtual-machine"))]
     pub async fn update(
         &mut self,
         zone_uid: &str,
@@ -649,7 +635,6 @@ where
             tracing::warn!(
                 zone = %zone_uid,
                 resource = %guest_uid,
-                provider = "runtime-azure-virtual-machine",
                 phase = ?self.phase,
                 "update rejected: VM is not in Ready phase"
             );
@@ -659,7 +644,6 @@ where
             tracing::debug!(
                 zone = %zone_uid,
                 resource = %guest_uid,
-                provider = "runtime-azure-virtual-machine",
                 "update deferred while another operation is in flight"
             );
             return Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 });
@@ -668,7 +652,6 @@ where
             tracing::warn!(
                 zone = %zone_uid,
                 resource = %guest_uid,
-                provider = "runtime-azure-virtual-machine",
                 code = error.code(),
                 "update rejected: validation failed"
             );
@@ -681,7 +664,7 @@ where
         let operation = match &update {
             AzureVmUpdate::Resize { size } => {
                 self.effect
-                    .start_vm_resize(handle, size, &operation_id, &token)
+                    .start_vm_resize(handle, size.as_str(), &operation_id, &token)
                     .await?
             }
             AzureVmUpdate::AttachDisk { disk } => {
@@ -713,6 +696,7 @@ where
     /// Returns [`AzureVmError::Ambiguous`] when the owned VM identity or
     /// pending delete operation is absent, and the ARM effect variants for
     /// retryable and fatal deletion failures.
+    #[tracing::instrument(skip_all, fields(provider = "runtime-azure-virtual-machine"))]
     pub async fn finalize(
         &mut self,
         zone_uid: &str,
@@ -764,7 +748,6 @@ where
                 tracing::warn!(
                     zone = %zone_uid,
                     resource = %guest_uid,
-                    provider = "runtime-azure-virtual-machine",
                     state = ?state,
                     "VM state failed or unknown during finalization"
                 );
@@ -817,8 +800,6 @@ where
             .get_or_insert_with(|| self.clock.now_unix_ms());
         if self.clock.now_unix_ms().saturating_sub(started) >= self.settings.bootstrap_deadline_ms {
             tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
                 "bootstrap PSK delivery deadline elapsed"
             );
             self.phase = AzureVmPhase::Failed;
@@ -826,8 +807,6 @@ where
         }
         if self.psk_delivery_attempts >= MAX_PSK_DELIVERY_ATTEMPTS {
             tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
                 attempts = self.psk_delivery_attempts,
                 "bootstrap PSK delivery attempts exhausted"
             );
@@ -864,8 +843,6 @@ where
                 >= self.settings.bootstrap_deadline_ms
             {
                 tracing::warn!(
-                    resource_group = %self.settings.resource_group,
-                    provider = "runtime-azure-virtual-machine",
                     "bootstrap enrollment deadline elapsed before guest enrolled"
                 );
                 self.phase = AzureVmPhase::Failed;
@@ -918,8 +895,6 @@ where
             }
             AzureVmState::Failed | AzureVmState::Unknown => {
                 tracing::warn!(
-                    resource_group = %self.settings.resource_group,
-                    provider = "runtime-azure-virtual-machine",
                     state = ?state,
                     "VM state failed or unknown during pending delete"
                 );
@@ -982,8 +957,6 @@ where
     ) -> Result<(AzureVmHandle, TagDigest), AzureVmError> {
         let Some(handle) = handle else {
             tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
                 stage,
                 "running VM observed without effect handle"
             );
@@ -991,8 +964,6 @@ where
         };
         let Some(tags) = tags else {
             tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
                 stage,
                 "VM tag digest missing; refusing foreign or drifted resource"
             );
@@ -1000,8 +971,6 @@ where
         };
         if tags != self.expected_tag_digest {
             tracing::warn!(
-                resource_group = %self.settings.resource_group,
-                provider = "runtime-azure-virtual-machine",
                 stage,
                 "VM tag digest mismatch; refusing foreign or drifted resource"
             );
@@ -1029,10 +998,7 @@ where
 
     fn validate_update(&self, update: &AzureVmUpdate) -> Result<(), AzureVmError> {
         match update {
-            AzureVmUpdate::Resize { size } => {
-                d2b_contracts::OpaqueAzureRef::parse(size.clone())
-                    .map_err(|_| AzureVmError::InvalidConfiguration)?;
-            }
+            AzureVmUpdate::Resize { .. } => {}
             AzureVmUpdate::AttachDisk { disk } => {
                 let mut settings = self.settings.clone();
                 settings.data_disks.push(disk.clone());
@@ -1054,10 +1020,7 @@ where
 
     fn apply_update(&mut self, update: AzureVmUpdate) -> Result<(), AzureVmError> {
         match update {
-            AzureVmUpdate::Resize { size } => {
-                self.settings.vm_size = d2b_contracts::OpaqueAzureRef::parse(size)
-                    .map_err(|_| AzureVmError::InvalidConfiguration)?;
-        }
+AzureVmUpdate::Resize { size } => self.settings.vm_size = size,
         AzureVmUpdate::AttachDisk { disk } => self.settings.data_disks.push(disk),
         AzureVmUpdate::DetachDisk { lun } => {
             self.settings.data_disks.retain(|disk| disk.lun != lun)
@@ -1075,8 +1038,6 @@ where
             .await
             .inspect_err(|error| {
                 tracing::warn!(
-                    resource_group = %self.settings.resource_group,
-                    provider = "runtime-azure-virtual-machine",
                     code = error.code(),
                     "ARM access token acquisition failed"
                 );
