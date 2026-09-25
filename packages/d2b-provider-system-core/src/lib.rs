@@ -49,7 +49,7 @@ pub use host::{
 pub use ownership::{DISOWNED_RESOURCE_TYPES, OWNED_RESOURCE_TYPES};
 pub use user::{
     DiscoveredUser, UserBinding, UserDiscoveryCondition, UserDiscoveryEffectPort,
-    UserIdentityDigest, UserObservation, UserReconciler, UserStatusReport,
+    UserIdentityDigest, UserObservation, UserReconciler, UserStatusReport, required_bindings,
 };
 
 /// The Provider name this bootstrap controller implements.
