@@ -28,6 +28,12 @@ pub struct DeviceNodePath(String);
 
 impl DeviceNodePath {
     /// Parse an absolute device path with no control characters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SeccompProfileContractError::InvalidDevicePath`] when the
+    /// path does not start with `/dev/`, exceeds the byte bound, or
+    /// carries a NUL or control character.
     pub fn parse(value: impl Into<String>) -> Result<Self, SeccompProfileContractError> {
         let value = value.into();
         if !value.starts_with("/dev/")
@@ -39,8 +45,7 @@ impl DeviceNodePath {
         }
         Ok(Self(value))
     }
-
-    }
+}
 
 redacted_debug!(DeviceNodePath);
 
@@ -158,8 +163,7 @@ impl DeviceBind {
             access,
         }
     }
-
-    }
+}
 
 /// The `SeccompProfile` desired spec.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -173,6 +177,13 @@ pub struct SeccompProfileSpec {
 
 impl SeccompProfileSpec {
     /// Construct a profile spec after checking the list bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SeccompProfileContractError::TooManySyscalls`] when the
+    /// allowlist exceeds the syscall bound and
+    /// [`SeccompProfileContractError::TooManyDeviceBinds`] when the
+    /// profile declares more device binds than the bound.
     pub fn new(
         syscalls: Vec<BoundedToken>,
         namespaces: SeccompNamespaces,
@@ -192,8 +203,7 @@ impl SeccompProfileSpec {
             devices,
         })
     }
-
-    }
+}
 
 redacted_debug!(SeccompProfileSpec);
 

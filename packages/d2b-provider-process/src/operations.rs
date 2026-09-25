@@ -1348,10 +1348,10 @@ fn validate_spawn_runner_request_matches_intent(
 fn bind_cloud_hypervisor_guest_uid(
     role: RunnerRole,
     owner_uid: Option<&ResourceUid>,
-    argv: &[String],
+    argv: Vec<String>,
 ) -> Result<Vec<String>, OperationFailure> {
     if role != RunnerRole::CloudHypervisor {
-        return Ok(argv.to_vec());
+        return Ok(argv);
     }
     let owner_uid = owner_uid.ok_or_else(|| {
         OperationFailure::with_detail(
@@ -1359,7 +1359,7 @@ fn bind_cloud_hypervisor_guest_uid(
             "owner_uid: required-for-cloud-hypervisor".to_owned(),
         )
     })?;
-    let mut bound = argv.to_vec();
+    let mut bound = argv;
     let cmdline_index = bound
         .iter()
         .position(|argument| argument == "--cmdline")
@@ -2649,7 +2649,7 @@ impl OperationHandler for SpawnRunnerHandler {
         let argv = bind_cloud_hypervisor_guest_uid(
             request.role,
             request.owner_uid.as_ref(),
-            &launch_argv,
+            launch_argv,
         )?;
         // The launch identity is the trusted intent's principal for every
         // posture (the retired arm's `prepare_runner_launch_identity`).

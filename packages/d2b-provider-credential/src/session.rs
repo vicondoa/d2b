@@ -129,6 +129,13 @@ impl CredentialRevocationRequest {
     /// constructible for a credential Provider with a live (non-zero)
     /// session generation; everything else fails closed as
     /// [`CredentialResourceRuntimeError::InvalidResource`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialResourceRuntimeError::InvalidResource`] when
+    /// the session generation is zero or unknown, the rotation generation
+    /// is zero, or the Provider reference does not name a credential
+    /// Provider.
     pub fn new(inputs: CredentialRevocationInputs) -> Result<Self, CredentialResourceRuntimeError> {
         if inputs.session_generation.get() == 0
             || inputs.rotation_generation == 0
@@ -272,6 +279,11 @@ pub trait CredentialSession: Send + Sync {
 
     /// Revoke one credential lease through the authenticated Provider
     /// session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialResourceRuntimeError::Revocation`] when the
+    /// session refuses or cannot confirm the revocation.
     async fn revoke_credential(
         &self,
         request: &CredentialRevocationRequest,

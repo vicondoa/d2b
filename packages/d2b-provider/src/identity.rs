@@ -95,6 +95,11 @@ pub struct ProviderImplementationId(BoundedToken);
 
 impl ProviderImplementationId {
     /// Parse one bounded implementation token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrimitiveSpecError::InvalidToken`] when the value is not
+    /// a bounded token.
     pub fn parse(value: impl Into<String>) -> Result<Self, PrimitiveSpecError> {
         BoundedToken::parse(value).map(Self)
     }
@@ -117,6 +122,11 @@ pub struct ProviderMethodName(BoundedToken);
 
 impl ProviderMethodName {
     /// Parse one bounded method token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrimitiveSpecError::InvalidToken`] when the value is not
+    /// a bounded token.
     pub fn parse(value: impl Into<String>) -> Result<Self, PrimitiveSpecError> {
         BoundedToken::parse(value).map(Self)
     }
@@ -139,6 +149,11 @@ pub struct ProviderCapabilitySet(BTreeSet<ProviderMethodName>);
 
 impl ProviderCapabilitySet {
     /// Build a bounded, non-empty capability set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryBuildError::BoundExceeded`] when the set is empty
+    /// or exceeds the capability ceiling.
     pub fn new(
         methods: impl IntoIterator<Item = ProviderMethodName>,
     ) -> Result<Self, RegistryBuildError> {

@@ -32,6 +32,11 @@ impl std::fmt::Debug for OpenSessionRequest {
 
 impl OpenSessionRequest {
     /// Construct a bounded session request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::InvalidName`] when the pool or
+    /// session name violates its bound.
     pub fn new(
         pool_name: impl Into<String>,
         session_name: impl Into<String>,
@@ -140,6 +145,12 @@ impl ShellTerminalController {
     /// Restored occupancy blocks new streams until the next status reconcile
     /// proves capacity. This intentionally favors refusal over potentially
     /// exceeding a pool's attachment limit after controller restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::CapacityExceeded`] when the pool name
+    /// is already projected, and the authority's refusal when the restore
+    /// is rejected.
     pub fn restore_pool(
         &mut self,
         pool: ShellPool,
@@ -166,6 +177,11 @@ impl ShellTerminalController {
     }
 
     /// Update remote occupancy without invalidating locally tracked streams.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::CapacityExceeded`] when the pool is
+    /// not projected or the authority rejects the attachment count.
     pub fn reconcile_pool_attachments(
         &self,
         pool_name: &str,
@@ -207,6 +223,11 @@ impl ShellTerminalController {
     /// The session remains counted for capacity even when the supervisor is
     /// missing or ambiguous, preventing a restart from recreating a resource
     /// name while its earlier process may still exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::CapacityExceeded`] when the pool is
+    /// missing or the session is already projected.
     pub fn restore_session(
         &mut self,
         session: ShellSession,
@@ -262,6 +283,12 @@ impl ShellTerminalController {
     }
 
     /// Advance one reconciled session after its prior supervisor is retired.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::NotAuthorized`] when the subject is
+    /// not authorized, [`ShellTerminalError::CapacityExceeded`] when the
+    /// session is not projected, and the authority's refusal otherwise.
     pub fn restart_supervisor(
         &mut self,
         subject: &Subject,
@@ -340,6 +367,13 @@ impl ShellTerminalController {
     }
 
     /// Create a session after authorizing the current request and enforcing pool capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::NotAuthorized`] when the subject is
+    /// not authorized, [`ShellTerminalError::CapacityExceeded`] when the
+    /// pool is not projected or full, and the authority's refusal
+    /// otherwise.
     pub fn open_session(
         &mut self,
         subject: &Subject,
@@ -446,6 +480,12 @@ impl ShellTerminalController {
     }
 
     /// Finalize one session after its owned supervisor has stopped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::NotAuthorized`] when the subject is
+    /// not authorized, [`ShellTerminalError::CapacityExceeded`] when the
+    /// session is not projected, and the authority's refusal otherwise.
     pub fn finalize_session(
         &mut self,
         subject: &Subject,

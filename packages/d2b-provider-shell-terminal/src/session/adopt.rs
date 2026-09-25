@@ -10,6 +10,11 @@ pub struct SupervisorIdentity {
 
 impl SupervisorIdentity {
     /// Construct a verified identity with a nonzero generation and digests.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::ShellTerminalError::SupervisorAmbiguous`] when the
+    /// invocation or cgroup digest is zero or the generation is zero.
     pub fn new(
         invocation_digest: [u8; 32],
         cgroup_digest: [u8; 32],

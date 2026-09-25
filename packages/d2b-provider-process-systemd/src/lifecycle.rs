@@ -30,6 +30,13 @@ impl Default for SystemdProviderConfig {
 
 impl SystemdProviderConfig {
     /// Construct a validated Provider config.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SystemdConfigError::OutOfRange`] when any field exceeds
+    /// its fixed bound: `launch_timeout_sec` must be in `1..=3600`,
+    /// `termination_grace_sec` at most 3600, `user_manager_check_timeout`
+    /// in `1..=60`, and `max_concurrent_launches` in `1..=256`.
     pub fn new(
         launch_timeout_sec: u32,
         termination_grace_sec: u32,

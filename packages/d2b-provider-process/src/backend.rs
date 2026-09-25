@@ -253,6 +253,12 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
     type Handle: Send + Sync + 'static;
 
     /// Resolve and launch one ticket, returning mandatory local authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`ProcessEffectError`] the backend reports for the
+    /// failing launch step: ticket validation, identity resolution,
+    /// effect-port refusal, or launch failure.
     fn launch(
         &self,
         request: ProcessRequest,

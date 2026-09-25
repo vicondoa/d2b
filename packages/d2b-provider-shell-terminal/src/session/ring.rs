@@ -13,6 +13,11 @@ pub struct OutputRing {
 
 impl OutputRing {
     /// Create a ring within the provider's documented capacity bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellTerminalError::CapacityOutOfRange`] when the
+    /// capacity is outside `4096..=1 MiB`.
     pub fn new(capacity: usize) -> Result<Self, ShellTerminalError> {
         if !(4096..=1024 * 1024).contains(&capacity) {
             return Err(ShellTerminalError::CapacityOutOfRange);

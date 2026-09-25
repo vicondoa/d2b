@@ -19,8 +19,8 @@ use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_zone_session::v3::zone_routing::ZonePath;
 
 use crate::{
-    AttemptDisposition, CallDriver, CallOptions, CancellationToken, ClientError, MethodProfile,
-    ResourceClient, ServiceOwner, SessionFailure, SystemClock, TargetInput, TargetResolver,
+    AttemptDisposition, CallOptions, CancellationToken, ClientError, MethodProfile,
+    ResourceClient, ServiceOwner, SystemClock, TargetInput, TargetResolver,
     TransportKind, TransportSelection, WallClock, ZoneClient, ZoneServiceKind,
     ZoneSessionConnector, call::REQUEST_ID_BYTES, zone_client::ConnectedZoneSession,
 };
@@ -627,6 +627,16 @@ where
     /// session adapter sees the request. The adapter is responsible for
     /// authoritative subject mapping and the `attach` authorization verdict;
     /// this method cannot elevate a caller or reuse an exec admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::Cancelled`] when the token is already
+    /// cancelled, the resolver's refusal when the target cannot be
+    /// resolved, [`ClientError::InvalidMetadata`] when the call lifetime
+    /// is invalid, the admission refusal when the call cannot be admitted,
+    /// the connector's error when the session cannot be established, and
+    /// the session, transport, deadline, or remote error the open reports
+    /// after retries are exhausted.
     pub async fn attach(
         &self,
         target: ProcessAttachTarget,
@@ -655,7 +665,7 @@ where
             self.zone
                 .resource_client()
                 .prepare_call(&resolved, profile, call_options, false)?;
-        let connection = match await_with_cancellation(
+        let connection = match crate::call::await_with_cancellation(
             self.zone
                 .connect(&target_input, ZoneServiceKind::Zone, selection),
             cancellation,
@@ -680,7 +690,7 @@ where
             let open = connection
                 .session()
                 .open_named_stream(request.clone(), attempt.relative_timeout_nanos());
-            let result = match await_with_cancellation(open, cancellation).await {
+            let result = match crate::call::await_with_cancellation(open, cancellation).await {
                 Ok(result) => result,
                 Err(ClientError::Cancelled) => {
                     let _ = connection.session().cancel(request_id).await;
@@ -699,7 +709,7 @@ where
                     }
                     return Ok(stream);
                 }
-                Err(error) => match classify_attach_error(&driver, error) {
+                Err(error) => match crate::call::classify_session_error(&driver, error) {
                     AttemptDisposition::RetryNow => continue,
                     AttemptDisposition::RetryAfterMs(delay) => {
                         match crate::call::retry_backoff(delay, cancellation).await {
@@ -758,42 +768,6 @@ where
             )
             .await?;
         stream.close().await
-    }
-}
-
-async fn await_with_cancellation<F, T>(
-    future: F,
-    cancellation: &CancellationToken,
-) -> Result<T, ClientError>
-where
-    F: Future<Output = T> + Send,
-{
-    let mut future = Box::pin(future);
-    let mut cancelled = Box::pin(cancellation.cancelled());
-    core::future::poll_fn(move |context| {
-        if let core::task::Poll::Ready(value) = future.as_mut().poll(context) {
-            return core::task::Poll::Ready(Ok(value));
-        }
-        if let core::task::Poll::Ready(()) = cancelled.as_mut().poll(context) {
-            return core::task::Poll::Ready(Err(ClientError::Cancelled));
-        }
-        core::task::Poll::Pending
-    })
-    .await
-}
-
-fn classify_attach_error<W: WallClock>(
-    driver: &CallDriver<W>,
-    error: ClientError,
-) -> AttemptDisposition {
-    match error {
-        ClientError::SessionLost => driver.record_session_failure(SessionFailure::Disconnected),
-        ClientError::TransportFailed => driver.record_session_failure(SessionFailure::Retryable),
-        ClientError::DeadlineExpired => driver.record_session_failure(SessionFailure::Deadline),
-        ClientError::Cancelled => driver.record_session_failure(SessionFailure::Cancelled),
-        ClientError::ContractViolation => driver.record_session_failure(SessionFailure::Protocol),
-        ClientError::Remote { kind, retry } => driver.record_remote_verdict(kind, retry),
-        other => AttemptDisposition::Fail(other),
     }
 }
 

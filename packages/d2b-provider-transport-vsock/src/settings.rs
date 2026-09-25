@@ -28,6 +28,12 @@ pub struct VsockTransportSettings {
 
 impl VsockTransportSettings {
     /// Construct validated settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SettingsError::InvalidValue`] when the guest reference is
+    /// not a bounded `Guest/...` reference or the timeout is outside
+    /// `1..=60` seconds.
     pub fn new(guest_ref: impl Into<String>) -> Result<Self, SettingsError> {
         let settings = Self {
             guest_ref: guest_ref.into(),
@@ -39,6 +45,12 @@ impl VsockTransportSettings {
     }
 
     /// Validate settings and reject raw endpoint material.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SettingsError::InvalidValue`] when the guest reference is
+    /// not a bounded `Guest/...` reference or the timeout is outside
+    /// `1..=60` seconds.
     pub fn validate(&self) -> Result<(), SettingsError> {
         if !self.guest_ref.starts_with("Guest/")
             || self.guest_ref.len() <= "Guest/".len()

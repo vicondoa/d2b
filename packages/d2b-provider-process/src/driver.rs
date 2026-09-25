@@ -1985,7 +1985,7 @@ impl ResourceDriver for ProcessDriver {
         let identity = self
             .identity(
                 ctx,
-                &envelope.provider_ref.clone().expect("checked"),
+                envelope.provider_ref.as_ref().expect("checked"),
                 DriverOp::Recover,
             )
             .await?;
@@ -2053,7 +2053,7 @@ impl ResourceDriver for ProcessDriver {
         let identity = self
             .identity(
                 ctx,
-                &envelope.provider_ref.clone().expect("checked"),
+                envelope.provider_ref.as_ref().expect("checked"),
                 DriverOp::Reconcile,
             )
             .await?;
@@ -2102,7 +2102,7 @@ impl ResourceDriver for ProcessDriver {
         let identity = match self
             .identity(
                 ctx,
-                &envelope.provider_ref.clone().expect("checked"),
+                envelope.provider_ref.as_ref().expect("checked"),
                 DriverOp::Delete,
             )
             .await

@@ -31,9 +31,7 @@ use d2b_provider_process::{
 };
 use rustix::event::{PollFd, PollFlags, poll};
 use sha2::{Digest, Sha256};
-use tracing::{debug, error, warn};
-
-const MAX_PENDING_OBSERVATIONS: usize = 1024;
+use tracing::{debug, warn};
 
 /// Trusted-bundle launch intent resolved for one generic Process ticket.
 #[derive(Clone, PartialEq, Eq)]
@@ -1174,48 +1172,21 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
         }
     }
 
-    // Sync by construction: this ledger sits behind the sync
-// `ProcessEffectBackend` trait surface, invoked only from the dedicated
-// blocking workers (or sync test harnesses); the critical section is short
-// and never held across a suspension point.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn record(&self, observed: BrokerObservedProcess) -> Result<(), ProcessEffectError> {
-        let mut observations = self.observations.lock().map_err(|_| {
-            error!(
-                provider = "supervisor",
-                "broker observation ledger lock poisoned; observe failed"
-            );
-            ProcessEffectError::ObserveFailed
-        })?;
-        let identity = observed.digest();
-        if observations.len() >= MAX_PENDING_OBSERVATIONS
-            && !observations.contains_key(&identity)
-            && let Some(candidate) = observations.keys().next().copied()
-        {
-            observations.remove(&candidate);
-        }
-        observations.insert(identity, observed);
-        Ok(())
+// Sync by construction:the ledger sits behind the sync trait surface;the
+    // shared helper's critical section is short and never held across a suspension
+    // point.
+    fn record(&self, observed: BrokerObservedProcess) -> Result<(), ProcessEffectError> {
+        crate::observations::record(&self.observations, observed.digest(), observed)
     }
 
     // Sync by construction: backend ledger behind the sync trait surface (see
-// `record`); critical section short, no suspension inside the guard.
-#[allow(clippy::disallowed_methods, reason = "synchronous path")]
-fn take_observation(
+    // `record`); critical section short, no suspension inside the guard.
+
+    fn take_observation(
         &self,
         identity: &ProcessIdentityDigest,
     ) -> Result<BrokerObservedProcess, ProcessEffectError> {
-        self.observations
-            .lock()
-            .map_err(|_| {
-                error!(
-                    provider = "supervisor",
-                    "broker observation ledger lock poisoned; observation lookup failed"
-                );
-                ProcessEffectError::ObserveFailed
-            })?
-            .remove(identity)
-            .ok_or(ProcessEffectError::IdentityChanged)
+        crate::observations::take(&self.observations, identity)
     }
 
     pub(crate) fn matches_peer_process(
@@ -1867,6 +1838,8 @@ mod tests {
     use std::path::Path;
 
     use d2b_core::processes::ProcessRole;
+
+    use crate::observations::MAX_PENDING_OBSERVATIONS;
 
     use super::*;
 

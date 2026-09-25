@@ -25,6 +25,11 @@ pub struct ProviderInstance {
 
 impl ProviderInstance {
     /// Construct a ready instance handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::RegistryBuildError::NotAProviderRef`] when
+    /// the reference does not name a Provider.
     pub fn new(
         provider_ref: ResourceRef,
         generation: ResourceGeneration,

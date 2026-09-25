@@ -86,18 +86,13 @@ pub const PROCESS_SYSTEMD_SERVICES: &[ServiceDecl] = &[PROCESS_SYSTEMD_EFFECTS_S
 /// One value per zone serves the declared methods;the factory constructs it
 /// from crate-owned constants alone, so a respawn rebuilds the same surface
 /// from its durable row (KTD5).
+#[derive(Default)]
 pub struct SystemdEffectsService;
 
 impl SystemdEffectsService {
     /// Build the zone's effects service value.
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for SystemdEffectsService {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -206,18 +201,13 @@ impl EffectService for SystemdEffectsService {
 
 /// The composition-root factory that hosts the system-systemd effects
 /// service in one zone (R5): no facet set, so one value serves every zone.
+#[derive(Default)]
 pub struct SystemdEffectsServiceFactory;
 
 impl SystemdEffectsServiceFactory {
     /// Build the zone-agnostic factory.
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for SystemdEffectsServiceFactory {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

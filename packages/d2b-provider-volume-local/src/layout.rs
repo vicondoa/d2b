@@ -51,6 +51,12 @@ impl EntryRequest {
     /// read of the same authority rather than a second vocabulary. The ACL
     /// projection decodes from the same rendering, so a declaration whose
     /// grants exceed the mode's group class fails resolution here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VolumeLocalError::InvalidSpec`] when a lifecycle policy
+    /// field or the ACL projection cannot be decoded from the entry's
+    /// canonical rendering.
     pub fn resolve(
         volume_uid: &ResourceUid,
         declared: &LayoutEntry,

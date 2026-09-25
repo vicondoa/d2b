@@ -56,9 +56,20 @@ pub trait NamedStreamPort: Send + Sync + 'static {
     type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
 
     /// Open one named stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NamedStreamError::Capacity`] when the stream table is
+    /// full and [`NamedStreamError::Disconnected`] when the session is no
+    /// longer available.
     async fn open_named_stream(&self) -> Result<(NamedStreamId, Self::Stream), NamedStreamError>;
 
     /// Close one named stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NamedStreamError::Disconnected`] when the session is no
+    /// longer available.
     async fn close_named_stream(&self, stream: NamedStreamId) -> Result<(), NamedStreamError>;
 }
 

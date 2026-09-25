@@ -29,7 +29,7 @@ pub use d2b_core_controller::controller_assignment::{
 
 use crate::{
     AttemptDisposition, CallDriver, CallOptions, ClientError, MethodProfile, ResolvedTarget,
-    ResourceClient, SessionFailure, SystemClock, TargetInput, TargetResolver, TransportKind,
+    ResourceClient, SystemClock, TargetInput, TargetResolver, TransportKind,
     TransportSelection, WallClock, ZoneServiceKind, call::REQUEST_ID_BYTES,
 };
 
@@ -192,11 +192,6 @@ impl GuestControlEndpoint {
 
     /// Borrow the store-assigned Endpoint UID.
     pub const fn uid(&self) -> &ResourceUid {
-        &self.uid
-    }
-
-    /// Borrow the store-assigned Endpoint UID.
-    pub const fn endpoint_uid(&self) -> &ResourceUid {
         &self.uid
     }
 
@@ -673,6 +668,13 @@ where
     }
 
     /// Establish a session over the exact route selected by the resolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns the resolver's refusal when the target cannot be resolved,
+    /// the connector's error when the session cannot be established, and
+    /// [`ClientError::TransportPolicyMismatch`] when the session pin does
+    /// not match the resolved route.
     pub async fn connect(
         &self,
         target: &TargetInput,
@@ -728,6 +730,13 @@ where
 
     /// Execute a typed call over a handle whose authenticated route pin was
     /// checked by [`Self::connect`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::TransportPolicyMismatch`] when the pin no
+    /// longer matches the target, the profile or admission refusal when
+    /// the call cannot be admitted, and the session, transport, deadline,
+    /// or remote error the call itself reports.
     pub async fn call_connected(
         &self,
         connection: &ConnectedZoneClient<C::Session>,
@@ -769,6 +778,13 @@ where
     /// Each target and verb is re-admitted by the non-clonable lease. The
     /// resulting transport descriptor is derived from that same admission
     /// before the existing Resource transport is used.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::ContractViolation`] when the batch is empty
+    /// or oversized, a mutation is not mutating or not admitted by the
+    /// lease, or the session pin does not match the target, and the
+    /// profile, admission, or call error otherwise.
     pub async fn scoped_commit_batch(
         &self,
         connection: &ConnectedZoneClient<C::Session>,
@@ -868,7 +884,7 @@ where
     loop {
         let attempt = driver.begin_attempt(cancellation)?;
         let result = if let Some((assignment, mutations)) = scoped_call.as_ref() {
-            await_with_cancellation(
+            crate::call::await_with_cancellation(
                 session.call_scoped_commit_batch(
                     assignment.clone(),
                     mutations.clone(),
@@ -879,7 +895,7 @@ where
             )
             .await
         } else {
-            await_with_cancellation(
+            crate::call::await_with_cancellation(
                 session.call_with_timeout(
                     verb,
                     resource_target.clone(),
@@ -901,7 +917,7 @@ where
 
         match result {
             Ok(response) => return Ok(response),
-            Err(error) => match classify_session_error(&driver, error) {
+            Err(error) => match crate::call::classify_session_error(&driver, error) {
                 AttemptDisposition::RetryNow => continue,
                 AttemptDisposition::RetryAfterMs(delay) => {
                     crate::call::retry_backoff(delay, cancellation).await?;
@@ -909,42 +925,6 @@ where
                 AttemptDisposition::Fail(error) => return Err(error),
             },
         }
-    }
-
-    async fn await_with_cancellation<F, T>(
-        future: F,
-        cancellation: &crate::CancellationToken,
-    ) -> Result<T, ClientError>
-    where
-        F: Future<Output = T> + Send,
-    {
-        let mut future = Box::pin(future);
-        let mut cancelled = Box::pin(cancellation.cancelled());
-        core::future::poll_fn(move |context| {
-            if let core::task::Poll::Ready(value) = future.as_mut().poll(context) {
-                return core::task::Poll::Ready(Ok(value));
-            }
-            if let core::task::Poll::Ready(()) = cancelled.as_mut().poll(context) {
-                return core::task::Poll::Ready(Err(ClientError::Cancelled));
-            }
-            core::task::Poll::Pending
-        })
-        .await
-    }
-}
-
-fn classify_session_error<W: WallClock>(
-    driver: &CallDriver<W>,
-    error: ClientError,
-) -> AttemptDisposition {
-    match error {
-        ClientError::SessionLost => driver.record_session_failure(SessionFailure::Disconnected),
-        ClientError::TransportFailed => driver.record_session_failure(SessionFailure::Retryable),
-        ClientError::DeadlineExpired => driver.record_session_failure(SessionFailure::Deadline),
-        ClientError::Cancelled => driver.record_session_failure(SessionFailure::Cancelled),
-        ClientError::ContractViolation => driver.record_session_failure(SessionFailure::Protocol),
-        ClientError::Remote { kind, retry } => driver.record_remote_verdict(kind, retry),
-        other => AttemptDisposition::Fail(other),
     }
 }
 
@@ -1064,7 +1044,6 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(endpoint.endpoint_uid(), endpoint.uid());
         assert_eq!(endpoint.zone().as_str(), "work");
         assert!(!format!("{endpoint:?}").contains("gateway"));
         assert!(!format!("{endpoint:?}").contains("123e4567"));

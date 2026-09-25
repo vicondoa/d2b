@@ -137,7 +137,7 @@ impl EndpointAttachmentPolicy {
 }
 
 /// The only fine-grained endpoint consumer policy.
-#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Default, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EndpointConsumerPolicy {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -389,12 +389,6 @@ impl<'de> Deserialize<'de> for EndpointSpec {
             wire.lifecycle_policy,
         )
         .map_err(serde::de::Error::custom)
-    }
-}
-
-impl Default for EndpointConsumerPolicy {
-    fn default() -> Self {
-        Self::unrestricted()
     }
 }
 

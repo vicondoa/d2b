@@ -259,6 +259,11 @@ pub struct ZoneLinkLimits {
 
 impl ZoneLinkLimits {
     /// Validate one complete `spec.limits` object against its frozen bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::InvalidLimits`] when a ceiling is zero or
+    /// exceeds its frozen bound.
     pub const fn new(
         max_pending_intents: u32,
         max_active_streams: u32,
@@ -772,6 +777,11 @@ impl ZoneLinkRecord {
     ///
     /// The controller generation is also the ZoneLink identity generation, so
     /// a route binding from another controller generation is refused.
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::RouteAdmissionBindingInvalid`] when a
+    /// binding is already set or the binding's controller generation does
+    /// not match the record's.
     pub fn with_route_binding(
         mut self,
         binding: ZoneLinkRouteBinding,
@@ -802,6 +812,14 @@ impl ZoneLinkRecord {
     /// The envelope is canonical, versioned, identity-bound, and bounded.
     /// There is no expiry or eviction because an OperationId remains
     /// non-reusable for the active ZoneLink identity and generation.
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::RouteAdmissionBindingInvalid`] when no
+    /// route binding is configured,
+    /// [`ZoneLinkError::RouteAdmissionOperationCapacity`] when the
+    /// committed set exceeds the bound, and
+    /// [`ZoneLinkError::RouteAdmissionDedupInvalid`] when the envelope
+    /// cannot be rendered canonically within the byte bound.
     pub fn encode_route_admission_dedup(&self) -> Result<Vec<u8>, ZoneLinkError> {
         let binding = self
             .route_binding
@@ -835,6 +853,11 @@ impl ZoneLinkRecord {
     /// Identity mismatch and unknown versions are quarantine conditions. The
     /// receiver is consumed so a failed recovery cannot partially mutate a
     /// live record.
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::RouteAdmissionDedupInvalid`] when the
+    /// envelope is empty, over the byte bound, not canonical, or carries
+    /// an unknown version or identity mismatch.
     pub fn with_route_admission_dedup(mut self, encoded: &[u8]) -> Result<Self, ZoneLinkError> {
         if encoded.is_empty() || encoded.len() > MAX_ROUTE_ADMISSION_DEDUP_BYTES {
             return Err(ZoneLinkError::RouteAdmissionDedupInvalid);
@@ -1291,6 +1314,12 @@ impl ZoneLinkHandler {
     ///
     /// Exactly one pass may be open per link; a second call fails closed with
     /// [`ZoneLinkError::ReconcileInFlight`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::ReconcileInFlight`] when a pass is already
+    /// open and the planning refusal when the event is invalid for the
+    /// current record state.
     pub fn begin(&mut self, event: ZoneLinkEvent) -> Result<ZoneLinkPass, ZoneLinkError> {
         if self.pass_open {
             return Err(ZoneLinkError::ReconcileInFlight);
@@ -1309,6 +1338,11 @@ impl ZoneLinkHandler {
     }
 
     /// Apply the planned durable mutation and issue its commit proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::StaleCommitProof`] when no pass is open or
+    /// the pass does not match the current owner token and sequence.
     pub fn commit(&mut self, pass: ZoneLinkPass) -> Result<ZoneLinkCommitProof, ZoneLinkError> {
         if !self.pass_open
             || pass.owner_token != self.owner_token
@@ -1331,6 +1365,12 @@ impl ZoneLinkHandler {
     }
 
     /// Consume one commit proof and release its effects exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZoneLinkError::StaleCommitProof`] when no effects are
+    /// pending or the proof does not match the pending owner token and
+    /// sequence.
     pub fn release_effects(
         &mut self,
         proof: ZoneLinkCommitProof,
@@ -1367,6 +1407,11 @@ impl ZoneLinkHandler {
     /// a context created from the committed record. It cannot supply identity,
     /// policy, connectivity, or time claims. The callback's implementation is
     /// expected to delegate directly to the runtime-owned sealed route issuer.
+    /// # Errors
+    ///
+    /// Returns the commit-proof refusal when the proof is stale,
+    /// [`ZoneLinkError::RouteAdmissionCursorUnavailable`] when the cursor
+    /// is not adopted, and the issuer's refusal otherwise.
     pub fn issue_route_admission<T>(
         &mut self,
         mut proof: ZoneLinkCommitProof,
@@ -1523,7 +1568,7 @@ impl ZoneLinkHandler {
                 if state != ZoneLinkSessionState::Kk {
                     return Err(ZoneLinkError::InvalidTransition);
                 }
-                let Some(enrollment) = record.enrollment.clone() else {
+                let Some(enrollment) = record.enrollment.as_ref() else {
                     return Err(ZoneLinkError::InvalidTransition);
                 };
                 if enrollment.key_fingerprint != peer_key_fingerprint {
@@ -1689,7 +1734,7 @@ impl ZoneLinkHandler {
                 verb,
                 policy_revision,
             } => {
-                let Some(mut binding) = record.route_binding.clone() else {
+                let Some(binding) = record.route_binding.as_mut() else {
                     return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
                 };
                 if verb == OperationClass::Attach || policy_revision <= binding.policy_revision() {
@@ -1698,12 +1743,11 @@ impl ZoneLinkHandler {
                 binding.required_capability = required_capability;
                 binding.verb = verb;
                 binding.policy_revision = policy_revision;
-                record.route_binding = Some(binding);
             }
             ZoneLinkEvent::SessionGenerationAdvanced {
                 reconnect_generation,
             } => {
-                let Some(mut binding) = record.route_binding.clone() else {
+                let Some(binding) = record.route_binding.as_mut() else {
                     return Err(ZoneLinkError::RouteAdmissionBindingInvalid);
                 };
                 if reconnect_generation <= binding.reconnect_generation() {
@@ -1711,7 +1755,6 @@ impl ZoneLinkHandler {
                 }
                 let was_connected = record.connected;
                 binding.reconnect_generation = reconnect_generation;
-                record.route_binding = Some(binding);
                 record.connected = false;
                 record.advertised_routes = 0;
                 record.reconnect_attempts = 0;

@@ -109,6 +109,19 @@ impl LaunchIdentity {
     /// `binding_worker` marks the host-exec/guest-target split of a
     /// binding-owned serving worker; its launch VM is the execution host even
     /// though the ticket's target points at the attachment's Guest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchIdentityError::InvalidExecutionRef`] when the
+    /// execution reference is neither Host nor Guest,
+    /// [`LaunchIdentityError::InvalidTargetRef`] when the target selector
+    /// is not a Guest reference, [`LaunchIdentityError::MissingTargetRef`]
+    /// when a binding-owned worker declares no attachment target,
+    /// [`LaunchIdentityError::OwnerUidWithoutOwnerRef`] when a durable
+    /// owner UID has no owner reference, [`LaunchIdentityError::InvalidRole`]
+    /// when the process name is empty or forbidden, and
+    /// [`LaunchIdentityError::InvalidVm`] when the derived VM scope is
+    /// empty or forbidden.
     pub fn new(
         owner_ref: Option<ResourceRef>,
         owner_uid: Option<ResourceUid>,

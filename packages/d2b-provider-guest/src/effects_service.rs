@@ -240,7 +240,7 @@ impl aca_runtime::AcaControl for FrameworkAcaControl {
         {
             sandbox.lifecycle = aca_runtime::AcaSandboxLifecycle::Running;
         }
-        aca_runtime::AcaSandboxCandidates::new(state.sandbox.clone().into_iter().collect())
+        aca_runtime::AcaSandboxCandidates::new(state.sandbox.iter().cloned().collect())
             .map_err(|_| {
                 aca_runtime::AcaControlError::new(aca_runtime::AcaControlErrorKind::InvalidResponse)
             })
@@ -253,7 +253,7 @@ impl aca_runtime::AcaControl for FrameworkAcaControl {
         _desired: &aca_runtime::AcaDesiredDiskImage,
     ) -> Result<aca_runtime::AcaDiskImageCandidates, aca_runtime::AcaControlError> {
         let state = self.state.lock().await;
-        aca_runtime::AcaDiskImageCandidates::new(state.disk_image.clone().into_iter().collect())
+        aca_runtime::AcaDiskImageCandidates::new(state.disk_image.iter().cloned().collect())
             .map_err(|_| {
                 aca_runtime::AcaControlError::new(aca_runtime::AcaControlErrorKind::InvalidResponse)
             })

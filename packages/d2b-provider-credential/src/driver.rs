@@ -339,7 +339,6 @@ impl ResourceDriverFactory for CredentialDriverFactory {
 // ---------------------------------------------------------------------------
 
 /// One Credential resource's driver.
-#[derive(Clone)]
 pub struct CredentialDriver {
     zone: String,
     controller_generation: ControllerGeneration,
