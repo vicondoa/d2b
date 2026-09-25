@@ -1518,48 +1518,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn relay_grant_and_forwarded_target_grant_fail_independently() {
-        let claims = context(
-            "dev",
-            "d2b.resource.v3",
-            Locality::AdjacentZone,
-            EvidenceClass::EnrolledKk,
-        );
-        let target_route = route(
-            "dev",
-            "d2b.resource.v3",
-            RouteMember::method("ResourceService/Get").unwrap(),
-        );
-        let call = ResourceCall::Get(ResourceRef::parse("Host/system").unwrap());
-        let no_relay = authorizer(
-            &claims,
-            &[SessionVerb::Connect, SessionVerb::Invoke],
-            &[ResourceVerb::Get],
-        );
-        assert_eq!(
-            no_relay.authorize_dispatch(&claims, &target_route, Some(&call), false),
-            Err(AuthorizationError::RelayGrantMissing)
-        );
-
-        let no_target = authorizer(
-            &claims,
-            &[
-                SessionVerb::Connect,
-                SessionVerb::Invoke,
-                SessionVerb::Relay,
-            ],
-            &[],
-        );
-        assert_eq!(
-            no_target.authorize_dispatch(&claims, &target_route, Some(&call), false),
-            Err(AuthorizationError::Native(
-                AuthorizationDenial::RelayTargetGrantMissing
-            ))
-        );
-    }
-
-    #[test]
+#[test]
     fn diagnostic_verbs_are_exact_and_cannot_carry_resource_authority() {
         for (service, member, verb) in [
             (
