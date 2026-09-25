@@ -412,7 +412,7 @@ impl AuthorityError {
             Self::AuthorityCapacityExceeded => "authority-capacity-exceeded",
             Self::UnknownAuthority => "authority-missing",
             Self::AuthorityCloseUnconfirmed => "authority-close-unconfirmed",
-            Self::DuplicateConflict => "duplicateConflict",
+            Self::DuplicateConflict => "duplicate-conflict",
             Self::PhysicalUsbBackingConflict => "physical-usb-backing-conflict",
             Self::UsbipNetworkRelayAuthorityConflict => "usbip-network-relay-authority-conflict",
             Self::InvalidVsockCid => "vsock-cid-invalid",
@@ -3407,7 +3407,7 @@ mod tests {
                 })
                 .unwrap_err()
                 .code(),
-            "duplicateConflict"
+            "duplicate-conflict"
         );
         assert_eq!(effects, 0);
 
