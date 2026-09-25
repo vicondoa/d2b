@@ -82,7 +82,7 @@ use std::fmt;
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(transparent)]
-pub struct HostPrepStepId(pub String);
+pub struct HostPrepStepId(String);
 
 impl HostPrepStepId {
     fn new(vm: &str, kind: HostPrepStepKind) -> Self {
