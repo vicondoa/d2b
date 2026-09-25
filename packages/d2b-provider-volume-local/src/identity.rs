@@ -69,17 +69,11 @@ impl Serialize for EntryDigest {
 /// `Serialize`, and carries no accessor: it is never persisted, never
 /// public status, and never crosses a Zone boundary. It is dropped and
 /// re-derived after a controller restart.
-pub struct VolumeRootHandle {
-    pub(crate) fd: Option<OwnedFd>,
-    pub(crate) marker_root_fd: Option<OwnedFd>,
-    pub(crate) volume_uid: Option<ResourceUid>,
-    pub(crate) marker_name: Option<String>,
-    pub(crate) lock_name: Option<String>,
-    pub(crate) identity: Option<VolumeRootIdentity>,
-    pub(crate) marker_binding: Option<MarkerBinding>,
-    pub(crate) marker_owner_uid: Option<u32>,
-    pub(crate) marker_group_gid: Option<u32>,
-    pub(crate) preexisting_state: bool,
+pub enum VolumeRootHandle {
+    /// No root is held.
+    Empty,
+    /// A broker-resolved anchored root is held.
+    Anchored(Box<AnchoredHandle>),
 }
 
 /// Borrowed descriptor view exposed only to the trusted core effect adapter.
@@ -138,38 +132,49 @@ pub struct AnchoredRoot {
     pub preexisting_state: bool,
 }
 
+/// The trusted adapter-bound inputs for one resolved Volume root.
+///
+/// Groups the anchored descriptor, identity, and marker/owner bindings that
+/// a broker core boundary resolved. Built only by the effect adapter
+/// immediately after resolution; never persisted and never serialized.
+#[derive(Debug)]
+pub struct AnchoredHandle {
+    pub(crate) fd: OwnedFd,
+    pub(crate) marker_root_fd: Option<OwnedFd>,
+    pub(crate) volume_uid: ResourceUid,
+    pub(crate) marker_name: String,
+    pub(crate) lock_name: String,
+    pub(crate) identity: VolumeRootIdentity,
+    pub(crate) marker_binding: MarkerBinding,
+    pub(crate) marker_owner_uid: u32,
+    pub(crate) marker_group_gid: u32,
+    pub(crate) preexisting_state: bool,
+}
+
 impl VolumeRootHandle {
-    /// Record that a validated Volume root descriptor is held.
+    /// Record that no Volume root descriptor is held.
     ///
     /// Only an effect adapter calls this, immediately after it resolved
     /// the opaque source policy ID against the private allowlist policy.
     pub const fn held() -> Self {
-        Self {
-            fd: None,
-            marker_root_fd: None,
-            volume_uid: None,
-            marker_name: None,
-            lock_name: None,
-            identity: None,
-            marker_binding: None,
-            marker_owner_uid: None,
-            marker_group_gid: None,
-            preexisting_state: false,
-        }
+        Self::Empty
     }
 
     /// Borrow the trusted adapter-only descriptor view.
     pub fn view(&self) -> Option<VolumeRootHandleView<'_>> {
+        let Self::Anchored(anchored) = self else {
+            return None;
+        };
         Some(VolumeRootHandleView {
-            fd: self.fd.as_ref()?.as_fd(),
-            marker_root_fd: self.marker_root_fd.as_ref().map(AsFd::as_fd),
-            volume_uid: self.volume_uid.as_ref()?,
-            marker_name: self.marker_name.as_deref()?,
-            lock_name: self.lock_name.as_deref()?,
-            identity: self.identity?,
-            marker_binding: self.marker_binding.as_ref()?,
-            marker_owner_uid: self.marker_owner_uid?,
-            marker_group_gid: self.marker_group_gid?,
+            fd: anchored.fd.as_fd(),
+            marker_root_fd: anchored.marker_root_fd.as_ref().map(AsFd::as_fd),
+            volume_uid: &anchored.volume_uid,
+            marker_name: &anchored.marker_name,
+            lock_name: &anchored.lock_name,
+            identity: anchored.identity,
+            marker_binding: &anchored.marker_binding,
+            marker_owner_uid: anchored.marker_owner_uid,
+            marker_group_gid: anchored.marker_group_gid,
         })
     }
 
@@ -180,68 +185,98 @@ impl VolumeRootHandle {
     pub fn from_anchored(
         anchored: AnchoredRoot,
     ) -> Self {
-        Self {
-            fd: Some(anchored.fd),
+        Self::Anchored(Box::new(AnchoredHandle {
+            fd: anchored.fd,
             marker_root_fd: anchored.marker_root_fd,
-            volume_uid: Some(anchored.volume_uid),
-            marker_name: Some(anchored.marker_name),
-            lock_name: Some(anchored.lock_name),
-            identity: Some(anchored.identity),
-            marker_binding: Some(anchored.marker_binding),
-            marker_owner_uid: Some(anchored.marker_owner_uid),
-            marker_group_gid: Some(anchored.marker_group_gid),
+            volume_uid: anchored.volume_uid,
+            marker_name: anchored.marker_name,
+            lock_name: anchored.lock_name,
+            identity: anchored.identity,
+            marker_binding: anchored.marker_binding,
+            marker_owner_uid: anchored.marker_owner_uid,
+            marker_group_gid: anchored.marker_group_gid,
             preexisting_state: anchored.preexisting_state,
-        }
+        }))
     }
 
     /// Borrow the broker-resolved Volume-root descriptor.
     pub fn anchored_fd(&self) -> Option<&OwnedFd> {
-        self.fd.as_ref()
+        match self {
+            Self::Empty => None,
+            Self::Anchored(anchored) => Some(&anchored.fd),
+        }
     }
 
     /// Borrow the external marker-root descriptor, when configured.
     pub fn marker_root_fd(&self) -> Option<&OwnedFd> {
-        self.marker_root_fd.as_ref()
+        match self {
+            Self::Empty => None,
+            Self::Anchored(anchored) => anchored.marker_root_fd.as_ref(),
+        }
     }
 
     /// Borrow the Volume UID bound to this handle.
     pub fn volume_uid(&self) -> Option<&ResourceUid> {
-        self.volume_uid.as_ref()
+        match self {
+            Self::Empty => None,
+            Self::Anchored(anchored) => Some(&anchored.volume_uid),
+        }
     }
 
     /// Borrow the marker filename relative to the marker root.
     pub fn marker_name(&self) -> Option<&str> {
-        self.marker_name.as_deref()
+        match self {
+            Self::Empty => None,
+            Self::Anchored(anchored) => Some(&anchored.marker_name),
+        }
     }
 
     /// Borrow the OFD lock filename relative to the Volume root.
     pub fn lock_name(&self) -> Option<&str> {
-        self.lock_name.as_deref()
+        match self {
+            Self::Empty => None,
+            Self::Anchored(anchored) => Some(&anchored.lock_name),
+        }
     }
 
     /// Return the root filesystem identity captured at resolution.
     pub fn root_identity(&self) -> Option<VolumeRootIdentity> {
-        self.identity
+        match self {
+            Self::Empty => None,
+            Self::Anchored(anchored) => Some(anchored.identity),
+        }
     }
 
     /// Borrow the marker binding captured at resolution.
     pub fn marker_binding(&self) -> Option<&MarkerBinding> {
-        self.marker_binding.as_ref()
+        match self {
+            Self::Empty => None,
+            Self::Anchored(anchored) => Some(&anchored.marker_binding),
+        }
     }
 
     /// Return the expected marker owner UID.
     pub fn marker_owner_uid(&self) -> Option<u32> {
-        self.marker_owner_uid
+        match self {
+            Self::Empty => None,
+            Self::Anchored(anchored) => Some(anchored.marker_owner_uid),
+        }
     }
 
     /// Return the expected marker group GID.
     pub fn marker_group_gid(&self) -> Option<u32> {
-        self.marker_group_gid
+        match self {
+            Self::Empty => None,
+            Self::Anchored(anchored) => Some(anchored.marker_group_gid),
+        }
     }
 
     /// Whether the trusted effect already materialized this root.
     pub fn preexisting_state(&self) -> bool {
-        self.preexisting_state
+        match self {
+            Self::Empty => false,
+            Self::Anchored(anchored) => anchored.preexisting_state,
+        }
     }
 }
 
