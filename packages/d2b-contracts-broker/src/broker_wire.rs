@@ -2386,6 +2386,12 @@ pub enum RunnerRole {
     QemuMedia,
     /// Target-local one-shot NixOS activation runner. Guest mode may spawn
     /// this role only from the bundle-authoritative process intent.
+    ///
+    /// The wire token is renamed to the frozen `role_id`/template spelling
+    /// (`activation-nixos-runner`, pinned by the bundle schema, ADR-046, and
+    /// the provider's `ACTIVATION_RUNNER_TEMPLATE`) so the wire token and
+    /// [`RunnerRole::as_str`] agree for the same role.
+    #[serde(rename = "activation-nixos-runner")]
     ActivationNixos,
     /// virtiofsd sidecar; one per `d2b.vms.<vm>.runner.shares` row. The
     /// daemon/bundle provides argv from the runner-shape generators.
@@ -2905,7 +2911,7 @@ impl BrokerCallerRole {
         match self {
             Self::AdminUid { .. } => "d2b-admin",
             Self::LauncherUid { .. } => "d2b-launcher",
-            Self::RootUid { .. } => "RootUid",
+            Self::RootUid { .. } => "d2b-root",
             Self::HostShutdownUid { .. } => "d2b-host-shutdown",
             Self::NotAuthorized => "d2b-not-authorized",
         }
@@ -3151,6 +3157,10 @@ mod tests {
         assert_eq!(
             BrokerCallerRole::NotAuthorized.for_display(),
             "d2b-not-authorized"
+        );
+        assert_eq!(
+            BrokerCallerRole::RootUid { uid: 0 }.for_display(),
+            "d2b-root"
         );
     }
 
@@ -3986,6 +3996,7 @@ mod tests {
         // broker upgrades.
         let pairs = [
             (RunnerRole::CloudHypervisor, "\"cloud-hypervisor\""),
+            (RunnerRole::ActivationNixos, "\"activation-nixos-runner\""),
             (RunnerRole::Virtiofsd, "\"virtiofsd\""),
             (RunnerRole::Swtpm, "\"swtpm\""),
             (RunnerRole::SwtpmFlush, "\"swtpm-flush\""),
