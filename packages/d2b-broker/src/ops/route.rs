@@ -25,6 +25,10 @@ pub struct RouteConflictKey {
     pub table: String,
 }
 
+/// A preflight-refused route apply: the route-query step failed
+/// ([`ApplyWithPreflightError::RouteQuery`]), the owned-route ledger refused
+/// a foreign or unmarked route ([`ApplyWithPreflightError::ForeignRoute`]),
+/// or the executor apply itself failed ([`ApplyWithPreflightError::ReconcileExec`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyWithPreflightError {
     RouteQuery(ReconcileExecError),
