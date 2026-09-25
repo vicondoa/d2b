@@ -20,7 +20,6 @@
 //! after restart.  For qemu-media, the broker re-provides the fd on daemon
 //! restart via the normal SpawnRunner adoption path.
 
-use std::sync::OnceLock;
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -29,19 +28,6 @@ use std::{
 
 use d2b_contracts_control::public_wire::{ConsoleProviderKind, ConsoleReadOutputResult};
 use d2b_core::console_ring::RingBuffer;
-
-static CONSOLE_DRAINER_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-fn console_drainer_runtime() -> &'static tokio::runtime::Runtime {
-    CONSOLE_DRAINER_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .thread_name("d2bd-console-drainer")
-            .enable_all()
-            .build()
-            .expect("build console drainer runtime")
-    })
-}
 
 /// Maximum number of console sessions allowed across all VMs.
 const MAX_SESSIONS: usize = 64;
@@ -392,12 +378,14 @@ pub struct ConsoleReadOutput {
 ///
 /// The task connects to `socket_path` (CH's `--serial socket=<path>`), reads
 /// bytes into the ring, and reconnects if CH closes the connection (e.g. after
-/// a VM reboot). The ring's `notify` is triggered on each new chunk.
+/// a VM reboot). The ring's `notify` is triggered on each new chunk. The task
+/// runs on the caller-provided runtime handle (owned by the daemon binary).
 pub fn spawn_ch_serial_drainer(
+    runtime: &tokio::runtime::Handle,
     socket_path: String,
     ring: Arc<tokio::sync::Mutex<ConsoleRing>>,
 ) -> tokio::task::JoinHandle<()> {
-    console_drainer_runtime().spawn(async move {
+    runtime.spawn(async move {
         const RECONNECT_DELAY: Duration = Duration::from_millis(500);
         loop {
             match tokio::net::UnixStream::connect(&socket_path).await {
@@ -430,13 +418,15 @@ pub fn spawn_ch_serial_drainer(
 ///
 /// Unlike [`spawn_ch_serial_drainer`], this does not reconnect after EOF: the
 /// socketpair fd is unique and cannot be re-created without broker involvement.
-/// On EOF the ring is marked `is_eof = true` and the task exits.
+/// On EOF the ring is marked `is_eof = true` and the task exits. The task runs
+/// on the caller-provided runtime handle (owned by the daemon binary).
 pub fn spawn_fd_drainer(
+    runtime: &tokio::runtime::Handle,
     vm: String,
     stream: tokio::net::UnixStream,
     ring: Arc<tokio::sync::Mutex<ConsoleRing>>,
 ) -> tokio::task::JoinHandle<()> {
-    console_drainer_runtime().spawn(async move {
+    runtime.spawn(async move {
         use tokio::io::AsyncReadExt;
         let mut stream = stream;
         let mut buf = vec![0u8; 4096];
@@ -458,10 +448,14 @@ pub fn spawn_fd_drainer(
 }
 
 /// Create a new [`ConsoleSession`] for a Cloud Hypervisor VM using its serial
-/// socket path.
-pub fn create_ch_session(socket_path: String) -> ConsoleSession {
+/// socket path. The drainer task runs on the caller-provided runtime handle
+/// (owned by the daemon binary).
+pub fn create_ch_session(
+    runtime: &tokio::runtime::Handle,
+    socket_path: String,
+) -> ConsoleSession {
     let ring = Arc::new(tokio::sync::Mutex::new(ConsoleRing::new()));
-    let drainer = spawn_ch_serial_drainer(socket_path, Arc::clone(&ring));
+    let drainer = spawn_ch_serial_drainer(runtime, socket_path, Arc::clone(&ring));
     ConsoleSession::new(
         ConsoleProviderKind::LocalHypervisor,
         ring,
@@ -475,8 +469,12 @@ pub fn create_ch_session(socket_path: String) -> ConsoleSession {
 ///
 /// The caller must have already created the stream and converted it from
 /// the raw fd (the broker side handles the unsafe `from_raw_fd` conversion
-/// and passes the `UnixStream` value here).
-pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> ConsoleSession {
+/// and passes the `UnixStream` value here). The drainer task runs on the
+/// caller-provided runtime handle (owned by the daemon binary).
+pub fn create_qemu_session(
+    runtime: &tokio::runtime::Handle,
+    std_stream: std::os::unix::net::UnixStream,
+) -> ConsoleSession {
     std_stream.set_nonblocking(true).ok();
     let ring = Arc::new(tokio::sync::Mutex::new(ConsoleRing::new()));
     let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
@@ -484,7 +482,7 @@ pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> Consol
 
     // We need both a reader and a writer over the same socket.  Split
     // via tokio's UnixStream from the std socket.
-    let drainer = console_drainer_runtime().spawn(async move {
+    let drainer = runtime.spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let stream = match tokio::net::UnixStream::from_std(std_stream) {
             Ok(s) => s,
