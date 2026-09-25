@@ -89,6 +89,7 @@ impl HostPrepStepId {
         Self(format!("{vm}:{}", kind.as_str()))
     }
 
+    /// The deterministic `<vm>:<kind>` spelling.
     pub fn as_str(&self) -> &str {
         &self.0
     }

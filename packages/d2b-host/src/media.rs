@@ -38,6 +38,14 @@ impl fmt::Display for MediaRefError {
 
 impl std::error::Error for MediaRefError {}
 
+/// Validate the media reference grammar.
+///
+/// # Errors
+///
+/// Returns `Empty` for an empty reference, `TooLong` beyond the
+/// 63-byte bound, `BadStart` when the reference does not start with a
+/// lowercase ASCII letter, and `BadCharacter` when it contains any
+/// other character.
 pub fn validate_media_ref(value: &str) -> Result<(), MediaRefError> {
     if value.is_empty() {
         return Err(MediaRefError::Empty);
@@ -76,6 +84,12 @@ impl fmt::Display for BusIdError {
 impl std::error::Error for BusIdError {}
 
 /// Validate the Linux USB busid shape used under `/sys/bus/usb/devices/`.
+///
+/// # Errors
+///
+/// Returns `Empty` for an empty busid, `TooLong` beyond the 64-byte
+/// bound, and `BadCharacter` when the busid contains an invalid
+/// character.
 pub fn validate_usb_busid(value: &str) -> Result<(), BusIdError> {
     if value.is_empty() {
         return Err(BusIdError::Empty);

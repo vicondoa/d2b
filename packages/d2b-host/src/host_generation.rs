@@ -100,6 +100,13 @@ impl core::fmt::Display for ActivationHelperProtocolError {
 impl std::error::Error for ActivationHelperProtocolError {}
 
 /// Parse one bounded helper request.
+///
+/// # Errors
+///
+/// Returns `TooLarge` when the input exceeds the fixed envelope bound,
+/// `InvalidJson` when it is not valid strict JSON, and
+/// `ArtifactIdInvalid` or `GenerationInvalid` when the decoded request
+/// fails validation.
 pub fn parse_request(
     bytes: &[u8],
 ) -> Result<ActivationHelperRequest, ActivationHelperProtocolError> {
@@ -113,6 +120,11 @@ pub fn parse_request(
 }
 
 /// Parse one bounded read-only artifact validation request.
+///
+/// # Errors
+///
+/// Returns `TooLarge` when the input exceeds the fixed envelope bound
+/// and `InvalidJson` when it is not valid strict JSON.
 pub fn parse_validation_request(
     bytes: &[u8],
 ) -> Result<ActivationArtifactValidationRequest, ActivationHelperProtocolError> {
