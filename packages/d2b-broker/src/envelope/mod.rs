@@ -385,7 +385,7 @@ enum ContextCommand {
     /// worker. The store is usable only after the reply.
     Bootstrap {
         root: PathBuf,
-        reply: oneshot::Sender<Result<PersistedTrustedContext, TrustedContextStoreError>>,
+        reply: oneshot::Sender<Result<(), TrustedContextStoreError>>,
     },
     /// One publish-as-one-atomic-unit: monotonic check + in-memory commit +
     /// durable persist.
@@ -433,6 +433,7 @@ impl TrustedContextStore {
     /// the reply gates the handle). The daemon's last-published values are
     /// loaded with it, so a restarting broker still holds the values it
     /// published for while minting under a nonce no prior context carries.
+    #[cfg(test)]
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, TrustedContextStoreError> {
         let root = root.into();
         let (commands, receiver) = mpsc::channel::<ContextCommand>(Self::WORKER_QUEUE_DEPTH);
@@ -543,6 +544,7 @@ impl TrustedContextStore {
     /// The whole unit (monotonic check + in-memory commit + durable persist)
     /// runs on the single writer, so channel order is commit order and a
     /// concurrent stale publication can never durably regress newer state.
+    #[cfg(test)]
     pub fn publish(
         &self,
         values: &PublishTrustedContextValues,
@@ -566,7 +568,7 @@ impl TrustedContextStore {
 
     /// Cache one daemon publication, monotonically, from an async context.
     ///
-    /// The async twin of [`TrustedContextStore::publish`]: the dispatch
+    /// The async twin of the sync `publish`:the dispatch
     /// chain runs on the broker's reactor, so the command is sent and the
     /// reply awaited in async time instead of parking an executor worker on
     /// the blocking boundary.
@@ -668,7 +670,7 @@ fn context_worker_loop(mut receiver: mpsc::Receiver<ContextCommand>) {
             return;
         }
     };
-    let _ = reply.send(Ok(state.state.clone()));
+    let _ = reply.send(Ok(()));
     while let Some(command) = receiver.blocking_recv() {
         match command {
             ContextCommand::Publish { values, reply } => {
@@ -847,6 +849,7 @@ static TRUSTED_CONTEXT_STORE: std::sync::OnceLock<TrustedContextStore> = std::sy
 /// Called once in `run_server` before the broker serves; a store that fails
 /// to open fails the broker closed at startup rather than attesting or
 /// caching under a half-open state.
+#[cfg(test)]
 pub(crate) fn init_trusted_context_store(state_dir: &Path) -> Result<(), TrustedContextStoreError> {
     let store = TrustedContextStore::open(state_dir)?;
     let _ = TRUSTED_CONTEXT_STORE.set(store);
@@ -1115,6 +1118,16 @@ impl BrokerEnvelope {
     /// follow a denied invocation in the audit log. The call is async
     /// because the dispatch step is: a forwarded row's handler runs in the
     /// declaring process and is reached over an async dial.
+    ///
+    /// # Errors
+    ///
+    /// Refuses with any code of the closed [`ENVELOPE_REFUSALS`] vocabulary:
+    /// [`UNKNOWN_OPERATION`], [`UNCOMMITTED_OPERATION`],
+    /// [`UNGRANTED_CALLER`], [`WIRE_INHERITED_OPERATION`],
+    /// [`INVALID_PAYLOAD`], [`UNREGISTERED_HANDLER`], [`FD_LEG`],
+    /// [`STALE_CONTEXT`], the handler dispatch outcomes ([`HANDLER_REFUSED`],
+    /// [`HANDLER_ERRORED`], [`HANDLER_TIMED_OUT`], [`HANDLER_CRASHED`]), and
+    /// [`STALE_WIRE_VERSION`] / [`NESTED_DEPTH_EXCEEDED`] at the gates.
     pub async fn call(
         &self,
         caller: CallerAuthority,
@@ -1133,6 +1146,13 @@ impl BrokerEnvelope {
     /// here against the row's declared fd facet before dispatch,so an
     /// oversized-but-transport-legal set is refused with the fd-leg code
     /// rather than truncated by the transport.where
+    ///
+    /// # Errors
+    ///
+    /// Refuses with the same closed [`ENVELOPE_REFUSALS`] vocabulary as
+    /// [`BrokerEnvelope::call`], plus [`FD_LEG`] for descriptor sets that
+    /// disagree with the row's declared fd facet or exceed the bounded
+    /// ceiling.
     pub async fn call_with_fds(
         &self,
         caller: CallerAuthority,
@@ -1184,6 +1204,13 @@ impl BrokerEnvelope {
     }
 
     /// Invoke one nested operation with descriptors attached to it.
+    ///
+    /// # Errors
+    ///
+    /// Refuses with the same closed [`ENVELOPE_REFUSALS`] vocabulary as
+    /// [`BrokerEnvelope::call_with_fds`], with the chain's authz checked
+    /// under the initiating principal and [`NESTED_DEPTH_EXCEEDED`] named
+    /// for chains past the depth cap before anything else.
     pub async fn call_nested_with_fds(
         &self,
         chain: EvidenceChain,
