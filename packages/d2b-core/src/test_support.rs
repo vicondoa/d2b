@@ -455,15 +455,17 @@ impl Default for ResolvedRunnerIntentBuilder {
 /// crates used to carry as private copies.
 pub fn scratch_root(test_name: &str) -> PathBuf {
     let base = std::env::var_os("TEST_TMPDIR")
+        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("d2b-bundle-resolver-tests"));
+        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir);
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    std::fs::create_dir_all(&base).expect("create test scratch root");
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    base.join(format!("{test_name}-{}-{unique}", std::process::id()))
+    let root = {
+        let root = base.join("d2b-test-scratch").join(test_name);
+        std::fs::create_dir_all(&root).expect("create test scratch root");
+        root
+    };
+    root
 }
 
 // ── sample_zone_native_host_json ────────────────────────────────────────────
