@@ -446,6 +446,11 @@ pub enum ImdsEndpointAlias {
 
 impl ImdsEndpointAlias {
     /// Parse a closed alias without accepting a URL or path.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidConfig` when the value is not one of the closed
+    /// aliases.
     pub fn parse(value: &str) -> Result<Self, ManagedIdentityProviderError> {
         match value {
             "azure-imds" => Ok(Self::AzureImds),
@@ -511,6 +516,12 @@ pub struct ManagedIdentityClientConfig {
 
 impl ManagedIdentityClientConfig {
     /// Validate the inline client ID, closed alias, and lease ceiling.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidConfig` when the client ID is not a valid Azure
+    /// reference, the endpoint alias is not closed, or the lease ceiling
+    /// is outside `1..=MAX_LOCAL_LEASES`.
     pub fn new(
         client_id: impl Into<String>,
         endpoint_alias: &str,
@@ -589,6 +600,12 @@ pub struct ManagedIdentityPlacement {
 
 impl ManagedIdentityPlacement {
     /// Validate host-system or guest-agent placement bound to one Zone.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidPlacement` when the binding and execution
+    /// reference are not the `HostSystem`/`Host` or `GuestAgent`/`Guest`
+    /// pair, or the zone reference is not a `Zone`.
     pub fn new(
         binding: PlacementBinding,
         execution_ref: ResourceRef,
@@ -793,6 +810,11 @@ pub struct ManagedIdentityCredentialProviderFactory {
 
 impl ManagedIdentityCredentialProviderFactory {
     /// Validate and construct the factory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidConsumer` when the consumer reference is not a
+    /// `Provider`.
     pub fn new(
         config: ManagedIdentityClientConfig,
         placement: ManagedIdentityPlacement,
