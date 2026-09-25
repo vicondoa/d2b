@@ -1912,6 +1912,84 @@ pub mod pidfd_sys {
         }
     }
 
+    /// One job on the setfacl seat: run one `setfacl` fork/exec/wait on
+    /// the worker's own thread.
+    struct SetfaclJob {
+        fd: OwnedFd,
+        op: String,
+        acl_spec: String,
+        reply: tokio::sync::oneshot::Sender<io::Result<()>>,
+    }
+
+    /// The bounded worker that owns the blocking `setfacl` fork/exec/wait
+    /// (plan R4: a blocking `sync_channel` recv on the worker's own
+    /// dedicated thread, with `tokio::sync::oneshot` replies). The shellout
+    /// has no async form and can take arbitrarily long (a wedged host can
+    /// stall the child), so it must not run on an executor worker; the
+    /// dedicated thread blocks instead, and the caller awaits the outcome.
+    /// Admission is a non-blocking `try_send`, so a saturated queue refuses
+    /// rather than parking the caller or growing the pool.
+    struct SetfaclWorker {
+        sender: std::sync::mpsc::SyncSender<SetfaclJob>,
+    }
+
+    /// The setfacl seat, started on first use; `None` records a worker that
+    /// could not start, so every later call refuses instead of retrying a
+    /// failing spawn.
+    static SETFACL_WORKER: std::sync::LazyLock<Option<SetfaclWorker>> =
+        std::sync::LazyLock::new(|| {
+            const QUEUE_DEPTH: usize = 8;
+            let (sender, receiver) = std::sync::mpsc::sync_channel::<SetfaclJob>(QUEUE_DEPTH);
+            std::thread::Builder::new()
+                .name("d2b-broker-setfacl".to_owned())
+                .spawn(move || setfacl_worker_loop(receiver))
+                .ok()
+                .map(|_| SetfaclWorker { sender })
+        });
+
+    /// The sanctioned R4 channel boundary: a blocking `sync_channel` recv
+    /// on the worker's own dedicated thread, with `tokio::sync::oneshot`
+    /// replies.
+    #[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+    fn setfacl_worker_loop(receiver: std::sync::mpsc::Receiver<SetfaclJob>) {
+        while let Ok(job) = receiver.recv() {
+            let result = run_setfacl_op_on_fd(job.fd.as_fd(), &job.op, &job.acl_spec);
+            let _ = job.reply.send(result);
+        }
+    }
+
+    /// Async form of [`run_setfacl_op_on_fd`] for callers on an executor
+    /// worker: the fork/exec/wait runs on the dedicated bounded setfacl
+    /// seat ([`SETFACL_WORKER`]) instead of parking the worker thread.
+    /// The target fd is duplicated across, so the caller's fd lifetime is
+    /// unaffected.
+    pub async fn run_setfacl_op_on_fd_async(
+        fd: BorrowedFd<'_>,
+        op: &str,
+        acl_spec: &str,
+    ) -> io::Result<()> {
+        let Some(worker) = SETFACL_WORKER.as_ref() else {
+            return Err(io::Error::other("setfacl worker unavailable"));
+        };
+        let fd = nix::unistd::dup(fd.as_raw_fd())
+            .map(crate::sys::owned_fd_from_raw)
+            .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        let job = SetfaclJob {
+            fd,
+            op: op.to_owned(),
+            acl_spec: acl_spec.to_owned(),
+            reply,
+        };
+        worker
+            .sender
+            .try_send(job)
+            .map_err(|_| io::Error::other("setfacl worker busy"))?;
+        answer
+            .await
+            .map_err(|_| io::Error::other("setfacl worker unavailable"))?
+    }
+
     /// Clear BOTH the access ACL and the default ACL on the directory
     /// referenced by `fd` (the effect of `setfacl -b -k`) by removing the
     /// POSIX-ACL xattrs directly with `fremovexattr(2)`. Using the syscall
