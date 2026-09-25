@@ -143,9 +143,14 @@ pub struct Fragment {
 /// Parse one fragment, rejecting anything that could silently lose an entry.
 ///
 /// Accepted shape: one or more `### <Section>` headings from [`SECTIONS`],
-/// each followed by a bullet list. Rejected: an empty fragment, an unknown or
-/// wrong-level heading, a repeated heading, a section with no entries, and any
-/// content before the first heading.
+/// each followed by a bullet list.
+///
+/// # Errors
+///
+/// Returns [`FoldError`] when the fragment has no `### <Section>` heading, a
+/// heading is unknown or at the wrong level, a heading repeats, a section has
+/// no entries or does not start with a `- ` bullet, or content appears before
+/// the first heading.
 pub fn parse_fragment(name: &str, text: &str) -> Result<Fragment, FoldError> {
     let mut errors: Vec<String> = Vec::new();
     let mut raw: Vec<(usize, String, Vec<String>)> = Vec::new();

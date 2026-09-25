@@ -69,8 +69,11 @@ pub enum EntryKind {
 /// clippy matches on (everything after the final `::`), and the counting
 /// class.
 pub struct DeniedApi {
+    /// Fully-qualified API path as configured, e.g. `std::sync::Mutex::lock`.
     pub path: String,
+    /// The bare tail clippy matches on: everything after the final `::`.
     pub tail: String,
+    /// How the entry is counted: textually or from clippy diagnostics.
     pub kind: EntryKind,
 }
 
@@ -657,6 +660,8 @@ pub struct CrateCensus {
 /// spawn_blocking row, which the gate refuses to see grow.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CensusBaseline {
+    /// Crate-directory to deny-entry counts, as serialized into the
+    /// committed baseline file.
     pub crates: BTreeMap<String, BTreeMap<String, usize>>,
 }
 
