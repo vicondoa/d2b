@@ -39,8 +39,6 @@ pub const MAX_ASSIGNMENT_GRANT_SCOPES: usize = 2;
 
 /// The maximum number of assignments held by one Zone authority.
 pub const MAX_ASSIGNMENTS: usize = 16_384;
-/// Maximum child ownership entries retained by one assignment.
-pub const MAX_ASSIGNED_CHILDREN: usize = 4_096;
 /// Assignment-bound query filter for the primary resource UID.
 pub const ASSIGNMENT_UID_FILTER: &str = "assignment.resourceUid";
 /// Assignment-bound query filter for an owned child resource UID.
@@ -324,8 +322,6 @@ pub enum AssignmentError {
     AssignmentMissing,
     AssignmentNotDraining,
     AssignmentNotReleased,
-    ChildrenRemain,
-    ChildLimit,
     StaleAssignment,
     SessionRevoked,
     ResourceRevisionMismatch,
@@ -385,8 +381,6 @@ impl AssignmentError {
             Self::AssignmentMissing => "assignment-missing",
             Self::AssignmentNotDraining => "assignment-not-draining",
             Self::AssignmentNotReleased => "assignment-not-released",
-            Self::ChildrenRemain => "assignment-children-remain",
-            Self::ChildLimit => "assignment-child-limit",
             Self::StaleAssignment => "assignment-stale",
             Self::SessionRevoked => "assignment-session-revoked",
             Self::ResourceRevisionMismatch => "assignment-resource-revision-mismatch",
@@ -2600,11 +2594,8 @@ impl ResourceClientLease {
 
     /// Admit a mutation against one Process child owned by this lease.
     ///
-    /// Successful commit receipts must be handed to
-    /// [`ControllerAssignmentRegistry::record_child`] and
-    /// [`ControllerAssignmentRegistry::remove_child`] by the controller
-    /// owner. Minting this capability does not pre-account a child that may
-    /// never commit.
+    /// Minting this capability does not account for a child that may never
+    /// commit.
     pub fn child_mutation(
         &self,
         target: ResourceRef,
@@ -2633,15 +2624,6 @@ impl ResourceClientLease {
             owner_generation: self.resource_generation,
         }
     }
-
-    /// Verify that a placement target remains exactly the admitted target.
-    pub fn target_for(&self, target: PlacementTarget) -> Result<(), AssignmentError> {
-        if self.target() == &AssignmentTarget::from_placement(target) {
-            Ok(())
-        } else {
-            Err(AssignmentError::TargetMismatch)
-        }
-    }
 }
 
 impl fmt::Debug for ResourceClientLease {
@@ -2665,7 +2647,6 @@ struct AssignmentRecord {
     provider_ref: ResourceRef,
     allowed_verbs: BTreeSet<AssignmentVerb>,
     state: Arc<AssignmentLeaseState>,
-    children: BTreeSet<ResourceUid>,
 }
 
 struct AssignmentLeaseState {
@@ -2713,19 +2694,6 @@ impl fmt::Debug for ControllerAssignmentRegistry {
 }
 
 impl ControllerAssignmentRegistry {
-    /// Reserve the next assignment epoch after all durable observations.
-    pub fn reserve_epoch_after(&mut self, floor: u64) -> Result<u64, AssignmentError> {
-        if self.next_epoch < floor {
-            self.next_epoch = floor;
-        }
-        let epoch = self
-            .next_epoch
-            .checked_add(1)
-            .ok_or(AssignmentError::EpochExhausted)?;
-        self.next_epoch = epoch;
-        AssignmentEpoch::new(epoch).map(|value| value.get())
-    }
-
     /// Admit one resource from the committed store snapshot.
     pub fn admit(
         &mut self,
@@ -2849,7 +2817,6 @@ impl ControllerAssignmentRegistry {
                 provider_ref: request.role.provider_ref.clone(),
                 allowed_verbs: primary_verbs.clone(),
                 state: Arc::clone(&state),
-                children: BTreeSet::new(),
             },
         );
         self.active_targets
@@ -2869,39 +2836,6 @@ impl ControllerAssignmentRegistry {
             allowed_verbs: primary_verbs,
             owner_child_process_verbs: owner_child_process_verbs(),
         })
-    }
-
-    /// Rebind one live lease to the resource revision produced by its last
-    /// successful write without changing its assignment epoch.
-    pub fn rebind_revision(
-        &mut self,
-        lease: &mut ResourceClientLease,
-        revision: ZoneRevision,
-    ) -> Result<(), AssignmentError> {
-        let record = self
-            .records
-            .get_mut(lease.identity.resource_uid())
-            .ok_or(AssignmentError::AssignmentMissing)?;
-        if record.identity != lease.identity {
-            return Err(AssignmentError::StaleAssignment);
-        }
-        if record.state.phase() == AssignmentPhase::Revoked {
-            return Err(AssignmentError::SessionRevoked);
-        }
-        if record.state.phase() != AssignmentPhase::Assigned {
-            return Err(AssignmentError::StaleAssignment);
-        }
-        if revision < lease.identity.resource_revision() {
-            return Err(AssignmentError::ResourceRevisionMismatch);
-        }
-        if revision == lease.identity.resource_revision() {
-            return Ok(());
-        }
-        let mut identity = lease.identity.clone();
-        identity.resource_revision = revision;
-        record.identity = identity.clone();
-        lease.identity = identity;
-        Ok(())
     }
 
     /// Return the current phase for an assignment identity.
@@ -2932,9 +2866,6 @@ impl ControllerAssignmentRegistry {
         ) {
             return Err(AssignmentError::AssignmentNotReleased);
         }
-        if !record.children.is_empty() {
-            return Err(AssignmentError::ChildrenRemain);
-        }
         record.state.set_phase(AssignmentPhase::Released);
         self.remove_active_target(identity);
         Ok(())
@@ -2947,41 +2878,6 @@ impl ControllerAssignmentRegistry {
         record.state.mark_stale();
         self.remove_active_target(identity);
         Ok(())
-    }
-
-    /// Record one child resource in the assignment's narrow owner index.
-    pub fn record_child(
-        &mut self,
-        identity: &AssignmentIdentity,
-        child_uid: ResourceUid,
-    ) -> Result<(), AssignmentError> {
-        let record = self.record_mut(identity)?;
-        if record.children.len() >= MAX_ASSIGNED_CHILDREN {
-            return Err(AssignmentError::ChildLimit);
-        }
-        record.children.insert(child_uid);
-        Ok(())
-    }
-
-    /// Remove one child after its terminal deletion is committed.
-    pub fn remove_child(
-        &mut self,
-        identity: &AssignmentIdentity,
-        child_uid: &ResourceUid,
-    ) -> Result<(), AssignmentError> {
-        let record = self.record_mut(identity)?;
-        if !record.children.remove(child_uid) {
-            return Err(AssignmentError::AssignmentMissing);
-        }
-        Ok(())
-    }
-
-    /// Return the currently indexed child UIDs.
-    pub fn child_uids(&self, identity: &AssignmentIdentity) -> Option<&BTreeSet<ResourceUid>> {
-        self.records
-            .get(identity.resource_uid())
-            .filter(|record| record.identity == *identity)
-            .map(|record| &record.children)
     }
 
     /// Revoke all assignments bound to a disconnected session generation.
@@ -3060,39 +2956,6 @@ impl ControllerAssignmentRegistry {
         }
     }
 
-    /// Validate a writer against every assignment fence.
-    pub fn validate_writer(
-        &self,
-        identity: &AssignmentIdentity,
-        uid: &ResourceUid,
-        revision: ZoneRevision,
-        verb: AssignmentVerb,
-    ) -> Result<(), AssignmentError> {
-        let record = self
-            .records
-            .get(identity.resource_uid())
-            .ok_or(AssignmentError::AssignmentMissing)?;
-        if record.identity != *identity {
-            return Err(AssignmentError::StaleAssignment);
-        }
-        if record.state.phase() == AssignmentPhase::Revoked {
-            return Err(AssignmentError::SessionRevoked);
-        }
-        if !record.state.phase().admits_mutation() {
-            return Err(AssignmentError::StaleAssignment);
-        }
-        if record.identity.resource_uid() != uid {
-            return Err(AssignmentError::ResourceUidMismatch);
-        }
-        if record.identity.resource_revision() != revision {
-            return Err(AssignmentError::ResourceRevisionMismatch);
-        }
-        if !record.allowed_verbs.contains(&verb) {
-            return Err(AssignmentError::VerbNotAllowed);
-        }
-        Ok(())
-    }
-
     /// Validate a read or mutation lease without a new resource snapshot.
     pub fn validate_scope(
         &self,
@@ -3124,14 +2987,6 @@ impl ControllerAssignmentRegistry {
             return Err(AssignmentError::VerbNotAllowed);
         }
         Ok(())
-    }
-
-    /// Whether the last committed observation must be retained as stale.
-    pub fn observation_is_stale(&self, identity: &AssignmentIdentity) -> bool {
-        self.records
-            .get(identity.resource_uid())
-            .filter(|record| record.identity == *identity)
-            .is_some_and(|record| record.state.stale_observation.load(Ordering::Acquire))
     }
 
     fn record_mut(
@@ -3174,9 +3029,9 @@ mod tests {
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
     use d2b_contracts_resource::v3::identity::ReconnectGeneration;
     use d2b_contracts_resource::v3::{
-        ControllerGeneration, PlacementAnchor, PlacementTarget, ResourceEnvelope,
-        ResourceGeneration, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint,
-        SchemaVersion, ZoneRevision,
+        ControllerGeneration, PlacementAnchor, ResourceEnvelope,
+        ResourceGeneration, ResourceRef, ResourceTypeName, SchemaFingerprint,
+        SchemaVersion,
     };
 
     use super::{
@@ -3465,37 +3320,6 @@ mod tests {
     }
 
     #[test]
-    fn stale_assignment_epoch_rejects_status_and_finalizer_writers() {
-        let resource = process("process", "Guest/dev-vm", 7);
-        let role = role();
-        let mut registry = ControllerAssignmentRegistry::default();
-        let old = registry.admit(request(&resource, &role, 1, 1, 1)).unwrap();
-        registry.begin_drain(old.identity()).unwrap();
-        registry.release(old.identity()).unwrap();
-        let new = registry.admit(request(&resource, &role, 1, 1, 2)).unwrap();
-
-        assert_eq!(
-            registry.validate_writer(
-                old.identity(),
-                &resource.metadata().uid().clone(),
-                resource.metadata().revision(),
-                AssignmentVerb::UpdateStatus,
-            ),
-            Err(AssignmentError::StaleAssignment)
-        );
-        assert!(
-            registry
-                .validate_writer(
-                    new.identity(),
-                    &resource.metadata().uid().clone(),
-                    resource.metadata().revision(),
-                    AssignmentVerb::UpdateFinalizers,
-                )
-                .is_ok()
-        );
-    }
-
-    #[test]
     fn scoped_commit_transport_round_trips_assignment_and_mutations() {
         let resource = process("process", "Guest/dev-vm", 7);
         let role = role();
@@ -3542,71 +3366,7 @@ mod tests {
     }
 
     #[test]
-    fn same_epoch_rebind_updates_the_active_writer_revision() {
-        let resource = process("process", "Guest/dev-vm", 7);
-        let role = role();
-        let mut registry = ControllerAssignmentRegistry::default();
-        let mut lease = registry.admit(request(&resource, &role, 1, 1, 1)).unwrap();
-        let stale = lease.identity().clone();
-
-        registry
-            .rebind_revision(&mut lease, ZoneRevision::new(8))
-            .unwrap();
-
-        assert_eq!(lease.identity().resource_revision(), ZoneRevision::new(8));
-        assert!(
-            registry
-                .validate_writer(
-                    lease.identity(),
-                    resource.metadata().uid(),
-                    ZoneRevision::new(8),
-                    AssignmentVerb::UpdateStatus,
-                )
-                .is_ok()
-        );
-        assert_eq!(
-            registry.validate_writer(
-                &stale,
-                resource.metadata().uid(),
-                ZoneRevision::new(7),
-                AssignmentVerb::UpdateStatus,
-            ),
-            Err(AssignmentError::StaleAssignment)
-        );
-    }
-
-    #[test]
-    fn released_assignment_allows_successor_at_the_current_revision() {
-        let resource = process("process", "Guest/dev-vm", 7);
-        let role = role();
-        let mut registry = ControllerAssignmentRegistry::default();
-        let mut old = registry.admit(request(&resource, &role, 1, 1, 1)).unwrap();
-        registry
-            .rebind_revision(&mut old, ZoneRevision::new(8))
-            .unwrap();
-        registry.begin_drain(old.identity()).unwrap();
-        registry.release(old.identity()).unwrap();
-
-        let current = process("process", "Guest/dev-vm", 8);
-        let successor = registry.admit(request(&current, &role, 2, 2, 2)).unwrap();
-        assert_eq!(
-            successor.identity().resource_revision(),
-            ZoneRevision::new(8)
-        );
-        assert!(
-            registry
-                .validate_writer(
-                    successor.identity(),
-                    current.metadata().uid(),
-                    ZoneRevision::new(8),
-                    AssignmentVerb::UpdateFinalizers,
-                )
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn disconnected_session_revokes_mutation_but_keeps_stale_observation() {
+    fn disconnected_session_revokes_mutation() {
         let resource = process("process", "Guest/dev-vm", 7);
         let role = role();
         let mut registry = ControllerAssignmentRegistry::default();
@@ -3640,16 +3400,6 @@ mod tests {
             ),
             Err(AssignmentError::SessionRevoked)
         );
-        assert_eq!(
-            registry.validate_writer(
-                lease.identity(),
-                resource.metadata().uid(),
-                resource.metadata().revision(),
-                AssignmentVerb::UpdateStatus,
-            ),
-            Err(AssignmentError::SessionRevoked)
-        );
-        assert!(registry.observation_is_stale(lease.identity()));
     }
 
     #[test]
@@ -3898,13 +3648,6 @@ mod tests {
             ),
             Err(AssignmentError::ResourceNotAssigned)
         );
-        assert_eq!(
-            lease.target_for(PlacementTarget::Execution {
-                kind: d2b_contracts_resource::v3::PlacementTargetKind::Host,
-                reference: ResourceRef::parse("Host/host-system").unwrap(),
-            }),
-            Err(AssignmentError::TargetMismatch)
-        );
     }
 
     #[test]
@@ -4063,26 +3806,6 @@ mod tests {
         let replacement = registry.admit(request(&resource, &role, 2, 2, 2)).unwrap();
         assert_eq!(replacement.identity().provider_generation().get(), 2);
         assert_eq!(replacement.identity().controller_generation().get(), 2);
-    }
-
-    #[test]
-    fn child_index_must_drain_before_parent_release() {
-        let resource = process("process", "Guest/dev-vm", 7);
-        let role = role();
-        let mut registry = ControllerAssignmentRegistry::default();
-        let lease = registry.admit(request(&resource, &role, 1, 1, 1)).unwrap();
-        let child = ResourceUid::parse("423e4567-e89b-42d3-a456-426614174003").unwrap();
-        registry
-            .record_child(lease.identity(), child.clone())
-            .unwrap();
-        registry.begin_drain(lease.identity()).unwrap();
-        assert_eq!(
-            registry.release(lease.identity()),
-            Err(AssignmentError::ChildrenRemain)
-        );
-        assert_eq!(registry.child_uids(lease.identity()).unwrap().len(), 1);
-        registry.remove_child(lease.identity(), &child).unwrap();
-        registry.release(lease.identity()).unwrap();
     }
 
     #[test]
