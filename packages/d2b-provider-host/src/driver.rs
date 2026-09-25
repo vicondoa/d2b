@@ -260,10 +260,10 @@ impl HostDriver {
         op: DriverOp,
     ) -> Result<ResourceRef, HostDriverError> {
         let type_name = d2b_contracts_resource::v3::ResourceTypeName::parse(
-            ctx.key().type_name.clone(),
+            &ctx.key().type_name,
         )
         .map_err(|_| self.error(HostDriverErrorKind::SpecInvalid, op))?;
-        let name = d2b_contracts_resource::v3::ResourceName::parse(ctx.key().name.clone())
+        let name = d2b_contracts_resource::v3::ResourceName::parse(&ctx.key().name)
             .map_err(|_| self.error(HostDriverErrorKind::SpecInvalid, op))?;
         Ok(ResourceRef::new(type_name, name))
     }

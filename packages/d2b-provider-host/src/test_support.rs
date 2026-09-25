@@ -181,8 +181,7 @@ impl RecordingMinijailGate {
             gate: tokio::sync::Mutex::new(gate),
         })
     }
-
-    }
+}
 
 impl MinijailPlatformGateSource for RecordingMinijailGate {
     fn platform_gate(&self) -> MinijailPlatformGate {
