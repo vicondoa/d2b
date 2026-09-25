@@ -976,7 +976,16 @@ fn response_fds_match_method(fds: &[OwnedFd], contract: MethodFdContract) -> boo
 /// (the kebab-case `MethodFdContract` facet), when the spelling is a known
 /// kind.
 fn declared_fd_kind(kind: &str) -> Option<FdKind> {
-    serde_json::from_value(serde_json::Value::String(kind.to_owned())).ok()
+    match kind {
+        "fifo" => Some(FdKind::Fifo),
+        "socket" => Some(FdKind::Socket),
+        "char-device" => Some(FdKind::CharDevice),
+        "block-device" => Some(FdKind::BlockDevice),
+        "any" => Some(FdKind::Any),
+        "regular" => Some(FdKind::Regular),
+        "directory" => Some(FdKind::Directory),
+        _ => None,
+    }
 }
 
 /// The normal result reply of one effect-service invocation: the canonical
@@ -1246,7 +1255,11 @@ async fn serve_accepted(
             // answer: the call is refused under the daemon's own capacity
             // code, so the broker reports that code rather than a handler it
             // never reached.
-            tracing::warn!("forward rendezvous is at its in-flight cap; refusing the call");
+            tracing::warn!(
+                peer_uid,
+                max = posture.max_inflight,
+                "forward rendezvous is at its in-flight cap; refusing the call"
+            );
             refuse(&connection, TypedError::DaemonBusy.kind()).await;
             continue;
         };

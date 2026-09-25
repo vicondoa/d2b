@@ -84,6 +84,35 @@ enum SharedProviderKind {
     GpuDevice,
 }
 
+/// The admission mode one shared-provider effect request carries on its
+/// spec (`/mode`). The wire spelling is kebab-case; an unknown or misspelled
+/// mode is refused at the effect boundary rather than silently taking the
+/// non-authority / non-projection branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum SharedProviderEffectMode {
+    /// The authority admission posture.
+    Authority,
+    /// The projection admission posture.
+    Projection,
+}
+
+impl SharedProviderEffectMode {
+    /// Parse the mode from the request spec, refusing unknown spellings.
+    fn parse(request: &SharedProviderEffectRequest<'_>) -> Result<Self, SharedProviderEffectError> {
+        let mode = request
+            .spec
+            .pointer("/mode")
+            .and_then(Value::as_str)
+            .ok_or(SharedProviderEffectError::InvalidResource)?;
+        match mode {
+            "authority" => Ok(Self::Authority),
+            "projection" => Ok(Self::Projection),
+            _ => Err(SharedProviderEffectError::InvalidResource),
+        }
+    }
+}
+
 impl SharedProviderKind {
     /// The Provider reference the row's spec must name.
     const fn provider_ref(self) -> &'static str {
@@ -1313,7 +1342,8 @@ impl ProductionSharedProviderEffects {
             self.usbip_ledger.clone(),
         )
         .into_port();
-        let opted_in = request.spec.pointer("/mode").and_then(Value::as_str) == Some("authority");
+        let mode = SharedProviderEffectMode::parse(request)?;
+        let opted_in = mode == SharedProviderEffectMode::Authority;
         Ok((zone_uid, opted_in, port))
     }
 }
@@ -1918,12 +1948,8 @@ impl ProductionSharedProviderEffects {
         match component {
             SecurityKeyComponent::Service => {
                 let runtime = self.runtime()?;
-                let mode = request
-                    .spec
-                    .pointer("/mode")
-                    .and_then(Value::as_str)
-                    .ok_or(SharedProviderEffectError::InvalidResource)?;
-                if mode == "projection" {
+                let mode = SharedProviderEffectMode::parse(request)?;
+                if mode == SharedProviderEffectMode::Projection {
                     let endpoint_ref = request
                         .status
                         .as_ref()

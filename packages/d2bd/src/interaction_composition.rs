@@ -5293,6 +5293,8 @@ where
                                     let handler_active = Arc::clone(&active_handlers);
                                     let handler_stop = Arc::clone(&stop);
                                     let handler = tokio::spawn(async move {
+                                        let _admission =
+                                            InteractionHandlerAdmissionGuard(handler_active);
                                         let result = admit_interaction_socket(
                                             socket,
                                             runtime,
@@ -5305,7 +5307,6 @@ where
                                         if let Err(error) = result {
                                             tracing::debug!(%error, "interaction ComponentSession refused");
                                         }
-                                        handler_active.fetch_sub(1, Ordering::AcqRel);
                                     });
                                     handlers.lock().await.push(handler);
                                 }
@@ -5355,12 +5356,24 @@ fn reserve_interaction_handler(active_handlers: &AtomicUsize) -> bool {
     }
 }
 
+/// Releases one reserved interaction-handler slot on drop, so a panicked
+/// handler cannot leak its bounded admission reservation.
+struct InteractionHandlerAdmissionGuard(Arc<AtomicUsize>);
+
+impl Drop for InteractionHandlerAdmissionGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 async fn reap_finished_handlers(handlers: &AsyncMutex<Vec<tokio::task::JoinHandle<()>>>) {
     let mut handlers = handlers.lock().await;
     let mut index = 0;
     while index < handlers.len() {
         if handlers[index].is_finished() {
-            let _ = handlers.swap_remove(index).await;
+            if let Err(error) = handlers.swap_remove(index).await {
+                tracing::warn!(%error, "interaction handler task failed");
+            }
         } else {
             index += 1;
         }

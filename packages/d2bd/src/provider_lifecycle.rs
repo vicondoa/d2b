@@ -1071,7 +1071,8 @@ impl ProviderRuntime {
                     zone = %self.zone.as_str(),
                     revision = provider_set_revision,
                     operation = "PublishTrustedContext",
-                    "trusted-context publication refused: {error}"
+                    %error,
+                    "trusted-context publication refused"
                 );
             }
         }

@@ -45,7 +45,7 @@ pub const PROVIDER_BUNDLE_VERSION: u32 = 3;
 pub const PROVIDER_BUNDLE_SCHEMA_VERSION: &str = "v3";
 
 /// Registry limits and snapshots are owned by the shared Provider crate.
-pub use d2b_provider::{MAX_PROVIDER_REGISTRY_ENTRIES, ProviderRegistrySnapshot};
+pub use d2b_provider::MAX_PROVIDER_REGISTRY_ENTRIES;
 
 /// Mint a unique operation identity for one lifecycle attempt. The immutable
 /// Guest identity is carried by the sealed authorization lease; the nonce
