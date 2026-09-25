@@ -192,7 +192,7 @@ fn principal_pool_is_opaque_and_fails_closed_when_exhausted() {
 fn controller_status_transitions_pending_ready_and_failed() {
     let (guest, host, user, policy) = refs();
     let spec = WaylandSessionSpec::new(guest, host, user, policy, identity(), true).unwrap();
-    let mut controller = d2b_provider_display_wayland::DisplayController::new(4);
+    let mut controller = d2b_provider_display_wayland::DisplayController::new(4).unwrap();
     let pending = reconcile(
         &mut controller,
         &spec,
@@ -233,7 +233,7 @@ fn failed_reconcile_retains_the_session_principal_until_cleanup() {
         true,
     )
     .unwrap();
-    let mut controller = d2b_provider_display_wayland::DisplayController::new(1);
+    let mut controller = d2b_provider_display_wayland::DisplayController::new(1).unwrap();
     let first_status = reconcile(
         &mut controller,
         &first,
@@ -283,7 +283,7 @@ fn mutable_session_fields_reuse_the_same_principal() {
         true,
     )
     .unwrap();
-    let mut controller = d2b_provider_display_wayland::DisplayController::new(1);
+    let mut controller = d2b_provider_display_wayland::DisplayController::new(1).unwrap();
     let first_principal = reconcile(
         &mut controller,
         &first,
@@ -318,7 +318,7 @@ fn readiness_cannot_be_reused_for_a_different_host_or_user_binding() {
         true,
     )
     .unwrap();
-    let mut controller = d2b_provider_display_wayland::DisplayController::new(2);
+    let mut controller = d2b_provider_display_wayland::DisplayController::new(2).unwrap();
     assert_eq!(
         reconcile(
             &mut controller,
@@ -362,7 +362,7 @@ fn distinct_authenticated_sessions_do_not_share_display_principals() {
         true,
     )
     .unwrap();
-    let mut controller = d2b_provider_display_wayland::DisplayController::new(2);
+    let mut controller = d2b_provider_display_wayland::DisplayController::new(2).unwrap();
     let first_status = reconcile(
         &mut controller,
         &first,

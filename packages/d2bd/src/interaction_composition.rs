@@ -2291,7 +2291,8 @@ where
             WorkerRestartEvidence::from_supervisor(daemon_monotonic_ms(), None, None, 1)
         };
         self.reconcile_display(
-            DisplayController::new(8),
+            DisplayController::new(8)
+                .expect("display principal pool size is validated by the signed descriptor"),
             &request.spec,
             evidence.dependencies.clone(),
             supervision,
@@ -7159,7 +7160,7 @@ mod tests {
         let zone = ZoneId::parse("dev").unwrap();
         let mut composition = test_interaction_composition(&zone, 42);
         composition.display = Some(DisplayRuntime::new(
-            DisplayController::new(2),
+            DisplayController::new(2).unwrap(),
             DisplaySupervisorEffects::new(ProviderSupervisor::new(Backend::default())),
         ));
 
