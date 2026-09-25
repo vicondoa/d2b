@@ -486,6 +486,7 @@ fn blocked_plan(guest_uid: ResourceUid, reason: FinalizationBlockReason) -> Gues
 
 /// Infer one fixed direct-child role from its deterministic ResourceRef.
 pub fn child_role_for_ref(target: &ResourceRef) -> Option<ChildRole> {
+    let name = target.name().as_str();
     [
         ChildRole::VmmProcess,
         ChildRole::ChApiEndpoint,
@@ -495,11 +496,9 @@ pub fn child_role_for_ref(target: &ResourceRef) -> Option<ChildRole> {
     .into_iter()
     .find(|role| {
         target.resource_type().as_str() == role.resource_type()
-            && target
-                .name()
-                .as_str()
-                .strip_suffix(&format!("-{}", role.suffix()))
-                .is_some()
+            && name
+                .strip_suffix(role.suffix())
+                .is_some_and(|stem| stem.ends_with('-'))
     })
 }
 
