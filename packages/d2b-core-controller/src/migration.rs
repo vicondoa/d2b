@@ -51,10 +51,12 @@ impl LegacyTpmMigrationDecision {
         Self::from_anchored_inventory(None, vm_id, intent_ref)
     }
 
+    /// Whether this decision requires the broker migration path.
     pub const fn requires_migration(&self) -> bool {
         self.state_id.is_some()
     }
 
+    /// Whether the supplied vm/intent bindings match the sealed decision.
     pub fn validates_binding(&self, vm_id: &str, intent_ref: &str) -> bool {
         self.vm_binding == canonical_digest("d2b:tpm-vm-binding/v1", vm_id.as_bytes())
             && self.intent_binding

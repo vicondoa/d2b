@@ -31,12 +31,16 @@ pub enum StartupStage {
 /// Trusted Zone runtime readiness observations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeReadiness {
+    /// Whether the Zone store is ready.
     pub store_ready: bool,
+    /// Whether the resource API is ready.
     pub resource_api_ready: bool,
+    /// Whether the local bus is ready.
     pub local_bus_ready: bool,
     /// Set only after the production ResourceService/controller endpoint is
     /// registered on the Zone-local path.
     pub controller_endpoint_registered: bool,
+    /// Whether an authenticated system-core session exists.
     pub authenticated_system_core_session: bool,
 }
 
@@ -45,10 +49,15 @@ pub struct RuntimeReadiness {
 pub struct RecoverySnapshot {
     /// Monotonic startup epoch issued by this CoreProcess instance.
     pub startup_epoch: u64,
+    /// Revision of the last durable checkpoint.
     pub checkpoint_revision: u64,
+    /// Revision of the active configuration.
     pub active_configuration_revision: u64,
+    /// Number of active provider leases.
     pub provider_lease_count: u32,
+    /// Number of active controller leases.
     pub controller_lease_count: u32,
+    /// Number of operations whose durability is ambiguous.
     pub ambiguous_operation_count: u32,
     /// Set only after the registered store watch has accepted its cursor.
     pub watch_admitted: bool,

@@ -196,14 +196,23 @@ impl std::error::Error for CurrencyAggregationError {}
 /// Bounded status for one isolated handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HandlerStatus {
+    /// Current handler phase.
     pub phase: HandlerPhase,
+    /// Last handler outcome.
     pub outcome: HandlerOutcome,
+    /// Generation the handler last observed.
     pub observed_generation: u64,
+    /// Queued work items.
     pub queued: u32,
+    /// Running work items.
     pub running: u32,
+    /// Revision of the last applied watch.
     pub last_watch_revision: u64,
+    /// Revision of the last durable checkpoint.
     pub checkpoint_revision: u64,
+    /// Tick of the last reconcile pass.
     pub last_reconciled_tick: u64,
+    /// Tick at which a retry becomes eligible, when one is scheduled.
     pub retry_after_tick: Option<u64>,
 }
 

@@ -2182,12 +2182,11 @@ impl HostGlobalAuthorityIndex {
         let key = request.key.clone();
         let token = self.issue_token();
         if let Some(entry) = self.authorities.get_mut(&key) {
-            if let Some(holder) = entry
+            if entry
                 .holders
                 .iter()
-                .find(|holder| holder.owner_proof == request.owner_proof)
+                .any(|holder| holder.owner_proof == request.owner_proof)
             {
-                let _ = holder;
                 return Err(AuthorityError::DuplicateActiveReservation);
             }
             if entry.arbitration != request.arbitration {
@@ -2535,12 +2534,11 @@ impl HostGlobalAuthorityIndex {
         let lease_limit = request.signed_max_holders;
         let token = self.issue_token();
         if let Some(entry) = self.external_nics.get_mut(&key) {
-            if let Some(holder) = entry
+            if entry
                 .holders
                 .iter()
-                .find(|holder| holder.owner_proof == request.owner_proof)
+                .any(|holder| holder.owner_proof == request.owner_proof)
             {
-                let _ = holder;
                 return Err(AuthorityError::DuplicateActiveReservation);
             }
             let signed_limit = entry.signed_max_holders.min(request.signed_max_holders);
@@ -2794,16 +2792,16 @@ impl AuthorityReservation {
         request: AuthorityRequest,
     ) -> Result<Self, AuthorityReservationError<AuthorityError>> {
         let operation_id = operation_id.into();
+        let claim = AuthorityStorageClaim::Generic(request.durable_claim());
         let lease = {
             let mut guard = index.lock().await;
             guard
                 .reserve_operation_id(&operation_id)
                 .map_err(AuthorityReservationError::Effect)?;
             guard
-                .admit_authority_inner_with_operation(request.clone(), Some(operation_id.clone()))
+                .admit_authority_inner_with_operation(request, Some(operation_id.clone()))
                 .map_err(AuthorityReservationError::Effect)?
         };
-        let claim = AuthorityStorageClaim::Generic(request.durable_claim());
         let prepared = match persistence.prepare(&operation_id, &claim).await {
             Ok(prepared) => prepared,
             Err(error @ crate::authority_persistence::AuthorityPersistenceError::CommitUnknown) => {
