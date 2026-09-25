@@ -8425,7 +8425,7 @@ fn provider_crate_family(crate_name: &str) -> String {
 /// `Process/<name>`, `Host/<name>`, `User/<name>`, or `Guest/<name>`. The
 /// resource model addresses providers and processes by name; naming the
 /// provider one delegates a child to is the one legitimate cross-family
-/// shape ((`d2b-provider-device-usbip/src/lifecycle.rs:25` names the
+/// shape (`d2b-provider-device-usbip/src/lifecycle.rs:25` names the
 /// system-minijail provider that owns its guest-proxy child). A reference
 /// names a provider; it is not knowledge about that provider.
 fn is_resource_reference_literal(content: &str) -> bool {
@@ -8637,7 +8637,7 @@ fn render_provider_family_violation(signal: &ProviderFamilySignal) -> String {
 
 /// One committed exemption row: a provider crate module that legitimately
 /// carries another family's identity token. The list only shrinks: a signal
-/// without a row is a policy failure ((a reintroduction),and a row whose
+/// without a row is a policy failure (a reintroduction),and a row whose
 /// signal the tree no longer carries is stale. No row may be added unless the
 /// change that introduces a legitimate cross-family reference also records
 /// its reason here.
@@ -8645,7 +8645,7 @@ fn render_provider_family_violation(signal: &ProviderFamilySignal) -> String {
 
 #[derive(Clone)]
 struct ProviderFamilyKnowledgeExemption {
-    /// The provider crate that carries the token ((its Cargo package name).
+    /// The provider crate that carries the token (its Cargo package name).
     crate_name: &'static str,
     /// Repository-relative module path that carries the token.
 
@@ -9040,11 +9040,11 @@ const COMMITTED_SCOPE: &[CommittedScopeEntry] = &[
 ];
 const COMMITTED_SCOPE_ARTIFACT_ROOTS: &[&str] = &["docs/reference", "packages/policy-inputs"];
 
-/// Fail when a workspace crate has no committed scope row ((an edit to a
+/// Fail when a workspace crate has no committed scope row (an edit to a
 /// crate no unit names),when a row names a crate the workspace no longer has,
 /// or when a declared artifact root has vanished. The committed scope is
 /// compared against the workspace rather than a diff: any crate present without
-/// a row is an edit outside the scope that happened, whiche is what a
+/// a row is an edit outside the scope that happened, which is what a
 /// committed scope gate can prove without a diff..
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_committed_scope(repo_root:&Path, members: &[WorkspaceMember]) -> Result<(), String> {
