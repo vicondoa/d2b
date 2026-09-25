@@ -6681,7 +6681,6 @@ fn collect_self_binding_scope(
 const GENERATOR_COMMANDS: &[&str] = &[
     "gen-broker-operations",
     "gen-layer-catalogs",
-    "gen-resource-schemas",
     "gen-zone-schemas",
     "gen-zone-nix-options",
     "gen-semantic-service-schemas",

@@ -18,7 +18,10 @@ exports_files(
 
 filegroup(
     name = "resource_ttrpc_generated",
-    srcs = ["src/generated/d2b_resource_v3_ttrpc.rs"],
+    srcs = [
+        "src/generated/d2b_resource_v3_ttrpc.rs",
+        "src/generated/mod.rs",
+    ],
     visibility = ["//visibility:public"],
 )
 

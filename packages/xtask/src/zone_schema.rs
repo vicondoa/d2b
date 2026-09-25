@@ -52,23 +52,6 @@ const MOUNT_PATH_MAX_BYTES: usize = 255;
 const API_VERSION: &str = "resources.d2bus.org/v3";
 const CORE_SCHEMA_NAMESPACE: &str = "core.d2bus.org";
 
-/// The canonical standard ResourceType registry from
-/// `ADR-046-resource-object-model`.
-///
-/// The registry has one declaration - `d2b_contracts::identity` - and this
-/// generator projects it into the committed Nix registry that every consumer
-/// imports. Nothing here restates a type name, so a type cannot be authorable
-/// in Nix while the resource plane refuses it.
-pub use d2b_contracts::identity::STANDARD_RESOURCE_TYPES;
-
-/// U12 Provider-owned qualified ResourceTypes. They are generated from their
-/// signed Provider schemas and must never enter the Core standard registry.
-pub const PROVIDER_OWNED_RESOURCE_TYPES: [&str; 3] = [
-    "activation-nixos.d2bus.org.NixosGeneration",
-    "telemetry.d2bus.org.TelemetryBinding",
-    "telemetry.d2bus.org.TelemetryService",
-];
-
 /// A field default, which is also the value the bundle emitter substitutes
 /// when the operator did not author the field.
 #[derive(Clone, Copy)]
@@ -1538,27 +1521,6 @@ fn generated_spec_canonical_module() -> String {
     out
 }
 
-fn generated_resource_types_module() -> String {
-    let mut out = String::new();
-    out.push_str(GENERATED_HEADER);
-    out.push_str(
-        "#\n\
-         # The canonical ADR 0046 standard ResourceType registry. Qualified\n\
-         # Provider types are appended only from installed signed schemas and\n\
-         # are therefore absent here.\n",
-    );
-    out.push_str(&format!(
-        "# Provider-owned qualified types remain outside this registry: {}.\n",
-        PROVIDER_OWNED_RESOURCE_TYPES.join(", ")
-    ));
-    out.push_str("[\n");
-    for name in STANDARD_RESOURCE_TYPES {
-        out.push_str(&format!("  {}\n", nix_string(name)));
-    }
-    out.push_str("]\n");
-    out
-}
-
 /// `gen-zone-nix-options`: emit the committed generated Nix modules.
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn gen_zone_nix_options(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -1572,10 +1534,6 @@ pub fn gen_zone_nix_options(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn st
             generated_options_module(schema),
         );
     }
-    files.insert(
-        out_dir.join("resource-types.nix"),
-        generated_resource_types_module(),
-    );
     files.insert(
         out_dir.join("zone-spec-canonical.nix"),
         generated_spec_canonical_module(),
@@ -1592,6 +1550,16 @@ pub fn gen_zone_nix_options(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn st
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::identity::STANDARD_RESOURCE_TYPES;
+
+    /// U12 Provider-owned qualified ResourceTypes. They are generated from
+    /// their signed Provider schemas and must never enter the Core standard
+    /// registry.
+    const PROVIDER_OWNED_RESOURCE_TYPES: [&str; 3] = [
+        "activation-nixos.d2bus.org.NixosGeneration",
+        "telemetry.d2bus.org.TelemetryBinding",
+        "telemetry.d2bus.org.TelemetryService",
+    ];
 
     fn repo_root() -> PathBuf {
         crate::repo_root().expect("repo root").to_path_buf()
@@ -1632,13 +1600,14 @@ mod tests {
             .iter()
             .map(|name| format!("  \"{name}\"\n"))
             .collect();
-        let generated = generated_resource_types_module();
+        let generated = fs::read_to_string(repo_root().join("nixos-modules/generated/resource-types.nix"))
+            .expect("resource-types.nix is committed");
         let mut expected = String::from("[\n");
         expected.push_str(&authority.concat());
         expected.push_str("]\n");
         assert!(
             generated.ends_with(&expected),
-            "the generated registry is the authority list entry for entry"
+            "the committed registry is the authority list entry for entry"
         );
     }
 
@@ -1649,7 +1618,8 @@ mod tests {
                 .iter()
                 .all(|resource_type| !PROVIDER_OWNED_RESOURCE_TYPES.contains(resource_type))
         );
-        let generated = generated_resource_types_module();
+        let generated = fs::read_to_string(repo_root().join("nixos-modules/generated/resource-types.nix"))
+            .expect("resource-types.nix is committed");
         for resource_type in PROVIDER_OWNED_RESOURCE_TYPES {
             assert!(!generated.contains(&format!("\"{resource_type}\"")));
         }
@@ -1661,8 +1631,7 @@ mod tests {
             '\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2015}', '\u{2212}',
             '\u{fe58}', '\u{ff0d}',
         ];
-        let mut rendered = generated_resource_types_module();
-        rendered.push_str(&generated_spec_canonical_module());
+        let mut rendered = generated_spec_canonical_module();
         for schema in &RESOURCE_TYPE_SCHEMAS {
             rendered.push_str(&generated_options_module(schema));
             rendered.push_str(
@@ -1763,11 +1732,6 @@ mod tests {
                 module_path.display()
             );
         }
-        assert_eq!(
-            fs::read_to_string(root.join("nixos-modules/generated/resource-types.nix"))
-                .expect("resource-types.nix is committed"),
-            generated_resource_types_module()
-        );
         assert_eq!(
             fs::read_to_string(root.join("nixos-modules/generated/zone-spec-canonical.nix"))
                 .expect("zone-spec-canonical.nix is committed"),

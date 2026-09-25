@@ -837,8 +837,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
- "zbus",
 ]
 
 [[package]]
@@ -847,8 +845,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-broker",
  "d2b-broker-fixture-handlers",
- "d2b-broker-fixture-syscall-surface",
- "d2b-contracts-resource",
  "regex",
  "serde_json",
  "tokio",
@@ -874,7 +870,6 @@ name = "d2b-bus"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -885,11 +880,9 @@ dependencies = [
  "d2b-telemetry",
  "getrandom 0.3.4",
  "protobuf",
- "quote",
  "serde_json",
  "sha2",
  "snow",
- "syn 2.0.119",
  "tempfile",
  "tokio",
  "ttrpc",
@@ -899,14 +892,12 @@ dependencies = [
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
  "regex",
  "schemars",
  "semver",
  "serde",
  "serde_json",
  "sha2",
- "unicode-normalization",
 ]
 
 [[package]]
@@ -945,7 +936,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "unicode-normalization",
 ]
 
 [[package]]
@@ -954,7 +944,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "protobuf",
- "regex",
  "schemars",
  "serde",
  "serde_json",
@@ -980,9 +969,6 @@ name = "d2b-controller-toolkit"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
- "schemars",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -994,10 +980,8 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "nix 0.29.0",
- "regex",
  "rustix 0.38.44",
  "schemars",
- "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -1025,7 +1009,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "libc",
  "miniz_oxide",
@@ -1037,7 +1020,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
- "ttrpc",
 ]
 
 [[package]]
@@ -1052,9 +1034,7 @@ dependencies = [
 name = "d2b-process-conformance"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "serde",
  "serde_json",
  "sha2",
@@ -1077,7 +1057,6 @@ dependencies = [
  "async-trait",
  "d2b-contracts-broker",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
@@ -1111,7 +1090,6 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "libc",
  "nix 0.29.0",
  "schemars",
@@ -1142,7 +1120,6 @@ dependencies = [
  "command-fds",
  "d2b-contracts",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "env_logger",
  "html2text",
@@ -1217,7 +1194,6 @@ dependencies = [
  "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "serde_json",
  "tokio",
@@ -1231,7 +1207,6 @@ dependencies = [
  "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "serde_json",
  "tokio",
@@ -1280,7 +1255,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core-controller",
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
@@ -1300,7 +1274,6 @@ dependencies = [
  "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core-controller",
  "d2b-provider-endpoint",
  "d2b-provider-process-minijail",
@@ -1323,7 +1296,6 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-core-controller",
  "d2b-provider-toolkit",
@@ -1345,13 +1317,11 @@ dependencies = [
  "d2b-contracts-broker",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-core-controller",
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "libc",
  "parking_lot",
  "serde",
  "serde_json",
@@ -1371,7 +1341,6 @@ dependencies = [
  "d2b-core-controller",
  "d2b-provider-endpoint",
  "d2b-provider-toolkit",
- "d2b-session",
  "env_logger",
  "libc",
  "log",
@@ -1493,9 +1462,7 @@ name = "d2b-provider-guest-qemu-media"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
- "d2b-process-conformance",
  "schemars",
  "serde",
  "serde_json",
@@ -1526,7 +1493,6 @@ dependencies = [
  "d2b-contracts",
  "d2b-contracts-broker",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-provider-guest",
  "d2b-provider-guest-cloud-hypervisor",
@@ -1538,7 +1504,6 @@ dependencies = [
  "rustix 0.38.44",
  "serde",
  "serde_json",
- "sha2",
  "socket2 0.5.10",
  "tempfile",
  "tokio",
@@ -1550,7 +1515,6 @@ name = "d2b-provider-notification-desktop"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
  "getrandom 0.2.17",
  "serde",
@@ -1627,9 +1591,7 @@ dependencies = [
  "async-trait",
  "d2b-contracts",
  "d2b-contracts-broker",
- "d2b-contracts-control",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "d2b-core",
  "d2b-process-conformance",
  "d2b-provider-toolkit",
@@ -1749,7 +1711,6 @@ name = "d2b-provider-shell-terminal"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "tokio",
  "tracing",
 ]
@@ -1770,7 +1731,6 @@ dependencies = [
  "rustix 0.38.44",
  "serde_json",
  "sha2",
- "socket2 0.5.10",
  "tempfile",
  "tokio",
  "tracing",
@@ -1841,7 +1801,6 @@ dependencies = [
  "d2b-resource-types",
  "d2b-session",
  "d2b-session-unix",
- "parking_lot",
  "schemars",
  "serde",
  "serde_json",
@@ -1886,7 +1845,6 @@ name = "d2b-provider-transport-unix"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "getrandom 0.3.4",
  "rustix 0.38.44",
  "tokio",
@@ -1983,7 +1941,6 @@ name = "d2b-provider-volume-virtiofs"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "serde",
  "serde_json",
  "sha2",
@@ -2053,7 +2010,6 @@ name = "d2b-resource-api"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-core-controller",
@@ -2074,7 +2030,6 @@ dependencies = [
 name = "d2b-resource-client"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
  "d2b-contracts-control",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -2088,7 +2043,6 @@ name = "d2b-resource-compiler"
 version = "0.0.0-bootstrap"
 dependencies = [
  "base64",
- "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
@@ -2130,7 +2084,6 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-core",
  "d2b-resource-runtime",
- "serde_json",
 ]
 
 [[package]]
@@ -2139,7 +2092,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-audit",
- "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-resource-api",
@@ -2160,7 +2112,6 @@ name = "d2b-session-unix"
 version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
- "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-session",
@@ -2196,10 +2147,8 @@ dependencies = [
 name = "d2b-telemetry"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "d2b-contracts-zone-session",
  "rustix 0.38.44",
  "serde",
  "serde_json",
@@ -2230,7 +2179,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-bus",
- "d2b-contracts",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",
  "d2b-provider-toolkit",
@@ -2267,9 +2215,6 @@ dependencies = [
  "d2b-provider-command",
  "d2b-provider-config-nixos",
  "d2b-provider-credential",
- "d2b-provider-credential-entra",
- "d2b-provider-credential-managed-identity",
- "d2b-provider-credential-secret-service",
  "d2b-provider-device",
  "d2b-provider-device-gpu",
  "d2b-provider-device-security-key",
@@ -2280,13 +2225,11 @@ dependencies = [
  "d2b-provider-endpoint",
  "d2b-provider-guest",
  "d2b-provider-guest-azure-container-apps",
- "d2b-provider-guest-azure-virtual-machine",
  "d2b-provider-guest-cloud-hypervisor",
  "d2b-provider-guest-qemu-media",
  "d2b-provider-host",
  "d2b-provider-network-local",
  "d2b-provider-notification-desktop",
- "d2b-provider-observability-otel",
  "d2b-provider-operation",
  "d2b-provider-process",
  "d2b-provider-process-minijail",
@@ -5534,12 +5477,14 @@ dependencies = [
  "d2b-provider-operation",
  "d2b-provider-seccomp-profile",
  "nix 0.29.0",
+ "proc-macro2",
  "protobuf-codegen",
  "rustix 0.38.44",
  "schemars",
  "serde",
  "serde_json",
  "sha2",
+ "syn 2.0.119",
  "ttrpc-codegen",
 ]
 

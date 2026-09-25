@@ -24,7 +24,6 @@ await_holding_refcell_ref = "deny"
 d2b-provider-role = { path = "../d2b-provider-role", version = "0.0.0-bootstrap" }
 tracing = "0.1"
 async-trait = "0.1"
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }

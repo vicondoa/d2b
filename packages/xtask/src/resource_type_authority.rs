@@ -59,6 +59,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::authority_common::{collect_rs_files, verify_committed};
 use serde::Deserialize;
 
 /// The directory-glob root the per-crate declarations live under.
@@ -258,7 +259,7 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
     }
     let artifacts = render_artifacts(repo_root, &registry)?;
     for (relative, rendered) in &artifacts {
-        verify_committed(repo_root, relative, rendered)?;
+        verify_committed(repo_root, relative, rendered, "resource-type-authority")?;
     }
     let rendered_again = render_artifacts(repo_root, &registry)?;
     if rendered_again != artifacts {
@@ -332,26 +333,6 @@ fn render_artifacts(
         (NIX_PROCESS_ROLE_PROVIDERS_OUT.to_owned(), role_providers),
         (PROCESS_ROLES_OUT.to_owned(), process_roles),
     ])
-}
-
-/// Fail when the committed copy of one generated artifact differs from the
-/// declarations' render.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn verify_committed(repo_root: &Path, relative: &str, rendered: &str) -> Result<(), String> {
-    let artifact_path = repo_root.join(relative);
-    let on_disk = fs::read_to_string(&artifact_path).map_err(|_| {
-        format!(
-            "resource-type-authority artifact is missing at {}; run `cargo xtask check-provider-crate-layout --fix`",
-            artifact_path.display()
-        )
-    })?;
-    if on_disk != rendered {
-        return Err(format!(
-            "resource-type-authority drift: the committed generated artifact {} differs from the declarations' output; a hand edit or a stale generation must be repaired by `cargo xtask check-provider-crate-layout --fix`",
-            artifact_path.display()
-        ));
-    }
-    Ok(())
 }
 
 /// The declared standard (unqualified) ResourceTypes in committed order, with
@@ -679,31 +660,6 @@ fn load_well_known(
         map.insert(ident.to_owned(), value.to_owned());
     }
     Ok(map)
-}
-
-/// Recursively collect every `.rs` file under one source tree.
-#[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-fn collect_rs_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut out = Vec::new();
-    if !dir.is_dir() {
-        return Err(format!(
-            "missing-src: the declaring crate has no src tree at {}",
-            dir.display()
-        ));
-    }
-    let entries = fs::read_dir(dir).map_err(|error| {
-        format!("cannot read {}: {error}", dir.display())
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("cannot read a source entry: {error}"))?;
-        let path = entry.path();
-        if path.is_dir() {
-            out.extend(collect_rs_files(&path)?);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            out.push(path);
-        }
-    }
-    Ok(out)
 }
 
 /// Find every `WellKnownType::IDENT` a crate's descriptor registration
