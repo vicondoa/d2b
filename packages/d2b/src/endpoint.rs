@@ -1,6 +1,6 @@
 //! Provider-neutral Endpoint read and resolution projections.
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -28,10 +28,39 @@ pub(crate) struct EndpointNameArgs {
     pub(crate) name: String,
 }
 
+/// The endpoint class vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum EndpointClass {
+    Service,
+    Device,
+    Transport,
+    Control,
+    Data,
+}
+
+impl EndpointClass {
+    /// The wire spelling of this class.
+    pub(crate) fn as_wire_str(self) -> &'static str {
+        match self {
+            EndpointClass::Service => "service",
+            EndpointClass::Device => "device",
+            EndpointClass::Transport => "transport",
+            EndpointClass::Control => "control",
+            EndpointClass::Data => "data",
+        }
+    }
+}
+
+impl std::fmt::Display for EndpointClass {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_wire_str())
+    }
+}
+
 #[derive(Debug, Args, Clone)]
 pub(crate) struct EndpointListArgs {
     #[arg(long = "endpoint-class")]
-    pub(crate) endpoint_class: Option<String>,
+    pub(crate) endpoint_class: Option<EndpointClass>,
     #[arg(long)]
     pub(crate) updates: bool,
 }
@@ -39,7 +68,7 @@ pub(crate) struct EndpointListArgs {
 #[derive(Debug, Args, Clone)]
 pub(crate) struct EndpointWatchArgs {
     #[arg(long = "endpoint-class")]
-    pub(crate) endpoint_class: Option<String>,
+    pub(crate) endpoint_class: Option<EndpointClass>,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -88,14 +117,11 @@ fn list(
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    if let Some(class) = args.endpoint_class.as_deref() {
-        validate_endpoint_class(context, class, mode)?;
-    }
     let value = context.invoke(
         "List",
         json!({
             "resourceType": "Endpoint",
-            "endpointClass": args.endpoint_class,
+            "endpointClass": args.endpoint_class.map(EndpointClass::as_wire_str),
             "updates": args.updates,
         }),
         deadline,
@@ -120,14 +146,11 @@ fn watch(
             2,
         ));
     }
-    if let Some(class) = args.endpoint_class.as_deref() {
-        validate_endpoint_class(context, class, mode)?;
-    }
     let value = context.invoke(
         "Watch",
         json!({
             "resourceType": "Endpoint",
-            "endpointClass": args.endpoint_class,
+            "endpointClass": args.endpoint_class.map(EndpointClass::as_wire_str),
         }),
         deadline,
         mode,
@@ -198,25 +221,6 @@ fn endpoint_ref(name: &str) -> Result<d2b_contracts_resource::v3::ResourceRef, C
         ));
     }
     Ok(resource_ref)
-}
-
-fn validate_endpoint_class(
-    context: &ZoneContext,
-    class: &str,
-    mode: OutputMode,
-) -> Result<(), CliFailure> {
-    if !matches!(
-        class,
-        "service" | "device" | "transport" | "control" | "data"
-    ) {
-        return Err(context.failure(
-            "ref-invalid",
-            "endpoint class must be service, device, transport, control, or data",
-            mode,
-            2,
-        ));
-    }
-    Ok(())
 }
 
 fn endpoint_resolution_projection(mut value: Value) -> Value {
