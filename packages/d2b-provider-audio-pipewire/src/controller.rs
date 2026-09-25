@@ -3,7 +3,7 @@
 use crate::{
     AudioBindingSpec, AudioChannel, AudioGrant, AudioLeaseId, AudioMediator, AudioMediatorError,
     AudioReadiness, GuestAudioReadiness, HostAudioReadiness, MicDecision, SharedMicrophoneArbiter,
-    SpeakerMixer, validate_audio_binding_in_zone, validate_audio_service,
+    SpeakerMixer, validate_audio_binding_in_zone,
 };
 use d2b_contracts_provider::v3::semantic_services::{
     SemanticFamily,
@@ -758,9 +758,4 @@ impl<M: AudioMediator> AudioBindingController<M> {
         }
         Ok(Some(next))
     }
-}
-
-/// Validate an AudioService before controller registration.
-pub fn register_service(service: &crate::AudioServiceSpec) -> Result<(), AudioControllerError> {
-    validate_audio_service(service).map_err(|_| AudioControllerError::Admission)
 }
