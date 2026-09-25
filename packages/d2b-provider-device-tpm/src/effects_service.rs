@@ -338,7 +338,7 @@ impl DeclaredTpmRows<'_> {
 /// broker calls that remain are the one-time legacy state adoption and the
 /// broker-owned state-directory preparation, neither of which launches a
 /// process.
-pub struct LiveTpmResourceEffectPort<'a> {
+pub(crate) struct LiveTpmResourceEffectPort<'a> {
     facets: TpmEffectFacets,
     vm_id: VmId,
     /// The Zone the Device row lives in: every manager/broker surface this
