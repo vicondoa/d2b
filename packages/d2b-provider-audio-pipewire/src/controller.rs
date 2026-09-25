@@ -180,7 +180,14 @@ impl core::fmt::Display for AudioControllerError {
     }
 }
 
-impl std::error::Error for AudioControllerError {}
+impl std::error::Error for AudioControllerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Admission => None,
+            Self::Mediator(error) => Some(error),
+        }
+    }
+}
 
 /// Controller result including separate readiness observations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
