@@ -923,24 +923,7 @@ impl GuestCredentialBackend {
         if operation.is_empty()
             || operation.len() > 128
             || !operation.is_ascii()
-            || !matches!(
-                operation,
-                "secret-service.state"
-                    | "secret-service.issue-lease"
-                    | "secret-service.inspect-lease"
-                    | "secret-service.refresh-lease"
-                    | "secret-service.revoke-lease"
-                    | "entra.state"
-                    | "entra.issue-lease"
-                    | "entra.inspect-lease"
-                    | "entra.refresh-lease"
-                    | "entra.revoke-lease"
-                    | "managed-identity.state"
-                    | "managed-identity.issue-lease"
-                    | "managed-identity.inspect-lease"
-                    | "managed-identity.refresh-lease"
-                    | "managed-identity.revoke-lease"
-            )
+            || !valid_guest_backend_operation(operation)
             || !fields.is_object()
         {
             return Err(GuestCredentialBackendError::Malformed);

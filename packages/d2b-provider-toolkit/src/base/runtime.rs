@@ -246,6 +246,11 @@ impl fmt::Debug for ProviderEntrypoint {
 
 impl ProviderEntrypoint {
     /// Construct a process lifecycle owner for one fixed Provider binary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderRuntimeError::InvalidName`] when the name is empty,
+    /// exceeds the bound, or is not ASCII.
     pub fn new(name: &'static str) -> Result<Self, ProviderRuntimeError> {
         if name.is_empty() || name.len() > 128 || !name.is_ascii() {
             return Err(ProviderRuntimeError::InvalidName);
@@ -327,6 +332,11 @@ impl ProviderEntrypoint {
     }
 
     /// Bind this lifecycle owner to one exact Host or Guest execution target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderRuntimeError::InvalidName`] when the reference is
+    /// not a `Host` or `Guest`, or when an execution target is already bound.
     pub fn with_execution_target(
         mut self,
         execution_ref: ResourceRef,
@@ -349,6 +359,11 @@ impl ProviderEntrypoint {
     }
 
     /// Bind this lifecycle owner to the exact controller Process identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderRuntimeError::InvalidName`] when the reference is
+    /// not a `Process`, or when a Process identity is already bound.
     pub fn with_controller_process(
         mut self,
         process_ref: ResourceRef,
@@ -362,6 +377,11 @@ impl ProviderEntrypoint {
 
     /// Bind this lifecycle owner to one exact Provider and controller
     /// generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderRuntimeError::InvalidName`] when a generation is
+    /// already bound.
     pub fn with_generations(
         mut self,
         provider_generation: ResourceGeneration,
@@ -381,6 +401,11 @@ impl ProviderEntrypoint {
     }
 
     /// Admit one local service registration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderRuntimeError::NotAccepting`] when the runtime is no
+    /// longer in the `Starting` lifecycle.
     pub fn admit(&self) -> Result<ProviderAdmission, ProviderRuntimeError> {
         // The count is incremented before the lifecycle check and rolled
         // back on refusal so a registration can never slip past the drain
@@ -533,8 +558,11 @@ impl ProviderEntrypoint {
             .ready_route
             .try_lock()
             .ok()
-            .and_then(|ready| ready.clone())
-            .is_some_and(|ready| ready.liveness().is_live() && ready == *route)
+            .is_some_and(|ready| {
+                ready
+                    .as_ref()
+                    .is_some_and(|bound| bound.liveness().is_live() && bound == route)
+            })
     }
 
     /// Return redacted routing metadata for the current ready session.
