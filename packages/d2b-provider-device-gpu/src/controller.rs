@@ -76,7 +76,6 @@ pub struct GpuController {
     phase: GpuPhase,
     finalizer: bool,
     gpu_role: Option<GpuProcessRole>,
-    video_started: bool,
     admission: Option<GpuAuthorityAdmission>,
     authority_lease: Option<GpuAuthorityLease>,
     ticket: Option<GpuLaunchTicket>,
@@ -115,7 +114,6 @@ impl GpuController {
             phase: GpuPhase::Pending,
             finalizer: true,
             gpu_role: None,
-            video_started: false,
             admission: Some(admission),
             authority_lease: None,
             ticket: None,
@@ -338,7 +336,6 @@ impl GpuController {
                     );
                     GpuControllerError::Effect(error)
                 })?;
-            self.video_started = true;
             if let Err(error) = validate_started_identity(
                 &identity,
                 GpuProcessRole::Video,
@@ -467,7 +464,6 @@ matched.push(observed);
                         self.phase = GpuPhase::Quarantined;
                         return Err(GpuControllerError::Quarantined);
                     }
-                    self.video_started = true;
                     self.video_identity = Some(identity);
                 }
                 role => {
@@ -545,7 +541,6 @@ matched.push(observed);
         self.gpu_identity = None;
         self.ticket = None;
         self.gpu_role = None;
-        self.video_started = false;
         self.gpu_closure = None;
         self.video_closure = None;
         self.finalizer = false;
@@ -582,7 +577,7 @@ impl fmt::Debug for GpuController {
             .field("phase", &self.phase)
             .field("finalizer", &self.finalizer)
             .field("gpu_role", &self.gpu_role)
-            .field("video_started", &self.video_started)
+            .field("video_started", &self.video_identity.is_some())
             .field("has_authority", &self.authority_lease.is_some())
             .field("has_gpu_identity", &self.gpu_identity.is_some())
             .field("has_video_identity", &self.video_identity.is_some())

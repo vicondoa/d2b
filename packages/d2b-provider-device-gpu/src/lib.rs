@@ -11,10 +11,10 @@ mod controller;
 pub mod effects_service;
 mod effects;
 pub mod facets;
-pub mod gpu_argv;
+mod gpu_argv;
 mod process;
 mod settings;
-pub mod video_argv;
+mod video_argv;
 pub mod vocabulary;
 mod workers;
 

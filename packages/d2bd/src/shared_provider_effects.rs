@@ -2160,18 +2160,20 @@ impl ProductionSharedProviderEffects {
             .cloned()
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let mut port = d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPort::new(
-            d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortArgs {
-                runtime: Arc::clone(&gpu_facets.runtime),
-                gpu_authority_leases: Arc::clone(&state.gpu_authority_leases),
-                runtime_handle: tokio::runtime::Handle::current(),
-                children: request.children,
-                zone: self.zone.as_str().to_owned(),
-                device_ref: key_ref(&request.target).clone(),
-                device_uid: request.uid.clone(),
+            d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortArgs::new(
+                d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortDeps::new(
+                    Arc::clone(&gpu_facets.runtime),
+                    Arc::clone(&state.gpu_authority_leases),
+                    tokio::runtime::Handle::current(),
+                    request.children,
+                ),
+                self.zone.as_str().to_owned(),
+                key_ref(&request.target).clone(),
+                request.uid.clone(),
                 holder_ref,
-                generation: request.generation,
-                operation_id: request.operation_id.clone(),
-            },
+                request.generation,
+                request.operation_id.clone(),
+            ),
         );
         let result = controller
             .reconcile_lifecycle(&mut port)
@@ -2624,18 +2626,20 @@ impl ProductionSharedProviderEffects {
             .cloned()
             .ok_or(SharedProviderEffectError::Unavailable)?;
         let mut port = d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPort::new(
-            d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortArgs {
-                runtime: Arc::clone(&gpu_facets.runtime),
-                gpu_authority_leases: Arc::clone(&state.gpu_authority_leases),
-                runtime_handle: tokio::runtime::Handle::current(),
-                children: request.children,
-                zone: self.zone.as_str().to_owned(),
-                device_ref: key_ref(&request.target).clone(),
-                device_uid: request.uid.clone(),
-                holder_ref: admission.owner().holder_ref().clone(),
-                generation: admission.owner().generation(),
-                operation_id: request.operation_id.clone(),
-            },
+            d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortArgs::new(
+                d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortDeps::new(
+                    Arc::clone(&gpu_facets.runtime),
+                    Arc::clone(&state.gpu_authority_leases),
+                    tokio::runtime::Handle::current(),
+                    request.children,
+                ),
+                self.zone.as_str().to_owned(),
+                key_ref(&request.target).clone(),
+                request.uid.clone(),
+                admission.owner().holder_ref().clone(),
+                admission.owner().generation(),
+                request.operation_id.clone(),
+            ),
         );
         let result = controller.finalize_lifecycle(&mut port).map_err(|error| {
             tracing::debug!(
