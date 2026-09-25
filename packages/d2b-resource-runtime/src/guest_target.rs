@@ -23,6 +23,7 @@
 pub const MODULE_NAME: &str = "guest_target";
 
 use std::{collections::HashMap, fmt, sync::Arc};
+use std::fmt::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
@@ -175,7 +176,7 @@ pub fn target_local_spec_digest(spec: &[u8]) -> String {
     let mut rendered = String::with_capacity(7 + 64);
     rendered.push_str("sha256:");
     for byte in bytes {
-        rendered.push_str(&format!("{byte:02x}"));
+        write!(&mut rendered, "{byte:02x}").expect("writing to a String cannot fail");
     }
     rendered
 }
@@ -1216,7 +1217,7 @@ fn json_decode_adoption(value: &Value) -> Result<GuestAdoption, GuestTargetError
 fn hex_encode(bytes: &[u8]) -> String {
     let mut rendered = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        rendered.push_str(&format!("{byte:02x}"));
+        write!(&mut rendered, "{byte:02x}").expect("writing to a String cannot fail");
     }
     rendered
 }
