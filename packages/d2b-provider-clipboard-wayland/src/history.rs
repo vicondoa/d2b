@@ -399,9 +399,116 @@ impl core::fmt::Debug for ClipboardHistory {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClipboardEntry, ClipboardHistory};
+    use super::{ClipboardEntry, ClipboardHistory, HistoryError};
     use crate::picker::CompletionKey;
+    use crate::policy::Policy;
     use crate::ClipboardConfig;
+
+    fn small_history() -> ClipboardHistory {
+        let policy = Policy::new(
+            true,
+            true,
+            true,
+            true,
+            false,
+            3,
+            4096,
+            8192,
+            32,
+            60,
+        )
+        .expect("test policy");
+        ClipboardHistory::new(ClipboardConfig::from_policy(policy))
+    }
+
+    #[test]
+    fn insert_evicts_the_oldest_entry_past_the_count_bound() {
+        let mut history = small_history();
+        let mut tokens = Vec::new();
+        for index in 0..4 {
+            let entry = ClipboardEntry::new(
+                "Guest/work",
+                "text/plain",
+                format!("entry-{index}").as_bytes(),
+                100,
+            )
+            .unwrap();
+            let token = entry.token().to_owned();
+            tokens.push(token);
+            history.insert(entry).unwrap();
+        }
+
+        assert_eq!(history.len(), 3);
+        assert!(!history.entries.contains_key(&tokens[0]));
+        assert!(history.entries.contains_key(&tokens[1]));
+        assert!(history.entries.contains_key(&tokens[2]));
+        assert!(history.entries.contains_key(&tokens[3]));
+        assert_eq!(history.order.front().map(String::as_str), Some(tokens[1].as_str()));
+    }
+
+    #[test]
+    fn insert_evicts_oldest_until_the_byte_quota_holds() {
+        let mut history = small_history();
+        let mut tokens = Vec::new();
+        for index in 0..3 {
+            let payload = vec![index as u8; 4096];
+            let entry =
+                ClipboardEntry::new("Guest/work", "text/plain", &payload, 100).unwrap();
+            let token = entry.token().to_owned();
+            tokens.push(token);
+            history.insert(entry).unwrap();
+        }
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.total_bytes, 8192);
+        assert!(!history.entries.contains_key(&tokens[0]));
+        assert!(history.entries.contains_key(&tokens[1]));
+        assert!(history.entries.contains_key(&tokens[2]));
+    }
+
+    #[test]
+    fn materialize_rejects_wrong_owner_and_expired_entries() {
+        let mut history = ClipboardHistory::new(ClipboardConfig::default());
+        let entry = ClipboardEntry::new("Guest/work", "text/plain", b"hello", 100).unwrap();
+        let token = entry.token().to_owned();
+        history.insert(entry).unwrap();
+
+        assert_eq!(
+            history.materialize(&token, "Guest/work", 100).as_deref(),
+            Ok(b"hello".as_slice())
+        );
+        assert_eq!(
+            history.materialize(&token, "Guest/other", 100),
+            Err(HistoryError::EntryUnavailable)
+        );
+        assert_eq!(
+            history.materialize(&token, "Guest/work", 100 + 3599).as_deref(),
+            Ok(b"hello".as_slice())
+        );
+        assert_eq!(
+            history.materialize(&token, "Guest/work", 100 + 3600),
+            Err(HistoryError::EntryUnavailable)
+        );
+        assert_eq!(
+            history.materialize(&token, "Guest/work", 100 + 3601),
+            Err(HistoryError::EntryUnavailable)
+        );
+    }
+
+    #[test]
+    fn entry_expiry_reports_ttl_only_for_owned_live_entries() {
+        let mut history = ClipboardHistory::new(ClipboardConfig::default());
+        let entry = ClipboardEntry::new("Guest/work", "text/plain", b"hello", 100).unwrap();
+        let token = entry.token().to_owned();
+        history.insert(entry).unwrap();
+
+        assert_eq!(
+            history.entry_expiry(&token, "Guest/work", 100),
+            Some(100 + 3600)
+        );
+        assert_eq!(history.entry_expiry(&token, "Guest/other", 100), None);
+        assert_eq!(history.entry_expiry(&token, "Guest/work", 100 + 3600), None);
+    }
 
     #[test]
     fn gc_prunes_idle_guest_rate_buckets() {

@@ -17,6 +17,7 @@ use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
+    Arc,
     atomic::{AtomicUsize, Ordering},
     mpsc,
 };
@@ -77,12 +78,12 @@ struct HelperThreadPermit;
 
 impl Drop for HelperThreadPermit {
     fn drop(&mut self) {
-        HELPER_THREADS.fetch_sub(1, Ordering::Release);
+        HELPER_THREADS.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
 fn try_acquire_helper_thread() -> Result<HelperThreadPermit, ReasonCode> {
-    let mut current = HELPER_THREADS.load(Ordering::Acquire);
+    let mut current = HELPER_THREADS.load(Ordering::Relaxed);
     loop {
         if current >= MAX_HELPER_THREADS {
             return Err(ReasonCode::FdCapExceeded);
@@ -90,8 +91,8 @@ fn try_acquire_helper_thread() -> Result<HelperThreadPermit, ReasonCode> {
         match HELPER_THREADS.compare_exchange_weak(
             current,
             current + 1,
-            Ordering::AcqRel,
-            Ordering::Acquire,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
         ) {
             Ok(_) => return Ok(HelperThreadPermit),
             Err(next) => current = next,
@@ -926,14 +927,14 @@ struct BridgeSelectionState {
     history_entry_id: String,
     timestamp_unix_ms: u64,
     suppress_selection_echo: bool,
-    data_by_mime: BTreeMap<String, Vec<u8>>,
+    data_by_mime: Arc<BTreeMap<String, Vec<u8>>>,
 }
 
 #[derive(Debug)]
 struct PublishedSelectionState {
     data_control_source_id: u64,
     _source: DataControlSource,
-    data_by_mime: BTreeMap<String, Vec<u8>>,
+    data_by_mime: Arc<BTreeMap<String, Vec<u8>>>,
     mode: PublishedSelectionMode,
     suppress_selection_echo: bool,
 }
@@ -958,7 +959,7 @@ struct ClipboardHistoryEntry {
     source_app: Option<String>,
     source_app_id: Option<String>,
     source_attribution: AttributionQuality,
-    data_by_mime: BTreeMap<String, Vec<u8>>,
+    data_by_mime: Arc<BTreeMap<String, Vec<u8>>>,
     timestamp_unix_ms: u64,
 }
 
@@ -1043,11 +1044,11 @@ impl ClipboardHistory {
             .collect()
     }
 
-    fn data_for(&self, entry_id: &str) -> Option<BTreeMap<String, Vec<u8>>> {
+    fn data_for(&self, entry_id: &str) -> Option<Arc<BTreeMap<String, Vec<u8>>>> {
         self.entries
             .iter()
             .find(|entry| entry.entry_id == entry_id)
-            .map(|entry| entry.data_by_mime.clone())
+            .map(|entry| Arc::clone(&entry.data_by_mime))
     }
 }
 
@@ -1820,7 +1821,7 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
             history_entry_id: bridge_history_entry_id(&identity, source_id),
             timestamp_unix_ms: unix_millis(),
             suppress_selection_echo: true,
-            data_by_mime: BTreeMap::new(),
+            data_by_mime: Arc::new(BTreeMap::new()),
         });
     }
 
@@ -1828,7 +1829,7 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
         return;
     };
     selection.suppress_selection_echo = true;
-    selection.data_by_mime.insert(mime_type, bytes);
+    Arc::make_mut(&mut selection.data_by_mime).insert(mime_type, bytes);
     context.history.upsert(ClipboardHistoryEntry {
         entry_id: selection.history_entry_id.clone(),
         source_realm: selection.identity.realm_label(),
@@ -1838,12 +1839,12 @@ fn handle_bridge_copy_ready(ready: BridgeCopyReady, context: &mut BridgeCopyRead
         source_app: Some(endpoint_source_app(&selection.identity)),
         source_app_id: Some(format!("d2b.{}", selection.identity.target_label())),
         source_attribution: AttributionQuality::ExactClient,
-        data_by_mime: selection.data_by_mime.clone(),
+        data_by_mime: Arc::clone(&selection.data_by_mime),
         timestamp_unix_ms: selection.timestamp_unix_ms,
     });
     match publish_data_control_selection(
         context.data_control,
-        selection.data_by_mime.clone(),
+        Arc::clone(&selection.data_by_mime),
         PublishedSelectionMode::Discovery,
     ) {
         Ok(published) => {
@@ -2151,7 +2152,7 @@ fn handle_wayland_event(event: HostClipboardEvent, context: &mut WaylandEventCon
                         .as_ref()
                         .and_then(|window| window.app_id.clone()),
                     source_attribution: AttributionQuality::FocusedWindowGuess,
-                    data_by_mime: BTreeMap::new(),
+                    data_by_mime: Arc::new(BTreeMap::new()),
                     timestamp_unix_ms: unix_millis(),
                 };
                 materialize_offer_mimes_async(
@@ -2772,7 +2773,7 @@ fn publish_selected_entry_to_host(
 
 fn publish_data_control_selection(
     data_control: &mut DataControlClient,
-    data_by_mime: BTreeMap<String, Vec<u8>>,
+    data_by_mime: Arc<BTreeMap<String, Vec<u8>>>,
     mode: PublishedSelectionMode,
 ) -> Result<PublishedSelectionState, ReasonCode> {
     if data_by_mime.is_empty() {
@@ -2799,16 +2800,16 @@ fn selected_entry_data_by_mime(
     current_host_entry: Option<&ClipboardHistoryEntry>,
     history: &ClipboardHistory,
     entry_id: &str,
-) -> Result<BTreeMap<String, Vec<u8>>, ReasonCode> {
+) -> Result<Arc<BTreeMap<String, Vec<u8>>>, ReasonCode> {
     if entry_id == CURRENT_HOST_ENTRY_ID {
         return current_host_entry
-            .map(|entry| entry.data_by_mime.clone())
+            .map(|entry| Arc::clone(&entry.data_by_mime))
             .filter(|data| !data.is_empty())
             .ok_or(ReasonCode::RequestExpired);
     }
     if entry_id == CURRENT_BRIDGE_ENTRY_ID {
         return bridge_selection
-            .map(|selection| selection.data_by_mime.clone())
+            .map(|selection| Arc::clone(&selection.data_by_mime))
             .filter(|data| !data.is_empty())
             .ok_or(ReasonCode::RequestExpired);
     }
@@ -2871,7 +2872,7 @@ fn materialize_offer_mimes_async(
                 if let Ok(bytes) =
                     read_fd_to_vec(read_fd, MATERIALIZE_MAX_BYTES, BOUNDED_READ_TIMEOUT)
                 {
-                    entry.data_by_mime.insert(mime, bytes);
+                    Arc::make_mut(&mut entry.data_by_mime).insert(mime, bytes);
                 }
             }
             if !entry.data_by_mime.is_empty() {
@@ -3781,14 +3782,7 @@ fn should_suppress_published_selection_echo(
     published_selection: Option<&PublishedSelectionState>,
     _bridge_selection: Option<&BridgeSelectionState>,
 ) -> bool {
-    let Some(selection) = published_selection else {
-        return false;
-    };
-    should_suppress_published_selection_echo_state(selection.suppress_selection_echo)
-}
-
-fn should_suppress_published_selection_echo_state(suppress_selection_echo: bool) -> bool {
-    suppress_selection_echo
+    published_selection.is_some_and(|selection| selection.suppress_selection_echo)
 }
 
 fn should_drop_discovery_source_send(
@@ -3953,7 +3947,7 @@ mod tests {
             history_entry_id: bridge_history_entry_id(&identity, 7),
             timestamp_unix_ms: 1,
             suppress_selection_echo: false,
-            data_by_mime: BTreeMap::new(),
+            data_by_mime: Arc::new(BTreeMap::new()),
         };
         let source_vm_window = FocusedWindowSnapshot {
             app_id: Some("d2b.personal-dev.firefox".to_owned()),
@@ -3988,7 +3982,7 @@ mod tests {
             history_entry_id: bridge_history_entry_id(&identity, 7),
             timestamp_unix_ms: 1,
             suppress_selection_echo: true,
-            data_by_mime: BTreeMap::new(),
+            data_by_mime: Arc::new(BTreeMap::new()),
         };
         let source_vm_window = FocusedWindowSnapshot {
             app_id: Some("d2b.personal-dev.firefox".to_owned()),
@@ -4017,12 +4011,6 @@ mod tests {
             Some(&source_vm_window),
             Some(&selection)
         ));
-    }
-
-    #[test]
-    fn published_selection_echo_is_always_suppressed_once() {
-        assert!(should_suppress_published_selection_echo_state(true));
-        assert!(!should_suppress_published_selection_echo_state(false));
     }
 
     #[test]
@@ -4180,7 +4168,7 @@ mod tests {
             source_app: Some("personal-dev VM".to_owned()),
             source_app_id: Some("d2b.personal-dev".to_owned()),
             source_attribution: AttributionQuality::ExactClient,
-            data_by_mime: vm_data,
+            data_by_mime: Arc::new(vm_data),
             timestamp_unix_ms: 20,
         });
 
@@ -4195,7 +4183,7 @@ mod tests {
             source_app: Some("old host".to_owned()),
             source_app_id: Some("firefox".to_owned()),
             source_attribution: AttributionQuality::FocusedWindowGuess,
-            data_by_mime: host_data,
+            data_by_mime: Arc::new(host_data),
             timestamp_unix_ms: 10,
         };
         let host_clipboard = HostClipboard::new(
@@ -4221,7 +4209,7 @@ mod tests {
             history_entry_id: bridge_history_entry_id(&identity, 7),
             timestamp_unix_ms: 1_700_000_000_000,
             suppress_selection_echo: false,
-            data_by_mime,
+            data_by_mime: Arc::new(data_by_mime),
         };
 
         let candidates = picker_bridge_candidates(&selection, "text/plain;charset=utf-8");
@@ -4259,7 +4247,7 @@ mod tests {
             source_app: Some("personal-dev VM".to_owned()),
             source_app_id: Some("d2b.personal-dev".to_owned()),
             source_attribution: AttributionQuality::ExactClient,
-            data_by_mime: first,
+            data_by_mime: Arc::new(first),
             timestamp_unix_ms: 1,
         });
 
@@ -4275,7 +4263,7 @@ mod tests {
             source_app: Some("personal-dev VM".to_owned()),
             source_app_id: Some("d2b.personal-dev".to_owned()),
             source_attribution: AttributionQuality::ExactClient,
-            data_by_mime: second,
+            data_by_mime: Arc::new(second),
             timestamp_unix_ms: 1,
         });
 
@@ -4321,7 +4309,7 @@ mod tests {
             history_entry_id: bridge_history_entry_id(&identity, 9),
             timestamp_unix_ms: 1,
             suppress_selection_echo: true,
-            data_by_mime,
+            data_by_mime: Arc::new(data_by_mime),
         };
 
         let candidates = picker_bridge_candidates(&selection, "text/plain");
