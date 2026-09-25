@@ -421,7 +421,7 @@ impl<'a> UsbipBrokerDispatcher for KernelUsbipDispatcher<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::UsbipBindingContext;
+    use super::{ServiceLifecycleError, UsbipBindingContext};
 
     fn context() -> UsbipBindingContext {
         UsbipBindingContext::before_host_effects(
@@ -454,5 +454,38 @@ mod tests {
         )
         .expect("matching USBIP context");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn context_new_rejects_zero_physical_key_or_empty_intent_refs() {
+        assert_eq!(
+            UsbipBindingContext::new("corp-vm", "work", "", "runner-intent", [7; 32])
+                .unwrap_err(),
+            ServiceLifecycleError::InvalidState
+        );
+        assert_eq!(
+            UsbipBindingContext::new("corp-vm", "work", "bind-intent", "", [7; 32])
+                .unwrap_err(),
+            ServiceLifecycleError::InvalidState
+        );
+        assert_eq!(
+            UsbipBindingContext::new(
+                "corp-vm",
+                "work",
+                "bind-intent",
+                "runner-intent",
+                [0; 32],
+            )
+            .unwrap_err(),
+            ServiceLifecycleError::InvalidState
+        );
+        assert!(UsbipBindingContext::new(
+            "corp-vm",
+            "work",
+            "bind-intent",
+            "runner-intent",
+            [7; 32],
+        )
+        .is_ok());
     }
 }

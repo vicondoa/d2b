@@ -749,7 +749,7 @@ mod tests {
             bind_ref: "usbip-bind-work-corp-vm-1-2".to_owned(),
         };
         assert!(!declared.is_explicit());
-        if let UsbipClaimSource::Declared {
+if let UsbipClaimSource::Declared {
             ref firewall_ref,
             ref bind_ref,
         } = declared
@@ -759,4 +759,138 @@ mod tests {
         }
     }
 
+    /// The declared plan path fails fast at plan time: empty inputs are
+    /// rejected before any bundle lookup, and missing firewall/bind intents
+    /// are tagged at the exact steps whose preconditions failed.
+
+    #[test]
+    fn build_usbip_plan_fails_fast_on_empty_inputs() {
+        let resolver = fixture_resolver();
+        assert_eq!(
+            build_usbip_plan("", "work", "corp-vm", &resolver).unwrap_err(),
+            UsbipPlanError {
+                busid: "".to_owned(),
+                step: UsbipBusidStep::Lock,
+                reason: "bus_id is empty".to_owned(),
+            },
+        );
+        assert_eq!(
+            build_usbip_plan("1-2", "", "corp-vm", &resolver).unwrap_err(),
+            UsbipPlanError {
+                busid: "1-2".to_owned(),
+                step: UsbipBusidStep::Lock,
+                reason: "env is empty".to_owned(),
+            },
+        );
+        assert_eq!(
+            build_usbip_plan("1-2", "work", "", &resolver).unwrap_err(),
+            UsbipPlanError {
+                busid: "1-2".to_owned(),
+                step: UsbipBusidStep::Bind,
+                reason: "vm is empty".to_owned(),
+            },
+        );
     }
+
+    #[test]
+    fn build_usbip_plan_fails_closed_on_missing_bundle_intents() {
+        let resolver = fixture_resolver();
+        let firewall_id =
+            d2b_core::bundle_resolver::intent_id_usbip_firewall("no-such-env", "1-2");
+        assert!(resolver.find_usbip_firewall_intent(&firewall_id).is_none());
+        assert_eq!(
+            build_usbip_plan("1-2", "no-such-env", "corp-vm", &resolver).unwrap_err(),
+            UsbipPlanError {
+                busid: "1-2".to_owned(),
+                step: UsbipBusidStep::Firewall,
+                reason: "trusted bundle has no usbip firewall intent for env=no-such-env busid=1-2"
+                    .to_owned(),
+            },
+        );
+
+// The elevated fixture gave env "work" a firewall intent for busid "1-2".
+        let firewall_id =
+            d2b_core::bundle_resolver::intent_id_usbip_firewall("work", "1-2");
+        assert!(resolver.find_usbip_firewall_intent(&firewall_id).is_some());
+        // No bind intent exists for a VM the fixture never declares.
+
+        let bind_id =
+            d2b_core::bundle_resolver::intent_id_usbip_bind("work", "no-such-vm", "1-2");
+        assert!(resolver.find_usbip_bind_intent(&bind_id).is_none());
+        assert_eq!(
+            build_usbip_plan("1-2", "work", "no-such-vm", &resolver).unwrap_err(),
+            UsbipPlanError {
+                busid: "1-2".to_owned(),
+                step: UsbipBusidStep::Bind,
+                reason: "trusted bundle has no usbip bind intent for env=work vm=no-such-vm busid=1-2"
+                    .to_owned(),
+            },
+        );
+    }
+
+    /// The repo-level host/manifest fixtures, materialized into a
+    /// resolver. Any env other than the fixture's own has no USBIP intents,
+    /// so missing-intent branches are exercised against "no-such-env".
+    fn fixture_resolver() -> BundleResolver {
+        use d2b_core::bundle::{Bundle, BundleGeneration};
+        use std::collections::BTreeMap;
+
+        let mut host: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        // Elevate the fixture's "work" env to USBIP-capable: uplink IPs, an
+        // uplink bridge-port rule,and explicit per-busid locks, so its
+        // firewall intents actually materialize.
+
+        let env = host["environments"][0]
+            .as_object_mut()
+            .expect("fixture has one env");
+        env.insert("hostUplinkIp".to_owned(), serde_json::json!("192.0.2.1"));
+        env.insert("netUplinkIp".to_owned(), serde_json::json!("192.0.2.2"));
+        env["usbipBusidLocks"][0]["busIds"] = serde_json::json!(["1-2"]);
+        env["bridgePortFlags"]
+            .as_array_mut()
+            .expect("fixture bridge port flags")
+            .push(serde_json::json!({
+                "role": "uplink",
+                "isolated": true,
+                "neighSuppress": true,
+                "learning": false,
+                "unicastFlood": false,
+                "rule": "usbip uplink stays isolated",
+            }));
+        let host =
+            serde_json::from_value::<d2b_core::host::HostJson>(host).expect("host parses");
+        let manifest = d2b_core::manifest_v04::ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        d2b_core::bundle_resolver::BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                realm_workloads_launcher_v2_path: None,
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some(
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_owned(),
+                ),
+                artifact_hashes: None,
+            },
+            host,
+            d2b_core::processes::ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::new(),
+        )
+    }
+}
