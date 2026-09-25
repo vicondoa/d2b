@@ -150,30 +150,30 @@ impl SpeakerMixer {
         }
     }
 
-    /// Grant or revoke one speaker consumer.
+    /// Grant one speaker consumer.
     ///
     /// The return value is true when the aggregate speaker grant changed
-    /// from no consumers to at least one consumer, or back to none.
-    pub fn set_grant(
-        &mut self,
-        lease: AudioLeaseId,
-        on: bool,
-    ) -> Result<bool, AudioAuthorityError> {
-        if on {
-            if !self.grants.contains(&lease)
-                && !self.levels.contains_key(&lease)
-                && self.consumer_count() >= self.max_consumers
-            {
-                return Err(AudioAuthorityError::ConsumerLimit);
-            }
-            let was_empty = self.grants.is_empty();
-            self.grants.insert(lease);
-            Ok(was_empty)
-        } else {
-            let was_last = self.grants.len() == 1 && self.grants.contains(&lease);
-            self.grants.remove(&lease);
-            Ok(was_last)
+    /// from no consumers to at least one consumer.
+    pub fn grant(&mut self, lease: AudioLeaseId) -> Result<bool, AudioAuthorityError> {
+        if !self.grants.contains(&lease)
+            && !self.levels.contains_key(&lease)
+            && self.consumer_count() >= self.max_consumers
+        {
+            return Err(AudioAuthorityError::ConsumerLimit);
         }
+        let was_empty = self.grants.is_empty();
+        self.grants.insert(lease);
+        Ok(was_empty)
+    }
+
+    /// Revoke one speaker consumer.
+    ///
+    /// The return value is true when the revoked consumer was the last
+    /// grant holder.
+    pub fn revoke(&mut self, lease: AudioLeaseId) -> Result<bool, AudioAuthorityError> {
+        let was_last = self.grants.len() == 1 && self.grants.contains(&lease);
+        self.grants.remove(&lease);
+        Ok(was_last)
     }
 
     /// Return whether one lease currently holds a speaker grant.

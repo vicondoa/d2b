@@ -225,7 +225,7 @@ fn shared_finalization_does_not_enable_the_promoted_binding_through_the_old_medi
         .unwrap();
 
     assert_eq!(
-        first.finalize_shared(AudioLeaseId::new(1)).unwrap(),
+        first.finalize(AudioLeaseId::new(1)).unwrap(),
         Some(AudioLeaseId::new(2))
     );
     assert_eq!(first.mediator().grant(), AudioGrant::Off);
