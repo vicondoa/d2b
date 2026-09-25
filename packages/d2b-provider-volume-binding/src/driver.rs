@@ -1120,7 +1120,7 @@ mod tests {
     use d2b_resource_runtime::driver::{
         DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::FailureClass;
+    use d2b_resource_runtime::error::{FailureClass, FailureKinds};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::target::TargetHandle;
 
@@ -1787,6 +1787,126 @@ mod tests {
         assert_eq!(ensures.len(), 4);
         assert_eq!(ensures[0], ensures[2], "worker child key is deterministic");
         assert_eq!(ensures[1], ensures[3], "endpoint child key is deterministic");
+    }
+
+    // -- spec refusal: undecodable envelope / unsupported provider -------------
+
+    /// The terminal refusal surface at `decoded_binding`: an envelope that
+    /// does not decode, a providerRef naming a provider this driver does not
+    /// own, and an absent providerRef all fail closed.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn decoded_binding_refuses_an_undecodable_spec_and_an_unsupported_provider() {
+        // The stored bytes are not a binding envelope at all.
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut row = binding_row([0x42; 16]);
+        row.spec = b"not a binding envelope".to_vec();
+        let mut f = fixture(row, manager.clone());
+        let mut d = driver(fake.clone()).await;
+let failure = d.validate(&mut f.ctx).await.expect_err("undecodable spec refused");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_SPEC_INVALID);
+
+        // A providerRef naming a provider this driver does not own.
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut row = binding_row([0x42; 16]);
+        let mut spec: serde_json::Value = serde_json::from_slice(&row.spec).expect("binding spec");
+        spec["providerRef"] = serde_json::json!("Provider/volume-other");
+        row.spec = serde_json::to_vec(&spec).expect("binding spec bytes");
+        let mut f = fixture(row, manager.clone());
+        let mut d = driver(fake.clone()).await;
+        let failure = d.validate(&mut f.ctx).await.expect_err("unsupported provider refused");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_PROVIDER_UNSUPPORTED);
+
+        // An absent providerRef is equally unsupported.
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut row = binding_row([0x42; 16]);
+        let mut spec: serde_json::Value = serde_json::from_slice(&row.spec).expect("binding spec");
+        spec.as_object_mut().expect("spec object").remove("providerRef");
+        row.spec = serde_json::to_vec(&spec).expect("binding spec bytes");
+        let mut f = fixture(row, manager.clone());
+        let mut d = driver(fake).await;
+        let failure = d.validate(&mut f.ctx).await.expect_err("absent provider refused");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_PROVIDER_UNSUPPORTED);
+    }
+
+    // -- parent row decode refusal ---------------------------------------------
+
+    /// A present parent Volume row whose stored spec does not decode is
+    /// terminal (`ParentSpecInvalid`), distinct from the absent-row deferral
+    /// and the owner-mismatch refusal.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn parent_spec_invalid_is_terminal_for_an_undecodable_parent_row() {
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], b"not a volume spec");
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake).await;
+        let failure = d.validate(&mut f.ctx).await.expect_err("undecodable parent refused");
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_PARENT_SPEC_INVALID);
+    }
+
+    // -- retryable effect / mutation failures -----------------------------------
+
+    /// The manager refusing a child ensure surfaces `ChildMutation` and
+    /// defers retryably: the committed rows can converge on a retry.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn a_failed_child_ensure_defers_retryably() {
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        manager.set_fail_ensures(true);
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake).await;
+        let failure = d.reconcile(&mut f.ctx).await.expect_err("ensure refused");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_CHILD_MUTATION_FAILED);
+        assert!(
+            manager.order().iter().any(|entry| entry.starts_with("ensure:Process/")),
+            "the refused ensure was attempted"
+        );
+    }
+
+    /// The delete drain's serving effect and manager mutations fail
+    /// retryably: a socket that cannot be removed stops the drain before the
+    /// worker row, and a refused child delete surfaces `ChildMutation`.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn delete_socket_and_child_mutation_failures_defers_retryably() {
+        // The socket removal fails: the drain stops before the worker row.
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        fake.set_fail_remove_socket(true);
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake.clone()).await;
+        let failure = d.delete(&mut f.ctx).await.expect_err("socket removal failed");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_SERVING_EFFECT_FAILED);
+        let order = manager.order();
+        assert!(
+            order.iter().any(|entry| entry.starts_with("delete:Endpoint/")),
+            "the endpoint child delete was attempted: {order:?}"
+        );
+        assert!(
+            order.iter().all(|entry| !entry.starts_with("delete:Process/")),
+            "the socket failure stops the drain before the worker row: {order:?}"
+        );
+
+        // The manager refuses the endpoint delete: `ChildMutation`, retryable.
+        let manager = RecordingManagerEndpoint::new().with_parent([0x42; 16], &parent_volume_bytes());
+        manager.set_fail_deletes(true);
+        let fake = FakeServingEffects::shared(manager.log_handle());
+        let mut f = fixture(binding_row([0x42; 16]), manager.clone());
+        let mut d = driver(fake).await;
+        let failure = d.delete(&mut f.ctx).await.expect_err("child delete refused");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(failure.kind(), FailureKinds::BINDING_CHILD_MUTATION_FAILED);
     }
 
     fn manager_clone_placeholder() -> RecordingManagerEndpoint {
