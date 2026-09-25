@@ -3726,6 +3726,165 @@ mod tests {
     }
 
     #[test]
+    fn workload_public_wire_json_shape_is_stable() {
+        use super::{
+            GraphicalLaunchPosture, LauncherExecArgs, LauncherExecDisposition, LauncherExecResult,
+            PublicRequest, PublicResponse, WorkloadAvailability, WorkloadListArgs,
+            WorkloadListResult, WorkloadOp, WorkloadOpResponse, WorkloadPublicSummary,
+            WorkloadStatusArgs, WorkloadStatusResult,
+        };
+        use d2b_contracts::{
+            capability::CapabilitySet,
+            ids::{OperationId, RealmId, WorkloadId},
+            realm::RealmPath,
+            token::ProtocolToken,
+            workload::{
+                DisplayEnvironmentPosture, EnvironmentPosture, ExecutionIdentityPosture,
+                IsolationPosture, LauncherIcon, LauncherItemKind, LauncherItemSummary,
+                SessionPersistencePosture, WorkloadExecutionPosture, WorkloadProviderKind,
+                WorkloadState,
+            },
+            workload_identity::{WorkloadIdentity, WorkloadTarget},
+        };
+
+        let target = WorkloadTarget::parse("builder.dev.d2b").expect("valid target");
+        let item_id = ProtocolToken::parse("launch-item-1").expect("valid token");
+        let operation_id = OperationId::parse("op-1").expect("valid operation id");
+        let identity = WorkloadIdentity::new(
+            WorkloadId::parse("builder").expect("valid workload id"),
+            RealmId::parse("dev").expect("valid realm id"),
+            RealmPath::new(vec![RealmId::parse("dev").expect("valid realm id")])
+                .expect("valid realm path"),
+            target.clone(),
+        );
+        let summary = WorkloadPublicSummary {
+            identity,
+            provider_kind: WorkloadProviderKind::LocalVm,
+            state: WorkloadState::Running,
+            execution_posture: WorkloadExecutionPosture {
+                isolation: IsolationPosture::VirtualMachine,
+                environment: EnvironmentPosture::RuntimeManaged,
+                display_environment: DisplayEnvironmentPosture::NotApplicable,
+                execution_identity: ExecutionIdentityPosture::WorkloadUser,
+                session_persistence: SessionPersistencePosture::RuntimeManaged,
+            },
+            availability: WorkloadAvailability::Ready,
+            graphical_posture: GraphicalLaunchPosture::NotApplicable,
+            capabilities: CapabilitySet::empty(),
+            launcher_items: vec![LauncherItemSummary {
+                id: item_id.clone(),
+                name: "Developer Shell".to_owned(),
+                icon: LauncherIcon::default(),
+                kind: LauncherItemKind::Exec,
+                graphical: false,
+                capabilities: CapabilitySet::empty(),
+            }],
+            default_item_id: Some(item_id.clone()),
+        };
+
+        // List request with an optional realm filter.
+        let list = PublicRequest::Workload(WorkloadOp::List(WorkloadListArgs {
+            realm: Some("dev".to_owned()),
+        }));
+        let value = serde_json::to_value(&list).expect("workload list serializes");
+        assert_eq!(value["kind"], "workload");
+        assert_eq!(value["payload"]["op"], "list");
+        assert_eq!(value["payload"]["args"]["realm"], "dev");
+        let decoded: PublicRequest = serde_json::from_value(value).expect("workload list decodes");
+        assert_eq!(decoded, list);
+
+        // Realm-less list request omits the optional field.
+        let all = PublicRequest::Workload(WorkloadOp::List(WorkloadListArgs { realm: None }));
+        let value = serde_json::to_value(&all).expect("realm-less list serializes");
+        assert!(value["payload"]["args"].get("realm").is_none());
+        let decoded: PublicRequest = serde_json::from_value(value).expect("realm-less list decodes");
+        assert_eq!(decoded, all);
+
+        // Status request: the target travels as the canonical wire address.
+        let status = PublicRequest::Workload(WorkloadOp::Status(WorkloadStatusArgs {
+            target: target.clone(),
+        }));
+        let value = serde_json::to_value(&status).expect("workload status serializes");
+        assert_eq!(value["payload"]["op"], "status");
+        assert_eq!(value["payload"]["args"]["target"], "builder.dev.d2b");
+        let decoded: PublicRequest = serde_json::from_value(value).expect("workload status decodes");
+        assert_eq!(decoded, status);
+
+        // LauncherExec request.
+        let exec = PublicRequest::Workload(WorkloadOp::LauncherExec(LauncherExecArgs {
+            target: target.clone(),
+            item_id: item_id.clone(),
+            operation_id: operation_id.clone(),
+        }));
+        let value = serde_json::to_value(&exec).expect("launcher exec serializes");
+        assert_eq!(value["payload"]["op"], "launcherExec");
+        assert_eq!(value["payload"]["args"]["target"], "builder.dev.d2b");
+        assert_eq!(value["payload"]["args"]["itemId"], "launch-item-1");
+        assert_eq!(value["payload"]["args"]["operationId"], "op-1");
+        let decoded: PublicRequest = serde_json::from_value(value).expect("launcher exec decodes");
+        assert_eq!(decoded, exec);
+
+        // List response with one inventory row.
+        let list_response =
+            PublicResponse::Workload(WorkloadOpResponse::List(WorkloadListResult {
+                workloads: vec![summary.clone()],
+            }));
+        let value =
+            serde_json::to_value(&list_response).expect("workload list response serializes");
+        assert_eq!(value["kind"], "workload");
+        assert_eq!(value["payload"]["op"], "list");
+        let row = &value["payload"]["result"]["workloads"][0];
+        assert_eq!(row["identity"]["workloadId"], "builder");
+        assert_eq!(row["identity"]["realmId"], "dev");
+        assert_eq!(row["identity"]["canonicalTarget"], "builder.dev.d2b");
+        assert_eq!(row["providerKind"], "local-vm");
+        assert_eq!(row["state"], "running");
+        assert_eq!(row["executionPosture"]["isolation"], "virtual-machine");
+        assert_eq!(row["availability"], "ready");
+        assert_eq!(row["graphicalPosture"], "not-applicable");
+        assert_eq!(row["launcherItems"][0]["id"], "launch-item-1");
+        assert_eq!(row["launcherItems"][0]["type"], "exec");
+        assert_eq!(row["defaultItemId"], "launch-item-1");
+        let decoded: PublicResponse =
+            serde_json::from_value(value).expect("workload list response decodes");
+        assert_eq!(decoded, list_response);
+
+        // Status response.
+        let status_response = PublicResponse::Workload(WorkloadOpResponse::Status(Box::new(
+            WorkloadStatusResult {
+                workload: summary.clone(),
+            },
+        )));
+        let value =
+            serde_json::to_value(&status_response).expect("workload status response serializes");
+        assert_eq!(value["payload"]["op"], "status");
+        assert_eq!(value["payload"]["result"]["workload"]["state"], "running");
+        let decoded: PublicResponse =
+            serde_json::from_value(value).expect("workload status response decodes");
+        assert_eq!(decoded, status_response);
+
+        // LauncherExec response.
+        let exec_response = PublicResponse::Workload(WorkloadOpResponse::LauncherExec(
+            LauncherExecResult {
+                target,
+                item_id,
+                operation_id,
+                disposition: LauncherExecDisposition::Committed,
+            },
+        ));
+        let value =
+            serde_json::to_value(&exec_response).expect("launcher exec response serializes");
+        assert_eq!(value["payload"]["op"], "launcherExec");
+        assert_eq!(value["payload"]["result"]["target"], "builder.dev.d2b");
+        assert_eq!(value["payload"]["result"]["itemId"], "launch-item-1");
+        assert_eq!(value["payload"]["result"]["operationId"], "op-1");
+        assert_eq!(value["payload"]["result"]["disposition"], "committed");
+        let decoded: PublicResponse =
+            serde_json::from_value(value).expect("launcher exec response decodes");
+        assert_eq!(decoded, exec_response);
+    }
+
+    #[test]
     fn level_percent_validates_range_at_wire_boundary() {
         // Values in range round-trip cleanly.
         for v in [0u8, 1, 50, 99, 100] {
