@@ -152,7 +152,7 @@ pub struct ScopeRuntime<M: UserScopeManager> {
 
 pub(crate) struct RuntimeLedger {
     pub(crate) persisted: PersistedScopeLedger,
-    pub(crate) reservations: BTreeMap<String, LaunchReservation>,
+    pub(crate) reservations: BTreeMap<OperationId, LaunchReservation>,
     next_owner: u64,
 }
 
@@ -190,7 +190,6 @@ impl RuntimeLedger {
         operation_id: &OperationId,
         fingerprint: [u8; 32],
     ) -> Result<LaunchBegin, RuntimeError> {
-        let operation_key = operation_id.to_string();
         if let Some(scope) = self
             .persisted
             .scopes
@@ -203,7 +202,7 @@ impl RuntimeLedger {
                 Err(RuntimeError::OperationIdConflict)
             };
         }
-        if let Some(reservation) = self.reservations.get(&operation_key) {
+        if let Some(reservation) = self.reservations.get(operation_id) {
             return if reservation.fingerprint == fingerprint {
                 Err(RuntimeError::OperationInProgress)
             } else {
@@ -227,19 +226,19 @@ impl RuntimeLedger {
             fingerprint,
             owner: self.next_owner,
         };
-        self.reservations.insert(operation_key, reservation);
+        self.reservations.insert(operation_id.clone(), reservation);
         Ok(LaunchBegin::Started(reservation))
     }
 
     fn owns(&self, operation_id: &OperationId, reservation: LaunchReservation) -> bool {
         self.reservations
-            .get(operation_id.as_str())
+            .get(operation_id)
             .is_some_and(|active| active.owner == reservation.owner)
     }
 
     fn clear(&mut self, operation_id: &OperationId, reservation: LaunchReservation) {
         if self.owns(operation_id, reservation) {
-            self.reservations.remove(operation_id.as_str());
+            self.reservations.remove(operation_id);
         }
     }
 
