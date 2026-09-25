@@ -764,6 +764,44 @@ mod tests {
         assert_eq!(err, GzipError::MissingMagic);
     }
 
+    fn gzip_header(cm: u8, flags: u8, tail_len: usize) -> Vec<u8> {
+        let mut out = vec![
+            0x1f, 0x8b, // magic
+            cm,
+            flags,
+            0, 0, 0,  0,    // mtime
+            0x00, // XFL
+            0xff, // OS
+        ];
+        out.resize(10 + tail_len, 0x41);
+        out
+    }
+
+    #[test]
+    fn gunzip_inflate_refuses_every_malformed_shape() {
+        // Shorter than the fixed 10-byte header + 8-byte trailer.
+ 
+        assert_eq!(
+            gunzip_inflate(&[0u8; 17]),
+            Err(GzipError::TooShort)
+        );
+        // A compression method other than DEFLATE (CM != 8).
+        assert_eq!(
+            gunzip_inflate(&gzip_header(7, 0, 8)),
+            Err(GzipError::UnsupportedMethod(7))
+        );
+        // FNAME flag set but no NUL terminator in the bounded body.
+
+        assert_eq!(
+            gunzip_inflate(&gzip_header(8, 0x08, 8)),
+            Err(GzipError::Truncated)
+        );
+        // Valid header but the payload is not a DEFLATE stream..
+        let garbage = gzip_header(8, 0, 16);
+        let err = gunzip_inflate(&garbage).unwrap_err();
+        assert!(matches!(err, GzipError::Inflate { .. }));
+    }
+
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn read_kernel_config_with_fallback_prefers_primary() {
