@@ -312,7 +312,7 @@ where
             || envelope
                 .digest()
                 .map_err(|_| schema_error("Guest lifecycle resource digest is invalid"))?
-                != current.payload_digest
+                != current.payload_digest.as_str()
         {
             return Err(ResourceError::terminal(
                 ResourceErrorKind::AuthorizationDenied,
@@ -357,7 +357,7 @@ where
             || provider_envelope
                 .digest()
                 .map_err(|_| schema_error("Guest lifecycle Provider digest is invalid"))?
-                != provider.payload_digest
+                != provider.payload_digest.as_str()
         {
             return Err(ResourceError::terminal(
                 ResourceErrorKind::AuthorizationDenied,
@@ -1077,7 +1077,7 @@ where
                 let mut body = wire::ResourceEnvelopeBytes::new();
                 body.identity = MessageField::some(identity);
                 body.canonical_json = schema.canonical_json;
-                body.payload_digest = schema.payload_digest;
+                body.payload_digest = schema.payload_digest.as_str().to_owned();
                 let mut response = wire::InspectSchemaResponse::new();
                 response.schema = MessageField::some(body);
                 if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
@@ -2159,7 +2159,7 @@ fn to_wire_resource(resource: StoredResource) -> wire::ResourceEnvelopeBytes {
     let mut result = wire::ResourceEnvelopeBytes::new();
     result.identity = MessageField::some(identity);
     result.canonical_json = resource.canonical_json;
-    result.payload_digest = resource.payload_digest;
+    result.payload_digest = resource.payload_digest.as_str().to_owned();
     result
 }
 
@@ -2356,7 +2356,7 @@ mod tests {
     };
     use d2b_contracts_resource::v3::{
         ConfigurationGeneration, ControllerGeneration, ResourceGeneration, ResourceUid,
-        SchemaFingerprint, ZoneId,
+        SchemaFingerprint, StateDigest, ZoneId,
     };
     use d2b_core_controller::controller_assignment::ScopedCommitTransport;
     use d2b_contracts_resource::v3::operations::seal::MutationSealAcceptor;
@@ -2422,7 +2422,7 @@ mod tests {
 
         fn unavailable() -> StoreError {
             StoreError::new(
-                StoreErrorKind::ResourcePlaneUnavailable,
+                StoreErrorKind::Resource(ResourceErrorKind::ResourcePlaneUnavailable),
                 None,
                 None,
                 d2b_contracts_resource::v3::RetryClass::AfterDelay,
@@ -2486,8 +2486,9 @@ mod tests {
                 first.and_then(|prepared| prepared.mutation().canonical_resource.clone());
             *self.last_resource_uid.lock().await =
                 first.and_then(|prepared| prepared.resource_uid().cloned());
-            *self.last_payload_digest.lock().await =
-                first.and_then(|prepared| prepared.payload_digest().map(str::to_owned));
+            *self.last_payload_digest.lock().await = first
+                .and_then(|prepared| prepared.payload_digest())
+                .map(|digest| digest.as_str().to_owned());
             match *self.mode.lock().await {
                 CommitMode::Success => {
                     if let Some(prepared) = first
@@ -2746,7 +2747,7 @@ mod tests {
             generation: ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(9),
             canonical_json: vec![b'x'; bytes],
-            payload_digest: format!("sha256:{}", "1".repeat(64)),
+            payload_digest: StateDigest::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
         }
     }
 
@@ -3389,7 +3390,8 @@ mod tests {
         *schema_store.schema_response.lock().await = Some(StoredSchema {
             resource_type: ResourceTypeName::parse("Host").unwrap(),
             canonical_json: vec![b'x'; MAX_RESPONSE_CANONICAL_BYTES],
-            payload_digest: format!("sha256:{}", "1".repeat(64)),
+            payload_digest: SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64)))
+                .unwrap(),
         });
         let schema_service = checked_service(
             Arc::clone(&schema_store),
@@ -3502,7 +3504,8 @@ mod tests {
         resource.zone = ZoneId::parse(ZONE_SENTINEL).unwrap();
         resource.uid = ResourceUid::parse(UID_SENTINEL).unwrap();
         resource.canonical_json = PAYLOAD_SENTINEL.as_bytes().to_vec();
-        resource.payload_digest = PAYLOAD_SENTINEL.to_owned();
+        resource.payload_digest =
+            StateDigest::parse(format!("sha256:{}", "1".repeat(64))).unwrap();
         let result = UpgradeResult {
             resource,
             plan: Vec::new(),

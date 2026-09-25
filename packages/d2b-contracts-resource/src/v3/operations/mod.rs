@@ -10,7 +10,8 @@
 use crate::v3::identity::ReconnectGeneration;
 use crate::v3::{
     ConfigurationGeneration, ControllerGeneration, FinalizerId, ResourceGeneration, ResourceName,
-    ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
+    ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, StateDigest, ZoneId,
+    ZoneRevision,
 };
 
 pub mod error;
@@ -68,7 +69,8 @@ pub struct StoredResource {
     pub generation: ResourceGeneration,
     pub revision: ZoneRevision,
     pub canonical_json: Vec<u8>,
-    pub payload_digest: String,
+    /// Digest of the canonical resource payload the row carries.
+    pub payload_digest: StateDigest,
 }
 
 impl core::fmt::Debug for StoredResource {
@@ -236,7 +238,8 @@ impl core::fmt::Debug for StoreInspectSchemaRequest {
 pub struct StoredSchema {
     pub resource_type: ResourceTypeName,
     pub canonical_json: Vec<u8>,
-    pub payload_digest: String,
+    /// Digest of the canonical schema document the row carries.
+    pub payload_digest: SchemaFingerprint,
 }
 
 impl core::fmt::Debug for StoredSchema {
@@ -371,7 +374,7 @@ impl core::fmt::Debug for ResourceAssignmentFence {
 pub struct PreparedStoreMutation {
     mutation: StoreMutation,
     resource_uid: Option<ResourceUid>,
-    payload_digest: Option<String>,
+    payload_digest: Option<StateDigest>,
 }
 
 impl PreparedStoreMutation {
@@ -379,7 +382,7 @@ impl PreparedStoreMutation {
     pub const fn new(
         mutation: StoreMutation,
         resource_uid: Option<ResourceUid>,
-        payload_digest: Option<String>,
+        payload_digest: Option<StateDigest>,
     ) -> Self {
         Self {
             mutation,
@@ -399,8 +402,8 @@ impl PreparedStoreMutation {
     }
 
     /// Digest of the final canonical bytes persisted by the backend.
-    pub fn payload_digest(&self) -> Option<&str> {
-        self.payload_digest.as_deref()
+    pub const fn payload_digest(&self) -> Option<&StateDigest> {
+        self.payload_digest.as_ref()
     }
 }
 
@@ -521,7 +524,8 @@ mod tests {
     const UID_SENTINEL: &str = "feedface-feed-4bad-8dad-deadbeef0001";
     const TYPE_SENTINEL: &str = "debug-sentinel.d2bus.org.Widget";
     const PAYLOAD_SENTINEL: &str = "payload-debug-sentinel";
-    const DIGEST_SENTINEL: &str = "digest-debug-sentinel";
+    const DIGEST_SENTINEL: &str =
+        "sha256:feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface";
     const OPERATION_SENTINEL: &str = "operation-debug-sentinel";
     const FILTER_SENTINEL: &str = "filter-debug-sentinel";
     const CURSOR_SENTINEL: &str = "cursor-debug-sentinel";
@@ -558,7 +562,7 @@ mod tests {
             generation: ResourceGeneration::new(3).unwrap(),
             revision: ZoneRevision::new(5),
             canonical_json: PAYLOAD_SENTINEL.as_bytes().to_vec(),
-            payload_digest: DIGEST_SENTINEL.to_owned(),
+            payload_digest: StateDigest::parse(DIGEST_SENTINEL).unwrap(),
         };
         let get = StoreGetRequest {
             operation: operation(),
@@ -618,7 +622,7 @@ mod tests {
         let schema = StoredSchema {
             resource_type: resource_type.clone(),
             canonical_json: PAYLOAD_SENTINEL.as_bytes().to_vec(),
-            payload_digest: DIGEST_SENTINEL.to_owned(),
+            payload_digest: SchemaFingerprint::parse(DIGEST_SENTINEL).unwrap(),
         };
         let mutation = StoreMutation {
             kind: ResourceMutationKind::UpdateSpec,

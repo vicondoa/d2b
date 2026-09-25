@@ -735,7 +735,7 @@ fn rendered_rows_round_trip_through_the_strict_envelope_reader() {
         // the digest the row carries.
         assert_eq!(
             envelope.digest().unwrap(),
-            stored.payload_digest,
+            stored.payload_digest.as_str(),
             "{label}: the row digest must be the decoded envelope's digest"
         );
         assert_eq!(envelope.status().phase(), expected_phase, "{label}");
@@ -810,7 +810,7 @@ fn rendered_full_envelopes_keep_the_strict_reader_contract() {
         );
         assert_eq!(
             envelope.digest().unwrap(),
-            stored.payload_digest,
+            stored.payload_digest.as_str(),
             "{label}: the row digest must be the decoded envelope's digest"
         );
         if deleting {
@@ -921,7 +921,7 @@ fn every_converted_type_projects_a_strict_wire_view() {
             );
             assert_eq!(
                 envelope.digest().expect("envelope digest"),
-                stored.payload_digest,
+                stored.payload_digest.as_str(),
                 "{label}: the row digest must be the decoded envelope's digest"
             );
             assert_eq!(
