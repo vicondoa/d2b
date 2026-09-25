@@ -1981,6 +1981,7 @@ dependencies = [
  "d2b-resource-runtime",
  "d2b-resource-types",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
