@@ -75,6 +75,12 @@ impl EmitterSocket {
     ///
     /// Sync public surface: one-shot AF_UNIX path setup (mkdir, chmod, inode
     /// identity capture) has no async form and runs before any event loop hops.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `io::Error` the socket setup reports when the parent
+    /// cannot be created, the path is not a valid socket parent, or the
+    /// bind fails.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn bind(path: impl AsRef<Path>, capacity_bytes: usize) -> io::Result<Self> {
         let path = path.as_ref().to_path_buf();
@@ -128,6 +134,11 @@ impl EmitterSocket {
     }
 
     /// Drain available datagrams into the bounded FIFO.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `io::Error` the socket reports when the bound identity
+    /// check fails or a receive fails.
     pub fn drain_once(&mut self) -> io::Result<usize> {
         self.prune_expired();
         self.validate_bound_identity()?;

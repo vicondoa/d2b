@@ -18,6 +18,13 @@ pub use d2b_contracts_provider::v3::telemetry_policy::{
 pub const MAX_RESOURCE_ATTRIBUTE_BYTES: usize = 256;
 
 /// Validate one set of attributes before it can enter a telemetry frame.
+///
+/// # Errors
+///
+/// Returns [`ResourceAttributeError::NotAllowlisted`] when a key is
+/// outside the closed attribute set and [`ResourceAttributeError::Invalid`]
+/// when a value is empty, over the byte bound, carries a forbidden byte,
+/// duplicates a key, or fails the value policy.
 pub fn validate_resource_attributes(
     attributes: &BTreeMap<String, String>,
 ) -> Result<(), ResourceAttributeError> {

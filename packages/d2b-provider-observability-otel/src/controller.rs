@@ -97,6 +97,13 @@ impl TelemetryServiceController {
     }
 
     /// Reconcile one Service without opening or mutating a transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TelemetryServiceError::InvalidReference`] when the
+    /// service reference is not a Telemetry Service or the Provider
+    /// reference is not the canonical one, and the lifecycle refusal when
+    /// the service is deleted.
     pub fn reconcile(
         &mut self,
         service_ref: &ResourceRef,
@@ -212,6 +219,11 @@ pub struct TelemetryComponentSession;
 
 impl TelemetryComponentSession {
     /// Admit one stream and reject all resource-service-shaped references.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TelemetryControllerError::Admission`] when the service or
+    /// binding reference is not the Telemetry shape.
     pub fn open_stream(
         &self,
         request: TelemetryStreamRequest,
