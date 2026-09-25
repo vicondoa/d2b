@@ -551,4 +551,12 @@ mod tests {
             Err(ZoneLinkError::RouteAdmissionCursorUnavailable)
         );
     }
-}
+#[test]
+    fn transport_error_is_quarantine_maps_only_stale_and_inflight_errors() {
+        assert!(transport_error_is_quarantine(ZoneLinkError::StaleCommitProof));
+        assert!(transport_error_is_quarantine(ZoneLinkError::ReconcileInFlight));
+        assert!(!transport_error_is_quarantine(
+            ZoneLinkError::RouteAdmissionBindingInvalid
+        ));
+        assert!(!transport_error_is_quarantine(ZoneLinkError::BootstrapPskInvalidated));
+    }}
