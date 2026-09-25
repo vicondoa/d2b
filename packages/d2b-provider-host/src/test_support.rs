@@ -28,7 +28,7 @@ use d2b_provider_system_core::{
     HostReconciler, MinijailPlatformGate, SystemCoreError,
 };
 
-use crate::driver::HostDriverEffects;
+use crate::driver::{HostDriverEffects, ObserveError};
 use crate::facets::{HostEffectFacets, MinijailPlatformGateSource};
 
 /// Scripted observation port: records every call order-preservingly and
@@ -69,10 +69,10 @@ impl HostDriverEffects for RecordingEffects {
         host_ref: &ResourceRef,
         provider_ref: &ResourceRef,
         spec: &HostSpec,
-    ) -> Result<HostObservationReport, String> {
+    ) -> Result<HostObservationReport, ObserveError> {
         self.calls.lock().await.push("observe-host".to_owned());
         if self.fail.load(Ordering::SeqCst) {
-            return Err("the scripted probe refused".to_owned());
+            return Err(ObserveError { probe: SystemCoreError::HostProbeFailed, fallback: None });
         }
         let mut status = HostReconciler::new()
             .reconcile(host_ref, provider_ref, spec)

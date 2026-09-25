@@ -180,7 +180,6 @@ impl<W: WallClock> CallDriver<W> {
     /// does not match the method's profile,
     /// [`ClientError::IdempotencyRequired`] when the profile demands an
     /// idempotency key and none was supplied,
-    /// [`ClientError::InvalidMetadata`] when the lifetime is invalid, and
     /// [`ClientError::DeadlineExpired`] when the deadline has already
     /// passed.
     pub fn new(
@@ -196,7 +195,6 @@ impl<W: WallClock> CallDriver<W> {
         if profile.requires_idempotency() && !options.metadata.has_idempotency_key() {
             return Err(ClientError::IdempotencyRequired);
         }
-        options.metadata.validate_lifetime()?;
         let remaining_ms = options
             .metadata
             .expires_at_unix_ms()

@@ -21,7 +21,7 @@ mod lifecycle;
 mod process;
 mod production;
 pub mod reconcile_state;
-pub mod state_machine;
+mod state_machine;
 pub mod vocabulary;
 mod workers;
 

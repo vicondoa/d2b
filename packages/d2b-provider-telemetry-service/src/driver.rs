@@ -34,7 +34,9 @@ use d2b_resource_runtime::context::{
 use d2b_resource_runtime::driver::{
     DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriver, ResourceDriverFactory,
 };
-use d2b_resource_runtime::error::{DriverFailure, DriverOp};
+use std::error::Error;
+
+use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureDetail, ResourceError};
 use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
 use d2b_resource_types::{AllowedSources, CONVERTED_TYPE_VERBS, DriverDescriptor, WellKnownType};
 
@@ -89,15 +91,22 @@ impl TelemetryServiceDriverErrorKind {
 
 /// Typed driver failure; redacted at the erased boundary through
 /// [`ResourceDriver::classify_error`] (R13).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct TelemetryServiceDriverError {
     kind: TelemetryServiceDriverErrorKind,
     op: DriverOp,
+    source: Option<Box<ResourceError>>,
 }
 
 impl TelemetryServiceDriverError {
     const fn new(kind: TelemetryServiceDriverErrorKind, op: DriverOp) -> Self {
-        Self { kind, op }
+        Self { kind, op, source: None }
+    }
+
+    /// Retain the underlying store failure as the chain's source (R13).
+    fn with_source(mut self, source: ResourceError) -> Self {
+        self.source = Some(Box::new(source));
+        self
     }
 }
 
@@ -107,20 +116,58 @@ impl core::fmt::Display for TelemetryServiceDriverError {
     }
 }
 
-impl std::error::Error for TelemetryServiceDriverError {}
+impl std::error::Error for TelemetryServiceDriverError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|error| error.as_ref() as &(dyn std::error::Error + 'static))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // In-memory status (R11)
 // ---------------------------------------------------------------------------
 
+/// The projected provider phase, spelled as the telemetry contract's
+/// status terms..
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum TelemetryServicePhase {
+    /// A usable ingest route is materialized.
+    Ready,
+    /// A declared ingest route is not materialized yet.
+    Pending,
+    /// The role is absent or unadmitted, or the route is unavailable.
+    Degraded,
+}
+
+impl TelemetryServicePhase {
+    /// The contract spelling of this phase.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => PHASE_READY,
+            Self::Pending => PHASE_PENDING,
+            Self::Degraded => PHASE_DEGRADED,
+        }
+    }
+}
+
+/// The `{serviceRole, serviceReadiness}` status projection, serialized to
+/// the contract-pinned telemetry status shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryServiceProjection {
+    /// The projected service role.
+    pub service_role: &'static str,
+    /// The projected service readiness spelling.
+    pub service_readiness: TelemetryServicePhase,
+}
+
 /// The provider projection the old reconciler persisted through the Resource
 /// API, now in-memory only (R11: runtime status is never persisted).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelemetryServiceStatus {
-    /// The projected provider phase spelling.
-    pub phase: &'static str,
-    /// `{serviceRole, serviceReadiness}`; empty when the spec is degraded.
-    pub projection: serde_json::Value,
+    /// The projected provider phase.
+    pub phase: TelemetryServicePhase,
+    /// `{serviceRole, serviceReadiness}`; absent when the spec is degraded.
+    pub projection: Option<TelemetryServiceProjection>,
     /// Declared ingest endpoint refs whose rows exist and are not deleting.
     pub present_endpoints: Vec<ResourceRef>,
 }
@@ -272,8 +319,8 @@ impl TelemetryServiceDriver {
             // Old: a Service whose role is absent or unadmitted reports
             // Degraded with an empty projection and mutates nothing.
             ctx.set_status(TelemetryServiceStatus {
-                phase: PHASE_DEGRADED,
-                projection: serde_json::json!({}),
+                phase: TelemetryServicePhase::Degraded,
+                projection: None,
                 present_endpoints: Vec::new(),
             });
             return Ok(ReconcileOutcome::Satisfied);
@@ -281,16 +328,16 @@ impl TelemetryServiceDriver {
         if role == "projection" {
             // Old: a projection Service is Ready without an ingest route.
             ctx.set_status(TelemetryServiceStatus {
-                phase: PHASE_READY,
-                projection: serde_json::json!({
-                    "serviceRole": "projection",
-                    "serviceReadiness": PHASE_READY,
+                phase: TelemetryServicePhase::Ready,
+                projection: Some(TelemetryServiceProjection {
+                    service_role: "projection",
+                    service_readiness: TelemetryServicePhase::Ready,
                 }),
                 present_endpoints: Vec::new(),
             });
             return Ok(ReconcileOutcome::Satisfied);
         }
-        let endpoint_refs = ingest_endpoint_refs(&spec);
+        let endpoint_refs = ingest_endpoint_refs(&spec).map_err(|kind| self.error(kind, op))?;
         let mut present_endpoints = Vec::with_capacity(endpoint_refs.len());
         let mut all_present = !endpoint_refs.is_empty();
         for endpoint_ref in &endpoint_refs {
@@ -301,16 +348,20 @@ impl TelemetryServiceDriver {
                     self.watch_once(ctx, key).await;
                 }
                 Ok(_) => all_present = false,
-                Err(_) => return Err(self.error(TelemetryServiceDriverErrorKind::Reconcile, op)),
+                Err(error) => {
+                    return Err(self
+                        .error(TelemetryServiceDriverErrorKind::Reconcile, op)
+                        .with_source(error));
+                }
             }
         }
         let ready = all_present && DEPENDENCY_READINESS_PROVEN;
-        let phase = if ready { PHASE_READY } else { PHASE_PENDING };
+        let phase = if ready { TelemetryServicePhase::Ready } else { TelemetryServicePhase::Pending };
         ctx.set_status(TelemetryServiceStatus {
             phase,
-            projection: serde_json::json!({
-                "serviceRole": "authority",
-                "serviceReadiness": phase,
+            projection: Some(TelemetryServiceProjection {
+                service_role: "authority",
+                service_readiness: phase,
             }),
             present_endpoints,
         });
@@ -328,9 +379,13 @@ impl ResourceDriver for TelemetryServiceDriver {
     type Error = TelemetryServiceDriverError;
 
     fn classify_error(&self, error: &TelemetryServiceDriverError) -> DriverFailure {
-        // The old reconciler classified every failure retryable; the actor
+        // The old reconciler classified every failure retryable;the actor
         // owns retry/backoff from the closed class (R13).
-        DriverFailure::retryable(error.op)
+        match error.source() {
+            Some(source) => DriverFailure::retryable(error.op)
+                .with_detail(FailureDetail::at("manager").with_note(source.to_string())),
+            None => DriverFailure::retryable(error.op),
+        }
     }
 
     /// Structural validation only (old `validate_spec`): the stored envelope
@@ -374,20 +429,25 @@ impl ResourceDriver for TelemetryServiceDriver {
 // ---------------------------------------------------------------------------
 
 /// Ingest endpoint refs declared by a Service spec.
-fn ingest_endpoint_refs(spec: &serde_json::Value) -> Vec<ResourceRef> {
+fn ingest_endpoint_refs(
+    spec: &serde_json::Value,
+) -> Result<Vec<ResourceRef>, TelemetryServiceDriverErrorKind> {
     spec.get("ingestEndpointRefs")
-        .and_then(serde_json::Value::as_array)
         .map(|values| {
             values
+                .as_array()
+                .ok_or(TelemetryServiceDriverErrorKind::InvalidResource)?
                 .iter()
-                .filter_map(|value| {
+                .map(|value| {
                     value
                         .as_str()
                         .and_then(|value| ResourceRef::parse(value).ok())
+                        .ok_or(TelemetryServiceDriverErrorKind::InvalidResource)
                 })
                 .collect()
         })
-        .unwrap_or_default()
+        .transpose()
+        .map(|refs| refs.unwrap_or_default())
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +502,32 @@ pub fn telemetry_service_descriptor() -> DriverDescriptor {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    #[test]
+    fn projection_serializes_to_the_contract_pinned_shape() {
+        let authority = TelemetryServiceProjection {
+            service_role: "authority",
+            service_readiness: TelemetryServicePhase::Ready,
+        };
+        assert_eq!(
+            serde_json::to_value(authority).unwrap(),
+            serde_json::json!({
+                "serviceRole": "authority",
+                "serviceReadiness": "Ready",
+            }),
+        );
+        let projection = TelemetryServiceProjection {
+            service_role: "projection",
+            service_readiness: TelemetryServicePhase::Pending,
+        };
+        assert_eq!(
+            serde_json::to_value(projection).unwrap(),
+            serde_json::json!({
+                "serviceRole": "projection",
+                "serviceReadiness": "Pending",
+            }),
+        );
+    }
     use tokio::sync::Mutex;
     use std::time::Duration;
 
@@ -762,7 +848,7 @@ mod tests {
         let Some(status) = fixture.ctx.status::<TelemetryServiceStatus>() else {
             panic!("service status");
         };
-        assert_eq!(status.phase, PHASE_PENDING);
+        assert_eq!(status.phase, TelemetryServicePhase::Pending);
         assert!(status.present_endpoints.is_empty());
         assert_eq!(
             fixture.requeue.scheduled().await,
@@ -776,12 +862,15 @@ mod tests {
             panic!("service status");
         };
         assert_eq!(status.present_endpoints.len(), 1);
-        assert_eq!(status.projection["serviceRole"], "authority");
+        assert_eq!(status.projection.as_ref().unwrap().service_role, "authority");
         // CONTRACT FLAG: the old predicate also required the ingest
         // Endpoint's own `status.phase == "Ready"`, which this surface cannot
         // read; the phase stays fail-closed Pending while the row exists.
-        assert_eq!(status.phase, PHASE_PENDING);
-        assert_eq!(status.projection["serviceReadiness"], PHASE_PENDING);
+        assert_eq!(status.phase, TelemetryServicePhase::Pending);
+        assert_eq!(
+            status.projection.as_ref().unwrap().service_readiness,
+            TelemetryServicePhase::Pending,
+        );
         assert_eq!(
             fixture.requeue.scheduled().await,
             vec![TELEMETRY_SERVICE_RESYNC],
@@ -811,9 +900,12 @@ mod tests {
         let Some(status) = fixture.ctx.status::<TelemetryServiceStatus>() else {
             panic!("service status");
         };
-        assert_eq!(status.phase, PHASE_READY);
-        assert_eq!(status.projection["serviceRole"], "projection");
-        assert_eq!(status.projection["serviceReadiness"], PHASE_READY);
+        assert_eq!(status.phase, TelemetryServicePhase::Ready);
+        assert_eq!(status.projection.as_ref().unwrap().service_role, "projection");
+        assert_eq!(
+            status.projection.as_ref().unwrap().service_readiness,
+            TelemetryServicePhase::Ready,
+        );
         assert!(fixture.manager.log().await.is_empty());
         assert!(fixture.requeue.scheduled().await.is_empty());
     }
@@ -838,8 +930,8 @@ mod tests {
         let Some(status) = fixture.ctx.status::<TelemetryServiceStatus>() else {
             panic!("service status");
         };
-        assert_eq!(status.phase, PHASE_DEGRADED);
-        assert_eq!(status.projection, serde_json::json!({}));
+        assert_eq!(status.phase, TelemetryServicePhase::Degraded);
+        assert!(status.projection.is_none());
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

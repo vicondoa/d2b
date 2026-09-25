@@ -329,7 +329,7 @@ impl Future for CancellationFuture {
         // and the critical section is a short push/retain with no suspension
         // point; the std lock is the sanctioned synchronous path (plan R11).
         #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-        let mut waiters = state.waiters.lock().unwrap();
+        let mut waiters = state.waiters.lock().expect("waker registry lock is not poisoned: no user code runs under it");
         if state.cancelled.load(Ordering::Acquire) {
             return Poll::Ready(());
         }
@@ -357,7 +357,7 @@ impl Drop for CancellationFuture {
             return;
         };
         #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-        let mut waiters = self.state.waiters.lock().unwrap();
+        let mut waiters = self.state.waiters.lock().expect("waker registry lock is not poisoned: no user code runs under it");
         waiters.retain(|(id, _)| *id != registered);
     }
 }
@@ -383,7 +383,7 @@ impl CancellationToken {
             // Synchronous cancellation surface (no async form): the waker
             // drain is a short take/wake with no suspension point (plan R11).
             #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-            let waiters = std::mem::take(&mut *self.state.waiters.lock().unwrap());
+            let waiters = std::mem::take(&mut *self.state.waiters.lock().expect("waker registry lock is not poisoned: no user code runs under it"));
             for (_, waiter) in waiters {
                 waiter.wake();
             }

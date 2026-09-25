@@ -289,7 +289,7 @@ impl AuditSink {
         &self,
         after: Option<&str>,
         before: Option<&str>,
-    ) -> Result<Vec<crate::ExportLine>, AuditSinkError> {
+    ) -> Result<Vec<crate::export::ExportLine>, AuditSinkError> {
         let state = self
             .state
             .lock()
