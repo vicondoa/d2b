@@ -789,10 +789,8 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[test]
     fn package_digest_includes_bytes_read_through_store_symlinks() {
-        let directory = PathBuf::from("target")
-            .join(format!("activation-helper-digest-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        fs::create_dir_all(&directory).expect("create digest fixture");
+        let fixture = tempfile::tempdir().expect("create digest fixture");
+        let directory = fixture.path().to_path_buf();
         let target = directory.join("target");
         let link = directory.join("linked");
         let directory_target = directory.join("directory-target");
@@ -812,7 +810,6 @@ mod tests {
             digest_store_path_with_root(&directory, &store_root).expect("digest second fixture");
 
         assert_ne!(first, second);
-        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]

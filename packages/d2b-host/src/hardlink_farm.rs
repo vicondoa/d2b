@@ -65,6 +65,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
@@ -623,10 +624,10 @@ pub fn generation_id(closure_paths: &[PathBuf], system_path: Option<&Path>) -> S
         hasher.update((0u64).to_le_bytes());
     }
     let digest = hasher.finalize();
-    let hex = digest
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+    let mut hex = String::with_capacity(64);
+    for b in digest.iter() {
+        write!(hex, "{b:02x}").expect("writing to a String is infallible");
+    }
     format!("g-{hex}")
 }
 
