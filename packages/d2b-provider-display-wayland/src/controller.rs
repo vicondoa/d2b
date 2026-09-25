@@ -571,22 +571,6 @@ pub struct WaylandPolicySnapshot {
 }
 
 impl WaylandPolicySnapshot {
-    /// Resolve a policy snapshot for one authenticated Guest session.
-    ///
-    /// The route binding supplies the Zone and Provider identity; callers may
-    /// not substitute a different Zone or service boundary while compiling
-    /// the policy.
-    pub fn from_authenticated_session<C>(
-        session: &AuthenticatedComponentSession<C>,
-        policy_ref: ResourceRef,
-        generation: u64,
-        defaults: FilterInput,
-        zone_policy: FilterInput,
-    ) -> Result<Self, WaylandSpecError> {
-        let route = session.route_binding();
-        Self::from_authenticated_route(&route, policy_ref, generation, defaults, zone_policy)
-    }
-
     /// Resolve a policy snapshot from the daemon-retained authenticated route.
     ///
     /// This is the production adapter used after the Zone registrar consumed
