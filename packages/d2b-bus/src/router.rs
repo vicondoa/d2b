@@ -26,8 +26,8 @@ use d2b_core_controller::controller_assignment::{
     ScopedResourceScope,
 };
 use d2b_resource_api::authz::{
-    ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, NativeAuthorizer,
-    PolicySet, ResourceVerb, SessionVerb,
+    ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
+    ResourceVerb, SessionVerb,
 };
 use d2b_resource_api::watch::{WatchFrame, WatchSink, WatchSinkError};
 use d2b_session::{
@@ -217,8 +217,7 @@ pub struct ResourceQuery {
     resource_types: Vec<ResourceTypeName>,
     resource_names: Vec<ResourceName>,
     filters: Vec<ResourceFilter>,
-    assignment: Option<AssignmentIdentity>,
-    scope: Option<ScopedResourceScope>,
+    scoped: Option<(AssignmentIdentity, ScopedResourceScope)>,
 }
 
 impl ResourceQuery {
@@ -239,8 +238,7 @@ impl ResourceQuery {
             resource_types,
             resource_names,
             filters,
-            assignment: None,
-            scope: None,
+            scoped: None,
         })
     }
 
@@ -265,8 +263,7 @@ impl ResourceQuery {
             resource_types,
             resource_names,
             filters,
-            assignment: Some(assignment),
-            scope: Some(scope),
+            scoped: Some((assignment, scope)),
         };
         query.validate_scoped()?;
         Ok(query)
@@ -289,21 +286,23 @@ impl ResourceQuery {
 
     /// Borrow the assignment evidence, when this query is controller-scoped.
     pub const fn assignment(&self) -> Option<&AssignmentIdentity> {
-        self.assignment.as_ref()
+        match &self.scoped {
+            Some((assignment, _)) => Some(assignment),
+            None => None,
+        }
     }
 
     /// Borrow the controller-minted query scope, when present.
     pub const fn scope(&self) -> Option<&ScopedResourceScope> {
-        self.scope.as_ref()
+        match &self.scoped {
+            Some((_, scope)) => Some(scope),
+            None => None,
+        }
     }
 
     fn validate_scoped(&self) -> Result<(), BusError> {
-        let (Some(assignment), Some(scope)) = (&self.assignment, &self.scope) else {
-            return if self.assignment.is_none() && self.scope.is_none() {
-                Ok(())
-            } else {
-                Err(BusError::InvalidResourceCall)
-            };
+        let Some((assignment, scope)) = &self.scoped else {
+            return Ok(());
         };
         let (bound_field, bound_value) = match scope {
             ScopedResourceScope::Primary => {
@@ -1237,39 +1236,6 @@ impl ZoneBus {
         Self::with_clock(zone, authorizer, config, Arc::new(SystemClock::new()))
     }
 
-    pub fn with_observer(
-        zone: ZoneId,
-        authorizer: BusAuthorizer,
-        config: BusConfig,
-        observer: Arc<dyn BusObserver>,
-    ) -> Result<(Self, ZoneRegistrar), BusError> {
-        Self::with_clock_and_observer(
-            zone,
-            authorizer,
-            config,
-            Arc::new(SystemClock::new()),
-            observer,
-        )
-    }
-
-    /// Construct a bus with the system clock, observer, and telemetry handoff.
-    pub fn with_observer_and_metrics(
-        zone: ZoneId,
-        authorizer: BusAuthorizer,
-        config: BusConfig,
-        observer: Arc<dyn BusObserver>,
-        metrics: Arc<dyn BusTelemetry>,
-    ) -> Result<(Self, ZoneRegistrar), BusError> {
-        Self::with_clock_observer_and_metrics(
-            zone,
-            authorizer,
-            config,
-            Arc::new(SystemClock::new()),
-            observer,
-            metrics,
-        )
-    }
-
     /// Construct a bus and the Zone-runtime-only committed subject issuer.
     pub fn with_interaction_subject_issuer(
         zone: ZoneId,
@@ -1287,28 +1253,18 @@ impl ZoneBus {
     }
 
     /// Construct a bus with an injected monotonic clock.
-    pub fn with_clock(
+    pub(crate) fn with_clock(
         zone: ZoneId,
         authorizer: BusAuthorizer,
         config: BusConfig,
         clock: Arc<dyn BusClock>,
-    ) -> Result<(Self, ZoneRegistrar), BusError> {
-        Self::with_clock_and_observer(zone, authorizer, config, clock, Arc::new(NoopBusObserver))
-    }
-
-    pub fn with_clock_and_observer(
-        zone: ZoneId,
-        authorizer: BusAuthorizer,
-        config: BusConfig,
-        clock: Arc<dyn BusClock>,
-        observer: Arc<dyn BusObserver>,
     ) -> Result<(Self, ZoneRegistrar), BusError> {
         let (bus, registrar, _) = Self::with_clock_observer_and_metrics_internal(
             zone,
             authorizer,
             config,
             clock,
-            observer,
+            Arc::new(NoopBusObserver),
             Arc::new(NoopBusTelemetry),
             false,
         )?;
@@ -1316,6 +1272,7 @@ impl ZoneBus {
     }
 
     /// Construct a bus with an observer and the bounded telemetry handoff.
+    #[cfg(test)]
     pub fn with_clock_observer_and_metrics(
         zone: ZoneId,
         authorizer: BusAuthorizer,
@@ -1443,11 +1400,6 @@ impl ZoneBus {
         Ok(())
     }
 
-    /// Borrow the native authorizer shared by this Zone bus.
-    pub fn native_authorizer(&self) -> Arc<NativeAuthorizer> {
-        self.core.authorizer.native_authorizer()
-    }
-
     /// Fail closed for all new work while durable policy is unavailable.
     pub fn mark_policy_unavailable(&self) {
         self.core.authorizer.mark_policy_unavailable();
@@ -1468,14 +1420,22 @@ enum UnixSubjectKind {
     Provider,
 }
 
+/// The exactly-one expected peer identity for a Unix subject.
+#[derive(Clone)]
+enum ExpectedPeer {
+    /// The full peer credentials must match exactly.
+    Exact(PeerCredentials),
+    /// Only the peer UID must match.
+    Uid(u32),
+}
+
 #[derive(Clone)]
 pub(crate) struct UnixSubjectRecord {
     kind: UnixSubjectKind,
     subject_ref: ResourceRef,
     subject_uid: ResourceUid,
     zone_ref: ResourceRef,
-    expected_peer: Option<PeerCredentials>,
-    expected_peer_uid: Option<u32>,
+    expected_peer: ExpectedPeer,
     service: Option<ServicePackage>,
     provider_ref: Option<ResourceRef>,
     provider_generation: Option<ResourceGeneration>,
@@ -1562,8 +1522,7 @@ impl UnixSubjectRecord {
             subject_ref,
             subject_uid,
             zone_ref,
-            expected_peer: Some(expected_peer),
-            expected_peer_uid: None,
+            expected_peer: ExpectedPeer::Exact(expected_peer),
             service: None,
             provider_ref: None,
             provider_generation: None,
@@ -1591,8 +1550,7 @@ impl UnixSubjectRecord {
             subject_ref,
             subject_uid,
             zone_ref,
-            expected_peer: None,
-            expected_peer_uid: Some(expected_peer_uid),
+            expected_peer: ExpectedPeer::Uid(expected_peer_uid),
             service: None,
             provider_ref: None,
             provider_generation: None,
@@ -1620,8 +1578,7 @@ impl UnixSubjectRecord {
             subject_ref,
             subject_uid,
             zone_ref,
-            expected_peer: None,
-            expected_peer_uid: Some(expected_peer_uid),
+            expected_peer: ExpectedPeer::Uid(expected_peer_uid),
             service: None,
             provider_ref: None,
             provider_generation: None,
@@ -1696,15 +1653,12 @@ impl UnixSubjectRecord {
             UnixSubjectKind::Provider => "Provider",
         };
         peer.validate_transport(binding.transport_class())?;
-        let peer_matches = if binding.service().as_str() == "d2b.resource.v3" {
-            self.expected_peer
-                .is_some_and(|expected| peer.credentials() == expected)
-        } else {
-            self.expected_peer
-                .is_some_and(|expected| peer.credentials() == expected)
-                || self
-                    .expected_peer_uid
-                    .is_some_and(|expected| peer.credentials().uid().as_raw() == expected)
+        let peer_matches = match &self.expected_peer {
+            ExpectedPeer::Exact(expected) => peer.credentials() == *expected,
+            ExpectedPeer::Uid(expected) => {
+                binding.service().as_str() != "d2b.resource.v3"
+                    && peer.credentials().uid().as_raw() == *expected
+            }
         };
         if !peer_matches
             || evidence.class() != EvidenceClass::UnixPeer
@@ -1806,17 +1760,12 @@ impl AuthoritativeUnixSubjectResolver {
             .iter()
             .enumerate()
             .filter_map(|(index, subject)| {
-                let peer_matches = if *service == ServicePackage::ResourceV3 {
-                    subject
-                        .expected_peer
-                        .is_some_and(|expected| expected == peer)
-                } else {
-                    subject
-                        .expected_peer
-                        .is_some_and(|expected| expected == peer)
-                        || subject
-                            .expected_peer_uid
-                            .is_some_and(|expected| peer.uid().as_raw() == expected)
+                let peer_matches = match &subject.expected_peer {
+                    ExpectedPeer::Exact(expected) => *expected == peer,
+                    ExpectedPeer::Uid(expected) => {
+                        *service != ServicePackage::ResourceV3
+                            && peer.uid().as_raw() == *expected
+                    }
                 };
                 (peer_matches
                     && subject
@@ -1831,7 +1780,7 @@ impl AuthoritativeUnixSubjectResolver {
                 d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
             )),
         };
-        if subjects[index].expected_peer.is_some() {
+        if matches!(subjects[index].expected_peer, ExpectedPeer::Exact(_)) {
             Ok(subjects.swap_remove(index))
         } else {
             Ok(subjects[index].clone())
@@ -1896,7 +1845,8 @@ impl AuthoritativeUnixSubjectResolver {
 
 impl UnixSubjectRecord {
     fn is_exact_resource_v3(&self) -> bool {
-        self.expected_peer.is_some() && self.service == Some(ServicePackage::ResourceV3)
+        matches!(self.expected_peer, ExpectedPeer::Exact(_))
+            && self.service == Some(ServicePackage::ResourceV3)
     }
 
     fn has_same_exact_resource_v3_key(&self, other: &Self) -> bool {
@@ -5844,8 +5794,7 @@ mod tests {
             resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
             resource_names: Vec::new(),
             filters: vec![owner_filter.clone()],
-            assignment: Some(first.assignment().clone()),
-            scope: Some(owner_scope.clone()),
+            scoped: Some((first.assignment().clone(), owner_scope.clone())),
         };
         assert_eq!(
             ResourceCall::List(non_process).authorization_request(zone.clone()),
@@ -5856,8 +5805,7 @@ mod tests {
             resource_types: vec![ResourceTypeName::parse(PROCESS_RESOURCE_TYPE).unwrap()],
             resource_names: Vec::new(),
             filters: vec![owner_filter],
-            assignment: Some(second.assignment().clone()),
-            scope: Some(owner_scope),
+            scoped: Some((second.assignment().clone(), owner_scope)),
         };
         assert_eq!(
             ResourceCall::Watch(mismatched_scope).authorization_request(zone),

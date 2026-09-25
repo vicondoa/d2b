@@ -66,16 +66,6 @@ impl BusAuthorizer {
         self
     }
 
-    /// Borrow the single native authorizer shared with the Resource API.
-    ///
-    /// The bus and generated resource handlers must evaluate the same policy
-    /// instance and store-bound mutation authority.  Returning the existing
-    /// `Arc` prevents the daemon from accidentally constructing a parallel
-    /// authority for one Zone.
-    pub fn native_authorizer(&self) -> std::sync::Arc<NativeAuthorizer> {
-        std::sync::Arc::clone(&self.lock().native)
-    }
-
     pub(crate) fn controller_generation(&self) -> Option<ControllerGeneration> {
         self.lock().state.snapshot.controller_generation
     }
