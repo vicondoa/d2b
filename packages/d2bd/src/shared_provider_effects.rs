@@ -3381,7 +3381,8 @@ mod tests {
         let device_facets = d2b_provider_device::test_support::recording_facets(
             Arc::new(d2b_provider_device::test_support::RecordingRuntime::default()),
         );
-        // U6: the plane tests build the VolumeBinding and Endpoint families'
+        let tpm_facets = d2b_provider_device_tpm::test_support::recording_facets();
+        // U6:the plane tests build the VolumeBinding and Endpoint families'
         // facet sets from the scripted doubles, exactly as the production
         // composition root builds them from the daemon's registry, plane
         // table, and target directory.
@@ -3549,6 +3550,12 @@ mod tests {
                         Arc::new(d2b_provider_device::effects_service::
                             DeviceEffectsServiceFactory::new(device_facets))
                             as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
+                    ),
+                    (
+                        d2b_provider_device_tpm::effects_service::TPM_EFFECTS_SERVICE.id,
+                        Arc::new(d2b_provider_device_tpm::effects_service::TpmEffectsServiceFactory::new(
+                            tpm_facets.clone(),
+                        )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
                     (
                         d2b_provider_volume_binding::BINDING_EFFECTS_SERVICE.id,

@@ -1186,9 +1186,9 @@ impl GuestEffectsService {
                 let controller = azure_vm_runtime::AzureVmController::new(
                     config,
                     settings,
-                    Arc::new(FrameworkAzureEffect {
+                    FrameworkAzureEffect {
                         state: Arc::clone(&state),
-                    }),
+                    },
                     Arc::new(FrameworkAzureCredential),
                     None,
                 )
@@ -1892,9 +1892,9 @@ mod tests {
             child_zone_hosting: false,
             azure_tags: Vec::new(),
         };
-        let effect = Arc::new(FrameworkAzureEffect {
+        let effect = FrameworkAzureEffect {
             state: Arc::new(tokio::sync::Mutex::new(FrameworkAzureState::new(&settings))),
-        });
+        };
         let mut controller = azure_vm_runtime::AzureVmController::new(
             config,
             settings,

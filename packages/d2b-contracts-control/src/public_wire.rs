@@ -1308,6 +1308,14 @@ impl ShellName {
 /// The value is not a valid shell name.
 pub struct ShellNameError;
 
+impl fmt::Display for ShellNameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid shell name")
+    }
+}
+
+impl std::error::Error for ShellNameError {}
+
 impl fmt::Debug for ShellName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("ShellName(<redacted>)")
@@ -2173,8 +2181,8 @@ pub struct PublicReadModelMetadata {
     pub deep_refresh: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "AuditResponseWire")]
 pub struct AuditResponse {
     /// Typed broker audit entries. The public daemon page deliberately shares
     /// the broker entry shape so pagination does not lose sequence or export
@@ -2196,14 +2204,11 @@ struct AuditResponseWire {
     complete: bool,
 }
 
-impl<'de> Deserialize<'de> for AuditResponse {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let wire = AuditResponseWire::deserialize(deserializer)?;
-        validate_audit_page(wire.complete, wire.next_cursor.as_ref())
-            .map_err(serde::de::Error::custom)?;
+impl TryFrom<AuditResponseWire> for AuditResponse {
+    type Error = &'static str;
+
+    fn try_from(wire: AuditResponseWire) -> Result<Self, Self::Error> {
+        validate_audit_page(wire.complete, wire.next_cursor.as_ref())?;
         Ok(Self {
             entries: wire.entries,
             next_cursor: wire.next_cursor,
