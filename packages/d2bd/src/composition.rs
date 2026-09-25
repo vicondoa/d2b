@@ -3256,7 +3256,7 @@ fn production_process_resource_port(
         .try_lock()
         .ok()
         .and_then(|plane| plane.clone())
-        .and_then(|plane| plane.zone(zone).ok())
+        .and_then(|plane| plane.zone(&zone).ok())
         .and_then(|runtime| runtime.process_resource_client())
     else {
         return RoutedProcessResourcePort(None);
@@ -20436,7 +20436,7 @@ fn dispatch_live_guest_activation_resource(
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
         })?;
-    let runtime = plane.zone(&zone).map_err(|_| TypedError::InternalConfig {
+    let runtime = plane.zone(zone).map_err(|_| TypedError::InternalConfig {
         detail: "activation Zone runtime unavailable".to_owned(),
     })?;
     let guest_ref_text = format!("Guest/{}", request.vm);
