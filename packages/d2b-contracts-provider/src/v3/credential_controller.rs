@@ -1505,8 +1505,8 @@ pub enum CredentialObservabilityError {
 impl fmt::Display for CredentialObservabilityError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::InvalidAuditRecord => "credential audit record is invalid",
-            Self::ForbiddenTelemetryField => "credential telemetry frame is invalid",
+            Self::InvalidAuditRecord => "credential-audit-record-invalid",
+            Self::ForbiddenTelemetryField => "credential-telemetry-frame-invalid",
         })
     }
 }
