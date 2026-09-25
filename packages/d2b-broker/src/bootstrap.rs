@@ -409,9 +409,30 @@ impl wire::CallerRole {
         match self {
             wire::CallerRole::AdminUid { .. } => "d2b-admin",
             wire::CallerRole::LauncherUid { .. } => "d2b-launcher",
-            wire::CallerRole::RootUid { .. } => "RootUid",
+            wire::CallerRole::RootUid { .. } => "d2b-root",
             wire::CallerRole::HostShutdownUid { .. } => "d2b-host-shutdown",
             wire::CallerRole::NotAuthorized => "d2b-not-authorized",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caller_role_display_mirrors_the_contract_audit_labels() {
+        // The layer1-bootstrap profile's mirror of the contracts-crate
+        // labels: a label that drifts here shows up in audit records written
+        // by this profile only.
+        assert_eq!(wire::CallerRole::RootUid { uid: 0 }.for_display(), "d2b-root");
+        assert_eq!(
+            wire::CallerRole::AdminUid { uid: 0 }.for_display(),
+            "d2b-admin"
+        );
+        assert_eq!(
+            wire::CallerRole::NotAuthorized.for_display(),
+            "d2b-not-authorized"
+        );
     }
 }

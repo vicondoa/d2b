@@ -513,3 +513,20 @@ pub fn sample_zone_native_host_json() -> serde_json::Value {
         "cloudHypervisorCapabilities": []
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scratch_root_resolves_the_same_path_for_one_test_name() {
+        // The stability contract: a test that writes through one call and
+        // reads through another resolves the same directory. Callers that
+        // need a private directory join their own unique suffix.
+        let first = scratch_root("stability-probe");
+        let second = scratch_root("stability-probe");
+        assert_eq!(first, second, "one name resolves one directory");
+        assert_ne!(first, scratch_root("stability-probe-other"));
+        assert!(first.is_dir(), "the scratch root is created on demand");
+    }
+}

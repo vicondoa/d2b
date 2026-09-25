@@ -269,6 +269,30 @@ mod tests {
         );
     }
 
+    /// The false answer is the same payload shape with the probe's false
+    /// value: a runtime that has not laid the volume out answers
+    /// `{"hasLayout":false}` rather than a different envelope.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn has_layout_answers_false_for_an_unlaid_out_volume() {
+        let service = VolumeEffectsService::new(facets(Arc::new(ScriptedRuntime {
+            has_layout: false,
+        })));
+        let payload = canonical(serde_json::json!({
+            "volumeUid": "6f9619ff-8b86-4d01-b42d-00cf4fc964ff",
+        }));
+        let mut resources = ServiceResourceContext::fail_closed();
+        let response = service
+            .handle(invocation(&payload, &mut resources, "invocation-u7"))
+            .await
+            .expect("call");
+        assert_eq!(
+            response.payload,
+            canonical(serde_json::json!({ "hasLayout": false })),
+            "the hosted method answers the negative probe from the runtime facet"
+        );
+    }
+
     /// A volume uid that is absent from the payload refuses with the
     /// method's own closed code instead of answering a half-built report.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

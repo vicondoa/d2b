@@ -199,9 +199,15 @@ mod tests {
         );
     }
 
+    /// Remove one test serving directory, ignoring absence.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn remove_serving_dir(dir: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Serve one `vm.info` HTTP-over-unix exchange for the given wire state,
-    ///and return the socket path the poll reads,plus the serving dir the caller
-    /// removes when the exchange is complete.
+    /// and return the socket path the poll reads, plus the serving dir the
+    /// caller removes when the exchange is complete.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn serve_vm_info(state: &str) -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
@@ -253,7 +259,7 @@ mod tests {
                 api_socket: Some(socket.clone()),
             };
             assert_eq!(provider.poll_state(&target).await, expected, "state {state}");
-            let _ = std::fs::remove_dir_all(&dir);
+            remove_serving_dir(&dir);
         }
 
         // An unreachable socket is an error, and errors answer Unknown.

@@ -3010,7 +3010,7 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
         module: "packages/d2b-core/src/test_support.rs",
         token: "nftables",
         family: "network-local",
-        retires_with: "test-support only: the single host-contract JSON sample collapsed from the two copies (U4)",
+        retires_with: "permanent: the single host-contract JSON sample is feature-gated test-support data in the shared crate; no provider crate owns it",
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts-broker/src/broker_wire.rs",

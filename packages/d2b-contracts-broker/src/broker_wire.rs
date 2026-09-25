@@ -2390,8 +2390,10 @@ pub enum RunnerRole {
     /// The wire token is renamed to the frozen `role_id`/template spelling
     /// (`activation-nixos-runner`, pinned by the bundle schema, ADR-046, and
     /// the provider's `ACTIVATION_RUNNER_TEMPLATE`) so the wire token and
-    /// [`RunnerRole::as_str`] agree for the same role.
-    #[serde(rename = "activation-nixos-runner")]
+    /// [`RunnerRole::as_str`] agree for the same role. The pre-rename
+    /// kebab-case spelling stays accepted on the read side, so a frame or
+    /// persisted record written before the rename still decodes.
+    #[serde(rename = "activation-nixos-runner", alias = "activation-nixos")]
     ActivationNixos,
     /// virtiofsd sidecar; one per `d2b.vms.<vm>.runner.shares` row. The
     /// daemon/bundle provides argv from the runner-shape generators.
@@ -4018,6 +4020,20 @@ mod tests {
             assert_eq!(serde_json::to_string(&role).unwrap(), expected);
             assert_eq!(role.as_str(), expected.trim_matches('"'));
         }
+    }
+
+    #[test]
+    fn spawn_runner_role_still_decodes_the_pre_rename_token() {
+        // A frame or persisted record written before the token alignment
+        // carried the kebab-case spelling; it must still decode.
+        assert_eq!(
+            serde_json::from_str::<RunnerRole>("\"activation-nixos\"").unwrap(),
+            RunnerRole::ActivationNixos
+        );
+        assert_eq!(
+            serde_json::from_str::<RunnerRole>("\"activation-nixos-runner\"").unwrap(),
+            RunnerRole::ActivationNixos
+        );
     }
 
     #[test]
