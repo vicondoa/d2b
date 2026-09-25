@@ -69,6 +69,13 @@ impl core::fmt::Display for TelemetryFrameError {
 impl std::error::Error for TelemetryFrameError {}
 
 /// Parse one raw frame into the shared typed representation.
+///
+/// # Errors
+///
+/// Returns [`TelemetryFrameError::RawOversize`] when `bytes` exceed
+/// [`MAX_TELEMETRY_FRAME_BYTES`], [`TelemetryFrameError::UnknownField`] when a
+/// top-level field is not part of the frame schema, and
+/// [`TelemetryFrameError::Malformed`] for any other parse failure.
 pub fn parse_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrameError> {
     if bytes.len() > MAX_TELEMETRY_FRAME_BYTES {
         return Err(TelemetryFrameError::RawOversize);
@@ -85,11 +92,27 @@ pub fn parse_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrameErr
 }
 
 /// Validate a previously parsed shared frame.
+///
+/// # Errors
+///
+/// Returns [`TelemetryFrameError::Malformed`] when the value is not an object
+/// or a field has an invalid shape, [`TelemetryFrameError::NonFiniteNumber`]
+/// when a number is not finite, [`TelemetryFrameError::UnknownField`] when a
+/// field is outside the signal's allowed set,
+/// [`TelemetryFrameError::DescriptorInvalid`] when a name or enumerated value
+/// is not in the closed vocabulary, [`TelemetryFrameError::LabelInvalid`] when
+/// a metric label key or value is not admitted, and
+/// [`TelemetryFrameError::ResourceAttributeInvalid`] when a resource attribute
+/// is malformed or a sensitive field is not null or a canonical digest.
 pub fn validate_frame(frame: &TelemetryFrame) -> Result<(), TelemetryFrameError> {
     validate_value_shape(frame.signal, &frame.value)
 }
 
 /// Parse and validate one raw frame.
+///
+/// # Errors
+///
+/// Returns every error of [`parse_raw_frame`] and [`validate_frame`].
 pub fn validate_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrameError> {
     let frame = parse_raw_frame(bytes)?;
     validate_frame(&frame)?;
@@ -97,6 +120,12 @@ pub fn validate_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrame
 }
 
 /// Redact and serialize one previously validated shared frame.
+///
+/// # Errors
+///
+/// Returns [`TelemetryFrameError::Malformed`] when the frame cannot be
+/// re-serialized and [`TelemetryFrameError::RedactedOversize`] when the
+/// redacted frame exceeds [`MAX_TELEMETRY_FRAME_BYTES`].
 pub fn redact_parsed_frame(mut frame: TelemetryFrame) -> Result<Vec<u8>, TelemetryFrameError> {
     redact_value(
         &mut frame.value,
@@ -111,6 +140,10 @@ pub fn redact_parsed_frame(mut frame: TelemetryFrame) -> Result<Vec<u8>, Telemet
 }
 
 /// Parse, validate, redact, and remeasure one complete frame.
+///
+/// # Errors
+///
+/// Returns every error of [`validate_raw_frame`] and [`redact_parsed_frame`].
 pub fn redact_frame(bytes: &[u8]) -> Result<Vec<u8>, TelemetryFrameError> {
     let frame = validate_raw_frame(bytes)?;
     redact_parsed_frame(frame)

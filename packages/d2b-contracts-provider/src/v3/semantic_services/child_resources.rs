@@ -44,6 +44,29 @@ impl BindingChildKind {
     }
 }
 
+/// The process resource kinds a semantic Binding may own.
+///
+/// This is the restricted kind set admitted by the process constructors:
+/// an Endpoint carries no execution contract and is built through
+/// [`BindingChildRequest::endpoint`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ProcessChildKind {
+    /// A long-lived provider component.
+    Process,
+    /// A one-shot provider worker.
+    EphemeralProcess,
+}
+
+impl ProcessChildKind {
+    /// Convert to the full child-kind vocabulary.
+    pub const fn as_binding_kind(self) -> BindingChildKind {
+        match self {
+            Self::Process => BindingChildKind::Process,
+            Self::EphemeralProcess => BindingChildKind::EphemeralProcess,
+        }
+    }
+}
+
 /// The target on which a child resource is reconciled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BindingChildPlacement {
@@ -90,7 +113,7 @@ impl BindingChildRequest {
     /// Construct a Process or EphemeralProcess request with its signed
     /// execution contract.
     pub const fn process(
-        kind: BindingChildKind,
+        kind: ProcessChildKind,
         placement: BindingChildPlacement,
         role: &'static str,
         provider: &'static str,
@@ -99,7 +122,7 @@ impl BindingChildRequest {
         class: &'static str,
     ) -> Self {
         Self {
-            kind,
+            kind: kind.as_binding_kind(),
             placement,
             role,
             producer_role: None,
@@ -114,7 +137,7 @@ impl BindingChildRequest {
     /// Construct a user-domain Process request whose identity is supplied by
     /// the authored Binding target.
     pub const fn process_for_user(
-        kind: BindingChildKind,
+        kind: ProcessChildKind,
         placement: BindingChildPlacement,
         role: &'static str,
         provider: &'static str,
@@ -122,7 +145,7 @@ impl BindingChildRequest {
         class: &'static str,
     ) -> Self {
         Self {
-            kind,
+            kind: kind.as_binding_kind(),
             placement,
             role,
             producer_role: None,
@@ -431,6 +454,25 @@ impl std::error::Error for BindingChildError {}
 /// This is the only constructor for a [`BindingChildSet`].  In particular,
 /// callers must provide the Binding and Service references; a Ready Service
 /// alone cannot create consumer children.
+///
+/// # Errors
+///
+/// Returns [`BindingChildError::InvalidBindingRef`] or
+/// [`BindingChildError::InvalidServiceRef`] when a supplied reference does not
+/// name the family's Binding or Service ResourceType,
+/// [`BindingChildError::InvalidProviderRef`] when a Provider reference does not
+/// name a Provider, [`BindingChildError::InvalidTargetRef`] when the target is
+/// not a Guest, User, or Zone or is not admitted by the family contract,
+/// [`BindingChildError::EmptyDeclaration`] when no children are declared,
+/// [`BindingChildError::InvalidRole`] when a role is malformed, duplicated, or
+/// a process template or class is invalid, [`BindingChildError::InvalidPlacement`]
+/// when a Guest child is declared for a non-Guest target or a producer
+/// placement differs from its Endpoint, [`BindingChildError::InvalidProducer`]
+/// when an Endpoint names a non-Process producer,
+/// [`BindingChildError::MissingProducer`] when an Endpoint names no declared
+/// child, [`BindingChildError::MissingUser`] when a user-domain Process is
+/// declared without a User reference, and [`BindingChildError::InvalidChildRef`]
+/// when a derived child reference cannot be parsed.
 pub fn explicit_binding_children(
     family: SemanticFamily,
     binding_ref: ResourceRef,
@@ -452,6 +494,12 @@ pub fn explicit_binding_children(
 
 /// Construct child intents while supplying the Binding's admitted User
 /// identity for user-domain Processes.
+///
+/// # Errors
+///
+/// Returns every error of [`explicit_binding_children`], plus
+/// [`BindingChildError::InvalidUserRef`] when `user_ref` does not name a User
+/// resource.
 pub fn explicit_binding_children_with_user(
     family: SemanticFamily,
     binding_ref: ResourceRef,
@@ -495,18 +543,6 @@ pub fn explicit_binding_children_with_user(
     for declaration in declarations {
         if !valid_role(declaration.role) || roles.contains(&declaration.role) {
             return Err(BindingChildError::InvalidRole);
-        }
-        if declaration.producer_role.is_some() && declaration.kind != BindingChildKind::Endpoint {
-            return Err(BindingChildError::InvalidProducer);
-        }
-        if declaration.kind == BindingChildKind::Endpoint
-            && (declaration.process_provider.is_some()
-                || declaration.process_template.is_some()
-                || declaration.process_domain.is_some()
-                || declaration.process_class.is_some()
-                || declaration.process_user)
-        {
-            return Err(BindingChildError::InvalidProducer);
         }
         if declaration.kind != BindingChildKind::Endpoint {
             if let Some(provider) = declaration.process_provider {

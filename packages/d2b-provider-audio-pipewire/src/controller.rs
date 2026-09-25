@@ -8,7 +8,7 @@ use crate::{
 use d2b_contracts_provider::v3::semantic_services::{
     SemanticFamily,
     child_resources::{
-        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        ProcessChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
         explicit_binding_children,
     },
 };
@@ -33,7 +33,7 @@ pub const AUDIO_QUEUE_BOUND: NonZeroUsize = NonZeroUsize::new(64).expect("fixed 
 
 const AUDIO_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Host,
         "host-effect",
         "Provider/system-minijail",
@@ -43,7 +43,7 @@ const AUDIO_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
     ),
     BindingChildRequest::endpoint(BindingChildPlacement::Host, "host-endpoint", "host-effect"),
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Guest,
         "guest-agent",
         "Provider/system-systemd",

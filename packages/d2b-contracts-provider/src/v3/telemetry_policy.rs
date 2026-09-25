@@ -475,6 +475,17 @@ impl core::fmt::Display for MetricPolicyError {
 impl std::error::Error for MetricPolicyError {}
 
 /// Validate one metric descriptor against the closed registry.
+///
+/// # Errors
+///
+/// Returns [`MetricPolicyError::DescriptorMalformed`] when the name is empty,
+/// oversized, or not lower-kebab, when more than 16 labels are declared, when
+/// a label key is empty, oversized, or duplicated, or when the label set does
+/// not match the canonical descriptor; [`MetricPolicyError::DescriptorNotAllowlisted`]
+/// when the name is not in the canonical family registry;
+/// [`MetricPolicyError::KeyNotAllowlisted`] when a label key is not in the
+/// policy; and [`MetricPolicyError::ValueNotAllowlisted`] when a label value
+/// is outside its closed domain.
 pub fn validate_descriptor(descriptor: &MetricDescriptor) -> Result<(), MetricPolicyError> {
     if descriptor.name.is_empty()
         || descriptor.name.len() > 128
@@ -536,6 +547,13 @@ pub fn canonical_descriptor(name: &str) -> Option<MetricDescriptor> {
 }
 
 /// Validate a label key before any value is considered.
+///
+/// # Errors
+///
+/// Returns [`MetricPolicyError::KeyForbidden`] when the key is unconditionally
+/// forbidden, [`MetricPolicyError::KeySuffixForbidden`] when it carries a
+/// forbidden identity suffix, and [`MetricPolicyError::KeyNotAllowlisted`]
+/// when it is not in the policy.
 pub fn validate_label_key(key: &str) -> Result<(), MetricPolicyError> {
     if FORBIDDEN_LABEL_KEYS.contains(&key) {
         return Err(MetricPolicyError::KeyForbidden);
@@ -553,6 +571,14 @@ pub fn validate_label_key(key: &str) -> Result<(), MetricPolicyError> {
 }
 
 /// Validate one data point against its descriptor and identity canaries.
+///
+/// # Errors
+///
+/// Returns every error of [`validate_descriptor`], plus
+/// [`MetricPolicyError::LabelSetMismatch`] when the label keys differ from the
+/// descriptor, [`MetricPolicyError::ValueNotAllowlisted`] when a value is
+/// outside its closed domain, and [`MetricPolicyError::ValueIdentity`] when a
+/// value is a resource identity canary.
 pub fn validate_data_point(
     descriptor: &MetricDescriptor,
     labels: &BTreeMap<String, String>,
@@ -564,6 +590,13 @@ pub fn validate_data_point(
 
 /// Validate a data point when the descriptor was resolved from the canonical
 /// registry by the caller.
+///
+/// # Errors
+///
+/// Returns every error of [`validate_labels`] (a malformed label set, a
+/// forbidden or non-allowlisted key, a non-allowlisted value, or an identity
+/// canary), plus [`MetricPolicyError::LabelSetMismatch`] when the label keys
+/// differ from the descriptor.
 pub fn validate_canonical_data_point(
     descriptor: &MetricDescriptor,
     labels: &BTreeMap<String, String>,
@@ -575,6 +608,14 @@ pub fn validate_canonical_data_point(
 
 /// Validate a data point without validating actual label keys before comparing
 /// them with the descriptor.
+///
+/// # Errors
+///
+/// Returns every error of [`validate_descriptor`], plus
+/// [`MetricPolicyError::LabelSetMismatch`] when the label keys differ from the
+/// descriptor, [`MetricPolicyError::ValueNotAllowlisted`] when a value is
+/// outside its closed domain, and [`MetricPolicyError::ValueIdentity`] when a
+/// value is a resource identity canary.
 pub fn validate_data_point_without_label_key_validation(
     descriptor: &MetricDescriptor,
     labels: &BTreeMap<String, String>,
@@ -585,6 +626,16 @@ pub fn validate_data_point_without_label_key_validation(
 }
 
 /// Validate labels when a frame does not carry a full descriptor.
+///
+/// # Errors
+///
+/// Returns [`MetricPolicyError::DescriptorMalformed`] when more than 16 labels
+/// are supplied, [`MetricPolicyError::KeyForbidden`] or
+/// [`MetricPolicyError::KeySuffixForbidden`] for a forbidden key,
+/// [`MetricPolicyError::KeyNotAllowlisted`] when a key is not in the policy,
+/// [`MetricPolicyError::ValueNotAllowlisted`] when a value is outside its
+/// closed domain, and [`MetricPolicyError::ValueIdentity`] when a value is a
+/// resource identity canary.
 pub fn validate_labels(
     labels: &BTreeMap<String, String>,
     canaries: &IdentityCanaries,

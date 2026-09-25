@@ -559,33 +559,13 @@ impl CompatibilityRange {
     /// state schema major must be exact and the installed minor must not be
     /// newer than this artifact's.
     pub fn admits_state(&self, installed: SchemaVersion) -> Result<(), ProviderContractError> {
-        let (installed_major, installed_minor) = schema_version_parts(installed);
-        let (artifact_major, artifact_minor) = schema_version_parts(self.state_schema_version);
-        if installed_major != artifact_major || installed_minor > artifact_minor {
+        if installed.major() != self.state_schema_version.major()
+            || installed.minor() > self.state_schema_version.minor()
+        {
             return Err(ProviderContractError::StateSchemaIncompatible);
         }
         Ok(())
     }
-}
-
-/// Split a canonical `MAJOR.MINOR` schema version into its two components.
-///
-/// `SchemaVersion` exposes no component accessor, and its canonical string
-/// is the contract's own round-trip spelling, so parsing that spelling back
-/// is exact rather than lossy.
-fn schema_version_parts(version: SchemaVersion) -> (u32, u32) {
-    let rendered = version.to_canonical_string();
-    let (major, minor) = rendered
-        .split_once('.')
-        .expect("a canonical schema version always carries one separator");
-    (
-        major
-            .parse()
-            .expect("a canonical schema version major is numeric"),
-        minor
-            .parse()
-            .expect("a canonical schema version minor is numeric"),
-    )
 }
 
 /// The closed Provider component type set.

@@ -8,7 +8,7 @@
 use d2b_contracts_provider::v3::semantic_services::{
     SemanticFamily,
     child_resources::{
-        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        ProcessChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
         explicit_binding_children,
     },
 };
@@ -19,7 +19,7 @@ const USBIP_PROVIDER_REF: &str = "Provider/device-usbip";
 
 const USBIP_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Guest,
         "guest-proxy",
         "Provider/system-minijail",
