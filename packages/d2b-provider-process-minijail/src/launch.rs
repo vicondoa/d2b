@@ -30,6 +30,11 @@ impl PlatformGate {
     }
 
     /// Check Linux 5.14 and cgroup.kill.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PlatformGateRejected` when the kernel is older than
+    /// 5.14 or the runtime cgroup does not expose `cgroup.kill`.
     pub const fn validate(self) -> Result<(), ProcessConformanceError> {
         if self.kernel_major < 5
             || (self.kernel_major == 5 && self.kernel_minor < 14)
@@ -42,7 +47,13 @@ impl PlatformGate {
     }
 }
 
-/// Validate provider identity and platform evidence before spawn dispatch.
+/// Validate provider identityand platform evidence before spawn dispatch.
+///
+/// # Errors
+///
+/// Returns `ProviderMismatch` when the ticket selects a different
+/// Process Provider,and `PlatformGateRejected` when the platform gate
+/// fails.
 pub fn validate_launch_ticket(
     ticket: &LaunchTicket,
     gate: PlatformGate,

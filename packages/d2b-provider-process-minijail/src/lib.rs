@@ -310,6 +310,16 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         self.launch_with_inherited_fds(ticket, Vec::new()).await
     }
 
+/// Launch one ticket after validation, returning the verified report.
+    ///
+    /// # Errors
+    ///
+    /// Returns ticket validation failures (`ProviderMismatch`,
+    /// `PlatformGateRejected`), thee effect port's launch and readiness
+    /// failures, `WaitOwnerMismatch` when the launched process is not
+    /// locally owned, `IdentityUnverified` when the launch evidence lacks
+    /// the required identity bindings,and `TerminalEvidenceMismatch`
+    /// when the identity does not match the ticket seal.
     async fn launch_with_inherited_fds(
         &self,
         ticket: &LaunchTicket,
@@ -367,6 +377,15 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
             Err(error) => Err(self.cleanup_failed_launch(&launched, error).await),
         }
     }
+
+    /// Adopt a running candidate after verifying its identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns ticket validation failures, thee effect port's observe
+    /// failures, non-`DeadlineExceeded` readiness failures, and
+    /// pidfd-open failures. A `DeadlineExceeded` readiness probe
+    /// instead quarantines the candidate as identity-ambiguous.
 
     async fn adopt(
         &self,
@@ -450,6 +469,12 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         )))
     }
 
+    /// Stop exactly the named identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IdentityUnverified` when the identity is zero; otherwise
+    /// the effect port's stop failure propagates.
     async fn stop(
         &self,
         identity: &ProcessIdentityDigest,
@@ -472,6 +497,13 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         })
     }
 
+    /// Stop the stale candidate when no live adopter is running.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IdentityUnverified` when the candidate identity is zero;
+    /// otherwise thee effect port's pidfd-open or stop failure
+    /// propagates.
     async fn stop_stale(
         &self,
         candidate: &AdoptionCandidate,
