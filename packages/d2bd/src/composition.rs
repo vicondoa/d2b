@@ -16152,7 +16152,8 @@ struct VmStopRoleReport {
     shutdown_outcome: Option<VmShutdownOutcome>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum VmShutdownOutcome {
     CleanGuestShutdown,
     CleanVmmCleanup,
@@ -16175,7 +16176,7 @@ struct ShutdownDegradedReport {
 #[serde(rename_all = "camelCase")]
 struct ShutdownDegradedMarker {
     vm: String,
-    outcome: String,
+    outcome: VmShutdownOutcome,
     severity: String,
     remediation: String,
     elapsed_ms: u64,
@@ -16384,7 +16385,7 @@ fn persist_vm_shutdown_marker(
     if let Some(severity) = outcome.degraded_severity() {
         report.markers.push(ShutdownDegradedMarker {
             vm: vm.to_owned(),
-            outcome: outcome.label().to_owned(),
+            outcome,
             severity: severity.to_owned(),
             remediation: outcome.remediation().replace("<vm>", vm),
             elapsed_ms: elapsed.as_millis() as u64,
@@ -18680,7 +18681,6 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
             self.operation,
             &self.caller_role,
         )?;
-        let _ = self.force;
         drive_sync(&self.state.runtime_handle, self.runtime.apply_cloud_hypervisor_lifecycle(
             Arc::new(self.state.clone()),
             &self.guest,
@@ -18689,7 +18689,7 @@ impl provider_effects::ProviderLifecycleEffectPort for DaemonGuestLifecycleEffec
             self.operation,
         ))
         .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
-        if self.wait_for_ready {
+        if self.wait_for_ready && !self.force {
             drive_sync(&self.state.runtime_handle, self.runtime.wait_cloud_hypervisor_lifecycle(
                 Arc::new(self.state.clone()),
                 &self.guest,
