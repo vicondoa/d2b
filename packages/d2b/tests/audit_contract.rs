@@ -480,7 +480,7 @@ fn spawn_single_audit_response_mock(path: &Path, response: Value) -> std::thread
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn spawn_paginated_audit_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
-    use d2b_contracts_broker::broker_wire::AuditExportCursor;
+    use d2b_contracts_broker::AuditExportCursor;
     use nix::sys::socket::{
         AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
     };

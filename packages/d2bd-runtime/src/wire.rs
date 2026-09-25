@@ -586,9 +586,8 @@ fn map_parse_error(error: serde_json::Error) -> TypedError {
 #[cfg(test)]
 mod tests {
     use super::{Request, audit_response, parse_request};
-    use d2b_contracts_broker::broker_wire::{
-        AuditExportCursor, AuditExportEntry, ExportBrokerAuditResponse,
-    };
+    use d2b_contracts_broker::broker_wire::ExportBrokerAuditResponse;
+    use d2b_contracts_broker::{AuditExportCursor, AuditExportEntry};
     use serde_json::json;
 
     #[test]
