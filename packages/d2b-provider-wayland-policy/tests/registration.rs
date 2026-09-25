@@ -90,5 +90,6 @@ fn the_policy_envelope_is_the_whole_contract() {
             .is_empty()
     );
     assert!(wayland_policy_spec_decoder().decode(b"[]").is_err());
-    let _ = ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/policy");
+    ResourceRef::parse("display-wayland.d2bus.org.WaylandPolicy/policy")
+        .expect("the policy reference parses");
 }

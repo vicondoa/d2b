@@ -2562,7 +2562,10 @@ mod tests {
             ZoneLinkSessionState::EnrollmentCommitted,
             ZoneLinkSessionState::Kk,
         ] {
-            assert!(!state.permits_resource_traffic());
+            assert!(
+                !state.permits_resource_traffic(),
+                "state: {state:?} must not permit resource traffic"
+            );
         }
         assert_eq!(
             refused(
@@ -3136,7 +3139,10 @@ mod tests {
     fn metric_labels_carry_no_identity() {
         let forbidden = ["vm", "zone", "zone_id", "zone_uid", "link_name_hash"];
         for key in ZONE_LINK_METRIC_LABEL_KEYS {
-            assert!(!forbidden.contains(key), "forbidden metric label key");
+            assert!(
+                !forbidden.contains(key),
+                "key: {key} must not be a forbidden metric label key"
+            );
         }
         let canary = "k1-uplink";
         let samples = [
@@ -3205,13 +3211,17 @@ mod tests {
             ZoneLinkError::RouteAdmissionDedupConflict,
         ] {
             let label = error.label();
-            assert!(!label.is_empty() && label.len() <= 64);
+            assert!(
+                !label.is_empty() && label.len() <= 64,
+                "error: {error:?} label must be a non-empty bounded token"
+            );
             assert!(
                 label
                     .chars()
-                    .all(|character| character.is_ascii_lowercase() || character == '-')
+                    .all(|character| character.is_ascii_lowercase() || character == '-'),
+                "error: {error:?} label must be lowercase-and-dash"
             );
-            assert_eq!(error.to_string(), label);
+            assert_eq!(error.to_string(), label, "error: {error:?}");
         }
         assert_eq!(
             ZoneLinkError::Disconnected.label(),

@@ -12,5 +12,5 @@ fn released_observation_is_identity_free_and_bounded() {
         last_exit: Some(d2b_provider_transport_vsock::BridgeExit::OwnerClosed),
     };
     assert_eq!(observation.phase, TransportPhase::Released);
-    assert_eq!(ServicePhase::Ready, ServicePhase::Ready);
+    assert_ne!(ServicePhase::Ready, ServicePhase::Serving);
 }
