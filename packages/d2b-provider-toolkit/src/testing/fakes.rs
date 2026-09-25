@@ -1,5 +1,5 @@
-//! Fake core, store, bus, supervisor, and effect clients, with fault
-//! injection.
+//! Fake core, store, bus, supervisor, manager-endpoint, and effect clients,
+//! with fault injection.
 //!
 //! `ADR-046-provider-model-and-packaging` section "Toolkit" lists these as
 //! toolkit deliverables so that every Provider crate can write hermetic
@@ -27,10 +27,20 @@
 //! was handed.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use async_trait::async_trait;
 use d2b_contracts_provider::v3::{DependencyAlias, ProviderManifest};
 use d2b_contracts_resource::v3::ArtifactId;
 use d2b_contracts_resource::v3::{ResourceRef, execution_policy::BoundedToken};
+use d2b_resource_runtime::context::{ChildEnsure, ManagerEndpoint, WatchId, WatchRegistration};
+use d2b_resource_runtime::error::ResourceError;
+use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
+use d2b_resource_runtime::manager::ResourceView;
+use d2b_resource_runtime::resource::ResourceStatus;
+use d2b_resource_runtime::spec_store::EnsureOutcome;
+use parking_lot::Mutex;
 
 use crate::base::error::ProviderToolkitError;
 
@@ -471,6 +481,349 @@ impl FakeEffectPort {
     }
 }
 
+/// A recording [`ManagerEndpoint`] double: committed child rows plus the
+/// ordered call log the assertions read.
+///
+/// `ensure_child` commits the child row (Created/Unchanged/Updated by spec
+/// comparison) and records `ensure:<type>/<name>` before the commit and
+/// `spawned:<type>/<name>` after it, so a test can pin commit-before-spawn
+/// (F1). `delete` records `delete:<type>/<name>` and removes the row;
+/// `register_watch` records `watch:<type>/<name>` and returns a
+/// monotonically increasing [`WatchId`]. While [`Self::set_fail_reads`] is
+/// on, every read (`get`, `view`, `list_owned`) answers `ManagerRpc`, so a
+/// test can pin the retryable defer of an unanswerable manager.
+///
+/// The double is cloneable and shares its state through `Arc`s, so a test
+/// can hand [`Self::log_handle`] to a sibling effect double and assert one
+/// ordered sequence across both.
+#[derive(Clone)]
+pub struct RecordingManagerEndpoint {
+    zone: String,
+    owner_uid: [u8; 16],
+    log: Arc<Mutex<Vec<String>>>,
+    rows: Arc<Mutex<Vec<StoredDesiredResource>>>,
+    views: Arc<Mutex<Vec<(ResourceKey, ResourceView)>>>,
+    watch_targets: Arc<Mutex<Vec<ResourceKey>>>,
+    next_uid: Arc<AtomicU64>,
+    fail_reads: Arc<AtomicBool>,
+    children_ready: Arc<AtomicBool>,
+}
+
+impl RecordingManagerEndpoint {
+    /// A fresh double in zone `work` whose committed children carry the
+    /// owner uid `[0x42; 16]`, with its own ordered log.
+    pub fn new() -> Self {
+        Self {
+            zone: "work".to_owned(),
+            owner_uid: [0x42; 16],
+            log: Arc::new(Mutex::new(Vec::new())),
+            rows: Arc::new(Mutex::new(Vec::new())),
+            views: Arc::new(Mutex::new(Vec::new())),
+            watch_targets: Arc::new(Mutex::new(Vec::new())),
+            next_uid: Arc::new(AtomicU64::new(1)),
+            fail_reads: Arc::new(AtomicBool::new(false)),
+            children_ready: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The zone committed child rows are keyed under.
+    pub fn with_zone(mut self, zone: impl Into<String>) -> Self {
+        self.zone = zone.into();
+        self
+    }
+
+    /// The owner uid committed child rows carry.
+    pub fn with_owner_uid(mut self, owner_uid: [u8; 16]) -> Self {
+        self.owner_uid = owner_uid;
+        self
+    }
+
+    /// Share the caller's ordered log, so manager calls and a sibling
+    /// effect double read as one sequence.
+    pub fn with_log(log: Arc<Mutex<Vec<String>>>) -> Self {
+        Self {
+            log,
+            ..Self::new()
+        }
+    }
+
+    /// Seed the parent row the binding declares: `Volume/data` in this
+    /// double's zone, owned by nobody.
+    pub fn with_parent(self, parent_uid: [u8; 16], spec: &[u8]) -> Self {
+        self.rows.lock().push(StoredDesiredResource {
+            key: ResourceKey::new(&self.zone, "Volume", "data"),
+            uid: parent_uid,
+            generation: 2,
+            owner_uid: None,
+            provenance: ResourceProvenance::Api,
+            deleting: false,
+            spec: spec.to_vec(),
+            metadata: Vec::new(),
+            created_at: 0,
+        });
+        self
+    }
+
+    /// Seed one pre-existing row.
+    pub fn with_row(self, row: StoredDesiredResource) -> Self {
+        self.rows.lock().push(row);
+        self
+    }
+
+    /// Seed a pre-existing owned-row set.
+    pub fn with_rows(self, rows: Vec<StoredDesiredResource>) -> Self {
+        self.rows.lock().extend(rows);
+        self
+    }
+
+    /// Seed one owned child row (drift the driver must retire).
+    pub fn seed_owned(&self, key: ResourceKey) {
+        self.rows.lock().push(StoredDesiredResource {
+            key,
+            uid: [0x77; 16],
+            generation: 1,
+            owner_uid: Some(self.owner_uid),
+            provenance: ResourceProvenance::Resource,
+            deleting: false,
+            spec: Vec::new(),
+            metadata: Vec::new(),
+            created_at: 0,
+        });
+    }
+
+    /// Seed one row without a published view.
+    pub fn seed(&self, row: StoredDesiredResource) {
+        self.rows.lock().push(row);
+    }
+
+    /// Seed one row together with its live view at the given status.
+    pub fn add(&self, row: StoredDesiredResource, status: ResourceStatus) {
+        let view = ResourceView {
+            key: row.key.clone(),
+            uid: row.uid,
+            generation: row.generation,
+            deleting: row.deleting,
+            provenance: row.provenance,
+            spec: row.spec.clone(),
+            metadata: row.metadata.clone(),
+            owner_key: None,
+            status: Some(status),
+            status_generation: Some(row.generation),
+            status_projection: None,
+        };
+        self.rows.lock().push(row);
+        self.views.lock().push((view.key.clone(), view));
+    }
+
+    /// Seed one owned row together with its published view.
+    pub fn add_owned(&self, row: StoredDesiredResource, view: ResourceView) {
+        self.views.lock().push((view.key.clone(), view));
+        self.rows.lock().push(row);
+    }
+
+    /// Seed one published view without a row.
+    pub fn add_view(&self, view: ResourceView) {
+        self.views.lock().push((view.key.clone(), view));
+    }
+
+    /// Remove one row and its published view.
+    pub fn drop_row(&self, key: &ResourceKey) {
+        self.rows.lock().retain(|row| row.key != *key);
+        self.views.lock().retain(|(view_key, _)| view_key != key);
+    }
+
+    /// The published view of one key, if any.
+    pub fn view_of(&self, key: &ResourceKey) -> Option<ResourceView> {
+        self.views
+            .lock()
+            .iter()
+            .find(|(view_key, _)| view_key == key)
+            .map(|(_, view)| view.clone())
+    }
+
+    /// Make every read answer `ManagerRpc` (the unanswerable plane).
+    pub fn set_fail_reads(&self, fail: bool) {
+        self.fail_reads.store(fail, Ordering::SeqCst);
+    }
+
+    /// The phase ensured children publish: Ready when on, Pending when off.
+    pub fn set_children_ready(&self, ready: bool) {
+        self.children_ready.store(ready, Ordering::SeqCst);
+    }
+
+    /// The shared ordered log, for a sibling double to append to.
+    pub fn log_handle(&self) -> Arc<Mutex<Vec<String>>> {
+        Arc::clone(&self.log)
+    }
+
+    /// The recorded calls in order.
+    pub fn order(&self) -> Vec<String> {
+        self.log.lock().clone()
+    }
+
+    /// The recorded calls in order (alias of [`Self::order`]).
+    pub fn log(&self) -> Vec<String> {
+        self.log.lock().clone()
+    }
+
+    /// The recorded calls in order (alias of [`Self::order`]).
+    pub fn call_order(&self) -> Vec<String> {
+        self.log.lock().clone()
+    }
+
+    /// The recorded `ensure:` calls in order.
+    pub fn ensure_order(&self) -> Vec<String> {
+        self.log
+            .lock()
+            .iter()
+            .filter(|call| call.starts_with("ensure:"))
+            .cloned()
+            .collect()
+    }
+
+    /// The committed rows.
+    pub fn rows(&self) -> Vec<StoredDesiredResource> {
+        self.rows.lock().clone()
+    }
+
+    /// One committed row by key.
+    pub fn row(&self, key: &ResourceKey) -> Option<StoredDesiredResource> {
+        self.rows.lock().iter().find(|row| row.key == *key).cloned()
+    }
+
+    /// The registered watch targets in order.
+    pub fn watch_targets(&self) -> Vec<ResourceKey> {
+        self.watch_targets.lock().clone()
+    }
+}
+
+#[async_trait]
+impl ManagerEndpoint for RecordingManagerEndpoint {
+    async fn ensure_child(
+        &self,
+        _parent: &ResourceKey,
+        child: ChildEnsure,
+    ) -> Result<EnsureOutcome, ResourceError> {
+        let id = format!("{}/{}", child.type_name.as_str(), child.name);
+        self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        let next = self.next_uid.fetch_add(1, Ordering::SeqCst);
+        let mut uid = [0u8; 16];
+        uid[..8].copy_from_slice(&next.to_be_bytes());
+        let row = StoredDesiredResource {
+            key: ResourceKey::new(&self.zone, child.type_name.as_str(), &child.name),
+            uid,
+            generation: 1,
+            owner_uid: Some(self.owner_uid),
+            provenance: ResourceProvenance::Resource,
+            deleting: false,
+            spec: child.spec,
+            metadata: child.metadata,
+            created_at: 0,
+        };
+        let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        let outcome = match rows.iter_mut().find(|existing| existing.key == row.key) {
+            Some(existing) if existing.spec == row.spec => EnsureOutcome::Unchanged(existing.clone()),
+            Some(existing) => {
+                *existing = row.clone();
+                EnsureOutcome::Updated(row.clone())
+            }
+            None => {
+                rows.push(row.clone());
+                EnsureOutcome::Created(row.clone())
+            }
+        };
+        drop(rows);
+        // Publish the live view the child's phase reads; the children_ready
+        // switch is what a test flips to converge the child gate.
+        if !matches!(outcome, EnsureOutcome::Unchanged(_)) {
+            let status = if self.children_ready.load(Ordering::SeqCst) {
+                ResourceStatus::Ready
+            } else {
+                ResourceStatus::Pending
+            };
+            self.views.lock().retain(|(view_key, _)| view_key != &row.key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.views.lock().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+                row.key.clone(),
+                ResourceView {
+                    key: row.key.clone(),
+                    uid: row.uid,
+                    generation: row.generation,
+                    deleting: false,
+                    provenance: row.provenance,
+                    spec: row.spec.clone(),
+                    metadata: row.metadata.clone(),
+                    owner_key: None,
+                    status: Some(status),
+                    status_generation: Some(row.generation),
+                    status_projection: None,
+                },
+            ));
+        }
+        // Spawn notification only after the commit (F1, AE1).
+        self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        Ok(outcome)
+    }
+
+    async fn get(
+        &self,
+        key: &ResourceKey,
+    ) -> Result<Option<StoredDesiredResource>, ResourceError> {
+        if self.fail_reads.load(Ordering::SeqCst) {
+            return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+        }
+        Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+    }
+
+    async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
+        self.log.lock().push(format!("view:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        if self.fail_reads.load(Ordering::SeqCst) {
+            return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+        }
+        Ok(self.view_of(key))
+    }
+
+    async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
+        self.log.lock().push(format!("delete:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        self.views.lock().retain(|(view_key, _)| view_key != key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        Ok(())
+    }
+
+    async fn list_owned(
+        &self,
+        owner_uid: [u8; 16],
+    ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+        if self.fail_reads.load(Ordering::SeqCst) {
+            return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+        }
+        Ok(self
+            .rows
+            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            .iter()
+            .filter(|row| row.owner_uid == Some(owner_uid))
+            .cloned()
+            .collect())
+    }
+
+    async fn register_watch(
+        &self,
+        _subscriber: &ResourceKey,
+        registration: WatchRegistration,
+    ) -> Result<WatchId, ResourceError> {
+        self.log.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            "watch:{}/{}",
+            registration.target.type_name, registration.target.name
+        ));
+        let mut targets = self.watch_targets.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        targets.push(registration.target.clone());
+        Ok(WatchId(targets.len() as u64))
+    }
+
+    async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,5 +905,46 @@ mod tests {
         assert!(port.recorder().is_empty());
         assert!(port.apply(&effect).is_ok());
         assert_eq!(port.recorder().count_of("apply-effect"), 1);
+    }
+
+    #[tokio::test]
+    async fn the_manager_endpoint_commits_before_spawn_and_retires_on_delete() {
+        let manager = RecordingManagerEndpoint::new();
+        let child = ChildEnsure {
+            type_name: d2b_resource_runtime::identity::ResourceTypeName::new("Process"),
+            name: "worker-0".to_owned(),
+            spec: b"spec".to_vec(),
+            metadata: Vec::new(),
+        };
+        let parent = ResourceKey::new("work", "Volume", "data");
+        let created = manager
+            .ensure_child(&parent, child.clone())
+            .await
+            .expect("ensure");
+        assert!(matches!(created, EnsureOutcome::Created(_)));
+        let unchanged = manager
+            .ensure_child(&parent, child.clone())
+            .await
+            .expect("re-ensure");
+        assert!(matches!(unchanged, EnsureOutcome::Unchanged(_)));
+        let order = manager.order();
+        let ensure_at = order.iter().position(|entry| entry == "ensure:Process/worker-0");
+        let spawned_at = order.iter().position(|entry| entry == "spawned:Process/worker-0");
+        assert!(ensure_at < spawned_at, "commit-before-spawn (F1): {order:?}");
+        assert_eq!(manager.rows().len(), 1, "one committed row, no duplicate");
+
+        let key = ResourceKey::new("work", "Process", "worker-0");
+        manager.delete(&key).await.expect("delete");
+        assert!(manager.row(&key).is_none(), "delete removes the committed row");
+        assert_eq!(
+            manager.order(),
+            vec![
+                "ensure:Process/worker-0".to_owned(),
+                "spawned:Process/worker-0".to_owned(),
+                "ensure:Process/worker-0".to_owned(),
+                "spawned:Process/worker-0".to_owned(),
+                "delete:Process/worker-0".to_owned(),
+            ]
+        );
     }
 }

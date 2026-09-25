@@ -1061,16 +1061,14 @@ mod tests {
 
     use async_trait::async_trait;
     use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
+    use crate::testing::fakes::RecordingManagerEndpoint;
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, SpecDecoder,
-        WatchId, WatchRegistration,
     };
     use d2b_resource_runtime::driver::{DynResourceDriver, RecoveryOutcome, ResourceDriverFactory};
-    use d2b_resource_runtime::error::ResourceError;
     use d2b_resource_runtime::identity::{
         ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
     };
-    use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
     use serde_json::json;
 
@@ -1084,7 +1082,7 @@ mod tests {
     use d2b_resource_runtime::driver::ReconcileOutcome;
 
     /// Ordered log every fake writes to, so ordering is one assertion.
-    type Log = Arc<tokio::sync::Mutex<Vec<String>>>;
+    type Log = Arc<parking_lot::Mutex<Vec<String>>>;
 
     /// The fixture's closed component vocabulary.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1122,96 +1120,6 @@ mod tests {
             resync: Duration::from_secs(30),
         },
     ];
-
-    struct RecordingManager {
-        log: Log,
-        owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
-    }
-
-    impl RecordingManager {
-        fn new(log: Log) -> Arc<Self> {
-            Arc::new(Self {
-                log,
-                owned: tokio::sync::Mutex::new(Vec::new()),
-            })
-        }
-
-        fn with_owned(log: Log, owned: Vec<StoredDesiredResource>) -> Arc<Self> {
-            Arc::new(Self {
-                log,
-                owned: tokio::sync::Mutex::new(owned),
-            })
-        }
-    }
-
-    #[async_trait]
-    impl ManagerEndpoint for RecordingManager {
-        async fn ensure_child(
-            &self,
-            _parent: &ResourceKey,
-            child: ChildEnsure,
-        ) -> Result<EnsureOutcome, ResourceError> {
-            self.log
-                .lock()
-                .await
-                .push(format!("ensure:{}/{}", child.type_name.as_str(), child.name));
-            Ok(EnsureOutcome::Created(test_row(
-                "dev",
-                child.type_name.as_str(),
-                &child.name,
-            )))
-        }
-
-        async fn get(
-            &self,
-            key: &ResourceKey,
-        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self
-                .owned
-                .lock()
-                .await
-                .iter()
-                .find(|row| row.key == *key)
-                .cloned())
-        }
-
-        async fn view(
-            &self,
-            _key: &ResourceKey,
-        ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            // Desired rows only: this fixture publishes no runtime status, so
-            // it serves no observed state.
-            Ok(None)
-        }
-
-        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.log
-                .lock()
-                .await
-                .push(format!("delete:{}/{}", key.type_name, key.name));
-            self.owned.lock().await.retain(|row| row.key != *key);
-            Ok(())
-        }
-
-        async fn list_owned(
-            &self,
-            _owner_uid: [u8; 16],
-        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self.owned.lock().await.clone())
-        }
-
-        async fn register_watch(
-            &self,
-            _subscriber: &ResourceKey,
-            _registration: WatchRegistration,
-        ) -> Result<WatchId, ResourceError> {
-            Ok(WatchId(1))
-        }
-
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            Ok(())
-        }
-    }
 
     #[derive(Default)]
     struct RecordingRequeue {
@@ -1296,10 +1204,7 @@ mod tests {
             _request: &SharedProviderEffectRequest<'_>,
             _state: &(),
         ) -> Result<SharedProviderEffectOutcome, SharedProviderEffectError> {
-            self.log
-                .lock()
-                .await
-                .push(format!("effect:{}", component.effect_id()));
+            self.log.lock().push(format!("effect:{}", component.effect_id())); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(SharedProviderEffectOutcome::phase(*self.phase.lock().await))
         }
 
@@ -1309,10 +1214,7 @@ mod tests {
             _request: &SharedProviderEffectRequest<'_>,
             _state: &(),
         ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-            self.log
-                .lock()
-                .await
-                .push(format!("finalize:{}", component.effect_id()));
+            self.log.lock().push(format!("finalize:{}", component.effect_id())); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(*self.finalize.lock().await)
         }
     }
@@ -1354,7 +1256,7 @@ mod tests {
         type_name: &str,
         name: &str,
         spec: serde_json::Value,
-        manager: Arc<RecordingManager>,
+        manager: Arc<RecordingManagerEndpoint>,
         requeue: Arc<RecordingRequeue>,
         log: Log,
         phase: SharedProviderEffectPhase,
@@ -1402,7 +1304,7 @@ mod tests {
             zone: "dev".to_owned(),
             controller_generation: ControllerGeneration::new(1).expect("generation"),
             family: RecordingFamily::new(
-                Arc::new(tokio::sync::Mutex::new(Vec::new())),
+                Arc::new(parking_lot::Mutex::new(Vec::new())),
                 SharedProviderEffectPhase::Pending,
                 SharedProviderFinalize::Complete,
                 false,
@@ -1423,12 +1325,12 @@ mod tests {
 
     #[tokio::test]
     async fn validate_rejects_a_provider_outside_the_family() {
-        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let mut fixture = fixture(
             "FixtureOne",
             "row-a",
             json!({"providerRef": "Provider/elsewhere"}),
-            RecordingManager::new(Arc::clone(&log)),
+            Arc::new(RecordingManagerEndpoint::with_log(Arc::clone(&log))),
             Arc::new(RecordingRequeue::default()),
             log,
             SharedProviderEffectPhase::Pending,
@@ -1454,12 +1356,12 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_commits_the_child_set_then_runs_the_effect() {
-        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let mut fixture = fixture(
             "FixtureOne",
             "row-a",
             json!({"providerRef": "Provider/fixture-one"}),
-            RecordingManager::new(Arc::clone(&log)),
+            Arc::new(RecordingManagerEndpoint::with_log(Arc::clone(&log))),
             Arc::new(RecordingRequeue::default()),
             Arc::clone(&log),
             SharedProviderEffectPhase::Pending,
@@ -1479,7 +1381,7 @@ mod tests {
              pass published, which is what dependents read"
         );
 
-        let entries = fixture.log.lock().await.clone();
+        let entries = fixture.log.lock().clone(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         let child_at = entries
             .iter()
             .position(|entry| entry == "ensure:Volume/fixture-child")
@@ -1507,10 +1409,10 @@ mod tests {
 
     #[tokio::test]
     async fn reconcile_leaves_rows_of_a_child_less_component_alone() {
-        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let manager = RecordingManager::with_owned(
-            Arc::clone(&log),
-            vec![owned_row("dev", "Process", "declared-worker")],
+        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let manager = Arc::new(
+            RecordingManagerEndpoint::with_log(Arc::clone(&log))
+                .with_rows(vec![owned_row("dev", "Process", "declared-worker")]),
         );
         let mut fixture = fixture(
             "FixtureTwo",
@@ -1528,7 +1430,7 @@ mod tests {
             .reconcile(&mut fixture.ctx)
             .await
             .expect("reconcile");
-        let entries = log.lock().await.clone();
+        let entries = log.lock().clone(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         assert!(
             !entries.iter().any(|entry| entry.starts_with("delete:")),
             "the declared rows are not this driver's to retire: {entries:?}"
@@ -1548,13 +1450,12 @@ mod tests {
 
     #[tokio::test]
     async fn delete_runs_provider_teardown_then_retires_children() {
-        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let manager = RecordingManager::with_owned(
-            Arc::clone(&log),
-            vec![
+        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let manager = Arc::new(
+            RecordingManagerEndpoint::with_log(Arc::clone(&log)).with_rows(vec![
                 owned_row("dev", "Process", "stale-proxy"),
                 owned_row("dev", "Endpoint", "stale-endpoint"),
-            ],
+            ]),
         );
         let mut fixture = fixture(
             "FixtureOne",
@@ -1569,7 +1470,7 @@ mod tests {
         );
         let mut driver = driver(&fixture).await;
         driver.delete(&mut fixture.ctx).await.expect("teardown");
-        let entries = log.lock().await.clone();
+        let entries = log.lock().clone(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         let finalize_at = entries
             .iter()
             .position(|entry| entry == "finalize:one")
@@ -1594,12 +1495,12 @@ mod tests {
 
     #[tokio::test]
     async fn delete_is_retryable_while_the_provider_stage_is_pending() {
-        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let mut fixture = fixture(
             "FixtureTwo",
             "row-b",
             json!({"providerRef": "Provider/fixture-two"}),
-            RecordingManager::new(Arc::clone(&log)),
+            Arc::new(RecordingManagerEndpoint::with_log(Arc::clone(&log))),
             Arc::new(RecordingRequeue::default()),
             log,
             SharedProviderEffectPhase::Ready,
@@ -1626,8 +1527,8 @@ mod tests {
 
     #[tokio::test]
     async fn recover_adopts_the_committed_child_set() {
-        let log: Log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let manager = RecordingManager::new(Arc::clone(&log));
+        let log: Log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let manager = Arc::new(RecordingManagerEndpoint::with_log(Arc::clone(&log)));
         let mut fixture = fixture(
             "FixtureOne",
             "row-a",
@@ -1645,17 +1546,13 @@ mod tests {
             RecoveryOutcome::Missing
         );
 
-        manager
-            .owned
-            .lock()
-            .await
-            .push(owned_row("dev", "Volume", "fixture-child"));
+        manager.seed(owned_row("dev", "Volume", "fixture-child"));
         assert_eq!(
             driver.recover(&mut fixture.ctx).await.expect("recover"),
             RecoveryOutcome::Adopted
         );
         assert!(
-            !log.lock().await.iter().any(|entry| entry.starts_with("effect:")),
+            !log.lock().iter().any(|entry| entry.starts_with("effect:")), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             "recovery adoption runs no provider effect"
         );
     }

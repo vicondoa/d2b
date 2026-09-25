@@ -1494,18 +1494,15 @@ mod tests {
     use std::sync::Arc;
 
     use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
-    use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
-        WatchRegistration,
-    };
+    use d2b_provider_toolkit::testing::fakes::RecordingManagerEndpoint;
+    use d2b_resource_runtime::context::{RequeueId, RequeueScheduler, ResourceContext};
     use d2b_resource_runtime::driver::{
         ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass, ResourceError};
+    use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::resource::ResourceStatus;
-    use d2b_resource_runtime::spec_store::EnsureOutcome;
     use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
@@ -1527,235 +1524,6 @@ mod tests {
 
     // -- fakes ---------------------------------------------------------------
 
-    /// Recording manager over a scripted row/view set. `ensure_child` commits
-    /// (or keeps) the child row and its live view; the child's published
-    /// phase is the `children_ready` switch.
-    struct RecordingManager {
-        calls: Arc<parking_lot::Mutex<Vec<String>>>,
-        rows: parking_lot::Mutex<Vec<StoredDesiredResource>>,
-        views: parking_lot::Mutex<Vec<(ResourceKey, ResourceView)>>,
-        children_ready: std::sync::atomic::AtomicBool,
-        fail_reads: std::sync::atomic::AtomicBool,
-    }
-
-    impl RecordingManager {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                rows: parking_lot::Mutex::new(Vec::new()),
-                views: parking_lot::Mutex::new(Vec::new()),
-                children_ready: std::sync::atomic::AtomicBool::new(false),
-                fail_reads: std::sync::atomic::AtomicBool::new(false),
-            })
-        }
-
-        /// The shared order log: effect calls that were constructed over it
-        /// append to the same sequence.
-        fn log_handle(&self) -> Arc<parking_lot::Mutex<Vec<String>>> {
-            Arc::clone(&self.calls)
-        }
-
-        fn set_children_ready(&self, ready: bool) {
-            self.children_ready.store(ready, std::sync::atomic::Ordering::SeqCst);
-        }
-
-        /// Make every read answer `ManagerRpc` (the unanswerable plane).
-        fn set_fail_reads(&self, fail: bool) {
-            self.fail_reads.store(fail, std::sync::atomic::Ordering::SeqCst);
-        }
-
-        fn add(&self, row: StoredDesiredResource, status: ResourceStatus) {
-            let view = ResourceView {
-                key: row.key.clone(),
-                uid: row.uid,
-                generation: row.generation,
-                deleting: row.deleting,
-                provenance: row.provenance,
-                spec: row.spec.clone(),
-                metadata: row.metadata.clone(),
-                owner_key: None,
-                status: Some(status),
-                status_generation: Some(row.generation),
-                status_projection: None,
-            };
-            self.rows.lock().push(row);
-            self.views.lock().push((view.key.clone(), view));
-        }
-
-        fn drop_row(&self, key: &ResourceKey) {
-            self.rows.lock().retain(|row| row.key != *key);
-            self.views.lock().retain(|(view_key, _)| view_key != key);
-        }
-
-        fn call_order(&self) -> Vec<String> {
-            self.calls.lock().clone()
-        }
-
-        fn ensure_order(&self) -> Vec<String> {
-            self.calls
-                .lock()
-                .iter()
-                .filter(|call| call.starts_with("ensure:"))
-                .cloned()
-                .collect()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl ManagerEndpoint for RecordingManager {
-        async fn ensure_child(
-            &self,
-            parent: &ResourceKey,
-            child: ChildEnsure,
-        ) -> Result<EnsureOutcome, ResourceError> {
-            self.calls
-                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                .push(format!("ensure:{}/{}", child.type_name.as_str(), child.name));
-            let key = ResourceKey::new(
-                parent.zone.clone(),
-                child.type_name.as_str(),
-                child.name.as_str(),
-            );
-            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            if let Some(existing) = rows.iter().find(|row| row.key == key).cloned() {
-                if existing.spec == child.spec {
-                    return Ok(EnsureOutcome::Unchanged(existing));
-                }
-                rows.retain(|row| row.key != key);
-                let mut updated = existing;
-                updated.spec = child.spec.clone();
-                updated.metadata = child.metadata.clone();
-                updated.generation += 1;
-                rows.push(updated.clone());
-                drop(rows);
-                self.views.lock().retain(|(view_key, _)| view_key != &key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                self.views.lock().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                    key,
-                    ResourceView {
-                        key: updated.key.clone(),
-                        uid: updated.uid,
-                        generation: updated.generation,
-                        deleting: false,
-                        provenance: updated.provenance,
-                        spec: updated.spec.clone(),
-                        metadata: updated.metadata.clone(),
-                        owner_key: None,
-                        status: Some(if self.children_ready.load(std::sync::atomic::Ordering::SeqCst) {
-                            ResourceStatus::Ready
-                        } else {
-                            ResourceStatus::Pending
-                        }),
-                        status_generation: Some(updated.generation),
-                        status_projection: None,
-                    },
-                ));
-                return Ok(EnsureOutcome::Updated(updated));
-            }
-            let row = StoredDesiredResource {
-                key: key.clone(),
-                uid: CHILD_UID_BYTES,
-                generation: 1,
-                owner_uid: Some(GUEST_UID_BYTES),
-                provenance: ResourceProvenance::Resource,
-                deleting: false,
-                spec: child.spec,
-                metadata: child.metadata,
-                created_at: 0,
-            };
-            rows.push(row.clone());
-            drop(rows);
-            self.views.lock().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                key,
-                ResourceView {
-                    key: row.key.clone(),
-                    uid: row.uid,
-                    generation: row.generation,
-                    deleting: false,
-                    provenance: row.provenance,
-                    spec: row.spec.clone(),
-                    metadata: row.metadata.clone(),
-                    owner_key: None,
-                    status: Some(if self.children_ready.load(std::sync::atomic::Ordering::SeqCst) {
-                        ResourceStatus::Ready
-                    } else {
-                        ResourceStatus::Pending
-                    }),
-                    status_generation: Some(row.generation),
-                    status_projection: None,
-                },
-            ));
-            Ok(EnsureOutcome::Created(row))
-        }
-
-        async fn get(
-            &self,
-            key: &ResourceKey,
-        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push(format!("get:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
-            }
-            Ok(self
-                .rows
-                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                .iter()
-                .find(|row| row.key == *key)
-                .cloned())
-        }
-
-        async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-            self.calls.lock().push(format!("view:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
-            }
-            Ok(self
-                .views
-                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                .iter()
-                .find(|(view_key, _)| view_key == key)
-                .map(|(_, view)| view.clone()))
-        }
-
-        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.calls.lock().push(format!("delete:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            self.drop_row(key);
-            Ok(())
-        }
-
-        async fn list_owned(
-            &self,
-            owner_uid: [u8; 16],
-        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push("list-owned".to_owned());
-            if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
-            }
-            Ok(self
-                .rows
-                .lock()
-                .iter()
-                .filter(|row| row.owner_uid == Some(owner_uid))
-                .cloned()
-                .collect())
-        }
-
-        async fn register_watch(
-            &self,
-            _subscriber: &ResourceKey,
-            registration: WatchRegistration,
-        ) -> Result<WatchId, ResourceError> {
-            self.calls.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                "watch:{}/{}",
-                registration.target.type_name, registration.target.name
-            ));
-            Ok(WatchId(1))
-        }
-
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            self.calls.lock().push("cancel-watch".to_owned()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Ok(())
-        }
-    }
 
     struct RecordingRequeue {
         scheduled: parking_lot::Mutex<Vec<(ResourceKey, std::time::Duration)>>,
@@ -1832,7 +1600,7 @@ mod tests {
 
     fn context(
         target: StoredDesiredResource,
-        manager: Arc<RecordingManager>,
+        manager: Arc<RecordingManagerEndpoint>,
         requeue: Arc<RecordingRequeue>,
     ) -> ResourceContext {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1886,9 +1654,9 @@ mod tests {
         })
     }
 
-    fn qemu_fixture() -> (ResourceContext, Arc<ScriptedEffects>, Arc<RecordingManager>) {
+    fn qemu_fixture() -> (ResourceContext, Arc<ScriptedEffects>, Arc<RecordingManagerEndpoint>) {
         let effects = ScriptedEffects::new();
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         manager.add(
             provider_row("runtime-qemu-media", qemu_provider_spec()),
             ResourceStatus::Ready,
@@ -2009,7 +1777,7 @@ mod tests {
             controller_generation: ControllerGeneration::new(3).expect("generation"),
             facets: facets.facet_set(),
         });
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         manager.add(
             provider_row("runtime-azure-container-apps", aca_provider_spec()),
             ResourceStatus::Ready,
@@ -2082,7 +1850,7 @@ mod tests {
     #[tokio::test]
     async fn validate_admits_every_registered_provider() {
         for registration in GUEST_REGISTRATIONS {
-            let manager = RecordingManager::new();
+            let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
             let mut ctx = context(
                 guest_row(
                     "work-vm",
@@ -2099,7 +1867,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_refuses_an_unregistered_provider_as_terminal() {
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let mut ctx = context(
             guest_row(
                 "work-vm",
@@ -2180,7 +1948,7 @@ mod tests {
     async fn classified_provider_row_read_defers_absence_and_requires_terminal_evidence() {
         // Absent: the manager answers that it holds no provider row.
         let effects = ScriptedEffects::new();
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let mut ctx = context(
             guest_row("work-vm", qemu_guest_spec()),
             Arc::clone(&manager),
@@ -2256,7 +2024,7 @@ mod tests {
     async fn cloud_hypervisor_guests_commit_no_children_through_the_driver() {
         let effects = ScriptedEffects::new();
         effects.set_projection(Some(serde_json::json!({ "phase": "Ready" })));
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let mut ctx = context(
             guest_row(
                 "acceptance-guest",
@@ -2284,7 +2052,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_a_cloud_hypervisor_guest_with_a_live_vmm_child() {
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let mut ctx = context(
             guest_row(
                 "acceptance-guest",
@@ -2362,7 +2130,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_runs_the_provider_stage_before_retiring_the_children() {
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let effects = ScriptedEffects::with_shared_log(manager.log_handle());
         manager.add(
             provider_row("runtime-qemu-media", qemu_provider_spec()),
