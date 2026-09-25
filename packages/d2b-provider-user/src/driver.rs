@@ -506,7 +506,7 @@ mod tests {
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
             self.calls.lock().push("ensure-child"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected ensure_child".into() })
         }
 
         async fn get(
@@ -522,7 +522,7 @@ mod tests {
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
             self.calls.lock().push("view"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Err(ResourceError::ManagerRpc("unexpected view".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected view".into() })
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
@@ -532,7 +532,7 @@ mod tests {
                 owned.retain(|row| row.key != *key);
                 Ok(())
             } else {
-                Err(ResourceError::ManagerRpc("unexpected delete".into()))
+                Err(ResourceError::ManagerRejected { reason: "unexpected delete".into() })
             }
         }
 

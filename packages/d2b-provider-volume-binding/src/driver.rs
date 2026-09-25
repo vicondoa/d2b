@@ -1168,7 +1168,7 @@ mod tests {
             }
         }
 
-        /// Make `get` answer `ManagerRpc` (the unanswerable plane).
+        /// Make `get` answer `ManagerUnavailable` (the unanswerable plane).
         fn set_fail_reads(&self, fail: bool) {
             self.fail_reads.store(fail, std::sync::atomic::Ordering::SeqCst);
         }
@@ -1270,7 +1270,7 @@ mod tests {
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
             Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         }

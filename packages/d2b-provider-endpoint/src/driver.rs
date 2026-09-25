@@ -651,27 +651,27 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn get(
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn view(
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.deleted.lock().push(key.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             self.owned.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn list_owned(
@@ -686,7 +686,7 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {

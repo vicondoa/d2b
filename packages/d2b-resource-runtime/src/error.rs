@@ -769,10 +769,14 @@ pub enum ResourceError {
         type_name: String,
         message: String,
     },
-     /// A call routed to the manager actor failed: its channel closed, the
-     /// request was dropped, or the manager rejected it.
-     #[error("manager rpc: {0}")]
-     ManagerRpc(String),
+     /// The manager actor could not answer: its channel closed or the
+    /// request was dropped. Transport failure - retryable by construction.
+    #[error("manager unavailable: {0}")]
+    ManagerUnavailable(String),
+    /// The manager answered with a semantic refusal: the operation is
+    /// permanent for the row as stated.
+    #[error("manager rejected: {reason}")]
+    ManagerRejected { reason: String },
     /// A driver reported a structured failure (issue #508).
     #[error(transparent)]
     Driver(#[from] DriverFailure),

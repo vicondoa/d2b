@@ -1568,7 +1568,7 @@ mod tests {
             self.children_ready.store(ready, std::sync::atomic::Ordering::SeqCst);
         }
 
-        /// Make every read answer `ManagerRpc` (the unanswerable plane).
+        /// Make every read answer `ManagerUnavailable` (the unanswerable plane).
         fn set_fail_reads(&self, fail: bool) {
             self.fail_reads.store(fail, std::sync::atomic::Ordering::SeqCst);
         }
@@ -1702,7 +1702,7 @@ mod tests {
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
             self.calls.lock().push(format!("get:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
             Ok(self
                 .rows
@@ -1715,7 +1715,7 @@ mod tests {
         async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
             self.calls.lock().push(format!("view:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
             Ok(self
                 .views
@@ -1737,7 +1737,7 @@ mod tests {
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
             self.calls.lock().push("list-owned".to_owned());
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
             Ok(self
                 .rows

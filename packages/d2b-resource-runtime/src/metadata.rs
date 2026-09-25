@@ -305,7 +305,7 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected ensure_child".into() })
         }
 
         async fn get(
@@ -331,7 +331,7 @@ mod tests {
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
             self.calls.lock().await.push("list-owned");
             if self.fail_reads.load(Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
             Ok(self.owned.lock().await.clone())
         }

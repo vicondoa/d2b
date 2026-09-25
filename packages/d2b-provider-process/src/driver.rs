@@ -2330,32 +2330,32 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn get(
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn view(
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn delete(&self, _key: &ResourceKey) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn list_owned(
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn register_watch(
@@ -2363,14 +2363,14 @@ mod tests {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<d2b_resource_runtime::context::WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
         async fn cancel_watch(
             &self,
             _watch: d2b_resource_runtime::context::WatchId,
         ) -> Result<(), ResourceError> {
-            Err(ResourceError::ManagerRpc("dead".into()))
+            Err(ResourceError::ManagerUnavailable("dead".into()))
         }
     }
 
@@ -2416,7 +2416,7 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected ensure_child".into() })
         }
 
         async fn get(
@@ -2430,7 +2430,7 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected view".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected view".into() })
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
@@ -2451,9 +2451,9 @@ mod tests {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<d2b_resource_runtime::context::WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc(
-                "unexpected register_watch".into(),
-            ))
+            Err(ResourceError::ManagerRejected {
+                reason: "unexpected register_watch".into(),
+            })
         }
 
         async fn cancel_watch(
