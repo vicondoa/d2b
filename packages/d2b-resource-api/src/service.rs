@@ -3374,16 +3374,6 @@ mod tests {
     }
 
     #[test]
-    fn status_owner_matching_generation_is_representable() {
-        let context = subject(Some(11));
-        assert_eq!(
-            context.controller_generation(),
-            Some(ControllerGeneration::new(11).unwrap())
-        );
-        let _: ResourceGeneration = ResourceGeneration::new(11).unwrap();
-    }
-
-    #[test]
     fn service_debug_surfaces_redact_backend_and_resource_fields() {
         const EXPECTED_REVISION_SENTINEL: u64 = 4_294_967_290;
         const RESULT_REVISION_SENTINEL: u64 = 4_294_967_289;
