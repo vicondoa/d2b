@@ -1212,4 +1212,63 @@ mod tests {
             4
         );
     }
+
+    #[test]
+    fn entrypoint_name_validation_and_builder_double_set_guards_fail_closed() {
+        assert!(matches!(
+            ProviderEntrypoint::new(""),
+            Err(ProviderRuntimeError::InvalidName)
+        ));
+        assert!(matches!(
+            ProviderEntrypoint::new(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ),
+            Err(ProviderRuntimeError::InvalidName)
+        ));
+        assert!(matches!(
+            ProviderEntrypoint::new("Prövider/test"),
+            Err(ProviderRuntimeError::InvalidName)
+        ));
+        assert!(matches!(
+            ProviderEntrypoint::with_provider(
+                "Provider/test",
+                ResourceRef::parse("Volume/data").unwrap(),
+                "d2b.provider.v3",
+            ),
+            Err(ProviderRuntimeError::InvalidName)
+        ));
+
+        let base = || {
+            ProviderEntrypoint::with_provider(
+                "Provider/test",
+                ResourceRef::parse("Provider/test").unwrap(),
+                "d2b.provider.v3",
+            )
+            .unwrap()
+        };
+        assert!(matches!(
+            base().with_execution_target(ResourceRef::parse("Guest/dev-vm").unwrap())
+                .unwrap()
+                .with_execution_target(ResourceRef::parse("Guest/dev-vm").unwrap()),
+            Err(ProviderRuntimeError::InvalidName)
+        ));
+        assert!(matches!(
+            base().with_controller_process(ResourceRef::parse("Process/controller").unwrap())
+                .unwrap()
+                .with_controller_process(ResourceRef::parse("Process/controller").unwrap()),
+            Err(ProviderRuntimeError::InvalidName)
+        ));
+        assert!(matches!(
+            base().with_generations(
+                ResourceGeneration::new(1).unwrap(),
+                ControllerGeneration::new(1).unwrap(),
+            )
+            .unwrap()
+            .with_generations(
+                ResourceGeneration::new(2).unwrap(),
+                ControllerGeneration::new(2).unwrap(),
+            ),
+            Err(ProviderRuntimeError::InvalidName)
+        ));
+    }
 }

@@ -510,6 +510,8 @@ pub struct RecordingManagerEndpoint {
     watch_targets: Arc<Mutex<Vec<ResourceKey>>>,
     next_uid: Arc<AtomicU64>,
     fail_reads: Arc<AtomicBool>,
+    fail_ensures: Arc<AtomicBool>,
+    fail_deletes: Arc<AtomicBool>,
     children_ready: Arc<AtomicBool>,
 }
 
@@ -526,6 +528,8 @@ impl RecordingManagerEndpoint {
             watch_targets: Arc::new(Mutex::new(Vec::new())),
             next_uid: Arc::new(AtomicU64::new(1)),
             fail_reads: Arc::new(AtomicBool::new(false)),
+            fail_ensures: Arc::new(AtomicBool::new(false)),
+            fail_deletes: Arc::new(AtomicBool::new(false)),
             children_ready: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -650,6 +654,16 @@ impl RecordingManagerEndpoint {
         self.fail_reads.store(fail, Ordering::SeqCst);
     }
 
+    /// Make every child ensure answer `ManagerRpc` (the refusing plane).
+    pub fn set_fail_ensures(&self, fail: bool) {
+        self.fail_ensures.store(fail, Ordering::SeqCst);
+    }
+
+    /// Make every child delete answer `ManagerRpc` (the refusing plane).
+    pub fn set_fail_deletes(&self, fail: bool) {
+        self.fail_deletes.store(fail, Ordering::SeqCst);
+    }
+
     /// The phase ensured children publish: Ready when on, Pending when off.
     pub fn set_children_ready(&self, ready: bool) {
         self.children_ready.store(ready, Ordering::SeqCst);
@@ -716,6 +730,9 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
     ) -> Result<EnsureOutcome, ResourceError> {
         let id = format!("{}/{}", child.type_name.as_str(), child.name);
         self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        if self.fail_ensures.load(Ordering::SeqCst) {
+            return Err(ResourceError::ManagerRpc("scripted ensure failure".into()));
+        }
         let next = self.next_uid.fetch_add(1, Ordering::SeqCst);
         let mut uid = [0u8; 16];
         uid[..8].copy_from_slice(&next.to_be_bytes());
@@ -794,6 +811,10 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
 
     async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
         self.log.lock().push(format!("delete:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        if self.fail_deletes.load(Ordering::SeqCst) {
+
+            return Err(ResourceError::ManagerRpc("scripted delete failure".into()));
+        }
         self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         self.views.lock().retain(|(view_key, _)| view_key != key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         Ok(())
