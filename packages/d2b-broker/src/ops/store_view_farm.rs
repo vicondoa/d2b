@@ -65,8 +65,7 @@ const HELPER_BIN: &str = "/run/current-system/sw/bin/d2b-activation-helper";
 /// inodes. All other errors (collision / marker / genuine I/O) propagate
 /// unchanged. Returns the generation directory on success.
 ///
-/// Async form used by the async exec_reconcile and store_sync paths;the sync
-/// form was removed with its last sync caller (store_sync converted to async).
+/// Async counterpart used by the async exec_reconcile/store_sync callers.
 pub async fn build_farm_cross_mount_safe_async(
     farm_root: &Path,
     generation: u64,
@@ -84,6 +83,82 @@ pub async fn build_farm_cross_mount_safe_async(
 
 fn farm_build_argv(helper_bin: &str) -> Vec<String> {
     private_store_argv(helper_bin, "build-store-view-farm")
+}
+
+/// Spawn the store helper, write the JSON request to stdin, drain its
+/// output, and return the raw output for the caller's success handling.
+async fn run_store_helper(
+    argv: &[String],
+    payload: Vec<u8>,
+    farm_root: &Path,
+    verb_label: &str,
+) -> Result<std::process::Output, HardlinkFarmError> {
+    let mut child = tokio::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .env_remove("NOTIFY_SOCKET")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| HardlinkFarmError::Io {
+            path: argv[0].clone(),
+            detail: format!("spawn unshare for {verb_label}: {e}"),
+        })?;
+
+    // Write the request from a task and close stdin so the helper sees
+    // EOF; `wait_with_output` drains stdout/stderr concurrently, so no
+    // pipe-buffer deadlock can occur even when the request exceeds the
+    // stdin pipe capacity.
+
+    let mut stdin = child.stdin.take().ok_or_else(|| HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: format!("child stdin unavailable for {verb_label}"),
+    })?;
+    let writer = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        let _ = stdin.write_all(&payload).await;
+        // stdin dropped here -> EOF for the helper.
+
+    });
+
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| HardlinkFarmError::Io {
+            path: farm_root.display().to_string(),
+            detail: format!("await {verb_label}: {e}"),
+        })?;
+    let _ = writer.await;
+    Ok(output)
+}
+
+/// Convert a failed store-helper output into the typed farm error, or
+/// a generic Io error for spawn/protocol faults carrying stderr.
+fn store_helper_failure(
+    output: std::process::Output,
+    farm_root: &Path,
+    verb_label: &str,
+) -> HardlinkFarmError {
+    if let Some(line) = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        && let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line)
+    {
+        return typed;
+    }
+    HardlinkFarmError::Io {
+        path: farm_root.display().to_string(),
+        detail: format!(
+            "{verb_label} helper failed (exit {}): {}",
+            output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_owned()),
+            String::from_utf8_lossy(&output.stderr).trim(),
+        ),
+    }
 }
 
 /// Run the hardlink-farm build inside a private mount namespace where
@@ -112,40 +187,7 @@ async fn build_farm_via_namespace(
     })?;
 
     let argv = farm_build_argv(HELPER_BIN);
-    let mut child = tokio::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .env_remove("NOTIFY_SOCKET")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| HardlinkFarmError::Io {
-            path: argv[0].clone(),
-            detail: format!("spawn unshare for store-view farm build: {e}"),
-        })?;
-
-    // Write the request from a task and close stdin so the helper sees
-    // EOF; `wait_with_output` drains stdout/stderr concurrently, so no
-    // pipe-buffer deadlock can occur even when the request exceeds the
-    // stdin pipe capacity.
-    let mut stdin = child.stdin.take().ok_or_else(|| HardlinkFarmError::Io {
-        path: farm_root.display().to_string(),
-        detail: "child stdin unavailable for store-view farm build".to_owned(),
-    })?;
-    let writer = tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt;
-        let _ = stdin.write_all(&payload).await;
-        // stdin dropped here -> EOF for the helper.
-    });
-
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| HardlinkFarmError::Io {
-            path: farm_root.display().to_string(),
-            detail: format!("await store-view farm build: {e}"),
-        })?;
-    let _ = writer.await;
+    let output = run_store_helper(&argv, payload, farm_root, "store-view farm build").await?;
 
     let generation_dir = farm_root.join("generations").join(generation.to_string());
 
@@ -153,30 +195,7 @@ async fn build_farm_via_namespace(
         return Ok(generation_dir);
     }
 
-    // The helper emits the typed HardlinkFarmError as a single JSON
-    // line on stdout when build_farm itself failed; recover it so the
-    // collision / different-fs / marker mapping is preserved. Fall back
-    // to a generic Io error carrying stderr for spawn/protocol faults.
-    if let Some(line) = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        && let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line)
-    {
-        return Err(typed);
-    }
-    Err(HardlinkFarmError::Io {
-        path: farm_root.display().to_string(),
-        detail: format!(
-            "store-view farm build helper failed (exit {}): {}",
-            output
-                .status
-                .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "signal".to_owned()),
-            String::from_utf8_lossy(&output.stderr).trim(),
-        ),
-    })
+    Err(store_helper_failure(output, farm_root, "store-view farm build"))
 }
 
 /// Materialise one generation of the ADR 0027 **split** store view
@@ -190,8 +209,17 @@ async fn build_farm_via_namespace(
 /// `meta/current` or plant the live marker - the broker performs those
 /// in-process publish steps after a successful materialisation.
 ///
-/// Async form used by the async exec_reconcile and store_sync paths;the sync
-/// form was removed with its last sync caller (store_sync converted to async).
+/// Async counterpart used by the async exec_reconcile/store_sync callers.
+///
+/// # Errors
+///
+/// Returns farm errors with the same recovery semantics as
+/// [`build_farm_cross_mount_safe_async`]: a
+/// [`HardlinkFarmError::CrossMountLink`] from the in-process attempt
+/// triggers the namespace-isolated retry, a fatal
+/// [`HardlinkFarmError::DifferentFilesystem`] propagates unchanged, and
+/// all other errors (collision / marker / I/O) are surfaced as the typed
+/// [`HardlinkFarmError`].
 pub async fn build_store_view_cross_mount_safe_async(
     farm_root: &Path,
     generation_id: &str,
@@ -243,60 +271,13 @@ async fn build_store_view_via_namespace(
     })?;
 
     let argv = store_view_build_argv(HELPER_BIN);
-    let mut child = tokio::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .env_remove("NOTIFY_SOCKET")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| HardlinkFarmError::Io {
-            path: argv[0].clone(),
-            detail: format!("spawn unshare for store-view build: {e}"),
-        })?;
-
-    let mut stdin = child.stdin.take().ok_or_else(|| HardlinkFarmError::Io {
-        path: farm_root.display().to_string(),
-        detail: "child stdin unavailable for store-view build".to_owned(),
-    })?;
-    let writer = tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt;
-        let _ = stdin.write_all(&payload).await;
-    });
-
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| HardlinkFarmError::Io {
-            path: farm_root.display().to_string(),
-            detail: format!("await store-view build: {e}"),
-        })?;
-    let _ = writer.await;
+    let output = run_store_helper(&argv, payload, farm_root, "store-view build").await?;
 
     if output.status.success() {
         return parse_store_view_counts(&output.stdout, farm_root);
     }
 
-    if let Some(line) = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        && let Ok(typed) = serde_json::from_str::<HardlinkFarmError>(line)
-    {
-        return Err(typed);
-    }
-    Err(HardlinkFarmError::Io {
-        path: farm_root.display().to_string(),
-        detail: format!(
-            "store-view build helper failed (exit {}): {}",
-            output
-                .status
-                .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "signal".to_owned()),
-            String::from_utf8_lossy(&output.stderr).trim(),
-        ),
-    })
+    Err(store_helper_failure(output, farm_root, "store-view build"))
 }
 fn parse_store_view_counts(
     stdout: &[u8],
