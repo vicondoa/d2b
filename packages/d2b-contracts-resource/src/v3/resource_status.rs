@@ -647,7 +647,7 @@ impl ResourceStatus {
             resource,
             provider,
         };
-        if canonical_json_bytes(&value)
+        if serde_json::to_vec(&value)
             .map_err(|_| ResourceStatusError::InvalidStatusString)?
             .len()
             > MAX_STATUS_BYTES
