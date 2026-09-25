@@ -181,12 +181,17 @@ impl<M: UserScopeManager> HelperClient<M> {
                         .name("d2b-unsafe-local-operation".to_owned())
                         .spawn(move || {
                             let request_id = request.request_id;
-                            let operation_id = request.operation_id.clone();
+                            let operation = request.operation_id.clone();
                             let response = match runtime.launch(*request) {
                                 Ok(result) => UnsafeLocalHelperToDaemon::Operation(result),
                                 Err(error) => {
-                                    eprintln!("unsafe-local launch failed: {error:?}");
-                                    rejection(request_id, operation_id, failure_code(error))
+                                    tracing::warn!(
+                                        error = ?error,
+                                        request_id = request_id,
+                                        operation = %operation,
+                                        "unsafe-local launch failed",
+                                    );
+                                    rejection(request_id, operation, failure_code(error))
                                 }
                             };
                             if responses.send(response).is_ok() {
