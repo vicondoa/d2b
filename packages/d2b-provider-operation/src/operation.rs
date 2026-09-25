@@ -811,7 +811,7 @@ mod tests {
     #[test]
     fn over_limit_audit_facets_are_refused() {
         let fields = (0..=MAX_OPERATION_AUDIT_FIELDS)
-            .map(|i| BoundedText::parse(&format!("field-{i}")).unwrap())
+            .map(|i| BoundedText::parse(format!("field-{i}")).unwrap())
             .collect();
         let error = OperationAudit::new(
             true,
@@ -824,7 +824,7 @@ mod tests {
         assert_eq!(error, OperationContractError::TooManyAuditFields);
 
         let keys = (0..=MAX_OPERATION_REDACTION_KEYS)
-            .map(|i| BoundedText::parse(&format!("key-{i}")).unwrap())
+            .map(|i| BoundedText::parse(format!("key-{i}")).unwrap())
             .collect();
         let error = OperationAudit::new(
             true,
@@ -842,7 +842,7 @@ mod tests {
         let contracts: Vec<FdContract> = (0..=MAX_OPERATION_FDS)
             .map(|i| {
                 FdContract::new(
-                    BoundedToken::parse(&format!("fd-{i}")).unwrap(),
+                    BoundedToken::parse(format!("fd-{i}")).unwrap(),
                     FdKind::File,
                     true,
                 )
@@ -859,7 +859,7 @@ mod tests {
         let preopened = (0..=MAX_OPERATION_FDS)
             .map(|i| {
                 PreopenedFd::new(
-                    BoundedToken::parse(&format!("fd-{i}")).unwrap(),
+                    BoundedToken::parse(format!("fd-{i}")).unwrap(),
                     BoundedToken::parse("open").unwrap(),
                 )
             })
