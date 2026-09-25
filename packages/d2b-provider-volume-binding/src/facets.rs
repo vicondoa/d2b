@@ -49,6 +49,13 @@ pub trait SocketReadySource: Send + Sync + 'static {
 #[async_trait]
 pub trait SocketRemoveSource: Send + Sync + 'static {
     /// Remove the endpoint realization (socket).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the daemon adapter fails to remove the realized
+    /// socket endpoint. A socket that was never realized, or whose file is
+    /// already gone, answers `Ok(())` - the removal is idempotent under
+    /// retry.
     async fn remove(&self, socket: &SocketIdentity) -> Result<(), String>;
 }
 
@@ -62,5 +69,13 @@ pub trait SocketRemoveSource: Send + Sync + 'static {
 #[async_trait]
 pub trait GuestMountSource: Send + Sync + 'static {
     /// Whether the target Guest observes the row's mount.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the daemon adapter cannot complete the
+    /// observation (the target layer is unreachable). A target the
+    /// directory cannot reach, a loose row, and a source the Guest holds
+    /// no realization for all answer `Ok(false)` - the observation fails
+    /// closed.
     async fn guest_mount_ready(&self, key: &ResourceKey) -> Result<bool, String>;
 }
