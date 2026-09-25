@@ -910,7 +910,7 @@ impl ProductionProcessProviders {
         // readiness probe runs, so the table registration rides the backend's
         // launch-success notification - not the driver's post-launch path,
         // which runs after the probe.
-        minijail_backend.set_launched_observer(std::sync::Arc::new(PidfdTableLaunchedObserver {
+        minijail_backend.set_launched_observer(Box::new(PidfdTableLaunchedObserver {
             pidfd_table: pidfd_table.clone(),
         }));
         let systemd_owner = BrokerSystemdEffectOwner::with_socket_and_role(

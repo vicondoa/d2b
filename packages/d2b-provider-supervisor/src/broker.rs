@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
@@ -964,7 +964,7 @@ pub struct BrokerProcessBackend<R: BrokerLaunchResolver> {
     io_timeout: Duration,
     caller_role: BrokerCallerRole,
     observations: Mutex<BTreeMap<ProcessIdentityDigest, BrokerObservedProcess>>,
-    launched_observer: Option<Arc<dyn LaunchedObserver>>,
+    launched_observer: Option<Box<dyn LaunchedObserver>>,
 }
 
 impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
@@ -992,7 +992,7 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
 
     /// Wire the daemon's launched-runner observer (the pidfd-table
     /// registration) onto this backend.
-    pub fn set_launched_observer(&mut self, observer: Arc<dyn LaunchedObserver>) {
+    pub fn set_launched_observer(&mut self, observer: Box<dyn LaunchedObserver>) {
         self.launched_observer = Some(observer);
     }
 
