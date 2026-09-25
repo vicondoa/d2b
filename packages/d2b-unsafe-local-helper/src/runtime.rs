@@ -32,8 +32,8 @@ use std::time::{Duration, Instant};
 use uzers::os::unix::UserExt;
 use uzers::{get_current_uid, get_user_by_uid};
 
-pub const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(25);
-pub const SNAPSHOT_RECONCILE_TIMEOUT: Duration = Duration::from_secs(20);
+const SUPERVISOR_START_TIMEOUT: Duration = Duration::from_secs(25);
+const SNAPSHOT_RECONCILE_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_LEDGER_BYTES: u64 = 1024 * 1024;
 const PROXY_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const FIRST_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -569,7 +569,7 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SupervisorSpec {
+struct SupervisorSpec {
     program: PathBuf,
     args: Vec<String>,
     environment: BTreeMap<String, String>,
