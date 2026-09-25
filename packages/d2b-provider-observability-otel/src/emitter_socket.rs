@@ -143,10 +143,13 @@ impl EmitterSocket {
         self.prune_expired();
         self.validate_bound_identity()?;
         let mut drained = 0;
+        // One extra byte lets the receiver distinguish a full-size frame
+        // from a datagram truncated by the bounded receive buffer. The
+        // scratch buffer is reused across datagrams instead of being
+        // reallocated on every drain iteration.
+        let mut bytes = vec![0_u8; MAX_COMPACT_FRAME_BYTES + 1];
         while drained < MAX_DATAGRAMS_PER_DRAIN {
-            // One extra byte lets the receiver distinguish a full-size frame
-            // from a datagram truncated by the bounded receive buffer.
-            let mut bytes = vec![0_u8; MAX_COMPACT_FRAME_BYTES + 1];
+            bytes.resize(MAX_COMPACT_FRAME_BYTES + 1, 0);
             match self.socket.recv(&mut bytes) {
                 Ok(size) => {
                     if size > MAX_COMPACT_FRAME_BYTES {
