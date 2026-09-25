@@ -496,7 +496,9 @@ pub enum WorkloadLaunchResult {
 ///   daemon-state directory.
 /// - **Tests that don't care about audit output**: use
 ///   [`DaemonAuditLog::no_op`]; best-effort writes are discarded, while
-///   authoritative writes fail closed.
+///   authoritative writes fail closed. Tests that want to assert the
+///   no-op sink never touches the filesystem can point it at a directory
+///   with [`DaemonAuditLog::no_op_with_state_dir`] (test-support).
 ///
 /// One appender thread owns the hash chain and every file operation, and
 /// callers hand it records over the bounded queue in [`AUDIT_QUEUE_DEPTH`],
@@ -552,6 +554,9 @@ fn complete_reply(reply: oneshot::Sender<io::Result<()>>, result: io::Result<()>
 /// sink.
 struct AuditAppender {
     state_dir: Option<PathBuf>,
+    /// Capture-only seat: never reads or writes the filesystem even when a
+    /// `state_dir` is present. `no_op()` logs are the test-support shape.
+    noop: bool,
     #[cfg(any(test, feature = "test-support"))]
     captured: Arc<Mutex<Vec<String>>>,
     writer: AuditWriterState,
@@ -608,7 +613,8 @@ impl AuditAppender {
             serde_json::to_value(event)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
         );
-        if let Some(state_dir) = self.state_dir.as_deref()
+        if !self.noop
+            && let Some(state_dir) = self.state_dir.as_deref()
             && let Err(error) = initialize_chain_from_disk(state_dir, &mut self.writer)
         {
             self.writer.poisoned = true;
@@ -625,7 +631,9 @@ impl AuditAppender {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         line.push('\n');
 
-        if let Some(state_dir) = self.state_dir.as_deref() {
+        if !self.noop
+            && let Some(state_dir) = self.state_dir.as_deref()
+        {
             let today = utc_date_string();
             // First write of the process or a day-boundary crossing:
             // re-run retention pruning (best-effort) before appending.
@@ -854,12 +862,22 @@ impl DaemonAuditLog {
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         let state_dir = state_dir.into();
         let poisoned = prune_old_audit_logs(&state_dir, AUDIT_RETENTION_DAYS).is_err();
-        Self::with_appender(Some(state_dir), poisoned)
+        Self::with_appender(Some(state_dir), poisoned, false)
     }
 
     /// No-op constructor for tests that do not exercise audit output.
     pub fn no_op() -> Self {
-        Self::with_appender(None, false)
+        Self::with_appender(None, false, true)
+    }
+
+    /// No-op constructor that records a `state_dir` for the test to inspect.
+    ///
+    /// The sink stays capture-only: it never reads or writes the given
+    /// directory, so a test can point it at a temp dir and assert that no
+    /// audit file appears there.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn no_op_with_state_dir(state_dir: impl Into<PathBuf>) -> Self {
+        Self::with_appender(Some(state_dir.into()), false, true)
     }
 
     /// Start the single appender and return the handle over its queue.
@@ -867,11 +885,12 @@ impl DaemonAuditLog {
     /// A failed spawn is fail-closed: the sink stays `None`, so every later
     /// write reports the sink as unavailable instead of silently dropping the
     /// record.
-    fn with_appender(state_dir: Option<PathBuf>, poisoned: bool) -> Self {
+    fn with_appender(state_dir: Option<PathBuf>, poisoned: bool, noop: bool) -> Self {
         #[cfg(any(test, feature = "test-support"))]
         let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let appender = AuditAppender {
             state_dir: state_dir.clone(),
+            noop,
             #[cfg(any(test, feature = "test-support"))]
             captured: Arc::clone(&captured),
             writer: AuditWriterState {
@@ -2386,12 +2405,10 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn no_op_does_not_write_file() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        // Create a no-op log - but give it the temp dir to make sure the
-        // file is NOT created.
-        let log = DaemonAuditLog::no_op();
-        // Manually set state_dir to the temp dir via a helper.
-        // We can't do that here because state_dir is private; instead,
-        // create a no_op and verify its captured vec is empty.
+        // Point the no-op log at the temp dir: the no-op sink is
+        // capture-only and must never touch the filesystem, so the
+        // no-file-created claim is actually asserted against the dir.
+        let log = DaemonAuditLog::no_op_with_state_dir(dir.path());
         log.write_event(DaemonEvent::ApiReadyTimeout {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
@@ -2400,7 +2417,7 @@ mod tests {
         })
         .expect("no-op write should not error");
 
-        // No file should appear in temp dir (no state_dir set).
+        // No file should appear in the temp dir the log was pointed at.
         let count = std::fs::read_dir(dir.path())
             .expect("read temp dir")
             .count();
