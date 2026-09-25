@@ -183,7 +183,10 @@ impl ProviderRegistryPublication {
         generation: ResourceGeneration,
         mut entries: Vec<ProviderRegistryEntry>,
     ) -> Result<Self, ProviderRegistryError> {
-        if generation.get() == 0 || entries.len() > MAX_PROVIDER_REGISTRY_MAPPINGS {
+        if generation.get() == 0 {
+            return Err(ProviderRegistryError::ZeroGeneration);
+        }
+        if entries.len() > MAX_PROVIDER_REGISTRY_MAPPINGS {
             return Err(ProviderRegistryError::MappingBoundExceeded);
         }
         if entries
