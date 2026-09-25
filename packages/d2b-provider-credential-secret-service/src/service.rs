@@ -868,6 +868,9 @@ impl SecretServiceCredentialProvider {
         }
         if unresolved_leases || unresolved_operations {
             tracing::warn!(
+                provider = crate::PROVIDER_REF,
+                unresolved_leases,
+                unresolved_operations,
                 "secret-service session close left unresolved leases or ambiguous operations",
             );
             return Err(invariant());
