@@ -10,7 +10,7 @@
 #   ponytail:             vendored third_party/agent-skills/ponytail (no
 #                         upstream marketplace); untouched by this script.
 #
-# Usage: update-agent-skills.sh [--only <source>]
+# Usage: update-agent-skills.sh [--only <compound-engineering|caveman|rewrite-rs>]
 #   --only refreshes one upstream source and leaves the others as they are, so
 #   adding a source does not pick up unrelated upstream drift. Adapter link
 #   regeneration always runs over every vendored tree.
@@ -48,6 +48,7 @@ done
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+ran_source=
 
 refresh() {
   local repo=$1 name=$2 base=$3 layout=${4:-flat}
@@ -57,6 +58,7 @@ refresh() {
     echo "update-agent-skills: skipped $name (--only $only)"
     return 0
   fi
+  ran_source=$name
 
   local work="$tmp/$name"
   git clone --depth 1 --quiet "$repo" "$work"
@@ -138,6 +140,11 @@ refresh https://github.com/JuliusBrussee/caveman \
   caveman third_party/agent-skills/caveman
 refresh https://github.com/rewrite-rs/skills \
   rewrite-rs third_party/agent-skills/rewrite-rs nested "BSD-3-Clause; see LICENSE" porting
+
+if [[ -n $only && -z $ran_source ]]; then
+  echo "update-agent-skills: --only $only matched no refreshable source" >&2
+  exit 2
+fi
 
 # Regenerate the adapter links: one relative symlink per discovered skill
 # directory across every vendored tree, in both omp-native (.agents/skills)
