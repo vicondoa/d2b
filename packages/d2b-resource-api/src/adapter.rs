@@ -491,8 +491,8 @@ mod tests {
     use d2b_contracts_resource::v3::{
         CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
         RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceGeneration, ResourceName,
-        ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ZoneId, ZoneRevision,
-        canonical_digest,
+        ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, StateDigest, ZoneId,
+        ZoneRevision, canonical_digest,
     };
     use d2b_core_controller::controller_assignment::{ScopedCommitTransport, ScopedResourceScope};
     use d2b_contracts_resource::v3::operations::seal::MutationSealAcceptor;
@@ -880,7 +880,8 @@ mod tests {
             Ok(StoredSchema {
                 resource_type: ResourceTypeName::parse("Host").unwrap(),
                 canonical_json: b"inspect-schema-sentinel-112".to_vec(),
-                payload_digest: format!("sha256:{}", "1".repeat(64)),
+                payload_digest: SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64)))
+                    .unwrap(),
             })
         }
 
@@ -1232,7 +1233,7 @@ mod tests {
             generation: ResourceGeneration::new(1).unwrap(),
             revision: ZoneRevision::new(revision),
             canonical_json: format!("response-sentinel-{revision}").into_bytes(),
-            payload_digest: format!("sha256:{revision:064x}"),
+            payload_digest: StateDigest::parse(format!("sha256:{revision:064x}")).unwrap(),
         }
     }
 

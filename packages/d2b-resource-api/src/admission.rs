@@ -3,8 +3,8 @@
 use d2b_contracts_resource::redacted_debug;
 use d2b_contracts_resource::v3::execution_policy::redacted_debug_field_value;
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, RetryClass,
-    canonical_digest,
+    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceErrorKind,
+    RetryClass, StateDigest, canonical_digest,
 };
 use d2b_contracts_resource::v3::operations::seal::MutationSealIssuer;
 use d2b_contracts_resource::v3::{
@@ -347,7 +347,7 @@ impl StoreAdmissionBinding {
         #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let issuer_guard = self.seal_issuer.lock().map_err(|_| {
             StoreError::new(
-                StoreErrorKind::InternalIntegrityFailure,
+                StoreErrorKind::Resource(ResourceErrorKind::InternalIntegrityFailure),
                 None,
                 None,
                 RetryClass::Never,
@@ -356,7 +356,7 @@ impl StoreAdmissionBinding {
         })?;
         let issuer = issuer_guard.as_ref().ok_or_else(|| {
             StoreError::new(
-                StoreErrorKind::InternalIntegrityFailure,
+                StoreErrorKind::Resource(ResourceErrorKind::InternalIntegrityFailure),
                 None,
                 None,
                 RetryClass::Never,
@@ -383,7 +383,7 @@ impl StoreAdmissionBinding {
 
 fn authority_mismatch() -> StoreError {
     StoreError::new(
-        StoreErrorKind::InternalIntegrityFailure,
+        StoreErrorKind::Resource(ResourceErrorKind::InternalIntegrityFailure),
         None,
         None,
         RetryClass::Never,
@@ -393,7 +393,7 @@ fn authority_mismatch() -> StoreError {
 
 fn store_identity_mismatch() -> StoreError {
     StoreError::new(
-        StoreErrorKind::InternalIntegrityFailure,
+        StoreErrorKind::Resource(ResourceErrorKind::InternalIntegrityFailure),
         None,
         None,
         RetryClass::Never,
@@ -425,7 +425,11 @@ fn prepare_mutation(mut mutation: StoreMutation) -> Result<PreparedStoreMutation
                 let canonical = envelope
                     .canonical_bytes()
                     .map_err(|_| preparation_error("resource-envelope-invalid"))?;
-                let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+                let digest = StateDigest::parse(canonical_digest(
+                    RESOURCE_ENVELOPE_DOMAIN_TAG,
+                    &canonical,
+                ))
+                .expect("a canonical digest is a valid state digest");
                 let uid = envelope.metadata().uid().clone();
                 mutation.canonical_resource = Some(canonical);
                 (Some(uid), Some(digest))
@@ -443,7 +447,7 @@ fn prepare_mutation(mut mutation: StoreMutation) -> Result<PreparedStoreMutation
 fn validate_create(
     source: &[u8],
     mutation: &StoreMutation,
-) -> Result<(Vec<u8>, String), StoreError> {
+) -> Result<(Vec<u8>, StateDigest), StoreError> {
     let mut value = CanonicalJsonValue::parse(source)
         .map_err(|_| preparation_error("create-resource-body-invalid"))?;
     let canonical = value.to_canonical_bytes();
@@ -463,7 +467,8 @@ fn validate_create(
     let envelope = ResourceEnvelope::from_json(&value.to_canonical_bytes())
         .map_err(|_| preparation_error("create-resource-body-invalid"))?;
     validate_envelope_identity(&envelope, mutation)?;
-    let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+    let digest = StateDigest::parse(canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical))
+        .expect("a canonical digest is a valid state digest");
     Ok((canonical, digest))
 }
 
@@ -486,7 +491,7 @@ fn validate_envelope_identity(
 
 fn preparation_error(reason_code: &'static str) -> StoreError {
     StoreError::new(
-        StoreErrorKind::ResourceSchemaInvalid,
+        StoreErrorKind::Resource(ResourceErrorKind::ResourceSchemaInvalid),
         None,
         None,
         RetryClass::Never,
@@ -617,7 +622,10 @@ mod tests {
             .verify(admitted)
             .err()
             .expect("rejected admission");
-        assert_eq!(error.kind(), StoreErrorKind::ResourceSchemaInvalid);
+        assert_eq!(
+            error.kind(),
+            StoreErrorKind::Resource(ResourceErrorKind::ResourceSchemaInvalid)
+        );
         assert_eq!(error.reason_code(), "create-resource-uid-present");
     }
 
@@ -634,7 +642,10 @@ mod tests {
             .verify(admitted)
             .err()
             .expect("rejected admission");
-        assert_eq!(error.kind(), StoreErrorKind::InternalIntegrityFailure);
+        assert_eq!(
+            error.kind(),
+            StoreErrorKind::Resource(ResourceErrorKind::InternalIntegrityFailure)
+        );
         assert_eq!(error.reason_code(), "admission-authority-mismatch");
     }
 
@@ -662,7 +673,10 @@ mod tests {
             .verify(admitted)
             .err()
             .expect("rejected admission");
-        assert_eq!(error.kind(), StoreErrorKind::InternalIntegrityFailure);
+        assert_eq!(
+            error.kind(),
+            StoreErrorKind::Resource(ResourceErrorKind::InternalIntegrityFailure)
+        );
         assert_eq!(error.reason_code(), "admission-store-identity-mismatch");
     }
 

@@ -49,8 +49,8 @@ use std::sync::Arc;
 
 use d2b_contracts_resource::redacted_debug;
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, FinalizerId, ResourceEnvelope, ResourceGeneration, ResourceRef,
-    ResourceUid, RetryClass, ZoneId, ZoneRevision, canonical_digest,
+    CanonicalJsonValue, FinalizerId, ResourceEnvelope, ResourceErrorKind, ResourceGeneration,
+    ResourceRef, ResourceUid, RetryClass, StateDigest, ZoneId, ZoneRevision, canonical_digest,
     RESOURCE_ENVELOPE_DOMAIN_TAG,
 };
 use d2b_resource_runtime::manager::{
@@ -120,12 +120,17 @@ fn error(
 }
 
 fn not_found() -> StoreError {
-    error(StoreErrorKind::ResourceNotFound, None, RetryClass::Never, "resource-not-found")
+    error(
+        StoreErrorKind::Resource(ResourceErrorKind::ResourceNotFound),
+        None,
+        RetryClass::Never,
+        "resource-not-found",
+    )
 }
 
 fn conflict(current_generation: u64, reason: &'static str) -> StoreError {
     error(
-        StoreErrorKind::ResourceConflict,
+        StoreErrorKind::Resource(ResourceErrorKind::ResourceConflict),
         Some(current_generation),
         RetryClass::Reauthorize,
         reason,
@@ -134,7 +139,7 @@ fn conflict(current_generation: u64, reason: &'static str) -> StoreError {
 
 fn already_exists(current_generation: u64) -> StoreError {
     error(
-        StoreErrorKind::ResourceAlreadyExists,
+        StoreErrorKind::Resource(ResourceErrorKind::ResourceAlreadyExists),
         Some(current_generation),
         RetryClass::Reauthorize,
         "resource-already-exists",
@@ -145,7 +150,7 @@ fn already_exists(current_generation: u64) -> StoreError {
 /// only in memory at the authoritative actor and on the actual target.
 fn status_write_rejected() -> StoreError {
     error(
-        StoreErrorKind::ResourceStatusOwnerMismatch,
+        StoreErrorKind::Resource(ResourceErrorKind::ResourceStatusOwnerMismatch),
         None,
         RetryClass::Never,
         "resource-status-owner-mismatch",
@@ -154,7 +159,7 @@ fn status_write_rejected() -> StoreError {
 
 fn envelope_invalid() -> StoreError {
     error(
-        StoreErrorKind::ResourceSchemaInvalid,
+        StoreErrorKind::Resource(ResourceErrorKind::ResourceSchemaInvalid),
         None,
         RetryClass::Never,
         "resource-envelope-invalid",
@@ -166,7 +171,7 @@ fn map_manager_error(failure: ResourceError) -> StoreError {
     match failure {
         ResourceError::DeletingConflict { .. } => {
             error(
-                StoreErrorKind::ResourceConflict,
+                StoreErrorKind::Resource(ResourceErrorKind::ResourceConflict),
                 None,
                 RetryClass::Reauthorize,
                 "resource-deleting",
@@ -176,7 +181,7 @@ fn map_manager_error(failure: ResourceError) -> StoreError {
             // The spec row stays durable (F1); the resource recovers on the
             // next Ensure or manager restart.
             error(
-                StoreErrorKind::ResourceProviderUnavailable,
+                StoreErrorKind::Resource(ResourceErrorKind::ResourceProviderUnavailable),
                 None,
                 RetryClass::AfterDelay,
                 "resource-provider-unavailable",
@@ -184,7 +189,7 @@ fn map_manager_error(failure: ResourceError) -> StoreError {
         }
         ResourceError::AdmissionDenied { .. } => {
             error(
-                StoreErrorKind::AuthorizationDenied,
+                StoreErrorKind::Resource(ResourceErrorKind::AuthorizationDenied),
                 None,
                 RetryClass::Reauthorize,
                 "admission-denied",
@@ -193,7 +198,7 @@ fn map_manager_error(failure: ResourceError) -> StoreError {
         other => {
             tracing::warn!(failure = %other, "manager-backed store call failed");
             error(
-                StoreErrorKind::ResourcePlaneUnavailable,
+                StoreErrorKind::Resource(ResourceErrorKind::ResourcePlaneUnavailable),
                 None,
                 RetryClass::AfterDelay,
                 "manager-unavailable",
@@ -476,7 +481,12 @@ fn hex_decode(value: &str) -> Option<Vec<u8>> {
 }
 
 fn list_cursor_error(reason: &'static str) -> StoreError {
-    error(StoreErrorKind::ResourceSchemaInvalid, None, RetryClass::Never, reason)
+    error(
+        StoreErrorKind::Resource(ResourceErrorKind::ResourceSchemaInvalid),
+        None,
+        RetryClass::Never,
+        reason,
+    )
 }
 
 /// Encode the continuation cursor: `v1.<revision>.<selector>.<hex of the
@@ -590,8 +600,22 @@ fn stored_of(
     // recomputed only when the spec is a complete resource envelope.
     let payload_digest = CanonicalJsonValue::parse(spec)
         .ok()
-        .map(|canonical| canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical.to_canonical_bytes()))
-        .unwrap_or_default();
+        .map(|canonical| {
+            StateDigest::parse(canonical_digest(
+                RESOURCE_ENVELOPE_DOMAIN_TAG,
+                &canonical.to_canonical_bytes(),
+            ))
+            .expect("a canonical digest is a valid state digest")
+        })
+        .unwrap_or_else(|| {
+            // A spec that is not a complete envelope carries no digest; the
+            // all-zero marker matches no real envelope digest, so strict
+            // readers keep refusing the row until it is re-sealed - the same
+            // behavior the former empty string had, without letting a
+            // non-digest string cross the typed boundary.
+            StateDigest::parse(format!("sha256:{}", "0".repeat(64)))
+                .expect("a zero digest is a valid state digest")
+        });
     StoredResource {
         resource_ref: ResourceRef::parse(&format!("{type}/{name}", type = type_name, name = name))
             .expect("manager keys carry validated type and name components"),
@@ -858,7 +882,9 @@ fn reseal_envelope(stored: &mut StoredResource) -> Result<(), StoreError> {
     let envelope =
         ResourceEnvelope::from_json(&stored.canonical_json).map_err(|_| envelope_invalid())?;
     stored.canonical_json = envelope.canonical_bytes().map_err(|_| envelope_invalid())?;
-    stored.payload_digest = envelope.digest().map_err(|_| envelope_invalid())?;
+    let digest = envelope.digest().map_err(|_| envelope_invalid())?;
+    stored.payload_digest =
+        StateDigest::parse(digest).map_err(|_| envelope_invalid())?;
     Ok(())
 }
 
@@ -997,7 +1023,7 @@ impl ManagerBackend {
                     .map_err(map_manager_error)?;
                 if handle.uid != manager_uid(&key) {
                     return Err(error(
-                        StoreErrorKind::InternalIntegrityFailure,
+                        StoreErrorKind::Resource(ResourceErrorKind::InternalIntegrityFailure),
                         None,
                         RetryClass::Never,
                         "row-identity-drift",
@@ -1054,7 +1080,7 @@ impl ManagerBackend {
                     .map_err(map_manager_error)?;
                 if handle.uid != manager_uid(&key) {
                     return Err(error(
-                        StoreErrorKind::InternalIntegrityFailure,
+                        StoreErrorKind::Resource(ResourceErrorKind::InternalIntegrityFailure),
                         None,
                         RetryClass::Never,
                         "row-identity-drift",
@@ -1203,7 +1229,7 @@ impl ResourceStoreBackend for ManagerBackend {
         // the manager backend and pump it into the opened component stream)
         // is the composition's change, not this backend's.
         Err(error(
-            StoreErrorKind::UnsupportedCapability,
+            StoreErrorKind::Resource(ResourceErrorKind::UnsupportedCapability),
             None,
             RetryClass::Never,
             "watch-not-wired",
@@ -1243,7 +1269,7 @@ impl ResourceStoreBackend for ManagerBackend {
         // contracts. Nothing on this plane can answer a schema read, so the
         // refusal is typed and terminal (Phase A scope, KTD4).
         Err(error(
-            StoreErrorKind::UnsupportedCapability,
+            StoreErrorKind::Resource(ResourceErrorKind::UnsupportedCapability),
             None,
             RetryClass::Never,
             "schema-catalog-not-wired",
