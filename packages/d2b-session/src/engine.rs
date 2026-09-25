@@ -150,23 +150,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         credentials: HandshakeCredentials,
         now: Instant,
     ) -> Result<Self> {
-        Self::establish_initiator_with_generation_discovery_and_metrics(
-            transport,
-            identity,
-            credentials,
-            now,
-            Arc::new(NoopMetrics),
-        )
-        .await
-    }
-
-    pub async fn establish_initiator_with_generation_discovery_and_metrics(
-        transport: T,
-        identity: EndpointPolicyIdentity,
-        credentials: HandshakeCredentials,
-        now: Instant,
-        metrics: Arc<dyn MetricsSink>,
-    ) -> Result<Self> {
+        let metrics = Arc::new(NoopMetrics);
         let descriptor = transport.descriptor();
         let metric_identity = identity.clone();
         let timeout = Duration::from_millis(u64::from(identity.limits.handshake_deadline_ms));
@@ -240,7 +224,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         Self::establish_initiator_inner(transport, policy, credentials, now).await
     }
 
-    pub async fn establish_initiator(
+pub async fn establish_initiator(
         transport: T,
         policy: EndpointPolicy,
         credentials: HandshakeCredentials,
@@ -336,14 +320,47 @@ impl<T: OwnedTransport> SessionEngine<T> {
         credentials: HandshakeCredentials,
         now: Instant,
     ) -> Result<Self> {
-        Self::establish_responder_with_metrics(
-            transport,
-            policy,
-            credentials,
-            now,
-            Arc::new(NoopMetrics),
+        let metrics = Arc::new(NoopMetrics);
+        let descriptor = transport.descriptor();
+        let metric_policy = policy.clone();
+        let timeout = Duration::from_millis(u64::from(policy.limits.handshake_deadline_ms));
+        let result = match tokio::time::timeout(
+            timeout,
+            Self::establish_responder_inner(transport, policy, credentials, now),
         )
         .await
+        {
+            Ok(result) => {
+                if let Err(error) = &result {
+                    tracing::warn!(
+                        error = %error,
+                        purpose = metric_policy.purpose.as_str(),
+                        service = metric_policy.service.as_str(),
+                        timeout_ms = timeout.as_millis() as u64,
+                        "session handshake establishment failed (responder)"
+                    );
+                }
+                result
+            }
+            Err(_) => {
+                tracing::warn!(
+                    purpose = metric_policy.purpose.as_str(),
+                    service = metric_policy.service.as_str(),
+                    timeout_ms = timeout.as_millis() as u64,
+                    "session handshake timed out (responder)"
+                );
+                Err(SessionError::new(SessionErrorCode::HandshakeTimeout))
+            }
+        };
+        record_establishment(
+            metrics.as_ref(),
+            descriptor,
+            metric_policy.purpose,
+            metric_policy.service,
+            metric_policy.noise_profile,
+            &result,
+        );
+        result.map(|engine| engine.with_metrics(metrics))
     }
 
     /// Establish a responder while accepting a strictly newer reconnect
@@ -356,6 +373,29 @@ impl<T: OwnedTransport> SessionEngine<T> {
         credentials: HandshakeCredentials,
         minimum_generation: u64,
         now: Instant,
+    ) -> Result<Self> {
+        Self::establish_responder_with_generation_floor_and_metrics(
+            transport,
+            policy,
+            credentials,
+            minimum_generation,
+            now,
+            Arc::new(NoopMetrics),
+        )
+        .await
+    }
+
+    /// Establish a responder with a metrics sink while accepting a strictly
+    /// newer reconnect generation from the authenticated offer. All policy
+    /// fields remain exact; only `reconnect_generation` may advance beyond
+    /// the supplied floor.
+    pub async fn establish_responder_with_generation_floor_and_metrics(
+        transport: T,
+        policy: EndpointPolicy,
+        credentials: HandshakeCredentials,
+        minimum_generation: u64,
+        now: Instant,
+        metrics: Arc<dyn MetricsSink>,
     ) -> Result<Self> {
         if minimum_generation == 0 {
             return Err(SessionError::new(SessionErrorCode::GenerationMismatch));
@@ -395,55 +435,6 @@ impl<T: OwnedTransport> SessionEngine<T> {
                     minimum_generation = minimum_generation,
                     timeout_ms = timeout.as_millis() as u64,
                     "session handshake timed out (responder generation floor)"
-                );
-                Err(SessionError::new(SessionErrorCode::HandshakeTimeout))
-            }
-        };
-        record_establishment(
-            Arc::new(NoopMetrics).as_ref(),
-            descriptor,
-            metric_policy.purpose,
-            metric_policy.service,
-            metric_policy.noise_profile,
-            &result,
-        );
-        result
-    }
-
-    pub async fn establish_responder_with_metrics(
-        transport: T,
-        policy: EndpointPolicy,
-        credentials: HandshakeCredentials,
-        now: Instant,
-        metrics: Arc<dyn MetricsSink>,
-    ) -> Result<Self> {
-        let descriptor = transport.descriptor();
-        let metric_policy = policy.clone();
-        let timeout = Duration::from_millis(u64::from(policy.limits.handshake_deadline_ms));
-        let result = match tokio::time::timeout(
-            timeout,
-            Self::establish_responder_inner(transport, policy, credentials, now),
-        )
-        .await
-        {
-            Ok(result) => {
-                if let Err(error) = &result {
-                    tracing::warn!(
-                        error = %error,
-                        purpose = metric_policy.purpose.as_str(),
-                        service = metric_policy.service.as_str(),
-                        timeout_ms = timeout.as_millis() as u64,
-                        "session handshake establishment failed (responder)"
-                    );
-                }
-                result
-            }
-            Err(_) => {
-                tracing::warn!(
-                    purpose = metric_policy.purpose.as_str(),
-                    service = metric_policy.service.as_str(),
-                    timeout_ms = timeout.as_millis() as u64,
-                    "session handshake timed out (responder)"
                 );
                 Err(SessionError::new(SessionErrorCode::HandshakeTimeout))
             }
