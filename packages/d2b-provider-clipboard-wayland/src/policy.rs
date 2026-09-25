@@ -9,8 +9,17 @@ pub const ALLOWED_MIME_TYPES: &[&str] = &[
 ];
 
 /// MIME hints that suppress capture before any attachment is read.
+///
+/// Canonical list: the host clipd path re-exports it, and the guest history
+/// path checks it, so both sides suppress the same hints.
 pub const SECRET_HINT_MIME_TYPES: &[&str] = &[
     "x-kde-passwordmanagerhint",
+    "application/x-kde-passwordmanagerhint",
+    "x-gnome-passwordmanagerhint",
+    "application/x-gnome-passwordmanagerhint",
+    "x-keepassxc-secret",
+    "application/x-keepassxc-secret",
+    "application/x-secret-service",
     "application/x-password",
     "x-secret-content",
 ];
@@ -66,6 +75,11 @@ impl Default for Policy {
 
 impl Policy {
     /// Validate and construct a custom policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClipboardPolicyError::InvalidBounds`] when any numeric
+    /// bound falls outside its admissible range.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         allow_host_capture: bool,
@@ -203,8 +217,16 @@ impl Policy {
 }
 
 /// Normalize a MIME token without accepting parameters beyond the allowlist.
+///
+/// Whitespace around the `;` parameter separator is collapsed so that
+/// `Text/Plain ; Charset=UTF-8` normalizes to the allowlisted form.
 pub fn normalize_mime(mime: &str) -> String {
-    mime.trim().to_ascii_lowercase()
+    mime.trim()
+        .split(';')
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(";")
+        .to_ascii_lowercase()
 }
 
 #[cfg(test)]
