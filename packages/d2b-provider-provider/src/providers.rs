@@ -518,4 +518,32 @@ mod tests {
         assert_eq!(plan.phase(), ProviderPhase::Ready);
         assert!(plan.actions().is_empty());
     }
+
+    #[test]
+    fn plan_observed_projects_degraded_when_optional_components_degrade() {
+        let provider_ref = ResourceRef::parse("Provider/runtime").expect("fixture reference");
+        let observation = ProviderObservation {
+            package_present: true,
+            config_valid: true,
+            graph_valid: true,
+            conformance_valid: true,
+            required_dependencies_ready: true,
+            required_components_ready: true,
+            optional_components_degraded: true,
+            components_drained: true,
+        };
+        for intent in [ProviderIntent::Enable, ProviderIntent::Update] {
+            let plan = ProviderHandler::plan_observed(&provider_ref, intent, observation)
+                .expect("a ready observation plans");
+            assert_eq!(
+                plan.phase(),
+                ProviderPhase::Degraded,
+                "{intent:?} with a degraded optional component must project Degraded"
+            );
+            assert!(
+                plan.publish_exports(),
+                "{intent:?} with a degraded optional component must keep exports published"
+            );
+        }
+    }
 }
