@@ -19,11 +19,12 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub mod agent;
-pub mod config;
-pub mod link;
-pub mod uhid;
+mod agent;
+mod config;
+mod link;
+mod uhid;
 
 pub use agent::{HidDevice, SecurityKeyFrontend};
 pub use config::{Config, PlacementConfig};
 pub use link::VsockAllocatorLink;
+pub use uhid::{UhidDevice, UhidEvent};
