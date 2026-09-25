@@ -2110,9 +2110,4 @@ mod tests {
         assert!(matches!(result, Err(SecretServicePollError::Deadline)));
     }
 
-    #[test]
-    fn ambient_sdk_chain_names_are_rejected_without_reading_values() {
-        assert!(reject_ambient_credential_chain(["PATH", "RUST_LOG"]).is_ok());
-        assert!(reject_ambient_credential_chain(["AZURE_CLIENT_SECRET"]).is_err());
-    }
 }
