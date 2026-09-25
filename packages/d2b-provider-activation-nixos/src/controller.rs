@@ -2,7 +2,7 @@
 
 use d2b_contracts_resource::v3::{
     ActivationMode, ActivationOutcomeCode, ActivationRunnerInput, ArtifactId, EnvironmentClass,
-    ExecutionDomain, NixosGenerationSpec, ResourceName, ResourcePhase, ResourceRef,
+    ExecutionDomain, IdentityError, NixosGenerationSpec, ResourceName, ResourcePhase, ResourceRef,
     process::{EphemeralProcessSpec, ExecutionSpec, NamespaceClass, ProcessClass, SandboxSpec},
 };
 use ring::signature;
@@ -104,23 +104,28 @@ pub struct GenerationObservation {
 }
 
 impl GenerationObservation {
-    /// Construct a bounded observation.
-    pub fn new(name: impl Into<String>, phase: GenerationPhase) -> Self {
+    /// Construct a bounded observation from a generation row name.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IdentityError` when `name` is empty, contains '/', or
+    /// exceeds the `ResourceName` bound (63-byte lowercase label).
+    pub fn new(name: impl Into<String>, phase: GenerationPhase) -> Result<Self, IdentityError> {
         let name = name.into();
         let ordinal = name
             .rsplit('-')
             .next()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(0);
-        Self::terminal(name, phase, ordinal)
+        Ok(Self::terminal(ResourceName::parse(name)?, phase, ordinal))
     }
 
     /// Construct a bounded terminal observation.
-    pub fn terminal(name: impl Into<String>, phase: GenerationPhase, ordinal: u64) -> Self {
-        let name = name.into();
-        assert!(!name.is_empty() && !name.contains('/') && name.len() <= 128);
+    ///
+    /// Never panics: `name` is already validated by `ResourceName`.
+    pub fn terminal(name: ResourceName, phase: GenerationPhase, ordinal: u64) -> Self {
         Self {
-            name,
+            name: name.to_canonical_string(),
             phase,
             ordinal,
         }
