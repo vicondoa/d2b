@@ -31,6 +31,11 @@ struct JournalEntry {
     coordinator: HandoffCoordinator,
 }
 
+/// A handoff apply/replay failure: journal replays either carry the typed
+/// validation error (`Invalid` / `Io`) or refuse on a journal/helper
+/// mismatch or helper unavailability; artifact-validation failures keep
+/// their own variants so callers can distinguish helper faults from
+/// validation-output faults.
 #[derive(Debug)]
 pub enum HandoffOperationError {
     Invalid(HandoffError),
