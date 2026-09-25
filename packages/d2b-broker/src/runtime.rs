@@ -2413,14 +2413,17 @@ impl DispatchAuditContext {
         }
         #[cfg(not(feature = "layer1-bootstrap"))]
         {
-            let join = request
-                .authoritative_audit_join()
-                .map(|(zone_id, operation_identity)| AuditJoinContext {
+            let join = match request.authoritative_audit_join() {
+                Some((zone_id, operation_identity)) => Some(AuditJoinContext {
                     zone_id: CanonicalAuditDigest::parse(zone_id)
-                        .expect("authoritative zone digest"),
+                        .map_err(|_| BrokerError::Protocol("audit zone identity invalid".to_owned()))?,
                     operation_identity: CanonicalAuditDigest::parse(operation_identity)
-                        .expect("authoritative operation digest"),
-                });
+                        .map_err(|_| {
+                            BrokerError::Protocol("audit operation identity invalid".to_owned())
+                        })?,
+                }),
+                None => None,
+            };
             Self::from_request_with_join(request, peer_pid, caller_role, join.as_ref())
         }
     }
@@ -6045,11 +6048,6 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
         .map(owned_fd_from_raw)
         .map_err(|err| BrokerError::Protocol(format!("dup pidfd for {runner_id}: {err}")))?;
     runner_pidfds().insert(runner_id, duplicated)
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn remove_runner_registration(runner_id: &str) {
-    runner_pidfds().remove(runner_id);
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -11792,12 +11790,29 @@ async fn remove_and_notify_async(
     removed
 }
 
-/// Kill and synchronously reap a child when a post-spawn commit step fails.
+/// Bound on the spawn-rollback reap: `SIGKILL` is asynchronous (a child can
+/// sit in uninterruptible sleep), so [`cleanup_spawned_runner_after_failure`]
+/// polls `waitid` with `WNOHANG` under this deadline instead of parking the
+/// executor worker on a blocking wait for as long as the child takes to die.
+#[cfg(not(feature = "layer1-bootstrap"))]
+const SPAWN_ROLLBACK_REAP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+/// Poll interval for the spawn-rollback reap.
+#[cfg(not(feature = "layer1-bootstrap"))]
+const SPAWN_ROLLBACK_REAP_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Kill and asynchronously reap a child when a post-spawn commit step fails.
 /// The broker must not return an error while leaving a live process or stale
 /// runner identity behind: the caller will retry the lifecycle operation and
 /// the next attempt must be able to reserve the same runner id.
+///
+/// The reap is a bounded `WNOHANG` poll (the same non-blocking probe every
+/// sibling reap path in this file uses) rather than a blocking `waitid`. On
+/// deadline exhaustion the pidfd entry is left in place: the SIGCHLD reaper
+/// owns the zombie (it is signal-driven and reaps on death), the next spawn
+/// reservation evicts the stale entry once the process is gone, and while
+/// the child is still alive the entry keeps refusing a duplicate spawn.
 #[cfg(not(feature = "layer1-bootstrap"))]
-pub(crate) fn cleanup_spawned_runner_after_failure(
+pub(crate) async fn cleanup_spawned_runner_after_failure(
     runner_id: &str,
     pidfd: std::os::fd::BorrowedFd<'_>,
 ) {
@@ -11811,28 +11826,34 @@ pub(crate) fn cleanup_spawned_runner_after_failure(
     }
 
     use nix::errno::Errno;
-    use nix::sys::wait::{Id, WaitPidFlag, waitid};
-    match waitid(Id::PIDFd(pidfd), WaitPidFlag::WEXITED) {
-        Ok(_) | Err(Errno::ECHILD) => {}
-        Err(err) => {
-            tracing::warn!(
-                runner_id = %runner_id,
-                error = %err,
-                "spawn rollback: blocking pidfd reap failed"
-            );
+    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
+    let deadline = tokio::time::Instant::now() + SPAWN_ROLLBACK_REAP_DEADLINE;
+    loop {
+        match waitid(Id::PIDFd(pidfd), WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG) {
+            Ok(WaitStatus::Exited(..)) | Ok(WaitStatus::Signaled(..)) | Err(Errno::ECHILD) => {
+                runner_pidfds().remove(runner_id);
+                return;
+            }
+            Ok(WaitStatus::StillAlive) | Ok(_) => {
+                if tokio::time::Instant::now() >= deadline {
+                    tracing::warn!(
+                        runner_id = %runner_id,
+                        "spawn rollback: reap deadline exceeded; the SIGCHLD reaper owns the child"
+                    );
+                    return;
+                }
+                tokio::time::sleep(SPAWN_ROLLBACK_REAP_POLL).await;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    runner_id = %runner_id,
+                    error = %err,
+                    "spawn rollback: pidfd reap failed"
+                );
+                runner_pidfds().remove(runner_id);
+                return;
+            }
         }
-    }
-    runner_pidfds().remove(runner_id);
-}
-
-#[cfg(not(feature = "layer1-bootstrap"))]
-fn cleanup_registered_runner_after_failure(runner_id: &str) {
-    let pidfd = runner_pidfds().duplicate(runner_id);
-    if let Some(pidfd) = pidfd {
-        cleanup_spawned_runner_after_failure(runner_id, pidfd.as_fd());
-    } else {
-        remove_runner_metadata(runner_id);
-        remove_runner_registration(runner_id);
     }
 }
 
@@ -17252,6 +17273,50 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// A malformed authoritative audit join must yield the typed protocol
+    /// refusal, never a panic. The parse-failure leg cannot be driven at
+    /// HEAD: `authoritative_audit_join` computes canonical digests, so
+    /// `CanonicalAuditDigest::parse` always succeeds on its output (the
+    /// refusal was observed under a mutation that made the join return raw
+    /// strings - see the wave-0 report). This test pins the typed-refusal
+    /// surface of the converted call: a valid join builds the context
+    /// without panicking, and a supplied join that mismatches the request's
+    /// canonical join is refused with the typed Protocol error.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn from_request_refuses_a_malformed_audit_join_with_a_typed_protocol_error() {
+        let request = store_sync_request(7);
+        let caller_role = CallerRole::AdminUid { uid: 1000 };
+
+        let context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("valid audit join builds the dispatch context");
+        let (zone_id, operation_identity) = request
+            .authoritative_audit_join()
+            .expect("store sync carries an authoritative join");
+        let join = context.audit_join.as_ref().expect("join recorded");
+        assert_eq!(join.zone_id.as_str(), zone_id.as_str());
+        assert_eq!(join.operation_identity.as_str(), operation_identity.as_str());
+
+        let foreign_join = AuditJoinContext {
+            zone_id: CanonicalAuditDigest::parse(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .expect("fixed canonical digest"),
+            operation_identity: CanonicalAuditDigest::parse(
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            )
+            .expect("fixed canonical digest"),
+        };
+        let error = DispatchAuditContext::from_request_with_join(
+            &request,
+            4242,
+            &caller_role,
+            Some(&foreign_join),
+        )
+        .expect_err("a mismatched supplied join must be refused");
+        assert!(matches!(error, BrokerError::Protocol(_)));
+    }
+
     /// A second sync of the same closure must take the fast path and still
     /// emit EXACTLY ONE allowed record carrying `skipped_fast_path` +
     /// `fast_path`.
@@ -20317,6 +20382,50 @@ mod tests {
                 !runner_pidfds().contains_key(&runner_id),
                 "registry entry must be removed after targeted reap"
             );
+        }
+
+        #[test]
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn spawn_rollback_reaps_and_deregisters_the_child() {
+            // The post-spawn rollback reap must kill, reap, and
+            // deregister the child so a retry can reserve the runner id
+            // and no zombie is left behind.
+            let _guard = ReapTestGuard::new();
+
+            let child = Command::new("true").spawn().expect("spawn true child");
+            let pid = child.id() as i32;
+            let runner_id = format!("test-vm:rollback-{pid}");
+            let pidfd = crate::sys::pidfd_sys::pidfd_open(pid, 0).expect("pidfd_open");
+            let registry_dup = pidfd.try_clone().expect("dup pidfd for registry");
+            runner_pidfds()
+                .insert(&runner_id, registry_dup)
+                .expect("register runner pidfd");
+            with_runner_metadata_mut(|registry| {
+                registry.insert(runner_id.clone(), test_runner_registration(pid, 1));
+            });
+            std::mem::forget(child);
+
+            envelope_call_runtime().block_on(cleanup_spawned_runner_after_failure(
+                &runner_id,
+                pidfd.as_fd(),
+            ));
+
+            assert!(
+                !runner_pidfds().contains_key(&runner_id),
+                "rollback reap must remove the pidfd registration"
+            );
+            assert!(
+                !with_runner_metadata_mut(|registry| registry.contains_key(&runner_id)),
+                "rollback reap must remove the runner metadata"
+            );
+            // The child must be reaped, not left a zombie: a fresh
+            // WNOHANG probe on the pidfd reports ECHILD (already reaped).
+            use nix::errno::Errno;
+            use nix::sys::wait::{Id, WaitPidFlag, waitid};
+            match waitid(Id::PIDFd(pidfd.as_fd()), WaitPidFlag::WEXITED | WaitPidFlag::WNOHANG) {
+                Err(Errno::ECHILD) => {}
+                other => panic!("rollback reap left the child unreaped: {other:?}"),
+            }
         }
 
         #[test]

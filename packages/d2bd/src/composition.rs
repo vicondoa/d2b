@@ -13876,7 +13876,7 @@ fn dispatch_broker_request_as(
     caller_role: BrokerCallerRole,
 ) -> Result<BrokerResponse, TypedError> {
     let socket_path = broker_socket_path(state);
-    let audit_join = default_audit_join_context(&request);
+    let audit_join = default_audit_join_context(&request)?;
     let socket = connect_seqpacket(&socket_path)?;
     write_json_frame(
         &socket,
