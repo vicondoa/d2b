@@ -6,6 +6,7 @@ test_suite(
         "//packages/d2b-broker:d2b_broker_doc_test",
         "//packages/d2b-broker:bridge_lifecycle",
         "//packages/d2b-broker:broker_export_audit",
+        "//packages/d2b-broker:bootstrap_caller_role_labels",
         "//packages/d2b-broker:broker_protocol_compatibility",
         "//packages/d2b-broker:broker_socket_acl",
         "//packages/d2b-broker:bundle_tampered_broker",

@@ -167,6 +167,19 @@ rust_test(
 )
 
 rust_test(
+    name = "bootstrap_caller_role_labels",
+    srcs = ["tests/bootstrap_caller_role_labels.rs"],
+    compile_data = ["Cargo.toml"],
+    crate_features = ["layer1-bootstrap"],
+    crate_root = "tests/bootstrap_caller_role_labels.rs",
+    tags = broker_test_tags(),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":d2b_broker_layer1_bootstrap",
+    ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
+)
+
+rust_test(
     name = "broker_protocol_compatibility",
     srcs = [
         "tests/broker_protocol_compatibility.rs",
@@ -479,6 +492,7 @@ rust_clippy_test(
         ":d2b_broker_fake_backends_test_support",
         ":bridge_lifecycle",
         ":broker_export_audit",
+        ":bootstrap_caller_role_labels",
         ":broker_protocol_compatibility",
         ":broker_socket_acl",
         ":bundle_tampered_broker",
