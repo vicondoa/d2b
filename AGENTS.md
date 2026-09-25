@@ -67,11 +67,7 @@ every `git worktree` - builds its own gitignored `.codegraph/` index: run
 if graph tools return empty or stale results. The first launch downloads the
 pinned package over the network. The `npx` launch needs node: the devShell
 provides it; outside `nix develop`, install node first (for example
-`nix profile install nixpkgs#nodejs`). Codegraph telemetry is disabled by
-default for sessions from this repository: `.omp/mcp.json` sets
-`CODEGRAPH_TELEMETRY=0` for the MCP server and the devShell shellHook sets it
-for manual CLI runs; the tool's own default would otherwise send anonymous
-usage stats, and `codegraph telemetry off` disables it machine-wide.
+`nix profile install nixpkgs#nodejs`).
 
 Agent usage, per the tool's own instructions:
 
