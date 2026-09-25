@@ -2033,14 +2033,14 @@ impl CloudHypervisorResourceSession {
         guest: &StoredResource,
         origin: StoredRowOrigin,
     ) -> Result<GuestSnapshot, CloudHypervisorResourceApiError> {
-        let envelope = ResourceEnvelope::from_json(&guest.canonical_json).map_err(|_| {
-            tracing::warn!("Cloud Hypervisor Guest snapshot failed: envelope");
+        let envelope = ResourceEnvelope::from_json(&guest.canonical_json).map_err(|error| {
+            tracing::warn!(?error, "Cloud Hypervisor Guest snapshot failed: envelope");
             CloudHypervisorResourceApiError::InvalidResponse
         })?;
         let system_artifact_id =
             serde_json::from_slice::<GuestSpec>(&envelope.spec().base().to_canonical_bytes())
-                .map_err(|_| {
-                    tracing::warn!("Cloud Hypervisor Guest snapshot failed: spec");
+                .map_err(|error| {
+                    tracing::warn!(?error, "Cloud Hypervisor Guest snapshot failed: spec");
                     CloudHypervisorResourceApiError::InvalidResponse
                 })?
                 .system_artifact_id()
@@ -2080,8 +2080,8 @@ impl CloudHypervisorResourceSession {
             ),
             deleting,
         )
-        .map_err(|_| {
-            tracing::warn!("Cloud Hypervisor Guest snapshot failed: construction");
+        .map_err(|error| {
+            tracing::warn!(?error, "Cloud Hypervisor Guest snapshot failed: construction");
             CloudHypervisorResourceApiError::InvalidResponse
         })?
         .with_controller_finalizer_present(guest_controller_finalizer_present(
@@ -2428,12 +2428,12 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                     .get_stored(&guest_ref, "cloud-hypervisor-update-status")
                     .await?;
                 let current_value: Value = serde_json::from_slice(&current.canonical_json)
-                    .map_err(|_| {
-                        tracing::warn!("Cloud Hypervisor status update failed: current-resource");
+                    .map_err(|error| {
+                        tracing::warn!(?error, "Cloud Hypervisor status update failed: current-resource");
                         CloudHypervisorResourceApiError::InvalidResponse
                     })?;
-                let mut desired_status = serde_json::to_value(status.status()).map_err(|_| {
-                    tracing::warn!("Cloud Hypervisor status update failed: status-serialization");
+                let mut desired_status = serde_json::to_value(status.status()).map_err(|error| {
+                    tracing::warn!(?error, "Cloud Hypervisor status update failed: status-serialization");
                     CloudHypervisorResourceApiError::InvalidResponse
                 })?;
                 let provider_phase = desired_status
@@ -4862,15 +4862,15 @@ impl ZoneResourceRuntime {
             };
             let mut guest_outcome = CloudHypervisorReconcileOutcome::Ready;
             let descriptor = GuestSetupDescriptor::from_canonical_bytes(descriptor_bytes)
-                .map_err(|_| {
-                    tracing::warn!("Cloud Hypervisor reconcile stage failed: descriptor-decode");
+                .map_err(|error| {
+                    tracing::warn!(?error, "Cloud Hypervisor reconcile stage failed: descriptor-decode");
                     ResourceRuntimeError::CapabilityUnavailable
                 })?
                 .verify_with(&CatalogDescriptorVerifier {
                     expected_key: expected_key.clone(),
                 })
-                .map_err(|_| {
-                    tracing::warn!("Cloud Hypervisor reconcile stage failed: descriptor-verify");
+                .map_err(|error| {
+                    tracing::warn!(?error, "Cloud Hypervisor reconcile stage failed: descriptor-verify");
                     ResourceRuntimeError::CapabilityUnavailable
                 })?;
             let (provider_ref, execution_ref, config, graph) =
@@ -5024,8 +5024,8 @@ impl ZoneResourceRuntime {
                 Arc::new(adapter),
             )
             .map(|controller| controller.with_lifecycle_intent(lifecycle_intent))
-            .map_err(|_| {
-                tracing::warn!("Cloud Hypervisor reconcile stage failed: controller-construction");
+            .map_err(|error| {
+                tracing::warn!(?error, "Cloud Hypervisor reconcile stage failed: controller-construction");
                 ResourceRuntimeError::CapabilityUnavailable
             })?;
             controller
@@ -7183,7 +7183,11 @@ impl ControllerSessionCoordinator {
     ) -> Result<(), ResourceRuntimeError> {
         match controller_assignment_refresh_action(context, error) {
             ControllerAssignmentRefreshAction::Retryable { .. } => {
-                tracing::warn!("external Provider controller assignment reconciliation will retry");
+                tracing::warn!(
+                    provider = %context.process_provider_ref(),
+                    process = %context.process_ref(),
+                    "external Provider controller assignment reconciliation will retry"
+                );
                 Ok(())
             }
             ControllerAssignmentRefreshAction::Failed { context, error } => {
