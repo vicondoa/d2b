@@ -63,6 +63,14 @@ impl<P: d2b_process_conformance::ProcessLaunchEffectPort> SystemdProcessControll
     }
 
     /// Reconcile one action without opening a systemd connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::DeadlineExceeded`] when the
+    /// launch slot is exhausted or the operation does not finish inside
+    /// its per-action timeout, and otherwise the error the wrapped launch,
+    /// adopt, or stop operation reports (ticket validation, identity
+    /// verification, or effect-port failure).
     pub async fn reconcile(
         &self,
         action: SystemdReconcileAction<'_>,

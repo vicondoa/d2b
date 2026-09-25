@@ -11,6 +11,12 @@ pub struct SystemdSandboxCompiler {
 
 impl SystemdSandboxCompiler {
     /// Compile a public SandboxSpec without constructing a unit fragment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessConformanceError::SandboxRejected`] when the spec
+    /// starts as root in a user domain or its canonical JSON rendering
+    /// fails.
     pub fn compile(
         &self,
         spec: &SandboxSpec,

@@ -27,6 +27,13 @@ pub struct DrainProof {
 }
 
 /// Validate the systemd drain sequence.
+///
+/// # Errors
+///
+/// Returns [`DrainError::TerminalTransitionMissing`] when the exact-main
+/// stop or the manager terminal transition is absent, and
+/// [`DrainError::LeafNotEmpty`] when the anchored cgroup leaf still
+/// contains a process.
 pub fn validate(proof: DrainProof) -> Result<DrainStage, DrainError> {
     if !proof.exact_main_stopped || !proof.manager_terminal {
         return Err(DrainError::TerminalTransitionMissing);
