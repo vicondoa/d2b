@@ -555,18 +555,16 @@ impl ZoneTreeEdge {
 
 redacted_debug!(ZoneTreeEdge);
 
-impl<'de> Deserialize<'de> for ZoneTreeEdge {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            parent: ZonePath,
-            child: ZonePath,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.parent, wire.child).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneTreeEdge,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        parent: ZonePath,
+        child: ZonePath,
+    },
+    wire,
+    Self::new(wire.parent, wire.child).map_err(serde::de::Error::custom)
+);
 
 /// One descendant route advertised by a child Zone controller.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -621,25 +619,23 @@ impl ZoneDescendantRoute {
 
 redacted_debug!(ZoneDescendantRoute);
 
-impl<'de> Deserialize<'de> for ZoneDescendantRoute {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            route_id: ZoneRouteId,
-            descendant: ZonePath,
-            next_hop_child: ZoneLabelId,
-            capabilities: ZoneRouteCapabilitySet,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Ok(Self::new(
-            wire.route_id,
-            wire.descendant,
-            wire.next_hop_child,
-            wire.capabilities,
-        ))
-    }
-}
+wire_deserialize!(
+    ZoneDescendantRoute,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        route_id: ZoneRouteId,
+        descendant: ZonePath,
+        next_hop_child: ZoneLabelId,
+        capabilities: ZoneRouteCapabilitySet,
+    },
+    wire,
+    Ok(Self::new(
+        wire.route_id,
+        wire.descendant,
+        wire.next_hop_child,
+        wire.capabilities,
+    ))
+);
 
 /// A signed, expiring, descendant-only route advertisement.
 ///
@@ -815,34 +811,32 @@ impl ZoneLinkRouteAdvertisement {
 
 redacted_debug!(ZoneLinkRouteAdvertisement);
 
-impl<'de> Deserialize<'de> for ZoneLinkRouteAdvertisement {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            schema_version: u32,
-            advertising_zone: ZonePath,
-            tree_edge: ZoneTreeEdge,
-            controller_generation: ZoneLinkControllerGeneration,
-            routes: Vec<ZoneDescendantRoute>,
-            issued_at_unix_seconds: u64,
-            expires_at_unix_seconds: u64,
-            signature: ZoneRouteSignature,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.schema_version,
-            wire.advertising_zone,
-            wire.tree_edge,
-            wire.controller_generation,
-            wire.routes,
-            wire.issued_at_unix_seconds,
-            wire.expires_at_unix_seconds,
-            wire.signature,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneLinkRouteAdvertisement,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        schema_version: u32,
+        advertising_zone: ZonePath,
+        tree_edge: ZoneTreeEdge,
+        controller_generation: ZoneLinkControllerGeneration,
+        routes: Vec<ZoneDescendantRoute>,
+        issued_at_unix_seconds: u64,
+        expires_at_unix_seconds: u64,
+        signature: ZoneRouteSignature,
+    },
+    wire,
+    Self::new(
+        wire.schema_version,
+        wire.advertising_zone,
+        wire.tree_edge,
+        wire.controller_generation,
+        wire.routes,
+        wire.issued_at_unix_seconds,
+        wire.expires_at_unix_seconds,
+        wire.signature,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// A signed withdrawal removing an exact set of advertised routes.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -930,30 +924,28 @@ impl ZoneLinkRouteWithdrawal {
 
 redacted_debug!(ZoneLinkRouteWithdrawal);
 
-impl<'de> Deserialize<'de> for ZoneLinkRouteWithdrawal {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            schema_version: u32,
-            advertising_zone: ZonePath,
-            controller_generation: ZoneLinkControllerGeneration,
-            withdrawn_route_ids: Vec<ZoneRouteId>,
-            issued_at_unix_seconds: u64,
-            signature: ZoneRouteSignature,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.schema_version,
-            wire.advertising_zone,
-            wire.controller_generation,
-            wire.withdrawn_route_ids,
-            wire.issued_at_unix_seconds,
-            wire.signature,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneLinkRouteWithdrawal,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        schema_version: u32,
+        advertising_zone: ZonePath,
+        controller_generation: ZoneLinkControllerGeneration,
+        withdrawn_route_ids: Vec<ZoneRouteId>,
+        issued_at_unix_seconds: u64,
+        signature: ZoneRouteSignature,
+    },
+    wire,
+    Self::new(
+        wire.schema_version,
+        wire.advertising_zone,
+        wire.controller_generation,
+        wire.withdrawn_route_ids,
+        wire.issued_at_unix_seconds,
+        wire.signature,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// The route namespace a parent allocator delegates to one direct child edge.
 ///
@@ -1041,28 +1033,26 @@ impl ZoneLinkNamespaceAllocation {
 
 redacted_debug!(ZoneLinkNamespaceAllocation);
 
-impl<'de> Deserialize<'de> for ZoneLinkNamespaceAllocation {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            tree_edge: ZoneTreeEdge,
-            allocated_to_generation: ZoneLinkControllerGeneration,
-            allowed_prefixes: Vec<ZonePath>,
-            max_routes: u32,
-            allowed_capabilities: ZoneRouteCapabilitySet,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.tree_edge,
-            wire.allocated_to_generation,
-            wire.allowed_prefixes,
-            wire.max_routes,
-            wire.allowed_capabilities,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneLinkNamespaceAllocation,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        tree_edge: ZoneTreeEdge,
+        allocated_to_generation: ZoneLinkControllerGeneration,
+        allowed_prefixes: Vec<ZonePath>,
+        max_routes: u32,
+        allowed_capabilities: ZoneRouteCapabilitySet,
+    },
+    wire,
+    Self::new(
+        wire.tree_edge,
+        wire.allocated_to_generation,
+        wire.allowed_prefixes,
+        wire.max_routes,
+        wire.allowed_capabilities,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Direction of one hop along the Zone tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1140,23 +1130,21 @@ impl ZoneRouteHop {
 
 redacted_debug!(ZoneRouteHop);
 
-impl<'de> Deserialize<'de> for ZoneRouteHop {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            from: ZonePath,
-            to: ZonePath,
-            edge: ZoneTreeEdge,
-            direction: ZoneRouteHopDirection,
-            #[serde(default)]
-            route_id: Option<ZoneRouteId>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.from, wire.to, wire.edge, wire.direction, wire.route_id)
-            .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneRouteHop,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        from: ZonePath,
+        to: ZonePath,
+        edge: ZoneTreeEdge,
+        direction: ZoneRouteHopDirection,
+        #[serde(default)]
+        route_id: Option<ZoneRouteId>,
+    },
+    wire,
+    Self::new(wire.from, wire.to, wire.edge, wire.direction, wire.route_id)
+        .map_err(serde::de::Error::custom)
+);
 
 /// The immutable result of one Zone route decision.
 ///
@@ -1244,26 +1232,24 @@ impl ZoneRoutePath {
 
 redacted_debug!(ZoneRoutePath);
 
-impl<'de> Deserialize<'de> for ZoneRoutePath {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            source_zone: ZonePath,
-            target_zone: ZonePath,
-            nearest_common_ancestor: ZonePath,
-            hops: Vec<ZoneRouteHop>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.source_zone,
-            wire.target_zone,
-            wire.nearest_common_ancestor,
-            wire.hops,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneRoutePath,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        source_zone: ZonePath,
+        target_zone: ZonePath,
+        nearest_common_ancestor: ZonePath,
+        hops: Vec<ZoneRouteHop>,
+    },
+    wire,
+    Self::new(
+        wire.source_zone,
+        wire.target_zone,
+        wire.nearest_common_ancestor,
+        wire.hops,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// The closed fail-closed reason for a refused route decision, advertisement,
 /// or relay hop.

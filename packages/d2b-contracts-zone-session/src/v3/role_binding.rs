@@ -202,16 +202,15 @@ fn narrowing_set_is_subset<T: PartialEq>(
 
 redacted_debug!(ScopeNarrowing);
 
-impl<'de> Deserialize<'de> for ScopeNarrowing {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            rules: Vec<RoleRule>,
-        }
-        Self::new(Wire::deserialize(deserializer)?.rules).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ScopeNarrowing,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        rules: Vec<RoleRule>,
+    },
+    wire,
+    Self::new(wire.rules).map_err(serde::de::Error::custom)
+);
 
 /// Authority that created a relay-bearing binding.
 ///
@@ -392,41 +391,39 @@ impl RoleBindingSpec {
 
 redacted_debug!(RoleBindingSpec);
 
-impl<'de> Deserialize<'de> for RoleBindingSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            role_ref: ResourceRef,
-            #[serde(default)]
-            subjects: Vec<ResourceRef>,
-            #[serde(default)]
-            external_principal_selector: Option<ExternalPrincipalSelector>,
-            #[serde(default)]
-            scope_narrowing: Option<ScopeNarrowing>,
-            #[serde(default)]
-            resource_refs: Vec<ResourceRef>,
-            #[serde(default)]
-            zone_refs: Vec<ZoneId>,
-            #[serde(default)]
-            execution_refs: Vec<ResourceRef>,
-            #[serde(default)]
-            relay_authority: Option<RelayAuthority>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::with_facets(
-            wire.role_ref,
-            wire.subjects,
-            wire.external_principal_selector,
-            wire.scope_narrowing,
-            wire.resource_refs,
-            wire.zone_refs,
-            wire.execution_refs,
-            wire.relay_authority,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    RoleBindingSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        role_ref: ResourceRef,
+        #[serde(default)]
+        subjects: Vec<ResourceRef>,
+        #[serde(default)]
+        external_principal_selector: Option<ExternalPrincipalSelector>,
+        #[serde(default)]
+        scope_narrowing: Option<ScopeNarrowing>,
+        #[serde(default)]
+        resource_refs: Vec<ResourceRef>,
+        #[serde(default)]
+        zone_refs: Vec<ZoneId>,
+        #[serde(default)]
+        execution_refs: Vec<ResourceRef>,
+        #[serde(default)]
+        relay_authority: Option<RelayAuthority>,
+    },
+    wire,
+    Self::with_facets(
+        wire.role_ref,
+        wire.subjects,
+        wire.external_principal_selector,
+        wire.scope_narrowing,
+        wire.resource_refs,
+        wire.zone_refs,
+        wire.execution_refs,
+        wire.relay_authority,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Closed RoleBinding condition names.
 #[derive(

@@ -7,7 +7,7 @@
 //! credential bytes can be represented here.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceRef, ResourceUid, Timestamp, ZoneId,
@@ -129,30 +129,28 @@ impl Default for ZoneLinkLimits {
     }
 }
 
-impl<'de> Deserialize<'de> for ZoneLinkLimits {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default = "default_pending")]
-            max_pending_intents: u32,
-            #[serde(default = "default_streams")]
-            max_active_streams: u32,
-            #[serde(default = "default_attempts")]
-            reconnect_max_attempts: u32,
-            #[serde(default = "default_window")]
-            reconnect_window_secs: u32,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.max_pending_intents,
-            wire.max_active_streams,
-            wire.reconnect_max_attempts,
-            wire.reconnect_window_secs,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneLinkLimits,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default = "default_pending")]
+        max_pending_intents: u32,
+        #[serde(default = "default_streams")]
+        max_active_streams: u32,
+        #[serde(default = "default_attempts")]
+        reconnect_max_attempts: u32,
+        #[serde(default = "default_window")]
+        reconnect_window_secs: u32,
+    },
+    wire,
+    Self::new(
+        wire.max_pending_intents,
+        wire.max_active_streams,
+        wire.reconnect_max_attempts,
+        wire.reconnect_window_secs,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 const fn default_pending() -> u32 {
     256
@@ -272,34 +270,32 @@ impl ZoneLinkSpec {
 
 redacted_debug!(ZoneLinkSpec);
 
-impl<'de> Deserialize<'de> for ZoneLinkSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            child_zone_name: ZoneId,
-            transport_provider_ref: ResourceRef,
-            #[serde(default)]
-            transport_settings: CanonicalJsonObject,
-            #[serde(default)]
-            transport_credentials: Vec<ResourceRef>,
-            #[serde(default)]
-            disabled: bool,
-            #[serde(default)]
-            limits: ZoneLinkLimits,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.child_zone_name,
-            wire.transport_provider_ref,
-            wire.transport_settings,
-            wire.transport_credentials,
-            wire.disabled,
-            wire.limits,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneLinkSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        child_zone_name: ZoneId,
+        transport_provider_ref: ResourceRef,
+        #[serde(default)]
+        transport_settings: CanonicalJsonObject,
+        #[serde(default)]
+        transport_credentials: Vec<ResourceRef>,
+        #[serde(default)]
+        disabled: bool,
+        #[serde(default)]
+        limits: ZoneLinkLimits,
+    },
+    wire,
+    Self::new(
+        wire.child_zone_name,
+        wire.transport_provider_ref,
+        wire.transport_settings,
+        wire.transport_credentials,
+        wire.disabled,
+        wire.limits,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Closed ZoneLink condition names.
 #[derive(
@@ -405,40 +401,38 @@ fn ordered(left: Option<u64>, right: Option<u64>) -> bool {
 
 redacted_debug!(ZoneLinkStatusResource);
 
-impl<'de> Deserialize<'de> for ZoneLinkStatusResource {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            child_zone_uid: Option<ResourceUid>,
-            connected: bool,
-            last_connected_at: Option<Timestamp>,
-            last_disconnected_at: Option<Timestamp>,
-            last_sent_revision: Option<u64>,
-            last_acked_revision: Option<u64>,
-            last_received_revision: Option<u64>,
-            last_applied_revision: Option<u64>,
-            link_epoch: u64,
-            pending_local_intents: u32,
-            child_authorized: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.child_zone_uid,
-            wire.connected,
-            wire.last_connected_at,
-            wire.last_disconnected_at,
-            wire.last_sent_revision,
-            wire.last_acked_revision,
-            wire.last_received_revision,
-            wire.last_applied_revision,
-            wire.link_epoch,
-            wire.pending_local_intents,
-            wire.child_authorized,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneLinkStatusResource,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        child_zone_uid: Option<ResourceUid>,
+        connected: bool,
+        last_connected_at: Option<Timestamp>,
+        last_disconnected_at: Option<Timestamp>,
+        last_sent_revision: Option<u64>,
+        last_acked_revision: Option<u64>,
+        last_received_revision: Option<u64>,
+        last_applied_revision: Option<u64>,
+        link_epoch: u64,
+        pending_local_intents: u32,
+        child_authorized: bool,
+    },
+    wire,
+    Self::new(
+        wire.child_zone_uid,
+        wire.connected,
+        wire.last_connected_at,
+        wire.last_disconnected_at,
+        wire.last_sent_revision,
+        wire.last_acked_revision,
+        wire.last_received_revision,
+        wire.last_applied_revision,
+        wire.link_epoch,
+        wire.pending_local_intents,
+        wire.child_authorized,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Record admission of one locally queued intent.
 pub const fn admit_local_intent(

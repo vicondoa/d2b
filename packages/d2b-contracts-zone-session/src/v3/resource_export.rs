@@ -6,7 +6,7 @@
 //! outside this resource contract.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use d2b_contracts_provider::v3::provider::{
     Exportability, ProjectionFactory, ProviderContractError,
@@ -216,34 +216,28 @@ impl ShareQuota {
     }
 }
 
-impl<'de> Deserialize<'de> for ShareQuota {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            max_consumers: Option<u32>,
-            #[serde(default)]
-            per_consumer_rate: Option<u32>,
-            #[serde(default)]
-            fairness: ShareFairness,
-            #[serde(default)]
-            lease_deadline_ms: Option<u64>,
-        }
-
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.max_consumers,
-            wire.per_consumer_rate,
-            wire.fairness,
-            wire.lease_deadline_ms,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ShareQuota,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        max_consumers: Option<u32>,
+        #[serde(default)]
+        per_consumer_rate: Option<u32>,
+        #[serde(default)]
+        fairness: ShareFairness,
+        #[serde(default)]
+        lease_deadline_ms: Option<u64>,
+    },
+    wire,
+    Self::new(
+        wire.max_consumers,
+        wire.per_consumer_rate,
+        wire.fairness,
+        wire.lease_deadline_ms,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Consumer-Zone and capability ceiling carried by an export.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -303,23 +297,18 @@ impl core::fmt::Debug for ConsumerZonePolicy {
     }
 }
 
-impl<'de> Deserialize<'de> for ConsumerZonePolicy {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            zones: Vec<ZoneId>,
-            #[serde(default)]
-            capability_ceiling: Vec<BoundedToken>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.zones, wire.capability_ceiling).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ConsumerZonePolicy,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        zones: Vec<ZoneId>,
+        #[serde(default)]
+        capability_ceiling: Vec<BoundedToken>,
+    },
+    wire,
+    Self::new(wire.zones, wire.capability_ceiling).map_err(serde::de::Error::custom)
+);
 
 /// Export deletion and ZoneLink-loss policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, JsonSchema)]
@@ -355,23 +344,18 @@ impl RevocationPolicy {
     }
 }
 
-impl<'de> Deserialize<'de> for RevocationPolicy {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            grace_period_ms: u64,
-            #[serde(default)]
-            force_revoke: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.grace_period_ms, wire.force_revoke).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    RevocationPolicy,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        grace_period_ms: u64,
+        #[serde(default)]
+        force_revoke: bool,
+    },
+    wire,
+    Self::new(wire.grace_period_ms, wire.force_revoke).map_err(serde::de::Error::custom)
+);
 
 /// The provider-neutral desired state of one owner-Zone export.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -535,11 +519,7 @@ impl ResourceExportSpec {
         if target.resource_type() != &self.service_type {
             return Err(ResourceExportContractError::WrongResourceType);
         }
-        let target_ref = ResourceRef::new(
-            target.resource_type().clone(),
-            target.metadata().name().clone(),
-        );
-        if target_ref != self.resource_ref {
+        if ResourceRef::from(target) != self.resource_ref {
             return Err(ResourceExportContractError::ResourceReferenceMismatch);
         }
         Ok(())
@@ -576,44 +556,39 @@ impl core::fmt::Debug for ResourceExportSpec {
     }
 }
 
-impl<'de> Deserialize<'de> for ResourceExportSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            resource_ref: ResourceRef,
-            service_type: ResourceTypeName,
-            projection_schema_fingerprint: SchemaFingerprint,
-            factory_fingerprint: SchemaFingerprint,
-            operations: Vec<BoundedToken>,
-            arbitration: ExportArbitration,
-            #[serde(default)]
-            quota: ShareQuota,
-            consumer_zone_policy: ConsumerZonePolicy,
-            #[serde(default = "default_export_visibility")]
-            visibility: ExportVisibility,
-            #[serde(default)]
-            revocation_policy: RevocationPolicy,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.resource_ref,
-            wire.service_type,
-            wire.projection_schema_fingerprint,
-            wire.factory_fingerprint,
-            wire.operations,
-            wire.arbitration,
-            wire.quota,
-            wire.consumer_zone_policy,
-            wire.visibility,
-            wire.revocation_policy,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ResourceExportSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        resource_ref: ResourceRef,
+        service_type: ResourceTypeName,
+        projection_schema_fingerprint: SchemaFingerprint,
+        factory_fingerprint: SchemaFingerprint,
+        operations: Vec<BoundedToken>,
+        arbitration: ExportArbitration,
+        #[serde(default)]
+        quota: ShareQuota,
+        consumer_zone_policy: ConsumerZonePolicy,
+        #[serde(default = "default_export_visibility")]
+        visibility: ExportVisibility,
+        #[serde(default)]
+        revocation_policy: RevocationPolicy,
+    },
+    wire,
+    Self::new(
+        wire.resource_ref,
+        wire.service_type,
+        wire.projection_schema_fingerprint,
+        wire.factory_fingerprint,
+        wire.operations,
+        wire.arbitration,
+        wire.quota,
+        wire.consumer_zone_policy,
+        wire.visibility,
+        wire.revocation_policy,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// ResourceExport lifecycle state projected into `status.resource`.
 #[derive(

@@ -7,7 +7,7 @@
 //! parent topology, policy, or implementation settings into the self row.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use d2b_contracts_resource::v3::{
     ResourceName, ResourcePhase, ResourceRef, ResourceUid, Timestamp, ZoneId,
@@ -71,15 +71,13 @@ impl ZoneSpec {
     }
 }
 
-impl<'de> Deserialize<'de> for ZoneSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Wire {}
-        let _ = Wire::deserialize(deserializer)?;
-        Ok(Self::new())
-    }
-}
+wire_deserialize!(
+    ZoneSpec,
+    #[serde(deny_unknown_fields)]
+    Wire {},
+    wire,
+    { let _ = wire; Ok(Self::new()) }
+);
 
 /// A fixed handler phase projected by the Zone controller.
 #[derive(
@@ -164,19 +162,17 @@ impl ZoneHandlerStatus {
 
 redacted_debug!(ZoneHandlerStatus);
 
-impl<'de> Deserialize<'de> for ZoneHandlerStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            name: ZoneHandlerName,
-            last_reconciled_at: Option<Timestamp>,
-            phase: ZoneHandlerPhase,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Ok(Self::new(wire.name, wire.phase, wire.last_reconciled_at))
-    }
-}
+wire_deserialize!(
+    ZoneHandlerStatus,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        name: ZoneHandlerName,
+        last_reconciled_at: Option<Timestamp>,
+        phase: ZoneHandlerPhase,
+    },
+    wire,
+    Ok(Self::new(wire.name, wire.phase, wire.last_reconciled_at))
+);
 
 /// The ResourceType-common Zone status layer.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -319,40 +315,38 @@ impl ZoneStatusResource {
 
 redacted_debug!(ZoneStatusResource);
 
-impl<'de> Deserialize<'de> for ZoneStatusResource {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            api_catalog_revision: u64,
-            policy_revision: u64,
-            configuration_revision: u64,
-            core_controller_phase: ResourcePhase,
-            handlers: Vec<ZoneHandlerStatus>,
-            installed_provider_count: u32,
-            ready_provider_count: u32,
-            total_resource_count: u32,
-            active_configuration_generation: u64,
-            generation_cleanup_pending: bool,
-            cleanup_pending_count: u32,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.api_catalog_revision,
-            wire.policy_revision,
-            wire.configuration_revision,
-            wire.core_controller_phase,
-            wire.handlers,
-            wire.installed_provider_count,
-            wire.ready_provider_count,
-            wire.total_resource_count,
-            wire.active_configuration_generation,
-            wire.generation_cleanup_pending,
-            wire.cleanup_pending_count,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneStatusResource,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        api_catalog_revision: u64,
+        policy_revision: u64,
+        configuration_revision: u64,
+        core_controller_phase: ResourcePhase,
+        handlers: Vec<ZoneHandlerStatus>,
+        installed_provider_count: u32,
+        ready_provider_count: u32,
+        total_resource_count: u32,
+        active_configuration_generation: u64,
+        generation_cleanup_pending: bool,
+        cleanup_pending_count: u32,
+    },
+    wire,
+    Self::new(
+        wire.api_catalog_revision,
+        wire.policy_revision,
+        wire.configuration_revision,
+        wire.core_controller_phase,
+        wire.handlers,
+        wire.installed_provider_count,
+        wire.ready_provider_count,
+        wire.total_resource_count,
+        wire.active_configuration_generation,
+        wire.generation_cleanup_pending,
+        wire.cleanup_pending_count,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Alias used by generic ResourceType status adapters.
 pub type ZoneStatus = ZoneStatusResource;
