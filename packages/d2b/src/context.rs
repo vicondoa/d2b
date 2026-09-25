@@ -9,7 +9,7 @@ use std::{
     os::fd::{AsRawFd as _, OwnedFd},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -441,12 +441,17 @@ pub(crate) fn socket_connectable(path: &Path) -> io::Result<()> {
 /// surfaces as [`io::ErrorKind::TimedOut`] for the caller to name.
 pub(crate) struct CliSocket {
     fd: AsyncFd<OwnedFd>,
+    /// Reusable receive scratch: the zeroed 1 MiB allocation happens once per
+    /// socket instead of once per received frame. The lock is held only
+    /// around the non-blocking recvmsg and never across an await.
+    recv_buf: Mutex<Vec<u8>>,
 }
 
 impl CliSocket {
     fn from_owned_fd(fd: OwnedFd) -> io::Result<Self> {
         Ok(Self {
             fd: AsyncFd::new(fd)?,
+            recv_buf: Mutex::new(Vec::new()),
         })
     }
 
@@ -516,26 +521,10 @@ impl CliSocket {
     }
 
     pub(crate) async fn recv_frame(&self, budget: Duration) -> io::Result<Vec<u8>> {
-        let frame = match tokio::time::timeout(budget, self.read_frame()).await {
-            Ok(result) => result?,
-            Err(_) => return Err(deadline_error("receive", budget)),
-        };
-        if frame.len() < FRAME_PREFIX_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "short frame from seqpacket socket",
-            ));
+        match tokio::time::timeout(budget, self.read_frame()).await {
+            Ok(result) => result,
+            Err(_) => Err(deadline_error("receive", budget)),
         }
-        let expected = u32::from_le_bytes(frame[..FRAME_PREFIX_BYTES].try_into().expect("prefix"));
-        if expected as usize > MAX_FRAME_BYTES
-            || expected as usize + FRAME_PREFIX_BYTES != frame.len()
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "malformed seqpacket frame",
-            ));
-        }
-        Ok(frame[FRAME_PREFIX_BYTES..].to_vec())
     }
 
     /// Send one datagram: a seqpacket send is atomic, so a partial write is a
@@ -565,13 +554,24 @@ impl CliSocket {
         }
     }
 
-    /// Receive one datagram, refusing ancillary data and oversized frames.
+    /// Receive one datagram and extract its payload, refusing ancillary data,
+    /// oversized frames, and malformed envelopes.
+    ///
+    /// The receive, envelope validation, and payload extraction share one
+    /// lock on the socket's reusable scratch buffer, so concurrent calls
+    /// cannot observe each other's datagrams. The buffer keeps its full
+    /// length between calls, so the zeroed 1 MiB allocation happens once per
+    /// socket instead of once per received frame.
     async fn read_frame(&self) -> io::Result<Vec<u8>> {
-        let mut buffer = vec![0_u8; MAX_FRAME_BYTES + FRAME_PREFIX_BYTES];
         loop {
             let mut ready = self.fd.readable().await?;
             match ready.try_io(|inner| {
-                let mut iov = [rustix::io::IoSliceMut::new(&mut buffer)];
+                let mut buffer = self
+                    .recv_buf
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                buffer.resize(MAX_FRAME_BYTES + FRAME_PREFIX_BYTES, 0);
+                let mut iov = [rustix::io::IoSliceMut::new(&mut buffer[..])];
                 let mut control_bytes = [0_u8; rustix::cmsg_space!(ScmRights(1))];
                 let mut control = rustix::net::RecvAncillaryBuffer::new(&mut control_bytes);
                 let received = loop {
@@ -603,8 +603,23 @@ impl CliSocket {
                         "peer closed the socket",
                     ));
                 }
-                buffer.truncate(received.bytes);
-                Ok(std::mem::take(&mut buffer))
+                if received.bytes < FRAME_PREFIX_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "short frame from seqpacket socket",
+                    ));
+                }
+                let expected =
+                    u32::from_le_bytes(buffer[..FRAME_PREFIX_BYTES].try_into().expect("prefix"));
+                if expected as usize > MAX_FRAME_BYTES
+                    || expected as usize + FRAME_PREFIX_BYTES != received.bytes
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "malformed seqpacket frame",
+                    ));
+                }
+                Ok(buffer[FRAME_PREFIX_BYTES..received.bytes].to_vec())
             }) {
                 Ok(result) => return result,
                 // Spurious readiness: re-arm and wait again.
