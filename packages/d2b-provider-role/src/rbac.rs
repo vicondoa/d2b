@@ -212,4 +212,52 @@ mod tests {
         assert!(cache.contains(&key(1), revisions(2), 9));
         assert!(!cache.contains(&key(1), revisions(3), 9));
     }
+
+    /// The `expires_at_tick > now_tick` boundary itself: containment is
+    /// false at the expiry tick and after it, not just inside the window.
+    #[test]
+    fn positives_expire_at_the_boundary_tick() {
+        let cache = PositiveDecisionCache::new(4);
+        cache.insert_allow(key(1), revisions(2), 10, 1);
+        assert!(cache.contains(&key(1), revisions(2), 9), "inside the window");
+        assert!(
+            !cache.contains(&key(1), revisions(2), 10),
+            "at the expiry tick the entry is gone"
+        );
+        assert!(
+            !cache.contains(&key(1), revisions(2), 11),
+            "past the expiry tick the entry is gone"
+        );
+    }
+
+    /// The bounded ceiling: a new key is refused once the cache holds
+    /// `max_entries` live entries, while the resident entries survive.
+    #[test]
+    fn bounded_capacity_refuses_new_keys_past_the_ceiling() {
+        let cache = PositiveDecisionCache::new(2);
+        cache.insert_allow(key(1), revisions(1), 100, 1);
+        cache.insert_allow(key(2), revisions(1), 100, 1);
+        assert!(cache.contains(&key(1), revisions(1), 50));
+        assert!(cache.contains(&key(2), revisions(1), 50));
+
+        cache.insert_allow(key(3), revisions(1), 100, 50);
+        assert!(
+            !cache.contains(&key(3), revisions(1), 50),
+            "a new key past the ceiling is refused"
+        );
+        assert!(
+            cache.contains(&key(1), revisions(1), 50),
+            "resident keys survive the refused insertion"
+        );
+        assert!(cache.contains(&key(2), revisions(1), 50));
+    }
+
+    /// A zero-capacity cache stores nothing: `max_entries == 0` is a no-op
+    /// admission, never an unbounded fallback.
+    #[test]
+    fn zero_capacity_cache_never_stores() {
+        let cache = PositiveDecisionCache::new(0);
+        cache.insert_allow(key(1), revisions(1), 100, 1);
+        assert!(!cache.contains(&key(1), revisions(1), 50));
+    }
 }
