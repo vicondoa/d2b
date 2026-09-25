@@ -34,6 +34,13 @@ impl GuestTargetSession for DaemonGuestTargetSession {
         self.session.route_binding().liveness().is_live()
     }
 
+    /// Forward one target-control request through the live session client.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestTargetError::SessionUnavailable`] when the session is
+    /// no longer live or the request fails.
+
     async fn request(
         &self,
         request: ttrpc::Request,
