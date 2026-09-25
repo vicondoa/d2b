@@ -28,5 +28,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 socket2 = "0.5"
+tracing = "0.1"
 uzers = "0.12"
 zbus = { version = "5.16", features = ["blocking-api"] }

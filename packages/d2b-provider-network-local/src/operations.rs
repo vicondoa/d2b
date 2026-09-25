@@ -395,8 +395,8 @@ fn network_provenance(
 /// The resolved bridge intent payload one bridge kernel invocation carries.
 fn resolved_bridge_payload(
     intent: &d2b_core::bundle_resolver::ResolvedBridgeIntent,
-) -> serde_json::Value {
-    serde_json::json!({
+) -> Result<serde_json::Value, OperationFailure> {
+    Ok(serde_json::json!({
         "intentId": intent.intent_id,
         "scopeLabel": intent.scope_label,
         "bridgeIfname": intent.bridge_ifname.as_str(),
@@ -405,9 +405,14 @@ fn resolved_bridge_payload(
         "multicastSnoopingDisabled": intent.multicast_snooping_disabled,
         "ipv6Suppressed": intent.ipv6_suppressed,
         "ipv4Address": intent.ipv4_address.as_ref().map(|cidr| cidr.as_str()),
-        "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().ok().flatten(),
+        "provenance": intent.provenance.as_ref().map(serde_json::to_value).transpose().map_err(|error| {
+            OperationFailure::with_detail(
+                KERNEL_REFUSED,
+                format!("provenance serialization failed: {error}"),
+            )
+        })?,
         "ownershipMarker": intent.ownership_marker,
-    })
+    }))
 }
 
 /// The resolved route intent payload one apply-route kernel invocation
@@ -416,8 +421,8 @@ fn resolved_route_payload(
     intent: &d2b_core::bundle_resolver::ResolvedRouteIntent,
     provenance: &NetworkProvenance,
     destroy: bool,
-) -> serde_json::Value {
-    serde_json::json!({
+) -> Result<serde_json::Value, OperationFailure> {
+    Ok(serde_json::json!({
         "intentId": intent.intent_id,
         "routeSpec": intent.route_spec,
         "destination": intent.destination,
@@ -426,10 +431,15 @@ fn resolved_route_payload(
         "table": intent.table,
         "owned": intent.owned,
         "routeName": intent.route_name,
-        "provenance": serde_json::to_value(provenance).ok(),
+        "provenance": serde_json::to_value(provenance).map_err(|error| {
+            OperationFailure::with_detail(
+                KERNEL_REFUSED,
+                format!("provenance serialization failed: {error}"),
+            )
+        })?,
         "ownershipMarker": intent.ownership_marker,
         "destroy": destroy,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -648,7 +658,7 @@ impl OperationHandler for ApplyRouteHandler {
         let reply = invoke_kernel_nested(
             &ctx,
             "apply-route",
-            resolved_route_payload(&intent, &provenance, request.destroy),
+            resolved_route_payload(&intent, &provenance, request.destroy)?,
             Vec::new(),
         )
         .await?;
@@ -742,7 +752,7 @@ impl OperationHandler for CreateBridgeHandler {
         let reply = invoke_kernel_nested(
             &ctx,
             "create-bridge",
-            resolved_bridge_payload(&intent),
+            resolved_bridge_payload(&intent)?,
             Vec::new(),
         )
         .await?;
@@ -783,7 +793,7 @@ impl OperationHandler for DeleteBridgeHandler {
         let reply = invoke_kernel_nested(
             &ctx,
             "delete-bridge",
-            resolved_bridge_payload(&intent),
+            resolved_bridge_payload(&intent)?,
             Vec::new(),
         )
         .await?;

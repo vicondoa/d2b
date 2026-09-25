@@ -181,12 +181,17 @@ impl<M: UserScopeManager> HelperClient<M> {
                         .name("d2b-unsafe-local-operation".to_owned())
                         .spawn(move || {
                             let request_id = request.request_id;
-                            let operation_id = request.operation_id.clone();
+                            let operation = request.operation_id.clone();
                             let response = match runtime.launch(*request) {
                                 Ok(result) => UnsafeLocalHelperToDaemon::Operation(result),
                                 Err(error) => {
-                                    eprintln!("unsafe-local launch failed: {error:?}");
-                                    rejection(request_id, operation_id, failure_code(error))
+                                    tracing::warn!(
+                                        error = ?error,
+                                        request_id = request_id,
+                                        operation = %operation,
+                                        "unsafe-local launch failed",
+                                    );
+                                    rejection(request_id, operation, failure_code(error))
                                 }
                             };
                             if responses.send(response).is_ok() {
@@ -307,7 +312,7 @@ fn peer_uid_is_exact(peer_uid: u32, expected_uid: u32) -> bool {
     peer_uid != 0 && expected_uid != 0 && peer_uid == expected_uid
 }
 
-pub fn configure_socket_buffers(socket: &Socket) -> Result<(), ProtocolError> {
+fn configure_socket_buffers(socket: &Socket) -> Result<(), ProtocolError> {
     socket
         .set_send_buffer_size(HELPER_SOCKET_BUFFER_REQUEST_BYTES)
         .map_err(|_| ProtocolError::BufferTooSmall)?;
@@ -334,7 +339,7 @@ fn effective_socket_buffers_sufficient(send_size: usize, recv_size: usize) -> bo
 // Runs on the helper process main thread inside HelperClient::run's sync
 // service loop (CLI entry; never an executor).
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-pub fn send_frame<T: serde::Serialize>(socket: &Socket, frame: &T) -> Result<(), ProtocolError> {
+fn send_frame<T: serde::Serialize>(socket: &Socket, frame: &T) -> Result<(), ProtocolError> {
     let payload = serde_json::to_vec(frame).map_err(|_| ProtocolError::InvalidFrame)?;
     if payload.len() > MAX_HELPER_FRAME_SIZE {
         return Err(ProtocolError::FrameTooLarge);
@@ -354,7 +359,7 @@ pub fn send_frame<T: serde::Serialize>(socket: &Socket, frame: &T) -> Result<(),
 // Runs on the helper process main thread inside HelperClient::run's sync
 // service loop (CLI entry; never an executor).
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-pub fn receive_frame<T: serde::de::DeserializeOwned>(
+fn receive_frame<T: serde::de::DeserializeOwned>(
     socket: &Socket,
     encoded: &mut [u8],
 ) -> Result<T, ProtocolError> {
