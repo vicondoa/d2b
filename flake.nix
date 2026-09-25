@@ -67,6 +67,22 @@
           inherit system;
         };
 
+      # CodeGraph npm spec parsed from the committed omp MCP config, so the
+      # devShell install and the MCP wiring cannot drift apart. Eval fails
+      # closed if the entry is removed or reshaped.
+      codegraphNpmSpec = let
+        mcp = builtins.fromJSON (builtins.readFile ./.omp/mcp.json);
+        args = mcp.mcpServers.codegraph.args
+          or (throw "codegraph npm spec missing from .omp/mcp.json");
+        isPkg = a: builtins.isString a
+          && builtins.match "@colbymchenry/codegraph@[0-9][0-9a-zA-Z.-]*" a != null;
+        found = if ! builtins.isList args then
+          throw "codegraph npm spec missing from .omp/mcp.json"
+        else
+          nixpkgs.lib.findFirst isPkg
+            (throw "codegraph npm spec missing from .omp/mcp.json") args;
+      in found;
+
       providerElfShim = import ./nix/provider-elf-shim.nix;
       # The Guest static workspace mirrors the shared daemon/broker dependency
       # closure. Guest packaging contains only the shared daemon, broker,
@@ -244,6 +260,10 @@
             # .cargo/rustc-wrapper.sh, which uses this when present and plain
             # rustc when absent, so the shell never has to clear RUSTC_WRAPPER.
             sccache
+            # Node/npm so `npx` in .omp/mcp.json and the codegraph CLI below
+            # work inside the shell; the package bundles its own Rust runtime,
+            # so any nodejs works.
+            nodejs
             # Test and audit tooling the gates otherwise fetch per invocation.
             cargo-nextest
             cargo-deny
@@ -270,6 +290,17 @@
               pkgs.shellcheck
             ])}
             export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
+            # CodeGraph CLI via npm for manual runs; .omp/mcp.json uses npx
+            # for MCP. Version-aware install against the same pinned spec the
+            # MCP wiring reads: a stale or foreign `codegraph` on PATH is
+            # reinstalled to the pin, so the manual CLI cannot drift from the
+            # MCP wiring. Cached under $HOME, never written into the repo.
+            export NPM_CONFIG_PREFIX="''${NPM_CONFIG_PREFIX:-$HOME/.cache/d2b-npm-global}"
+            export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+            # Codegraph telemetry off by default for this repository's CLI
+            # runs; the omp MCP entry in .omp/mcp.json sets the same env.
+            export CODEGRAPH_TELEMETRY="''${CODEGRAPH_TELEMETRY:-0}"
+            npm ls -g ${codegraphNpmSpec} >/dev/null 2>&1 || npm install -g ${codegraphNpmSpec} || echo "codegraph install failed; retry with: npm install -g ${codegraphNpmSpec}"
             echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
           '';
         };

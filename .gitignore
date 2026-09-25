@@ -25,6 +25,9 @@ result
 result-*
 .direnv/
 
+# Codegraph local index (built by `codegraph init`, never committed)
+/.codegraph/
+
 # Bazel workspace output links
 /bazel-*
 .bazelrc.user

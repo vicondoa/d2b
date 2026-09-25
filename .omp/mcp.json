@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "codegraph": {
+      "command": "npx",
+      "args": ["-y", "@colbymchenry/codegraph@1.6.0", "serve", "--mcp"],
+      "timeout": 120000,
+      "env": {
+        "CODEGRAPH_TELEMETRY": "0"
+      }
+    }
+  }
+}
