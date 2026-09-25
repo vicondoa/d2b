@@ -345,7 +345,7 @@ impl CellStore {
     /// An in-memory store with no durable file.
     pub fn in_memory() -> Self {
         Self::spawn_owner(None, RetentionPolicy::default())
-            .expect("spawn in-memory cell store owner")
+            .expect("in-memory store is a startup precondition; a fresh owner spawn cannot fail")
     }
 
     /// Open the store for one state root, recovering every durable record.
@@ -355,9 +355,12 @@ impl CellStore {
     }
 
     /// Test/embedding knob: the root plus an explicit retention policy.
-    pub(crate) fn with_retention(root: Option<PathBuf>, retention: RetentionPolicy) -> Self {
+    /// Failures propagate to the caller instead of panicking.
+    pub(crate) fn with_retention(
+        root: Option<PathBuf>,
+        retention: RetentionPolicy,
+    ) -> Result<Self, CellStoreError> {
         Self::spawn_owner(root, retention)
-            .expect("spawn cell store owner with retention")
     }
 
     /// Spawn the single owner thread and hand it the bootstrap command.
@@ -1642,7 +1645,8 @@ mod tests {
                 outcome_ttl_ms: 60_000,
                 max_ephemeral_outcome_records: 1,
             },
-        );
+        )
+        .expect("spawn store with retention");
         // The one-time marker: consumed and completed.
         assert_eq!(
             store.consume("grant-g", "grant-1", "alice", CellDurability::OneTime),
