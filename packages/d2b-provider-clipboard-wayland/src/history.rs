@@ -1,5 +1,6 @@
 //! Bounded in-memory clipboard history and lifecycle controls.
 
+use crate::picker::CompletionKey;
 use crate::policy::Policy;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -129,7 +130,7 @@ pub struct ClipboardHistory {
     total_bytes: usize,
     suspended: BTreeSet<String>,
     guest_requests: BTreeMap<String, VecDeque<u64>>,
-    picker_completions: BTreeMap<String, u64>,
+    picker_completions: BTreeMap<CompletionKey, u64>,
 }
 
 impl ClipboardHistory {
@@ -240,7 +241,7 @@ impl ClipboardHistory {
 
         self.guest_requests.remove(guest);
         self.picker_completions
-            .retain(|key, _| !key.split('|').any(|component| component == guest));
+            .retain(|key, _| !key.references_guest(guest));
     }
 
     /// Purge all retained payloads and replay/rate-limit state.
@@ -301,7 +302,7 @@ impl ClipboardHistory {
     /// Atomically claim one picker completion until its receipt expires.
     pub(crate) fn claim_picker_completion(
         &mut self,
-        key: String,
+        key: CompletionKey,
         expires_at: u64,
         now_secs: u64,
     ) -> bool {
@@ -399,6 +400,7 @@ impl core::fmt::Debug for ClipboardHistory {
 #[cfg(test)]
 mod tests {
     use super::{ClipboardEntry, ClipboardHistory};
+    use crate::picker::CompletionKey;
     use crate::ClipboardConfig;
 
     #[test]
@@ -431,7 +433,15 @@ mod tests {
     #[test]
     fn purging_a_guest_releases_its_picker_completion_keys() {
         let mut history = ClipboardHistory::new(ClipboardConfig::default());
-        let key = "operation|zone|Guest/work|1|zone|Guest/destination|1".to_owned();
+        let key = CompletionKey::new(
+            "operation".to_owned(),
+            "zone".to_owned(),
+            "Guest/work".to_owned(),
+            1,
+            "zone".to_owned(),
+            "Guest/destination".to_owned(),
+            1,
+        );
         assert!(history.claim_picker_completion(key.clone(), 200, 100));
         history.purge_guest("Guest/work");
         assert!(history.claim_picker_completion(key, 200, 100));

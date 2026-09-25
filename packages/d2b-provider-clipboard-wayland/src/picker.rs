@@ -221,6 +221,50 @@ impl core::fmt::Debug for PickerReceipt {
     }
 }
 
+/// Key identifying one picker completion claim retained in history.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CompletionKey {
+    operation_id: String,
+    source_zone: String,
+    source_subject: String,
+    source_reconnect_generation: u64,
+    destination_zone: String,
+    destination_guest: String,
+    destination_reconnect_generation: u64,
+}
+
+impl CompletionKey {
+    /// Build the completion claim key for one authenticated picker completion.
+    pub(crate) fn new(
+        operation_id: impl Into<String>,
+        source_zone: impl Into<String>,
+        source_subject: impl Into<String>,
+        source_reconnect_generation: u64,
+        destination_zone: impl Into<String>,
+        destination_guest: impl Into<String>,
+        destination_reconnect_generation: u64,
+    ) -> Self {
+        Self {
+            operation_id: operation_id.into(),
+            source_zone: source_zone.into(),
+            source_subject: source_subject.into(),
+            source_reconnect_generation,
+            destination_zone: destination_zone.into(),
+            destination_guest: destination_guest.into(),
+            destination_reconnect_generation,
+        }
+    }
+
+    /// Whether one owner label appears anywhere in the key.
+    pub(crate) fn references_guest(&self, guest: &str) -> bool {
+        self.operation_id == guest
+            || self.source_zone == guest
+            || self.source_subject == guest
+            || self.destination_zone == guest
+            || self.destination_guest == guest
+    }
+}
+
 /// The picker-side completion authority.
 pub struct PickerAuthority;
 
@@ -255,8 +299,7 @@ impl PickerAuthority {
                 };
                 let receipt =
                     PickerReceipt::issue(source, destination, request, entry_digest, expires_at)?;
-                let completion_key = format!(
-                    "{}|{}|{}|{}|{}|{}|{}",
+                let completion_key = CompletionKey::new(
                     request.operation_id(),
                     source.zone(),
                     source.subject_ref().to_canonical_string(),
