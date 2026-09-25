@@ -183,7 +183,7 @@ pub struct FilterPolicy {
     pub identity: ProxyIdentity,
     /// Bounded display label derived from the authenticated identity.
     pub identity_label: String,
-    pub dmabuf_filters: std::sync::Arc<crate::wayland_proxy::dmabuf::DmabufFilterList>,
+    pub dmabuf_filters: std::rc::Rc<crate::wayland_proxy::dmabuf::DmabufFilterList>,
     pub log_filtered_globals: bool,
     /// Runtime advisories emitted by the filter process at startup.
     pub warnings: Vec<PolicyWarning>,
@@ -313,7 +313,7 @@ impl FilterPolicy {
             title_prefix,
             identity,
             identity_label: target_label,
-            dmabuf_filters: std::sync::Arc::new(
+            dmabuf_filters: std::rc::Rc::new(
                 crate::wayland_proxy::dmabuf::DmabufFilterList::new(
                     &input.dmabuf_allow,
                     &input.dmabuf_deny,

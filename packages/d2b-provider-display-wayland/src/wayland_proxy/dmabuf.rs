@@ -6,7 +6,6 @@ use std::{
     io::{self, Seek, SeekFrom, Write},
     os::fd::OwnedFd,
     rc::Rc,
-    sync::Arc,
 };
 
 use nix::sys::memfd::{MemFdCreateFlag, memfd_create};
@@ -159,6 +158,13 @@ pub fn map_shm_to_drm(format: u32) -> u32 {
     }
 }
 
+/// Parse a `format[:modifier]` dmabuf filter from CLI syntax.
+///
+/// # Errors
+///
+/// Returns a message naming the offending token when the format is neither
+/// `all` nor a parseable integer, or when the modifier is neither `linear`,
+/// `invalid`, nor a parseable integer.
 pub fn parse_filter(s: &str) -> Result<DmabufFilter, String> {
     let (format, modifier) = match s.split_once(':') {
         Some((format, modifier)) => (format, Some(modifier)),
@@ -205,14 +211,14 @@ fn parse_u64(s: &str) -> Option<u64> {
 }
 
 pub struct DmabufHandler {
-    filters: Arc<DmabufFilterList>,
+    filters: Rc<DmabufFilterList>,
     diag: Rc<RefCell<DiagRateLimiter>>,
     decoration: Option<SharedDecorationManager>,
 }
 
 impl DmabufHandler {
     pub fn new(
-        filters: Arc<DmabufFilterList>,
+        filters: Rc<DmabufFilterList>,
         diag: Rc<RefCell<DiagRateLimiter>>,
         decoration: Option<SharedDecorationManager>,
     ) -> Self {
@@ -300,7 +306,7 @@ impl DmabufPlane {
 }
 
 struct DmabufBufferParamsHandler {
-    filters: Arc<DmabufFilterList>,
+    filters: Rc<DmabufFilterList>,
     diag: Rc<RefCell<DiagRateLimiter>>,
     decoration: Option<SharedDecorationManager>,
     planes: Vec<DmabufPlane>,
@@ -325,7 +331,7 @@ enum DmabufCreateAction {
 
 impl DmabufBufferParamsHandler {
     fn new(
-        filters: Arc<DmabufFilterList>,
+        filters: Rc<DmabufFilterList>,
         diag: Rc<RefCell<DiagRateLimiter>>,
         decoration: Option<SharedDecorationManager>,
     ) -> Self {
@@ -617,7 +623,7 @@ impl ZwpLinuxBufferParamsV1Handler for DmabufBufferParamsHandler {
 }
 
 struct DmabufFeedbackHandler {
-    filters: Arc<DmabufFilterList>,
+    filters: Rc<DmabufFilterList>,
     diag: Rc<RefCell<DiagRateLimiter>>,
     table: Option<Vec<u8>>,
     index_map: Option<Vec<Option<u16>>>,
@@ -625,7 +631,7 @@ struct DmabufFeedbackHandler {
 }
 
 impl DmabufFeedbackHandler {
-    fn new(filters: Arc<DmabufFilterList>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
+    fn new(filters: Rc<DmabufFilterList>, diag: Rc<RefCell<DiagRateLimiter>>) -> Self {
         Self {
             filters,
             diag,
@@ -787,7 +793,7 @@ fn filter_format_table(
     let mut filtered = Vec::<u8>::new();
     let mut index_map = Vec::<Option<u16>>::new();
     let mut overflowed = false;
-    for (index, entry) in table.chunks_exact(16).enumerate() {
+    for entry in table.chunks_exact(16) {
         let Ok(format) = uapi::pod_read_init::<u32, _>(&entry[0..4]) else {
             index_map.push(None);
             continue;
@@ -798,7 +804,6 @@ fn filter_format_table(
         };
         if filters.allowed(format, modifier) {
             let Ok(new_index) = u16::try_from(filtered.len() / 16) else {
-                let _ = index;
                 overflowed = true;
                 index_map.push(None);
                 continue;
@@ -817,7 +822,7 @@ fn format_table_is_well_formed(table: &[u8]) -> bool {
 }
 
 // memfd is memory-backed: write_all cannot block on I/O; called from the
-    // sync wayland-proxy handler path。
+// sync wayland-proxy handler path.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn table_fd(table: &[u8]) -> io::Result<OwnedFd> {
     let name = CString::new("d2b-dmabuf-format-table").expect("static memfd name has no NUL");
@@ -910,7 +915,7 @@ mod tests {
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn handler_with_plane(modifier: u64) -> DmabufBufferParamsHandler {
-        let filters = Arc::new(DmabufFilterList::new(
+        let filters = Rc::new(DmabufFilterList::new(
             &[],
             &[DmabufFilter {
                 format: None,
@@ -1038,7 +1043,7 @@ mod tests {
 
     #[test]
     fn create_dimensions_are_queued_for_multiple_async_creates() {
-        let filters = Arc::new(DmabufFilterList::default());
+        let filters = Rc::new(DmabufFilterList::default());
         let mut handler = DmabufBufferParamsHandler::new(filters, diag(), None);
 
         handler
@@ -1072,7 +1077,7 @@ mod tests {
 
     #[test]
     fn failed_create_drops_oldest_pending_dimensions() {
-        let filters = Arc::new(DmabufFilterList::default());
+        let filters = Rc::new(DmabufFilterList::default());
         let mut handler = DmabufBufferParamsHandler::new(filters, diag(), None);
         handler
             .pending_create_dimensions
@@ -1100,7 +1105,7 @@ mod tests {
 
     #[test]
     fn invalid_create_dimensions_still_reserve_queue_slot() {
-        let filters = Arc::new(DmabufFilterList::default());
+        let filters = Rc::new(DmabufFilterList::default());
         let mut handler = DmabufBufferParamsHandler::new(filters, diag(), None);
         handler
             .pending_create_dimensions
@@ -1224,7 +1229,7 @@ mod tests {
     #[test]
     fn invalid_plane_set_fails_create_without_unbounded_examples() {
         let format = 0x3432_5258u32;
-        let filters = Arc::new(DmabufFilterList::new(&[], &[]));
+        let filters = Rc::new(DmabufFilterList::new(&[], &[]));
         let mut handler = DmabufBufferParamsHandler::new(filters, diag(), None);
         handler.invalid_plane_count = 100;
 
