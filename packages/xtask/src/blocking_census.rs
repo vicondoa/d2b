@@ -1107,7 +1107,7 @@ fn collect_crate_files(
 }
 
 /// Whether a clippy hit at `file:line` is test context, by the same split
-/// the lexical meter uses.
+/// the lexical meter uses。
 fn hit_is_test(files: &[CensusFile], file: &str, line: usize) -> bool {
     files
         .iter()
@@ -1121,9 +1121,59 @@ fn hit_is_test(files: &[CensusFile], file: &str, line: usize) -> bool {
         })
 }
 
-/// Run the census over the repository or the given crate paths. Prints the
-/// per-crate tables and the totals; with `json_out` writes the authoritative
-/// per-crate counts (the baseline shape); with `baseline` fails when any
+/// Fails when any current per-crate count exceeds its committed baseline。
+fn check_against_baseline<'a>(
+    baseline_path: &Path,
+    crates: impl Iterator<Item = (&'a str, &'a BTreeMap<String, usize>)>,
+) -> Result<(), String> {
+    let committed = fs::read_to_string(baseline_path)
+        .map_err(|error| format!("blocking-census: read baseline {}: {error}", baseline_path.display()))?;
+    let committed: CensusBaseline = serde_json::from_str(&committed)
+        .map_err(|error| format!("blocking-census: parse baseline {}: {error}", baseline_path.display()))?;
+    let mut violations = Vec::new();
+    for (crate_dir, counts) in crates {
+        let committed_counts = committed.crates.get(crate_dir);
+        let mut crate_violations = Vec::new();
+        for (entry, count) in counts {
+            let committed_count = committed_counts
+                .and_then(|counts| counts.get(entry))
+                .copied()
+                .unwrap_or(0);
+            if *count > committed_count {
+                crate_violations.push(format!(
+                    "{entry}: {count} > {committed_count} (committed baseline)"
+                ));
+            }
+        }
+        if crate_violations.is_empty() {
+            println!(
+                "  {}: {} entry class(es) at or below baseline",
+                crate_dir,
+                counts.len()
+            );
+        } else {
+            println!("  {}: ABOVE BASELINE", crate_dir);
+            for violation in &crate_violations {
+                println!("    {violation}");
+            }
+            violations.extend(crate_violations);
+        }
+    }
+    if violations.is_empty() {
+        println!("blocking-census check: PASS (no crate above its committed baseline)");
+    } else {
+        return Err(format!(
+            "blocking-census check: FAILED - {} deny-entry class(es) above the committed baseline {}",
+            violations.len(),
+            baseline_path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Run the census over the repository or the given crate paths。Prints the
+/// per-crate tables and the totals;with `json_out` writes the authoritative
+/// per-crate counts (the baseline shape);with `baseline` fails when any
 /// covered crate's count exceeds its committed baseline (plan R15).
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 pub fn run(
@@ -1263,66 +1313,30 @@ pub fn run(
     println!("clippy-visible blocking-API call sites: {clippy_total}");
     println!("authoritative blocking-API call sites: {authoritative_total}");
     println!("deny-list entries: {}", entries.len());
-
     if let Some(path) = json_out {
-        let baseline = CensusBaseline {
-            crates: crates
-                .iter()
-                .map(|crate_census| (crate_census.crate_dir.clone(), crate_census.counts.clone()))
+        let baseline_record = CensusBaseline {
+            crates: std::mem::take(&mut crates)
+                .into_iter()
+                .map(|crate_census| (crate_census.crate_dir, crate_census.counts))
                 .collect(),
         };
-        let rendered = serde_json::to_string_pretty(&baseline)
+        let rendered = serde_json::to_string_pretty(&baseline_record)
             .map_err(|error| format!("blocking-census: serialize baseline: {error}"))?;
         fs::write(path, rendered + "\n")
             .map_err(|error| format!("blocking-census: write {}: {error}", path.display()))?;
         println!("baseline written: {}", path.display());
-    }
-
-    if let Some(path) = baseline {
-        let committed = fs::read_to_string(path)
-            .map_err(|error| format!("blocking-census: read baseline {}: {error}", path.display()))?;
-        let committed: CensusBaseline = serde_json::from_str(&committed)
-            .map_err(|error| format!("blocking-census: parse baseline {}: {error}", path.display()))?;
-        let mut violations = Vec::new();
-        for crate_census in &crates {
-            let committed_counts = committed.crates.get(&crate_census.crate_dir);
-            let mut crate_violations = Vec::new();
-            for (entry, count) in &crate_census.counts {
-                let committed_count = committed_counts
-                    .and_then(|counts| counts.get(entry))
-                    .copied()
-                    .unwrap_or(0);
-                if *count > committed_count {
-                    crate_violations.push(format!(
-                        "{entry}: {count} > {committed_count} (committed baseline)"
-                    ));
-                }
-            }
-            if crate_violations.is_empty() {
-                println!(
-                    "  {}: {} entry class(es) at or below baseline",
-                    crate_census.crate_dir,
-                    crate_census.counts.len()
-                );
-            } else {
-                println!("  {}: ABOVE BASELINE", crate_census.crate_dir);
-                for violation in &crate_violations {
-                    println!("    {violation}");
-                }
-                violations.extend(crate_violations);
-            }
+        if let Some(baseline_path) = baseline {
+            check_against_baseline(
+                baseline_path,
+                baseline_record.crates.iter().map(|(crate_dir, counts)| (crate_dir.as_str(), counts)),
+            )?;
         }
-        if violations.is_empty() {
-            println!("blocking-census check: PASS (no crate above its committed baseline)");
-        } else {
-            return Err(format!(
-                "blocking-census check: FAILED - {} deny-entry class(es) above the committed baseline {}",
-                violations.len(),
-                path.display()
-            ));
-        }
+    } else if let Some(baseline_path) = baseline {
+        check_against_baseline(
+            baseline_path,
+            crates.iter().map(|crate_census| (crate_census.crate_dir.as_str(), &crate_census.counts)),
+        )?;
     }
-
     Ok(())
 }
 
