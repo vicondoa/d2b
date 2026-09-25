@@ -560,11 +560,6 @@ impl ChildMutation {
         self.precondition
     }
 
-    /// Return the absent UID fence on first create.
-    pub const fn expected_uid(&self) -> Option<&ResourceUid> {
-        None
-    }
-
     /// Borrow the typed create body.
     pub const fn body(&self) -> &ChildCreateBody {
         &self.body

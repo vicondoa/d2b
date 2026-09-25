@@ -334,9 +334,7 @@ mod tests {
         let batch = first.child_batch();
         assert_eq!(batch.mutations().len(), 4);
         assert!(batch.mutations().iter().all(|mutation| {
-            mutation.owner_ref() == &guest
-                && mutation.zone() == &zone
-                && mutation.expected_uid().is_none()
+            mutation.owner_ref() == &guest && mutation.zone() == &zone
         }));
 
         let rendered = format!("{first:?}");

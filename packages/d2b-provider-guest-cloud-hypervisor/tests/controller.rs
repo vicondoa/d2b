@@ -203,8 +203,7 @@ async fn one_uid_free_batch_contains_the_complete_guest_owned_child_graph() {
     assert_eq!(batch.owner_uid(), &ResourceUid::parse(GUEST_UID).unwrap());
     assert_eq!(batch.owner_revision(), ZoneRevision::new(7));
     assert!(batch.mutations().iter().all(|mutation| {
-        mutation.expected_uid().is_none()
-            && mutation.owner_ref() == &ResourceRef::parse("Guest/gateway").unwrap()
+        mutation.owner_ref() == &ResourceRef::parse("Guest/gateway").unwrap()
             && mutation.zone() == &ZoneId::parse("work").unwrap()
     }));
     for mutation in batch.mutations() {

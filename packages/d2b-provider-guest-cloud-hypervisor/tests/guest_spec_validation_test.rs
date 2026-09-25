@@ -169,7 +169,6 @@ fn fixed_guest_child_batch_is_name_addressed_and_uid_free() {
     assert!(batch.mutations().iter().all(|mutation| {
         mutation.precondition()
             == d2b_provider_guest_cloud_hypervisor::CreatePrecondition::CreateAbsent
-            && mutation.expected_uid().is_none()
             && mutation.owner_ref() == &guest
             && mutation.zone() == &zone
     }));
