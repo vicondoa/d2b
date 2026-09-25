@@ -28,9 +28,6 @@ use crate::{
 
 const ATTACHMENT_BATCH: u8 = 1;
 const ATTACHMENT_ACK: u8 = 2;
-const STREAM_CLOSE: u8 = 1;
-const STREAM_CREDIT: u8 = 2;
-const STREAM_RESET: u8 = 3;
 const ATTACHMENT_DESCRIPTOR_BYTES: usize = 62;
 const ACTIVE_REQUEST_RESERVATION_BYTES: usize = 4 * 1024;
 const MAX_ACTIVE_REQUESTS_PER_SESSION: usize = 256;
@@ -932,7 +929,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         self.send_logical(
             RecordKind::SessionControl,
             ChannelId::SESSION_CONTROL,
-            encode_stream_control(STREAM_CREDIT, stream, released),
+            encode_stream_control(StreamControlKind::Credit, stream, released),
             Vec::new(),
         )
         .await
@@ -943,7 +940,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         self.send_logical(
             RecordKind::SessionControl,
             ChannelId::SESSION_CONTROL,
-            encode_stream_control(STREAM_CLOSE, stream, 0),
+            encode_stream_control(StreamControlKind::Close, stream, 0),
             Vec::new(),
         )
         .await?;
@@ -960,7 +957,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         self.send_logical(
             RecordKind::SessionControl,
             ChannelId::SESSION_CONTROL,
-            encode_stream_control(STREAM_RESET, stream, 0),
+            encode_stream_control(StreamControlKind::Reset, stream, 0),
             Vec::new(),
         )
         .await?;
@@ -1295,16 +1292,16 @@ impl<T: OwnedTransport> SessionEngine<T> {
     fn receive_stream_control(&mut self, payload: &[u8]) -> Result<SessionEvent> {
         let (kind, stream, value) = decode_stream_control(payload)?;
         match kind {
-            STREAM_CLOSE => {
+            StreamControlKind::Close => {
                 let event = self.streams.receive_close(stream)?;
                 self.remove_terminal_stream(stream);
                 Ok(SessionEvent::NamedStream(event))
             }
-            STREAM_CREDIT => {
+            StreamControlKind::Credit => {
                 self.streams.grant_send_credit(stream, value)?;
                 Ok(SessionEvent::ControlProcessed)
             }
-            STREAM_RESET => {
+            StreamControlKind::Reset => {
                 self.scheduler.remove_stream(stream);
                 self.withheld_stream_credits.remove(&stream);
                 self.pending_stream_transport.remove(&stream);
@@ -1312,7 +1309,6 @@ impl<T: OwnedTransport> SessionEngine<T> {
                 self.remove_terminal_stream(stream);
                 Ok(SessionEvent::NamedStream(event))
             }
-            _ => Err(SessionError::new(SessionErrorCode::UnknownControl)),
         }
     }
 
@@ -1691,20 +1687,51 @@ fn close_reason_from_tag(tag: u8) -> Result<CloseReason> {
     }
 }
 
-fn encode_stream_control(kind: u8, stream: StreamId, value: u32) -> Vec<u8> {
+/// Stream control kind carried on the session control channel.
+enum StreamControlKind {
+    /// Close one named stream.
+    Close,
+    /// Grant send credit to one named stream.
+    Credit,
+    /// Reset one named stream.
+    Reset,
+}
+
+impl StreamControlKind {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::Close => 1,
+            Self::Credit => 2,
+            Self::Reset => 3,
+        }
+    }
+
+    const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::Close),
+            2 => Some(Self::Credit),
+            3 => Some(Self::Reset),
+            _ => None,
+        }
+    }
+}
+
+fn encode_stream_control(kind: StreamControlKind, stream: StreamId, value: u32) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(7);
-    bytes.push(kind);
+    bytes.push(kind.tag());
     bytes.extend_from_slice(&stream.channel().value().to_be_bytes());
     bytes.extend_from_slice(&value.to_be_bytes());
     bytes
 }
 
-fn decode_stream_control(bytes: &[u8]) -> Result<(u8, StreamId, u32)> {
+fn decode_stream_control(bytes: &[u8]) -> Result<(StreamControlKind, StreamId, u32)> {
     if bytes.len() != 7 {
         return Err(SessionError::new(SessionErrorCode::UnknownControl));
     }
+    let kind = StreamControlKind::from_tag(bytes[0])
+        .ok_or_else(|| SessionError::new(SessionErrorCode::UnknownControl))?;
     Ok((
-        bytes[0],
+        kind,
         StreamId::new(u16::from_be_bytes([bytes[1], bytes[2]]))?,
         u32::from_be_bytes(
             bytes[3..7]
