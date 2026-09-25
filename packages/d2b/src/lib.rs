@@ -1,3 +1,6 @@
+//! The `d2b` CLI: typed command surface, dispatch, doctor diagnosis,
+//! and host validation agents.
+
 #![allow(dead_code)]
 
 use std::{
@@ -212,12 +215,14 @@ pub(crate) fn sha256_hex(data: &[u8]) -> String {
     hex
 }
 
+/// Build the `d2b` CLI command tree for embedding and completion.
 pub fn cli_command() -> clap::Command {
     let mut command = dispatch::ModernCli::command();
     command.set_bin_name("d2b");
     command
 }
 
+/// Execute the `d2b` CLI against one argument list and return the process exit code.
 pub fn run<I>(args: I) -> i32
 where
     I: IntoIterator<Item = OsString>,
