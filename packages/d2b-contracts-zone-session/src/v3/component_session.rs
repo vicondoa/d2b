@@ -3241,3 +3241,580 @@ mod wire_enum_vectors {
         }
     }
 }
+
+#[cfg(test)]
+mod codec_state_machine_tests {
+    use super::*;
+
+    fn envelope(issued_at_unix_ms: u64, expires_at_unix_ms: u64) -> RequestEnvelope {
+        RequestEnvelope {
+            request_id: RequestId::new([0x42; 16].to_vec()).unwrap(),
+            correlation_id: None,
+            trace_id: None,
+            idempotency_key: None,
+            issued_at_unix_ms,
+            expires_at_unix_ms,
+        }
+    }
+
+    fn fragment(
+        message_id: u64,
+        index: u32,
+        count: u32,
+        total_plaintext_len: u32,
+        offset: u32,
+    ) -> FragmentHeader {
+        FragmentHeader {
+            message_id,
+            index,
+            count,
+            total_plaintext_len,
+            offset,
+        }
+    }
+
+    fn packet_policy(max_per_packet: u16) -> AttachmentPolicy {
+        AttachmentPolicy {
+            kind: AttachmentPolicyKind::PacketAtomic,
+            max_per_packet,
+            max_per_request: max_per_packet,
+            max_per_operation: max_per_packet,
+            max_per_session: max_per_packet,
+            credentials_allowed: false,
+        }
+    }
+
+    #[test]
+    fn admit_rejects_expiry_before_issue() {
+        let request = envelope(2_000, 1_000);
+        assert_eq!(
+            request.admit(1_000, 100_000, None, None),
+            Err(ContractError::InvalidDeadline)
+        );
+    }
+
+    #[test]
+    fn admit_rejects_zero_service_lifetime() {
+        let request = envelope(1_000, 5_000);
+        assert_eq!(
+            request.admit(2_000, 0, None, None),
+            Err(ContractError::InvalidDeadline)
+        );
+    }
+
+    #[test]
+    fn admit_rejects_service_lifetime_above_contract_max() {
+        let request = envelope(1_000, 5_000);
+        assert_eq!(
+            request.admit(2_000, MAX_REQUEST_LIFETIME_MS + 1, None, None),
+            Err(ContractError::InvalidDeadline)
+        );
+    }
+
+    #[test]
+    fn admit_rejects_lifetime_above_contract_max() {
+        let request = envelope(0, MAX_REQUEST_LIFETIME_MS + 1);
+        assert_eq!(
+            request.admit(1_000, MAX_REQUEST_LIFETIME_MS, None, None),
+            Err(ContractError::InvalidDeadline)
+        );
+    }
+
+    #[test]
+    fn admit_rejects_lifetime_above_service_max() {
+        let request = envelope(0, 100_000);
+        assert_eq!(
+            request.admit(1_000, 50_000, None, None),
+            Err(ContractError::InvalidDeadline)
+        );
+    }
+
+    #[test]
+    fn admit_rejects_issue_beyond_clock_skew() {
+        let issued = 1_000 + MAX_CLOCK_SKEW_MS + 1;
+        let request = envelope(issued, issued + 1_000);
+        assert_eq!(
+            request.admit(1_000, 100_000, None, None),
+            Err(ContractError::InvalidDeadline)
+        );
+    }
+
+    #[test]
+    fn admit_rejects_expired_envelope() {
+        let request = envelope(1_000, 2_000);
+        assert_eq!(
+            request.admit(2_000, 100_000, None, None),
+            Err(ContractError::InvalidDeadline)
+        );
+    }
+
+    #[test]
+    fn admit_rejects_zero_remaining_nanos() {
+        let request = envelope(1_000, 5_000);
+        assert_eq!(
+            request.admit(2_000, 100_000, Some(0), None),
+            Err(ContractError::InvalidDeadline)
+        );
+        assert_eq!(
+            request.admit(2_000, 100_000, None, Some(0)),
+            Err(ContractError::InvalidDeadline)
+        );
+    }
+
+    #[test]
+    fn admit_skew_check_overflows_near_wall_clock_max() {
+        let request = envelope(u64::MAX - 500, u64::MAX - 400);
+        assert_eq!(
+            request.admit(u64::MAX - 1_000, 1_000, None, None),
+            Err(ContractError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn admit_accepts_and_caps_remaining_nanos() {
+        let request = envelope(1_000, 5_000);
+        let admitted = request
+            .admit(2_000, 4_000, Some(2_500_000_000), Some(2_000_000_000))
+            .unwrap();
+        assert_eq!(admitted.absolute_expiry_unix_ms, 5_000);
+        assert_eq!(admitted.remaining_nanos, 2_000_000_000);
+
+        let admitted = request.admit(2_000, 4_000, None, None).unwrap();
+        assert_eq!(admitted.remaining_nanos, 3_000_000_000);
+
+        // A service cap below the wall-remaining window shortens the budget;
+        // the envelope lifetime must still fit inside the service maximum.
+        let future_issued = envelope(3_000, 5_000);
+        let admitted = future_issued.admit(1_000, 3_000, None, None).unwrap();
+        assert_eq!(admitted.absolute_expiry_unix_ms, 5_000);
+        assert_eq!(admitted.remaining_nanos, 3_000_000_000);
+    }
+
+    #[test]
+    fn fragment_begin_rejects_nonzero_index() {
+        let first = fragment(7, 1, 3, 10, 0);
+        assert_eq!(
+            FragmentSequence::begin(first, 5, 1_024),
+            Err(FragmentSequenceError::Reordered)
+        );
+    }
+
+    #[test]
+    fn fragment_begin_rejects_nonzero_offset() {
+        let first = fragment(7, 0, 2, 10, 5);
+        assert_eq!(
+            FragmentSequence::begin(first, 5, 1_024),
+            Err(FragmentSequenceError::Reordered)
+        );
+    }
+
+    #[test]
+    fn fragment_begin_rejects_invalid_header() {
+        let first = fragment(7, 0, 0, 10, 0);
+        assert_eq!(
+            FragmentSequence::begin(first, 5, 1_024),
+            Err(FragmentSequenceError::Invalid)
+        );
+    }
+
+    #[test]
+    fn fragment_sequence_accepts_in_order_until_complete() {
+        let mut sequence =
+            FragmentSequence::begin(fragment(7, 0, 2, 10, 0), 5, 1_024).unwrap();
+        assert_eq!(
+            sequence.accept(fragment(7, 1, 2, 10, 5), 5, 1_024),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn fragment_sequence_rejects_different_message() {
+        let mut sequence =
+            FragmentSequence::begin(fragment(7, 0, 2, 10, 0), 5, 1_024).unwrap();
+        assert_eq!(
+            sequence.accept(fragment(8, 1, 2, 10, 5), 5, 1_024),
+            Err(FragmentSequenceError::DifferentMessage)
+        );
+        assert_eq!(
+            sequence.accept(fragment(7, 1, 3, 10, 5), 5, 1_024),
+            Err(FragmentSequenceError::DifferentMessage)
+        );
+        assert_eq!(
+            sequence.accept(fragment(7, 1, 2, 11, 5), 5, 1_024),
+            Err(FragmentSequenceError::DifferentMessage)
+        );
+    }
+
+    #[test]
+    fn fragment_sequence_rejects_duplicate() {
+        let mut sequence =
+            FragmentSequence::begin(fragment(7, 0, 2, 10, 0), 5, 1_024).unwrap();
+        assert_eq!(
+            sequence.accept(fragment(7, 0, 2, 10, 0), 5, 1_024),
+            Err(FragmentSequenceError::Duplicate)
+        );
+    }
+
+    #[test]
+    fn fragment_sequence_rejects_reordered_index() {
+        let mut sequence =
+            FragmentSequence::begin(fragment(7, 0, 2, 10, 0), 5, 1_024).unwrap();
+        assert_eq!(
+            sequence.accept(fragment(7, 2, 2, 10, 5), 5, 1_024),
+            Err(FragmentSequenceError::Reordered)
+        );
+    }
+
+    #[test]
+    fn fragment_sequence_rejects_overlap() {
+        let mut sequence =
+            FragmentSequence::begin(fragment(7, 0, 2, 10, 0), 5, 1_024).unwrap();
+        assert_eq!(
+            sequence.accept(fragment(7, 1, 2, 10, 4), 5, 1_024),
+            Err(FragmentSequenceError::Overlap)
+        );
+    }
+
+    #[test]
+    fn fragment_sequence_rejects_reordered_offset() {
+        let mut sequence =
+            FragmentSequence::begin(fragment(7, 0, 2, 10, 0), 5, 1_024).unwrap();
+        assert_eq!(
+            sequence.accept(fragment(7, 1, 2, 10, 6), 5, 1_024),
+            Err(FragmentSequenceError::Reordered)
+        );
+    }
+
+    #[test]
+    fn fragment_sequence_rejects_invalid_fragment() {
+        let mut sequence =
+            FragmentSequence::begin(fragment(7, 0, 2, 10, 0), 5, 1_024).unwrap();
+        assert_eq!(
+            sequence.accept(fragment(7, 1, 2, 10, 5), 6, 1_024),
+            Err(FragmentSequenceError::Invalid)
+        );
+    }
+
+    #[test]
+    fn fragment_sequence_rejects_accept_after_complete() {
+        let mut sequence =
+            FragmentSequence::begin(fragment(7, 0, 2, 10, 0), 5, 1_024).unwrap();
+        assert_eq!(sequence.accept(fragment(7, 1, 2, 10, 5), 5, 1_024), Ok(true));
+        assert_eq!(
+            sequence.accept(fragment(7, 1, 2, 10, 5), 5, 1_024),
+            Err(FragmentSequenceError::Complete)
+        );
+    }
+
+    #[test]
+    fn receive_sequence_accepts_in_order() {
+        let mut sequence = ReceiveSequence::new();
+        assert_eq!(sequence.accept(0), Ok(()));
+        assert_eq!(sequence.accept(1), Ok(()));
+        let mut sequence = ReceiveSequence::from_expected(5);
+        assert_eq!(sequence.accept(5), Ok(()));
+    }
+
+    #[test]
+    fn receive_sequence_rejects_replay() {
+        let mut sequence = ReceiveSequence::from_expected(5);
+        assert_eq!(sequence.accept(4), Err(SequenceError::Replay));
+    }
+
+    #[test]
+    fn receive_sequence_rejects_out_of_order() {
+        let mut sequence = ReceiveSequence::from_expected(5);
+        assert_eq!(sequence.accept(6), Err(SequenceError::OutOfOrder));
+    }
+
+    #[test]
+    fn receive_sequence_rejects_max_nonce() {
+        let mut sequence = ReceiveSequence::new();
+        assert_eq!(sequence.accept(u64::MAX), Err(SequenceError::NonceExhausted));
+    }
+
+    #[test]
+    fn receive_sequence_exhausts_at_max_minus_one() {
+        let mut sequence = ReceiveSequence::from_expected(u64::MAX - 1);
+        assert_eq!(sequence.accept(u64::MAX - 1), Ok(()));
+        assert_eq!(
+            sequence.accept(u64::MAX - 1),
+            Err(SequenceError::NonceExhausted)
+        );
+    }
+
+    #[test]
+    fn receive_sequence_from_expected_max_is_exhausted() {
+        let mut sequence = ReceiveSequence::from_expected(u64::MAX);
+        assert_eq!(sequence.accept(0), Err(SequenceError::NonceExhausted));
+    }
+
+    #[test]
+    fn send_sequence_take_increments() {
+        let mut sequence = SendSequence::new();
+        assert_eq!(sequence.take(), Ok(0));
+        assert_eq!(sequence.take(), Ok(1));
+        assert_eq!(sequence.take(), Ok(2));
+        let mut sequence = SendSequence::from_next(5);
+        assert_eq!(sequence.take(), Ok(5));
+        assert_eq!(sequence.take(), Ok(6));
+    }
+
+    #[test]
+    fn send_sequence_take_rejects_exhausted() {
+        let mut sequence = SendSequence::from_next(u64::MAX);
+        assert_eq!(sequence.take(), Err(SequenceError::NonceExhausted));
+        let mut sequence = SendSequence::from_next(u64::MAX - 1);
+        assert_eq!(sequence.take(), Ok(u64::MAX - 1));
+        assert_eq!(sequence.take(), Err(SequenceError::NonceExhausted));
+    }
+
+    #[test]
+    fn attachment_credits_reserve_increments_all_classes() {
+        let credits = AttachmentCredits {
+            packet: 1,
+            request: 2,
+            operation: 3,
+            session: 4,
+            process: 5,
+            host: 6,
+        };
+        let next = credits.reserve(1, packet_policy(8)).unwrap();
+        assert_eq!(next.packet, 2);
+        assert_eq!(next.request, 3);
+        assert_eq!(next.operation, 4);
+        assert_eq!(next.session, 5);
+        assert_eq!(next.process, 6);
+        assert_eq!(next.host, 7);
+    }
+
+    #[test]
+    fn attachment_credits_reserve_overflows() {
+        let credits = AttachmentCredits {
+            packet: 1,
+            request: 0,
+            operation: 0,
+            session: 0,
+            process: 0,
+            host: 0,
+        };
+        assert_eq!(
+            credits.reserve(u16::MAX, packet_policy(u16::MAX)),
+            Err(ContractError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn attachment_credits_reserve_rejects_policy_excess() {
+        let credits = AttachmentCredits {
+            packet: 1,
+            request: 0,
+            operation: 0,
+            session: 0,
+            process: 0,
+            host: 0,
+        };
+        assert_eq!(
+            credits.reserve(1, packet_policy(1)),
+            Err(ContractError::CreditExceeded)
+        );
+    }
+
+    #[test]
+    fn attachment_credits_reserve_rejects_process_and_host_caps() {
+        let credits = AttachmentCredits {
+            packet: 0,
+            request: 0,
+            operation: 0,
+            session: 0,
+            process: MAX_PROCESS_ATTACHMENT_CREDITS,
+            host: 0,
+        };
+        assert_eq!(
+            credits.reserve(1, packet_policy(8)),
+            Err(ContractError::CreditExceeded)
+        );
+        let credits = AttachmentCredits {
+            packet: 0,
+            request: 0,
+            operation: 0,
+            session: 0,
+            process: 0,
+            host: MAX_HOST_ATTACHMENT_CREDITS,
+        };
+        assert_eq!(
+            credits.reserve(1, packet_policy(8)),
+            Err(ContractError::CreditExceeded)
+        );
+    }
+
+    #[test]
+    fn attachment_credits_process_pool_computes_and_caps() {
+        assert_eq!(AttachmentCredits::process_pool(1_000, 0), Ok(936));
+        assert_eq!(
+            AttachmentCredits::process_pool(1_000_000, 0),
+            Ok(MAX_PROCESS_ATTACHMENT_CREDITS)
+        );
+        assert_eq!(
+            AttachmentCredits::process_pool(100, 100),
+            Err(ContractError::CreditExceeded)
+        );
+        assert_eq!(
+            AttachmentCredits::process_pool(63, 0),
+            Err(ContractError::CreditExceeded)
+        );
+    }
+
+    #[test]
+    fn record_header_round_trips_canonically() {
+        let limits = LimitProfile::local_default();
+        let headers = [
+            (
+                RecordKind::SessionControl,
+                ChannelId::SESSION_CONTROL,
+            ),
+            (RecordKind::Ttrpc, ChannelId::TTRPC_CONTROL),
+            (RecordKind::Attachment, ChannelId::ATTACHMENT_CONTROL),
+            (
+                RecordKind::NamedStream,
+                ChannelId::named(0x0100).unwrap(),
+            ),
+        ];
+        for (kind, channel) in headers {
+            let header = RecordHeader {
+                kind,
+                flags: 0x05,
+                channel,
+                sequence: 7,
+                reconnect_generation: 9,
+                payload_len: 11,
+            };
+            let bytes = header.encode(limits).unwrap();
+            assert_eq!(bytes.len(), RECORD_HEADER_LEN);
+            assert_eq!(RecordHeader::decode(&bytes, limits).unwrap(), header);
+        }
+    }
+
+    #[test]
+    fn record_header_encode_rejects_invalid_contract() {
+        let limits = LimitProfile::local_default();
+        let invalid_channel = RecordHeader {
+            kind: RecordKind::Ttrpc,
+            flags: 0,
+            channel: ChannelId(3),
+            sequence: 1,
+            reconnect_generation: 1,
+            payload_len: 1,
+        };
+        assert_eq!(
+            invalid_channel.encode(limits),
+            Err(ContractError::InvalidChannel)
+        );
+        let zero_generation = RecordHeader {
+            kind: RecordKind::Ttrpc,
+            flags: 0,
+            channel: ChannelId::TTRPC_CONTROL,
+            sequence: 1,
+            reconnect_generation: 0,
+            payload_len: 1,
+        };
+        assert_eq!(
+            zero_generation.encode(limits),
+            Err(ContractError::LimitExceeded)
+        );
+        let oversized = RecordHeader {
+            kind: RecordKind::Ttrpc,
+            flags: 0,
+            channel: ChannelId::TTRPC_CONTROL,
+            sequence: 1,
+            reconnect_generation: 1,
+            payload_len: u32::MAX,
+        };
+        assert_eq!(oversized.encode(limits), Err(ContractError::LimitExceeded));
+    }
+
+    #[test]
+    fn record_header_decode_rejects_truncated() {
+        let limits = LimitProfile::local_default();
+        assert_eq!(
+            RecordHeader::decode(&[0; RECORD_HEADER_LEN - 1], limits),
+            Err(BinaryError::Truncated)
+        );
+    }
+
+    #[test]
+    fn fragment_header_round_trips_canonically() {
+        let header = fragment(7, 1, 2, 10, 5);
+        let bytes = header.encode(5, 1_024).unwrap();
+        assert_eq!(bytes.len(), FRAGMENT_HEADER_LEN);
+        assert_eq!(FragmentHeader::decode(&bytes, 5, 1_024).unwrap(), header);
+    }
+
+    #[test]
+    fn fragment_header_encode_rejects_invalid_fragment() {
+        let header = fragment(7, 2, 2, 10, 0);
+        assert_eq!(
+            header.encode(5, 1_024),
+            Err(ContractError::InvalidFragment)
+        );
+    }
+
+    #[test]
+    fn fragment_header_decode_rejects_truncated() {
+        assert_eq!(
+            FragmentHeader::decode(&[0; FRAGMENT_HEADER_LEN - 1], 5, 1_024),
+            Err(BinaryError::Truncated)
+        );
+    }
+
+    fn local_offer() -> HandshakeOffer {
+        HandshakeOffer {
+            purpose: EndpointPurpose::LocalLifecycle,
+            purpose_class: PurposeClass::Local,
+            initiator_role: EndpointRole::ZoneController,
+            responder_role: EndpointRole::Component,
+            service: ServicePackage::ResourceV3,
+            schema_fingerprint: [0x51; 32],
+            noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
+            limits: LimitProfile::local_default(),
+            transport_binding: TransportBinding {
+                transport: TransportClass::UnixStream,
+                locality: Locality::HostLocal,
+                channel_binding: [0x52; 32],
+                identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+            },
+            reconnect_generation: 1,
+            attachment_policy: AttachmentPolicy::disabled(),
+        }
+    }
+
+    #[test]
+    fn handshake_accept_round_trips_canonically() {
+        let accept = HandshakeAccept {
+            offer: local_offer(),
+            transcript_binding: [0x53; 32],
+        };
+        let bytes = accept.encode_canonical().unwrap();
+        assert_eq!(HandshakeAccept::decode_canonical(&bytes).unwrap(), accept);
+    }
+
+    #[test]
+    fn handshake_accept_rejects_zero_transcript_binding() {
+        let accept = HandshakeAccept {
+            offer: local_offer(),
+            transcript_binding: [0; 32],
+        };
+        assert_eq!(
+            accept.encode_canonical(),
+            Err(BinaryError::InvalidContract(ContractError::InvalidBinding))
+        );
+    }
+
+    #[test]
+    fn handshake_accept_decode_rejects_truncated() {
+        assert_eq!(
+            HandshakeAccept::decode_canonical(&[0x01, 0x00]),
+            Err(BinaryError::Truncated)
+        );
+    }
+}

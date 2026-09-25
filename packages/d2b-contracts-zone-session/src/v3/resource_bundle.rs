@@ -379,7 +379,9 @@ impl ProcessTemplateBinding {
             || binary_path
                 .split('/')
                 .any(|segment| matches!(segment, "." | ".."))
-            || !binary_path.ends_with(&format!("/bin/{}", binary_ref.as_str()))
+            || !binary_path
+                .strip_suffix(binary_ref.as_str())
+                .is_some_and(|prefix| prefix.ends_with("/bin/"))
         {
             return Err(ResourceBundleError::InvalidProcessTemplate);
         }
