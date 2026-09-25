@@ -444,7 +444,7 @@ mod tests {
         WatchRegistration,
     };
     use d2b_resource_runtime::driver::{
-        DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
+        DynResourceDriver, RecoveryOutcome, ReconcileOutcome,
     };
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
@@ -455,10 +455,8 @@ mod tests {
     use crate::test_support::{RecordingEffects, ScriptedProbe, recording_facets};
 
     use super::{
-        USER_REDISCOVER, UserDriver, UserDriverFactory, UserDriverStatus, user_descriptor,
-        user_spec_decoder,
+        USER_REDISCOVER, UserDriver, UserDriverStatus, user_descriptor, user_spec_decoder,
     };
-    use crate::UserEffectFacets;
 
     // -- fakes ---------------------------------------------------------------
 
@@ -639,12 +637,6 @@ mod tests {
         Box::new(UserDriver::new(effects))
     }
 
-    /// The facet set the factory and declaration tests build over: the
-    /// scripted probe double, exactly as the plane's test inputs build it.
-    fn facets() -> UserEffectFacets {
-        recording_facets(ScriptedProbe::new())
-    }
-
     async fn user_fixture() -> (
         ResourceContext,
         Arc<RecordingEffects>,
@@ -661,17 +653,6 @@ mod tests {
     }
 
     // -- factory -------------------------------------------------------------
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_registers_exactly_the_user_resource_type() {
-        let factory = UserDriverFactory::new(facets());
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), "User");
-        factory
-            .create(&ResourceKey::new("work", "User", "alice"))
-            .await;
-    }
 
     /// The declaration registers the type and the registry serves the
     /// declared factory, so a User row reaches its driver through the

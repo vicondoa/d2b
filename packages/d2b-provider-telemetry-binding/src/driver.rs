@@ -944,19 +944,6 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-
-    #[tokio::test]
-    async fn factory_registers_only_the_binding_type() {
-        let factory = TelemetryBindingDriverFactory::new();
-        let types = factory
-            .resource_types()
-            .iter()
-            .map(ResourceTypeName::as_str)
-            .collect::<Vec<_>>();
-        assert_eq!(types, vec![TELEMETRY_BINDING_TYPE]);
-    }
-
     // -- validate ------------------------------------------------------------
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]

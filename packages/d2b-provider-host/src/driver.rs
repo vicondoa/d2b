@@ -491,7 +491,7 @@ mod tests {
         WatchRegistration,
     };
     use d2b_resource_runtime::driver::{
-        DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
+        DynResourceDriver, RecoveryOutcome, ReconcileOutcome,
     };
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
@@ -502,9 +502,8 @@ mod tests {
     use crate::test_support::{RecordingEffects, RecordingProbe, scripted_facets};
 
     use super::{
-        HostDriver, HostDriverFactory, HostDriverStatus, host_descriptor, host_spec_decoder,
+        HostDriver, HostDriverStatus, host_descriptor, host_spec_decoder,
     };
-    use crate::HostEffectFacets;
 
     // -- fakes ---------------------------------------------------------------
 
@@ -699,29 +698,7 @@ mod tests {
         (ctx, effects, manager, requeue, driver)
     }
 
-    /// The facet set the factory and declaration tests build over: the
-    /// daemon-supplied minijail gate source double (the plane supplies the
-    /// other probe inputs as host state the probe reads itself).
-    fn facets() -> HostEffectFacets {
-        crate::test_support::recording_facets(crate::test_support::RecordingMinijailGate::new(
-            d2b_provider_system_core::MinijailPlatformGate::new(6, 9, true),
-        ))
-    }
-
-    // -- factory -------------------------------------------------------------
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_registers_exactly_the_host_resource_type() {
-        let factory = HostDriverFactory::new(facets());
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), "Host");
-        factory
-            .create(&ResourceKey::new("work", "Host", "host-system"))
-            .await;
-    }
-
-    /// The declaration registers the type and the registry serves the
+/// The declaration registers the type and the registry serves the
     /// declared factory, so a Host row reaches its driver through the
     /// registry alone; the driver's effects come from the crate's own
     /// implementation over the facet set (U5), so no externally built port

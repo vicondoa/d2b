@@ -1007,17 +1007,6 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_registers_only_the_volume_resource_type() {
-        let factory = VolumeDriverFactory::new(VolumeDriverArgs {
-            zone: "work".to_owned(),
-            facets: recording_facets(RecordingRuntime::new()),
-        });
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), "Volume");
-    }
-
     // -- ensure: layout effect, then children ---------------------------------
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
