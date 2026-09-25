@@ -595,11 +595,7 @@ fn push_check(checks: &mut Vec<DoctorCheck>, name: &str, passed: bool, error: bo
 }
 
 fn summarize(checks: &[DoctorCheck]) -> DoctorSummary {
-    let mut summary = DoctorSummary {
-        ok: 0,
-        warn: 0,
-        error: 0,
-    };
+    let mut summary = DoctorSummary::default();
     for check in checks {
         match check.status {
             CheckStatus::Ok => summary.ok += 1,
