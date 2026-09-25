@@ -38,6 +38,9 @@ pub const EXTERNAL_PHYSICAL_NIC_AUTHORITY_CLASS: &str = "external-physical-nic";
 pub const PHYSICAL_USB_BACKING_IDENTITY_DOMAIN: &str = "physical-usb-backing/v1";
 /// Domain tag for Core-derived USBIP relay endpoint identities.
 pub const USBIP_NETWORK_RELAY_IDENTITY_DOMAIN: &str = "usbip-network-relay/v1";
+/// The one Provider with optional controller cardinality: telemetry may be
+/// absent from a Zone, so its claim is AtMostOne instead of ExactlyOne.
+const OPTIONAL_PROVIDER_REF: &str = "Provider/observability-otel";
 #[allow(dead_code)]
 const MAX_RESOLVED_NIC_IDENTITY_BYTES: usize = 256;
 static NEXT_AUTHORITY_INDEX_NONCE: AtomicU64 = AtomicU64::new(1);
@@ -982,7 +985,7 @@ impl AuthorityRequest {
         provider_ref: ResourceRef,
         owner_proof: AuthorityOwnerProof,
     ) -> Result<Self, AuthorityError> {
-        let cardinality = if provider_ref.to_canonical_string() == "Provider/observability-otel" {
+        let cardinality = if provider_ref.to_canonical_string() == OPTIONAL_PROVIDER_REF {
             ProviderCardinality::AtMostOne
         } else {
             ProviderCardinality::ExactlyOne
