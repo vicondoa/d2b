@@ -1249,7 +1249,6 @@ async fn deletion_targets_the_declared_rows() {
     }
 
     /// One production-port instance over scripted rows and a facet set.
-
     fn make_port<'a>(
         facets: TpmEffectFacets,
         children: &'a RecordingChildSurface,

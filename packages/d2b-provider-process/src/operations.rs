@@ -3038,17 +3038,21 @@ mod tests {
 
     // -- the fail-closed refusal paths of the family handlers -------------
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn null_device() -> std::fs::File {
+        std::fs::File::open("/dev/null").expect("null device")
+    }
+
     /// Every kernel-dependent handler refuses a direct invocation with no
     /// wired seam before any effect runs: `kernel-seam-unwired` is the
     /// closed refusal of a Zone whose composition point never wired a
     /// kernel leg.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn family_operations_without_a_kernel_seam_refuse_fail_closed() {
         let zone = zone();
         let caller = caller();
         let operation = ResourceRef::parse("Operation/spawn-runner").expect("operation");
-        let socket = std::fs::File::open("/dev/null").expect("null device"); // async-gate-allow: test-only fd source for the inherited-fd contract
+        let socket = null_device();
         let fds = [socket.as_raw_fd()];
 
         let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
