@@ -154,7 +154,6 @@ mod tests {
     fn display_shows_epoch_and_sequence() {
         let revision = RuntimeRevision::new(1_728_000_000, 42);
         let rendered = revision.to_string();
-        assert!(rendered.contains("1728000000"), "got: {rendered}");
         assert!(rendered.contains('4'), "got: {rendered}");
         assert!(rendered.contains("e1728000000+42"), "got: {rendered}");
     }
