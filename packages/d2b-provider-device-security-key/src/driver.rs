@@ -377,36 +377,29 @@ pub fn declared_dependency_refs(
     spec: &Value,
     _metadata: &Value,
 ) -> Vec<ResourceRef> {
-    let mut refs = Vec::new();
-    let mut push = |reference: Option<ResourceRef>| {
-        if let Some(reference) = reference {
-            refs.push(reference);
-        }
-    };
     match component {
-        SecurityKeyComponent::Service => {
-            push(
-                spec.pointer("/spec/provider/settings/deviceRef")
-                    .and_then(Value::as_str)
-                    .and_then(|value| ResourceRef::parse(value).ok()),
-            );
-            push(
-                spec.pointer("/spec/provider/settings/relayEndpointRef")
-                    .and_then(Value::as_str)
-                    .and_then(|value| ResourceRef::parse(value).ok()),
-            );
-        }
-        SecurityKeyComponent::Binding => {
-            push(spec_ref(spec, "/spec/serviceRef").ok());
-            push(
-                spec.pointer("/spec/target/guestRef")
-                    .or_else(|| spec.pointer("/spec/guestRef"))
-                    .and_then(Value::as_str)
-                    .and_then(|value| ResourceRef::parse(value).ok()),
-            );
-        }
+        SecurityKeyComponent::Service => [
+            spec.pointer("/spec/provider/settings/deviceRef")
+                .and_then(Value::as_str)
+                .and_then(|value| ResourceRef::parse(value).ok()),
+            spec.pointer("/spec/provider/settings/relayEndpointRef")
+                .and_then(Value::as_str)
+                .and_then(|value| ResourceRef::parse(value).ok()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        SecurityKeyComponent::Binding => [
+            spec_ref(spec, "/spec/serviceRef").ok(),
+            spec.pointer("/spec/target/guestRef")
+                .or_else(|| spec.pointer("/spec/guestRef"))
+                .and_then(Value::as_str)
+                .and_then(|value| ResourceRef::parse(value).ok()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
     }
-    refs
 }
 
 /// One reference field of a stored spec.
