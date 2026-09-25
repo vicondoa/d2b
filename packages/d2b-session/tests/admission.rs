@@ -47,7 +47,7 @@ impl SessionRegistrationCapability<()> for TestRegistrationCapability {
 async fn unpolled_cancellation_on_real_driver_reclaims_request_for_reuse() {
     let zone = ZoneId::parse("work").unwrap();
     let policy = single_request_policy();
-    let (initiator, responder) = engine_pair(&policy).await;
+    let (initiator, responder, send_failure) = engine_pair_with_failure(&policy).await;
     let admitted = session_acceptor(
         policy,
         zone.clone(),
@@ -71,31 +71,28 @@ async fn unpolled_cancellation_on_real_driver_reclaims_request_for_reuse() {
         )
         .await
         .unwrap();
+    // The first request's frame write already notified `sent`; consume that
+    // notification so the wait below observes only the cancellation frame.
+    send_failure.sent.notified().await;
     drop(session.cancellation_handle().cancel(request_id.clone()));
 
-    let mut reused = false;
-    for _ in 0..64 {
-        match ttrpc
-            .start(
-                invoke_permit(&mut session, &zone).await,
-                replacement_id.clone(),
-                b"replacement".to_vec(),
-                ttrpc.attempt_guard(),
-                2,
-            )
-            .await
-        {
-            Ok(()) => {
-                reused = true;
-                break;
-            }
-            Err(error) if error.code() == SessionErrorCode::QueueBackpressure => {
-                tokio::task::yield_now().await;
-            }
-            Err(error) => panic!("replacement request failed unexpectedly: {error}"),
-        }
-    }
-    assert!(reused, "unpolled cancellation did not reclaim the request");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        send_failure.sent.notified(),
+    )
+    .await
+    .expect("unpolled cancellation did not reclaim the request");
+
+    ttrpc
+        .start(
+            invoke_permit(&mut session, &zone).await,
+            replacement_id.clone(),
+            b"replacement".to_vec(),
+            ttrpc.attempt_guard(),
+            2,
+        )
+        .await
+        .expect("replacement request failed after the cancellation was delivered");
     assert!(ttrpc.complete(replacement_id).await.unwrap());
 }
 
@@ -269,6 +266,9 @@ struct SendFailure {
     enabled: AtomicBool,
     entered: Notify,
     release: Notify,
+    /// Notified once for every frame the session writer delivers, so tests
+    /// can observe cancellation delivery without spinning.
+    sent: Notify,
 }
 
 impl SendFailure {
@@ -365,7 +365,9 @@ impl d2b_session::TransportWriter for TestTransportWriter {
         self.sender
             .send(packet)
             .await
-            .map_err(|_| TransportError::Disconnected)
+            .map_err(|_| TransportError::Disconnected)?;
+        self.send_failure.sent.notify_one();
+        Ok(())
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
