@@ -1667,7 +1667,7 @@ impl ProductionSharedProviderEffects {
         .map_err(|error| {
             tracing::warn!(
                 error = ?error,
-                device = %key_ref(&request.target)?.to_canonical_string(),
+                device = %device_ref.to_canonical_string(),
                 "TPM device controller reconcile failed",
             );
             SharedProviderEffectError::Unavailable
@@ -2641,10 +2641,11 @@ impl ProductionSharedProviderEffects {
                 request.operation_id.clone(),
             ),
         );
+        let device_ref = key_ref(&request.target)?.to_canonical_string();
         let result = controller.finalize_lifecycle(&mut port).map_err(|error| {
             tracing::debug!(
                 error = ?error,
-                device = %key_ref(&request.target)?.to_canonical_string(),
+                device = %device_ref,
                 "GPU lifecycle finalize failed",
             );
             SharedProviderEffectError::Unavailable

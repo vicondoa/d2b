@@ -415,8 +415,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        NETWORK_PROVIDER_REF, NETWORK_TYPE_NAME, NetworkDriverArgs, declared_dependency_refs,
-        network_descriptor, network_spec,
+        NETWORK_PROVIDER_REF, NETWORK_TYPE_NAME, NetworkDriverArgs, ZoneId,
+        declared_dependency_refs, network_descriptor, network_spec,
     };
     use crate::test_support::{RecordingRuntime, recording_facets};
 
