@@ -578,12 +578,12 @@
     },
     {
       "file": "packages/d2b-provider-network-local/tests/reconcile.rs",
-      "line": 99,
+      "line": 84,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-network-local/tests/reconcile.rs",
-      "line": 179,
+      "line": 164,
       "reason": "test-support recorder lock"
     },
     {
@@ -1053,17 +1053,17 @@
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 10701,
+      "line": 10690,
       "reason": "awaited through tokio::time::timeout"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 26136,
+      "line": 26125,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 26533,
+      "line": 26522,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
