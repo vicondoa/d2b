@@ -18,6 +18,85 @@ pub const MAX_PRIVATE_CONFIGURED_WORKLOADS: usize =
 pub const MAX_LAUNCHER_ITEMS_PER_WORKLOAD: usize = 64;
 pub const MAX_UNSAFE_LOCAL_SHELL_SESSIONS: u16 = 64;
 
+/// Failure classes for the private unsafe-local workload artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnsafeLocalWorkloadsError {
+    SchemaVersionMismatch { expected: &'static str },
+    TooManyWorkloads { max: usize },
+    TooManyLocalVmWorkloads { max: usize },
+    TooManyPrivateWorkloads { max: usize },
+    DuplicateUnsafeLocalTarget { target: String },
+    DuplicateConfiguredTarget { target: String },
+    LocalVmRuntimeKindMismatch,
+    LegacyVmNamePresent,
+    IdentityMismatch,
+    NoItems,
+    TooManyItems { max: usize },
+    DuplicateItemId { id: String },
+    ShellItemWithoutPolicy,
+    DefaultItemMissing { id: String },
+    ShellDefaultNameInvalid,
+    ShellMaxSessionsInvalid { max: u16 },
+}
+
+impl core::fmt::Display for UnsafeLocalWorkloadsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            UnsafeLocalWorkloadsError::SchemaVersionMismatch { expected } => write!(
+                f,
+                "unsafe-local-workloads schemaVersion must be {expected}"
+            ),
+            UnsafeLocalWorkloadsError::TooManyWorkloads { max } => {
+                write!(f, "unsafe-local workload count exceeds {max}")
+            }
+            UnsafeLocalWorkloadsError::TooManyLocalVmWorkloads { max } => {
+                write!(f, "local-vm configured workload count exceeds {max}")
+            }
+            UnsafeLocalWorkloadsError::TooManyPrivateWorkloads { max } => {
+                write!(f, "private configured workload count exceeds {max}")
+            }
+            UnsafeLocalWorkloadsError::DuplicateUnsafeLocalTarget { target } => {
+                write!(f, "duplicate unsafe-local workload target {target}")
+            }
+            UnsafeLocalWorkloadsError::DuplicateConfiguredTarget { target } => {
+                write!(f, "duplicate configured workload target {target}")
+            }
+            UnsafeLocalWorkloadsError::LocalVmRuntimeKindMismatch => {
+                f.write_str("local-vm configured workload must use nixos runtimeKind")
+            }
+            UnsafeLocalWorkloadsError::LegacyVmNamePresent => {
+                f.write_str("unsafe-local workload must not carry legacyVmName")
+            }
+            UnsafeLocalWorkloadsError::IdentityMismatch => f.write_str(
+                "unsafe-local workload identity must use unsafe-local runtimeKind and providerId",
+            ),
+            UnsafeLocalWorkloadsError::NoItems => {
+                f.write_str("configured workload must declare at least one launcher item")
+            }
+            UnsafeLocalWorkloadsError::TooManyItems { max } => {
+                write!(f, "configured launcher item count exceeds {max}")
+            }
+            UnsafeLocalWorkloadsError::DuplicateItemId { id } => {
+                write!(f, "duplicate configured launcher item id {id}")
+            }
+            UnsafeLocalWorkloadsError::ShellItemWithoutPolicy => {
+                f.write_str("shell launcher item requires shell policy")
+            }
+            UnsafeLocalWorkloadsError::DefaultItemMissing { id } => {
+                write!(f, "defaultItem {id} does not name a declared launcher item")
+            }
+            UnsafeLocalWorkloadsError::ShellDefaultNameInvalid => f.write_str(
+                "unsafe-local shell defaultName must be non-empty and NUL-free",
+            ),
+            UnsafeLocalWorkloadsError::ShellMaxSessionsInvalid { max } => {
+                write!(f, "unsafe-local shell maxSessions must be between 1 and {max}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for UnsafeLocalWorkloadsError {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UnsafeLocalWorkloadsJson {
@@ -33,39 +112,43 @@ pub struct UnsafeLocalWorkloadsJson {
 }
 
 impl UnsafeLocalWorkloadsJson {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), UnsafeLocalWorkloadsError> {
         if self.schema_version != UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION {
-            return Err(format!(
-                "unsafe-local-workloads schemaVersion must be {UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION}"
-            ));
+            return Err(UnsafeLocalWorkloadsError::SchemaVersionMismatch {
+                expected: UNSAFE_LOCAL_WORKLOADS_SCHEMA_VERSION,
+            });
         }
         if self.workloads.len() > MAX_UNSAFE_LOCAL_WORKLOADS {
-            return Err(format!(
-                "unsafe-local workload count exceeds {MAX_UNSAFE_LOCAL_WORKLOADS}"
-            ));
+            return Err(UnsafeLocalWorkloadsError::TooManyWorkloads {
+                max: MAX_UNSAFE_LOCAL_WORKLOADS,
+            });
         }
         if self.local_vm_workloads.len() > MAX_LOCAL_VM_CONFIGURED_WORKLOADS {
-            return Err(format!(
-                "local-vm configured workload count exceeds {MAX_LOCAL_VM_CONFIGURED_WORKLOADS}"
-            ));
+            return Err(UnsafeLocalWorkloadsError::TooManyLocalVmWorkloads {
+                max: MAX_LOCAL_VM_CONFIGURED_WORKLOADS,
+            });
         }
         if self.workloads.len() + self.local_vm_workloads.len() > MAX_PRIVATE_CONFIGURED_WORKLOADS {
-            return Err(format!(
-                "private configured workload count exceeds {MAX_PRIVATE_CONFIGURED_WORKLOADS}"
-            ));
+            return Err(UnsafeLocalWorkloadsError::TooManyPrivateWorkloads {
+                max: MAX_PRIVATE_CONFIGURED_WORKLOADS,
+            });
         }
         let mut targets = BTreeSet::new();
         for workload in &self.workloads {
             let target = workload.identity.canonical_target.to_canonical();
             if !targets.insert(target.clone()) {
-                return Err(format!("duplicate unsafe-local workload target {target}"));
+                return Err(UnsafeLocalWorkloadsError::DuplicateUnsafeLocalTarget {
+                    target,
+                });
             }
             workload.validate()?;
         }
         for workload in &self.local_vm_workloads {
             let target = workload.identity.canonical_target.to_canonical();
             if !targets.insert(target.clone()) {
-                return Err(format!("duplicate configured workload target {target}"));
+                return Err(UnsafeLocalWorkloadsError::DuplicateConfiguredTarget {
+                    target,
+                });
             }
             workload.validate()?;
         }
@@ -84,9 +167,9 @@ pub struct LocalVmConfiguredWorkload {
 }
 
 impl LocalVmConfiguredWorkload {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), UnsafeLocalWorkloadsError> {
         if self.identity.runtime_kind.as_ref().map(|id| id.as_str()) != Some("nixos") {
-            return Err("local-vm configured workload must use nixos runtimeKind".to_owned());
+            return Err(UnsafeLocalWorkloadsError::LocalVmRuntimeKindMismatch);
         }
         validate_items(&self.items, self.default_item_id.as_ref(), true)
     }
@@ -105,17 +188,14 @@ pub struct UnsafeLocalWorkload {
 }
 
 impl UnsafeLocalWorkload {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), UnsafeLocalWorkloadsError> {
         if self.identity.legacy_vm_name.is_some() {
-            return Err("unsafe-local workload must not carry legacyVmName".to_owned());
+            return Err(UnsafeLocalWorkloadsError::LegacyVmNamePresent);
         }
         if self.identity.runtime_kind.as_ref().map(|id| id.as_str()) != Some("unsafe-local")
             || self.identity.provider_id.as_ref().map(|id| id.as_str()) != Some("unsafe-local")
         {
-            return Err(
-                "unsafe-local workload identity must use unsafe-local runtimeKind and providerId"
-                    .to_owned(),
-            );
+            return Err(UnsafeLocalWorkloadsError::IdentityMismatch);
         }
         validate_items(
             &self.items,
@@ -133,34 +213,32 @@ fn validate_items(
     items: &[UnsafeLocalLauncherItem],
     default_item_id: Option<&ProtocolToken>,
     shell_enabled: bool,
-) -> Result<(), String> {
+) -> Result<(), UnsafeLocalWorkloadsError> {
     if items.is_empty() {
-        return Err("configured workload must declare at least one launcher item".to_owned());
+        return Err(UnsafeLocalWorkloadsError::NoItems);
     }
     if items.len() > MAX_LAUNCHER_ITEMS_PER_WORKLOAD {
-        return Err(format!(
-            "configured launcher item count exceeds {MAX_LAUNCHER_ITEMS_PER_WORKLOAD}"
-        ));
+        return Err(UnsafeLocalWorkloadsError::TooManyItems {
+            max: MAX_LAUNCHER_ITEMS_PER_WORKLOAD,
+        });
     }
     let mut ids = BTreeSet::new();
     for item in items {
         if !ids.insert(item.id()) {
-            return Err(format!(
-                "duplicate configured launcher item id {}",
-                item.id().as_str()
-            ));
+            return Err(UnsafeLocalWorkloadsError::DuplicateItemId {
+                id: item.id().as_str().to_owned(),
+            });
         }
         if matches!(item, UnsafeLocalLauncherItem::Shell(_)) && !shell_enabled {
-            return Err("shell launcher item requires shell policy".to_owned());
+            return Err(UnsafeLocalWorkloadsError::ShellItemWithoutPolicy);
         }
     }
     if let Some(default_item_id) = default_item_id
         && !ids.contains(default_item_id)
     {
-        return Err(format!(
-            "defaultItem {} does not name a declared launcher item",
-            default_item_id.as_str()
-        ));
+        return Err(UnsafeLocalWorkloadsError::DefaultItemMissing {
+            id: default_item_id.as_str().to_owned(),
+        });
     }
     Ok(())
 }
@@ -226,14 +304,14 @@ impl std::fmt::Debug for UnsafeLocalShellPolicy {
 }
 
 impl UnsafeLocalShellPolicy {
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<(), UnsafeLocalWorkloadsError> {
         if self.default_name.is_empty() || self.default_name.contains('\0') {
-            return Err("unsafe-local shell defaultName must be non-empty and NUL-free".to_owned());
+            return Err(UnsafeLocalWorkloadsError::ShellDefaultNameInvalid);
         }
         if self.max_sessions == 0 || self.max_sessions > MAX_UNSAFE_LOCAL_SHELL_SESSIONS {
-            return Err(format!(
-                "unsafe-local shell maxSessions must be between 1 and {MAX_UNSAFE_LOCAL_SHELL_SESSIONS}"
-            ));
+            return Err(UnsafeLocalWorkloadsError::ShellMaxSessionsInvalid {
+                max: MAX_UNSAFE_LOCAL_SHELL_SESSIONS,
+            });
         }
         Ok(())
     }
@@ -359,7 +437,9 @@ mod tests {
         };
         assert_eq!(
             unsafe_overflow.validate().unwrap_err(),
-            format!("unsafe-local workload count exceeds {MAX_UNSAFE_LOCAL_WORKLOADS}")
+            UnsafeLocalWorkloadsError::TooManyWorkloads {
+                max: MAX_UNSAFE_LOCAL_WORKLOADS,
+            }
         );
 
         let local_vm_overflow = UnsafeLocalWorkloadsJson {
@@ -372,9 +452,9 @@ mod tests {
         };
         assert_eq!(
             local_vm_overflow.validate().unwrap_err(),
-            format!(
-                "local-vm configured workload count exceeds {MAX_LOCAL_VM_CONFIGURED_WORKLOADS}"
-            )
+            UnsafeLocalWorkloadsError::TooManyLocalVmWorkloads {
+                max: MAX_LOCAL_VM_CONFIGURED_WORKLOADS,
+            }
         );
 
         let mut workload = valid_workload();

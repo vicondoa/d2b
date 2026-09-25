@@ -8,6 +8,35 @@ use serde::{Deserialize, Serialize};
 
 pub const REALM_WORKLOADS_LAUNCHER_V2_SCHEMA_VERSION: &str = "v2";
 
+/// Failure classes for [`RealmWorkloadsLauncherV2Json::validate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LauncherMetadataError {
+    SchemaVersionMismatch { expected: &'static str },
+    InvariantsNotAllTrue,
+}
+
+impl core::fmt::Display for LauncherMetadataError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            LauncherMetadataError::SchemaVersionMismatch { expected } => write!(
+                f,
+                "realm-workloads-launcher-v2 schemaVersion must be {expected}"
+            ),
+            LauncherMetadataError::InvariantsNotAllTrue => {
+                f.write_str("realm-workloads-launcher-v2 invariants must all be true")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LauncherMetadataError {}
+
+impl From<LauncherMetadataError> for String {
+    fn from(error: LauncherMetadataError) -> String {
+        error.to_string()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RealmWorkloadsLauncherV2Json {
@@ -18,11 +47,11 @@ pub struct RealmWorkloadsLauncherV2Json {
 }
 
 impl RealmWorkloadsLauncherV2Json {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), LauncherMetadataError> {
         if self.schema_version != REALM_WORKLOADS_LAUNCHER_V2_SCHEMA_VERSION {
-            return Err(format!(
-                "realm-workloads-launcher-v2 schemaVersion must be {REALM_WORKLOADS_LAUNCHER_V2_SCHEMA_VERSION}"
-            ));
+            return Err(LauncherMetadataError::SchemaVersionMismatch {
+                expected: REALM_WORKLOADS_LAUNCHER_V2_SCHEMA_VERSION,
+            });
         }
         let invariants = &self.invariants;
         if !(invariants.argv_private
@@ -31,7 +60,7 @@ impl RealmWorkloadsLauncherV2Json {
             && invariants.realm_accent_color_only
             && invariants.no_secrets_or_credentials)
         {
-            return Err("realm-workloads-launcher-v2 invariants must all be true".to_owned());
+            return Err(LauncherMetadataError::InvariantsNotAllTrue);
         }
         Ok(())
     }
