@@ -910,14 +910,14 @@ impl DaemonAuditLog {
     /// within a JSONL line: this call queues the record and waits for that
     /// append's outcome. A day-boundary crossing triggers best-effort
     /// retention pruning of stale `daemon-events-*.jsonl` files.
-    pub fn write_event(&self, event: &DaemonEvent) -> io::Result<()> {
+    pub fn write_event(&self, event: DaemonEvent) -> io::Result<()> {
         self.write_event_with_authority(event, DaemonAuditAuthority::BestEffort)
     }
 
     /// Write an event with an explicit authority class.
     pub fn write_event_with_authority(
         &self,
-        event: &DaemonEvent,
+        event: DaemonEvent,
         authority: DaemonAuditAuthority,
     ) -> io::Result<()> {
         let (reply, outcome) = oneshot::channel();
@@ -932,7 +932,7 @@ impl DaemonAuditLog {
     }
 
     /// Append one event without parking the caller's thread on the sink.
-    pub async fn write_event_async(&self, event: &DaemonEvent) -> io::Result<()> {
+    pub async fn write_event_async(&self, event: DaemonEvent) -> io::Result<()> {
         self.write_event_with_authority_async(event, DaemonAuditAuthority::BestEffort)
             .await
     }
@@ -944,7 +944,7 @@ impl DaemonAuditLog {
     /// it.
     pub async fn write_event_with_authority_async(
         &self,
-        event: &DaemonEvent,
+        event: DaemonEvent,
         authority: DaemonAuditAuthority,
     ) -> io::Result<()> {
         let (reply, outcome) = oneshot::channel();
@@ -961,7 +961,7 @@ impl DaemonAuditLog {
     /// caller, is what a backlog grows).
     fn enqueue(
         &self,
-        event: &DaemonEvent,
+        event: DaemonEvent,
         authority: DaemonAuditAuthority,
         reply: oneshot::Sender<io::Result<()>>,
     ) -> io::Result<()> {
@@ -973,7 +973,7 @@ impl DaemonAuditLog {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis(),
-            event: event.clone(),
+            event,
             authority,
             reply,
         };
@@ -1914,7 +1914,7 @@ mod tests {
         let log = DaemonAuditLog::new(dir.path());
 
         // Trigger a fake api-ready timeout event.
-        log.write_event(&DaemonEvent::ApiReadyTimeout {
+        log.write_event(DaemonEvent::ApiReadyTimeout {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 60,
@@ -2022,13 +2022,13 @@ mod tests {
         const SENTINEL: &str = "SECRET-handle-argv-env-cwd-/nix/store/path-like-token-9b2f";
         let log = DaemonAuditLog::no_op();
 
-        log.write_event(&DaemonEvent::ComponentSessionExecEstablished {
+        log.write_event(DaemonEvent::ComponentSessionExecEstablished {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
             tty: true,
         })
         .expect("write established event");
-        log.write_event(&DaemonEvent::ComponentSessionExecTerminated {
+        log.write_event(DaemonEvent::ComponentSessionExecTerminated {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
         })
@@ -2093,7 +2093,7 @@ mod tests {
         const SENTINEL: &str = "SECRET-shell-name-session-terminal-/nix/store/path-like-token";
         let log = DaemonAuditLog::no_op();
 
-        log.write_event(&DaemonEvent::ShellLifecycle {
+        log.write_event(DaemonEvent::ShellLifecycle {
             target: "corp-vm".to_owned(),
             peer_uid: 1000,
             provider: ShellAuditProvider::ComponentSession,
@@ -2153,7 +2153,7 @@ mod tests {
         const SENTINEL: &str = "SECRET-argv-env-cwd-/nix/store/log-bytes-2d7b";
         let log = DaemonAuditLog::no_op();
 
-        log.write_event(&DaemonEvent::ComponentSessionExecDetachedCreate {
+        log.write_event(DaemonEvent::ComponentSessionExecDetachedCreate {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
             action: DetachedExecAuditAction::Create,
@@ -2161,7 +2161,7 @@ mod tests {
             exec_id: "exec-opaque-1".to_owned(),
         })
         .expect("write detached create event");
-        log.write_event(&DaemonEvent::ComponentSessionExecDetachedKill {
+        log.write_event(DaemonEvent::ComponentSessionExecDetachedKill {
             vm: "corp-vm".to_owned(),
             peer_uid: 1000,
             action: DetachedExecAuditAction::Cancel,
@@ -2350,7 +2350,7 @@ mod tests {
         std::fs::write(&blocker, "blocks directory creation").expect("write blocker");
         let log = DaemonAuditLog::new(blocker.join("child"));
         let error = log
-            .write_event(&DaemonEvent::ApiReadyTimeout {
+            .write_event(DaemonEvent::ApiReadyTimeout {
                 vm: "vm-a".to_owned(),
                 runner: "ch-runner".to_owned(),
                 elapsed_secs: 30,
@@ -2392,7 +2392,7 @@ mod tests {
         // Manually set state_dir to the temp dir via a helper.
         // We can't do that here because state_dir is private; instead,
         // create a no_op and verify its captured vec is empty.
-        log.write_event(&DaemonEvent::ApiReadyTimeout {
+        log.write_event(DaemonEvent::ApiReadyTimeout {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 30,
@@ -2412,7 +2412,7 @@ mod tests {
     fn test_capture_authoritative_events_are_not_silently_dropped() {
         let log = DaemonAuditLog::no_op();
         let result = log.write_event_with_authority(
-            &DaemonEvent::ResourcePlaneLifecycle {
+            DaemonEvent::ResourcePlaneLifecycle {
                 zone: "work".to_owned(),
                 action: ResourcePlaneAction::Start,
                 result: ResourcePlaneResult::Ready,
@@ -2455,7 +2455,7 @@ mod tests {
             let log = std::sync::Arc::clone(&log);
             handles.push(std::thread::spawn(move || {
                 for _ in 0..25 {
-                    log.write_event(&DaemonEvent::VmStartRunnerExited {
+                    log.write_event(DaemonEvent::VmStartRunnerExited {
                         vm: format!("vm-{thread_idx}"),
                         role_id: "swtpm".to_owned(),
                         reason_kind: VmStartRunnerExitReason::RunnerExited,
@@ -2498,7 +2498,7 @@ mod tests {
     async fn async_seat_appends_before_it_returns() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let log = DaemonAuditLog::new(dir.path());
-        log.write_event_async(&DaemonEvent::ApiReadyTimeout {
+        log.write_event_async(DaemonEvent::ApiReadyTimeout {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 60,
@@ -2507,7 +2507,7 @@ mod tests {
         .await
         .expect("async best-effort append");
         log.write_event_with_authority_async(
-            &DaemonEvent::ResourcePlaneLifecycle {
+            DaemonEvent::ResourcePlaneLifecycle {
                 zone: "work".to_owned(),
                 action: ResourcePlaneAction::Start,
                 result: ResourcePlaneResult::Ready,
@@ -2634,7 +2634,7 @@ mod tests {
             result: WorkloadLaunchResult::Committed,
         };
         assert!(!format!("{event:?}").contains("target-secret-canary"));
-        log.write_event(&event).unwrap();
+        log.write_event(event).unwrap();
         let line = log.captured.lock().unwrap().last().cloned().unwrap();
         for canary in [
             "target-secret-canary",

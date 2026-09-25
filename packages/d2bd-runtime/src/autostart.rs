@@ -225,22 +225,17 @@ pub trait VmStarter: Send + Sync + 'static {
 /// with `autostart = false`. They are surfaced for observability but
 /// skipped by [`execute_autostart`].
 pub fn build_autostart_plan(resolver: &BundleResolver) -> AutostartPlan {
-    let mut net_entries = Vec::new();
-    let mut workload_entries = Vec::new();
-
-    for (name, vm) in &resolver.manifest.vms {
-        let entry = VmAutostartEntry {
+    let (mut net_entries, mut workload_entries): (Vec<_>, Vec<_>) = resolver
+        .manifest
+        .vms
+        .iter()
+        .map(|(name, vm)| VmAutostartEntry {
             vm: name.clone(),
             env: vm.env.clone(),
             is_net_vm: vm.is_net_vm,
             autostart: vm_is_autostart_eligible(vm),
-        };
-        if entry.is_net_vm {
-            net_entries.push(entry);
-        } else {
-            workload_entries.push(entry);
-        }
-    }
+        })
+        .partition(|entry| entry.is_net_vm);
 
     net_entries.sort_by(|a, b| a.env.cmp(&b.env).then_with(|| a.vm.cmp(&b.vm)));
     workload_entries.sort_by(|a, b| a.env.cmp(&b.env).then_with(|| a.vm.cmp(&b.vm)));

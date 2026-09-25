@@ -30,7 +30,7 @@ use d2b_session::{
 };
 use d2b_session_unix::FramedVsockTransport;
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
+
 
 use crate::{
     component_session_vsock::{
@@ -398,7 +398,7 @@ impl GuestComponentSessionClient {
                 .map_err(|_| GuestComponentSessionClientError::Session)?,
         );
         let session = authenticated
-            .admit(engine, evidence, monotonic_tick())
+            .admit(engine, evidence, crate::runtime_util::monotonic_tick())
             .await
             .map_err(|_| GuestComponentSessionClientError::Session)?;
         let route_binding = session.route_binding();
@@ -582,17 +582,6 @@ fn authorize_guest_peer(
         ));
     }
     Ok(previous)
-}
-
-fn monotonic_tick() -> u64 {
-    static START: OnceLock<std::time::Instant> = OnceLock::new();
-    START
-        .get_or_init(std::time::Instant::now)
-        .elapsed()
-        .as_millis()
-        .try_into()
-        .unwrap_or(1)
-        .max(1)
 }
 
 /// Errors while loading host-published session metadata.
