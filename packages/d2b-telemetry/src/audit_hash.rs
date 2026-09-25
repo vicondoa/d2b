@@ -20,6 +20,11 @@ pub struct AuditHash(String);
 
 impl AuditHash {
     /// Parse the canonical `sha256:<lowercase hex>` representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AuditHashError::BadShape` when the value is not the
+    /// canonical lower-case SHA-256 form.
     pub fn parse(value: impl Into<String>) -> Result<Self, AuditHashError> {
         let value = value.into();
         if !is_canonical_digest(&value) {
@@ -100,6 +105,11 @@ impl AuditChainLink {
     }
 
     /// Verify a link against recomputed values.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PreviousHashMismatch`, `PayloadHashMismatch`, or
+    /// `RecordHashMismatch` for the corresponding digest that changed.
     pub fn verify(
         &self,
         previous_hash: &AuditHash,
@@ -123,6 +133,11 @@ impl AuditChainLink {
     /// The shorter [`Self::verify`] method intentionally remains available
     /// for callers that do not have a segment sequence. Export and replay
     /// paths should use this method when they do.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SequenceMismatch` when the sequence is not the expected
+    /// one, plus the same digest-mismatch variants as [`Self::verify`].
     pub fn verify_at(
         &self,
         expected_sequence: u64,

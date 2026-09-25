@@ -38,6 +38,11 @@ pub struct MetricFamily {
 
 impl MetricFamily {
     /// Construct and validate a metric family.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MetricPolicyError::DescriptorMalformed` when the
+    /// descriptor fails validation or the buckets do not match the kind.
     pub fn new(
         descriptor: MetricDescriptor,
         kind: MetricKind,
@@ -78,6 +83,11 @@ impl MetricFamily {
     }
 
     /// Record a value after policy validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MetricPolicyError` when the data point or the value-kind
+    /// combination fails policy validation.
     pub fn record(
         &mut self,
         labels: &BTreeMap<String, String>,
@@ -124,6 +134,11 @@ pub struct MeterRegistry {
 
 impl MeterRegistry {
     /// Register one family.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MetricPolicyError::DescriptorMalformed` when a family
+    /// with the same name is already registered.
     pub fn register(&mut self, family: MetricFamily) -> Result<(), MetricPolicyError> {
         let name = family.descriptor().name().to_owned();
         if self.families.contains_key(&name) {
@@ -134,6 +149,12 @@ impl MeterRegistry {
     }
 
     /// Record a value in a registered family.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MetricPolicyError::DescriptorMalformed` when the family
+    /// is not registered, plus the family's own record validation
+    /// failures.
     pub fn record(
         &mut self,
         name: &str,
