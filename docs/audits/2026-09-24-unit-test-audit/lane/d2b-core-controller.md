@@ -1,98 +1,98 @@
-# d2b-core-controller — unit-test audit
+# d2b-core-controller - unit-test audit
 tests: 86 · src files: 10
 net: -0 tests, -0 lines
 
 ## Findings (biggest net first)
-- gap: `AuthorityRecoveryCoordinator::resolve_observed_closed` fail-closed rollback (src/authority_persistence.rs:282) — a failing `record_close`/`release` must restore the capability and quarantine the recovered operation; the whole `authority_persistence.rs` module (335 lines, 4 error variants, recovery coordinator, provenance gate) has zero tests, and no test anywhere in the crate exercises this rollback.
-- gap: provenance rejection in `validated_recovery_receipt` (src/authority_persistence.rs:321) — a failing `AuthorityRecoveryProvenance::validate` must abort rehydration with the adapter error; untested in src and tests/.
-- gap: `PreparedAuthorityOperation::new` RowInvalid boundary (src/authority_persistence.rs:50) — empty operation_id, empty store_binding_digest, and nonce==0 rejection; untested.
+- gap: `AuthorityRecoveryCoordinator::resolve_observed_closed` fail-closed rollback (src/authority_persistence.rs:282) - a failing `record_close`/`release` must restore the capability and quarantine the recovered operation; the whole `authority_persistence.rs` module (335 lines, 4 error variants, recovery coordinator, provenance gate) has zero tests, and no test anywhere in the crate exercises this rollback.
+- gap: provenance rejection in `validated_recovery_receipt` (src/authority_persistence.rs:321) - a failing `AuthorityRecoveryProvenance::validate` must abort rehydration with the adapter error; untested in src and tests/.
+- gap: `PreparedAuthorityOperation::new` RowInvalid boundary (src/authority_persistence.rs:50) - empty operation_id, empty store_binding_digest, and nonce==0 rejection; untested.
 
 ## Keep
-- `two_selectors_resolving_to_one_nic_share_one_host_global_key` (src/authority.rs:3066) — two ifnames resolving to one NIC identity derive one host-global authority key.
-- `cross_zone_bridge_rejection_is_distinct_and_runs_no_effect` (src/authority.rs:3087) — cross-zone bridge → `ExternalPhysicalNicCrossZoneL2` with zero effects.
-- `external_nic_admission_waits_for_the_same_startup_barrier` (src/authority.rs:3131) — unrehydrated index rejects with `StartupRehydrationRequired`, no effect runs.
-- `same_zone_compatible_bridge_multiplex_obeys_the_signed_limit` (src/authority.rs:3160) — multiplex limit: 2 holders, arbitration Multiplexed, not available.
-- `exclusive_mixed_and_non_bridge_claims_report_the_general_conflict` (src/authority.rs:3191) — exclusive/mixed/non-bridge claim combos → general `ExternalPhysicalNicConflict`, fail-closed.
-- `restart_adopts_one_exact_owner_and_quarantines_ambiguity` (src/authority.rs:3286) — NIC adopt: exact owner → Adopted, ambiguous → QuarantinedAmbiguous.
-- `update_and_delete_release_only_after_attachment_close` (src/authority.rs:3317) — close_then_release fail-closed, replace_after_close, release only after confirmed close.
-- `provider_cardinality_is_zone_local_and_effects_are_fail_closed` (src/authority.rs:3376) — provider cardinality zone-local, duplicate → duplicateConflict, effects=0.
-- `host_global_hardware_matrix_cannot_be_bypassed_by_zone_or_private_class` (src/authority.rs:3427) — GPU/swtpm/TPM/USB/usbip/relay/kvm/vsock/port duplicate + GPU render capacity matrix.
-- `host_store_guest_writer_and_zone_network_authorities_have_exact_scopes` (src/authority.rs:3641) — host_store and network_tap_bridge duplicate/zone scoping.
-- `generic_adoption_close_and_effect_order_are_fail_closed` (src/authority.rs:3703) — generic authority: effect once, adopt exact/ambiguous, failed close retains, confirmed close releases.
-- `generic_authority_diagnostics_are_redacted_and_input_bounds_are_closed` (src/authority.rs:3748) — generic Debug redaction + vsock_cid 0 / port 0 rejection.
-- `diagnostics_never_expose_identity_digest_host_or_owner_values` (src/authority.rs:3781) — NIC identity/owner/key Debug redaction.
-- `duplicate_same_owner_reservations_are_rejected_without_aliasing_leases` (src/authority.rs:3800) — same-owner duplicate → `DuplicateActiveReservation` for authority and NIC paths; release works.
-- `lease_tokens_cannot_cross_restart_boundaries` (src/authority.rs:3848) — stale lease rejected after restart with `AuthorityOwnerProofMismatch`.
-- `reservation_stays_held_across_async_effect_and_closes_before_release` (src/authority.rs:3869) — async reservation holds across effect; competing admit → DuplicateConflict; close releases.
-- `failed_reservation_close_keeps_lease_for_successful_retry` (src/authority.rs:3909) — async failed close retains lease; retry close succeeds.
-- `durable_reservation_records_pending_effect_close_and_release` (src/authority.rs:3954) — persistence state sequence Pending→EffectConfirmed→Closing→Released.
-- `dependent_authority_requires_close_before_finalizer_release` (src/authority.rs:3994) — close_then_drain_guest fail-closed, drains 1 after confirmed close.
-- `materializes_store_create_payloads_with_process_provider_and_endpoint_contract` (src/binding_children.rs:616) — create_payload yields store payloads with correct providerRef/executionRef/producerRef.
-- `validates_child_resource_identity_and_rejects_mutated_contracts` (src/binding_children.rs:675) — identity binding; mutated executionRef → ExecutionTargetMismatch.
-- `semantic_digest_ignores_store_runtime_fields` (src/binding_children.rs:709) — digest stable across uid/revision/updatedAt/phase mutations.
-- `create_payload_rejects_a_cross_zone_submission` (src/binding_children.rs:730) — cross-zone create_payload → OwnerMismatch.
-- `host_and_guest_resources_have_one_disjoint_target_assignment` (src/controller_assignment.rs:3422) — per-resource disjoint host/guest targets, shared target for two guests.
-- `stale_assignment_epoch_rejects_status_and_finalizer_writers` (src/controller_assignment.rs:3458) — stale epoch rejected for UpdateStatus/UpdateFinalizers.
-- `scoped_commit_transport_round_trips_assignment_and_mutations` (src/controller_assignment.rs:3489) — transport encode/decode roundtrip of assignment + primary mutations.
-- `scoped_commit_transport_round_trips_owner_child_scope` (src/controller_assignment.rs:3510) — owner-child scope roundtrip with owner ref/uid/revision/generation.
-- `same_epoch_rebind_updates_the_active_writer_revision` (src/controller_assignment.rs:3535) — rebind_revision updates writer; old identity → StaleAssignment.
-- `released_assignment_allows_successor_at_the_current_revision` (src/controller_assignment.rs:3569) — successor admit after drain+release at current revision.
-- `disconnected_session_revokes_mutation_but_keeps_stale_observation` (src/controller_assignment.rs:3599) — revoke_session: all mutations/queries → SessionRevoked, observation stale.
-- `disconnected_assignment_can_be_replaced_by_a_new_session` (src/controller_assignment.rs:3646) — new session admit after revoke gets new epoch/generation.
-- `scoped_session_revocation_does_not_touch_another_target` (src/controller_assignment.rs:3662) — revoke_session_for scoped to one target.
-- `exact_session_revocation_does_not_touch_same_generation_owner` (src/controller_assignment.rs:3681) — session-owner-scoped revocation.
-- `partial_delivery_rollback_revokes_an_admitted_unsent_lease` (src/controller_assignment.rs:3719) — revoke_assignment: lease → Revoked, mutations rejected.
-- `fixed_target_controller_accepts_multiple_resources_in_one_session` (src/controller_assignment.rs:3742) — fixed-target controller admits multiple resources.
-- `exact_revocation_allows_fixed_target_session_replacement_without_touching_sibling` (src/controller_assignment.rs:3761) — fixed-target revoke + replacement, sibling untouched.
-- `guest_lease_cannot_widen_to_host_or_foreign_resource` (src/controller_assignment.rs:3848) — query widening → QueryWidened; foreign mutation → ResourceNotAssigned; target mismatch.
-- `assigned_lease_mints_an_exact_process_child_scope` (src/controller_assignment.rs:3901) — child query/mutation scope, verb restrictions, forged-filter rejection, drain → StaleAssignment.
-- `target_handoff_requires_drain_and_release_before_reassignment` (src/controller_assignment.rs:4034) — AssignmentConflict until drain+release; successor generations.
-- `child_index_must_drain_before_parent_release` (src/controller_assignment.rs:4059) — ChildrenRemain until child removed.
-- `ambiguous_or_unready_targets_fail_closed_without_fallback` (src/controller_assignment.rs:4079) — TargetNotReady / PlacementTargetInvalid / TargetMismatch.
-- `assignment_grant_round_trips_exact_identity_and_scope` (src/controller_assignment.rs:4118) — grant encode/decode roundtrip, scopes, verb sets.
-- `assignment_grant_store_is_idempotent_but_rejects_identity_mismatch` (src/controller_assignment.rs:4155) — Installed→Duplicate idempotency; session-generation mismatch rejected.
-- `assignment_grant_store_binds_same_generation_to_exact_session_owner` (src/controller_assignment.rs:4196) — same generation, different owner → SessionBindingMismatch.
-- `assignment_grant_store_rejects_wrong_generation_target_epoch_and_widening` (src/controller_assignment.rs:4239) — forged provider/controller generation, target, epoch, resource-type/verb widening matrix.
-- `assignment_grant_transport_rejects_oversized_and_reordered_payloads` (src/controller_assignment.rs:4371) — TooLarge, reordered verbs → Malformed, legacy field name → Malformed.
-- `assignment_grant_revocation_preserves_observation_without_authority` (src/controller_assignment.rs:4454) — revocation lifecycle: Revoked→Duplicate, stale re-accept, replacement grant, store.revoke.
-- `readiness_requires_every_mandatory_handler_only` (src/controllers.rs:344) — degraded non-mandatory handler does not block Ready.
-- `mandatory_unknown_never_becomes_ready` (src/controllers.rs:364) — mandatory Unknown → aggregate Unknown.
-- `ready_without_an_observed_generation_is_rejected` (src/controllers.rs:385) — Ready with observed_generation 0 → InvalidStatus.
-- `restart_marks_every_handler_recovering_without_preserving_running_counts` (src/controllers.rs:402) — begin_recovery resets phase and running counts.
-- `handler_metric_labels_are_closed_and_identity_free` (src/controllers.rs:421) — metric label keys closed; labels carry no identity.
-- `currency_aggregation_counts_and_truncates_non_current_refs` (src/controllers.rs:432) — aggregation counts owned refs, truncates to MAX_STATUS_COLLECTION_ENTRIES.
-- `duplicate_currency_identity_is_rejected` (src/controllers.rs:458) — duplicate ref in aggregation → CurrencyAggregationError.
-- `coordination_state_is_isolated_by_zone` (src/coordinator.rs:429) — usbip/activation/staging/force-shutdown state isolated per zone; VM binding.
-- `staged_generation_is_committed_only_for_its_zone` (src/coordinator.rs:461) — commit_configuration scoped to staging zone; active staging.
-- `vm_binding_is_authoritative_and_does_not_cross_zone_state` (src/coordinator.rs:486) — VmZoneConflict, VmNotRegistered, force-shutdown + ordinal staging scoping.
-- `startup_reaches_ready_only_after_runtime_recovery_and_mandatory_handlers` (src/main.rs:288) — full happy path to Ready.
-- `unauthenticated_runtime_is_rejected_before_handler_recovery` (src/main.rs:303) — AuthenticationUnavailable gate.
-- `an_empty_store_checkpoint_is_not_fabricated` (src/main.rs:316) — checkpoint_revision 0 accepted, not fabricated.
-- `ambiguous_recovery_is_rejected_before_configuration_publication` (src/main.rs:333) — ambiguous_operation_count → InvalidRecoverySnapshot.
-- `restart_discards_process_local_recovery_and_preserves_unknown` (src/main.rs:350) — restart resets stage, authority readiness, handlers to Recovering.
-- `restart_rejects_a_stale_recovery_snapshot` (src/main.rs:370) — pre-restart snapshot → InvalidRecoverySnapshot after reconnect.
-- `restart_epoch_is_scoped_to_the_bound_authority_index` (src/main.rs:384) — restart invalidates only the bound index.
-- `a_missing_mandatory_handler_blocks_readiness` (src/main.rs:396) — missing mandatory → MandatoryHandlerNotReady.
-- `production_startup_waits_for_real_handler_admission` (src/main.rs:416) — start_production composite: ReconcilingSystemCore → MandatoryHandlerNotReady → Ready.
-- `unregistered_controller_endpoint_blocks_recovery` (src/main.rs:437) — ControllerEndpointUnavailable gate.
-- `watch_must_be_admitted_before_recovery` (src/main.rs:450) — watch_admitted=false → WatchAdmissionUnavailable.
-- `authority_rehydration_is_a_startup_barrier` (src/main.rs:467) — unrehydrated authority → AuthorityRehydrationUnavailable.
-- `inventory_adapter_mints_only_an_opaque_receipt` (src/migration.rs:91) — LegacyTpmStateId Debug redacted.
-- `migration_decision_binds_vm_and_intent` (src/migration.rs:97) — decision Debug sealed; validates_binding binds zone+state id.
-- `adoption_required_keeps_the_broker_migration_path_active` (src/migration.rs:115) — adoption_required decision requires migration and validates binding.
-- `complete_relist_drives_create_repair_and_delete_plan` (src/owner_reconcile.rs:1910) — plan yields Repair/Create/RequestDeletion from drifted+extra relist.
-- `uncertain_batch_recovery_preserves_existing_siblings` (src/owner_reconcile.rs:1959) — recover_batch with uncertain result + relisted recovery keeps siblings; converged.
-- `repair_and_delete_keep_exact_uid_revision_preconditions` (src/owner_reconcile.rs:2004) — Repair/Delete carry exact expected uid+revision.
-- `authoritative_relist_replaces_stale_children` (src/owner_reconcile.rs:2035) — relist replaces stale children; plan converges.
-- `deleting_children_keep_owner_pending_until_relisted_absent` (src/owner_reconcile.rs:2053) — deleting children block convergence until relisted absent.
-- `planning_fails_closed_until_the_owner_index_is_relisted` (src/owner_reconcile.rs:2072) — plan before relist → OwnerNotRelisted.
-- `owner_cannot_be_listed_as_its_own_child` (src/owner_reconcile.rs:2085) — self-child → InvalidChild in relist and plan.
-- `child_mutation_propagates_through_each_ancestor` (src/owner_reconcile.rs:2116) — graph propagation order and depth through 3 ancestors.
-- `owner_propagation_requires_a_durable_revision` (src/owner_reconcile.rs:2135) — revision 0 → InvalidRevision.
-- `owner_graph_rejects_cross_zone_and_cycles` (src/owner_reconcile.rs:2146) — cross-zone bind → InvalidBinding; cycle → CycleOrDepth.
-- `owner_trigger_coalescing_keeps_high_water_revision` (src/owner_reconcile.rs:2163) — coalesce keeps max revision.
-- `process_scheduling_prioritizes_deletion_then_workload_then_controller` (src/owner_reconcile.rs:2184) — classification and rank ordering.
-- `owner_chain_depth_bound_is_enforced_during_binding` (src/owner_reconcile.rs:2208) — depth bound → CycleOrDepth.
-- `owner_diagnostics_redact_body_digest_names_and_uids` (src/owner_reconcile.rs:2235) — DesiredChild/ObservedChild Debug redaction.
+- `two_selectors_resolving_to_one_nic_share_one_host_global_key` (src/authority.rs:3066) - two ifnames resolving to one NIC identity derive one host-global authority key.
+- `cross_zone_bridge_rejection_is_distinct_and_runs_no_effect` (src/authority.rs:3087) - cross-zone bridge → `ExternalPhysicalNicCrossZoneL2` with zero effects.
+- `external_nic_admission_waits_for_the_same_startup_barrier` (src/authority.rs:3131) - unrehydrated index rejects with `StartupRehydrationRequired`, no effect runs.
+- `same_zone_compatible_bridge_multiplex_obeys_the_signed_limit` (src/authority.rs:3160) - multiplex limit: 2 holders, arbitration Multiplexed, not available.
+- `exclusive_mixed_and_non_bridge_claims_report_the_general_conflict` (src/authority.rs:3191) - exclusive/mixed/non-bridge claim combos → general `ExternalPhysicalNicConflict`, fail-closed.
+- `restart_adopts_one_exact_owner_and_quarantines_ambiguity` (src/authority.rs:3286) - NIC adopt: exact owner → Adopted, ambiguous → QuarantinedAmbiguous.
+- `update_and_delete_release_only_after_attachment_close` (src/authority.rs:3317) - close_then_release fail-closed, replace_after_close, release only after confirmed close.
+- `provider_cardinality_is_zone_local_and_effects_are_fail_closed` (src/authority.rs:3376) - provider cardinality zone-local, duplicate → duplicateConflict, effects=0.
+- `host_global_hardware_matrix_cannot_be_bypassed_by_zone_or_private_class` (src/authority.rs:3427) - GPU/swtpm/TPM/USB/usbip/relay/kvm/vsock/port duplicate + GPU render capacity matrix.
+- `host_store_guest_writer_and_zone_network_authorities_have_exact_scopes` (src/authority.rs:3641) - host_store and network_tap_bridge duplicate/zone scoping.
+- `generic_adoption_close_and_effect_order_are_fail_closed` (src/authority.rs:3703) - generic authority: effect once, adopt exact/ambiguous, failed close retains, confirmed close releases.
+- `generic_authority_diagnostics_are_redacted_and_input_bounds_are_closed` (src/authority.rs:3748) - generic Debug redaction + vsock_cid 0 / port 0 rejection.
+- `diagnostics_never_expose_identity_digest_host_or_owner_values` (src/authority.rs:3781) - NIC identity/owner/key Debug redaction.
+- `duplicate_same_owner_reservations_are_rejected_without_aliasing_leases` (src/authority.rs:3800) - same-owner duplicate → `DuplicateActiveReservation` for authority and NIC paths; release works.
+- `lease_tokens_cannot_cross_restart_boundaries` (src/authority.rs:3848) - stale lease rejected after restart with `AuthorityOwnerProofMismatch`.
+- `reservation_stays_held_across_async_effect_and_closes_before_release` (src/authority.rs:3869) - async reservation holds across effect; competing admit → DuplicateConflict; close releases.
+- `failed_reservation_close_keeps_lease_for_successful_retry` (src/authority.rs:3909) - async failed close retains lease; retry close succeeds.
+- `durable_reservation_records_pending_effect_close_and_release` (src/authority.rs:3954) - persistence state sequence Pending→EffectConfirmed→Closing→Released.
+- `dependent_authority_requires_close_before_finalizer_release` (src/authority.rs:3994) - close_then_drain_guest fail-closed, drains 1 after confirmed close.
+- `materializes_store_create_payloads_with_process_provider_and_endpoint_contract` (src/binding_children.rs:616) - create_payload yields store payloads with correct providerRef/executionRef/producerRef.
+- `validates_child_resource_identity_and_rejects_mutated_contracts` (src/binding_children.rs:675) - identity binding; mutated executionRef → ExecutionTargetMismatch.
+- `semantic_digest_ignores_store_runtime_fields` (src/binding_children.rs:709) - digest stable across uid/revision/updatedAt/phase mutations.
+- `create_payload_rejects_a_cross_zone_submission` (src/binding_children.rs:730) - cross-zone create_payload → OwnerMismatch.
+- `host_and_guest_resources_have_one_disjoint_target_assignment` (src/controller_assignment.rs:3422) - per-resource disjoint host/guest targets, shared target for two guests.
+- `stale_assignment_epoch_rejects_status_and_finalizer_writers` (src/controller_assignment.rs:3458) - stale epoch rejected for UpdateStatus/UpdateFinalizers.
+- `scoped_commit_transport_round_trips_assignment_and_mutations` (src/controller_assignment.rs:3489) - transport encode/decode roundtrip of assignment + primary mutations.
+- `scoped_commit_transport_round_trips_owner_child_scope` (src/controller_assignment.rs:3510) - owner-child scope roundtrip with owner ref/uid/revision/generation.
+- `same_epoch_rebind_updates_the_active_writer_revision` (src/controller_assignment.rs:3535) - rebind_revision updates writer; old identity → StaleAssignment.
+- `released_assignment_allows_successor_at_the_current_revision` (src/controller_assignment.rs:3569) - successor admit after drain+release at current revision.
+- `disconnected_session_revokes_mutation_but_keeps_stale_observation` (src/controller_assignment.rs:3599) - revoke_session: all mutations/queries → SessionRevoked, observation stale.
+- `disconnected_assignment_can_be_replaced_by_a_new_session` (src/controller_assignment.rs:3646) - new session admit after revoke gets new epoch/generation.
+- `scoped_session_revocation_does_not_touch_another_target` (src/controller_assignment.rs:3662) - revoke_session_for scoped to one target.
+- `exact_session_revocation_does_not_touch_same_generation_owner` (src/controller_assignment.rs:3681) - session-owner-scoped revocation.
+- `partial_delivery_rollback_revokes_an_admitted_unsent_lease` (src/controller_assignment.rs:3719) - revoke_assignment: lease → Revoked, mutations rejected.
+- `fixed_target_controller_accepts_multiple_resources_in_one_session` (src/controller_assignment.rs:3742) - fixed-target controller admits multiple resources.
+- `exact_revocation_allows_fixed_target_session_replacement_without_touching_sibling` (src/controller_assignment.rs:3761) - fixed-target revoke + replacement, sibling untouched.
+- `guest_lease_cannot_widen_to_host_or_foreign_resource` (src/controller_assignment.rs:3848) - query widening → QueryWidened; foreign mutation → ResourceNotAssigned; target mismatch.
+- `assigned_lease_mints_an_exact_process_child_scope` (src/controller_assignment.rs:3901) - child query/mutation scope, verb restrictions, forged-filter rejection, drain → StaleAssignment.
+- `target_handoff_requires_drain_and_release_before_reassignment` (src/controller_assignment.rs:4034) - AssignmentConflict until drain+release; successor generations.
+- `child_index_must_drain_before_parent_release` (src/controller_assignment.rs:4059) - ChildrenRemain until child removed.
+- `ambiguous_or_unready_targets_fail_closed_without_fallback` (src/controller_assignment.rs:4079) - TargetNotReady / PlacementTargetInvalid / TargetMismatch.
+- `assignment_grant_round_trips_exact_identity_and_scope` (src/controller_assignment.rs:4118) - grant encode/decode roundtrip, scopes, verb sets.
+- `assignment_grant_store_is_idempotent_but_rejects_identity_mismatch` (src/controller_assignment.rs:4155) - Installed→Duplicate idempotency; session-generation mismatch rejected.
+- `assignment_grant_store_binds_same_generation_to_exact_session_owner` (src/controller_assignment.rs:4196) - same generation, different owner → SessionBindingMismatch.
+- `assignment_grant_store_rejects_wrong_generation_target_epoch_and_widening` (src/controller_assignment.rs:4239) - forged provider/controller generation, target, epoch, resource-type/verb widening matrix.
+- `assignment_grant_transport_rejects_oversized_and_reordered_payloads` (src/controller_assignment.rs:4371) - TooLarge, reordered verbs → Malformed, legacy field name → Malformed.
+- `assignment_grant_revocation_preserves_observation_without_authority` (src/controller_assignment.rs:4454) - revocation lifecycle: Revoked→Duplicate, stale re-accept, replacement grant, store.revoke.
+- `readiness_requires_every_mandatory_handler_only` (src/controllers.rs:344) - degraded non-mandatory handler does not block Ready.
+- `mandatory_unknown_never_becomes_ready` (src/controllers.rs:364) - mandatory Unknown → aggregate Unknown.
+- `ready_without_an_observed_generation_is_rejected` (src/controllers.rs:385) - Ready with observed_generation 0 → InvalidStatus.
+- `restart_marks_every_handler_recovering_without_preserving_running_counts` (src/controllers.rs:402) - begin_recovery resets phase and running counts.
+- `handler_metric_labels_are_closed_and_identity_free` (src/controllers.rs:421) - metric label keys closed; labels carry no identity.
+- `currency_aggregation_counts_and_truncates_non_current_refs` (src/controllers.rs:432) - aggregation counts owned refs, truncates to MAX_STATUS_COLLECTION_ENTRIES.
+- `duplicate_currency_identity_is_rejected` (src/controllers.rs:458) - duplicate ref in aggregation → CurrencyAggregationError.
+- `coordination_state_is_isolated_by_zone` (src/coordinator.rs:429) - usbip/activation/staging/force-shutdown state isolated per zone; VM binding.
+- `staged_generation_is_committed_only_for_its_zone` (src/coordinator.rs:461) - commit_configuration scoped to staging zone; active staging.
+- `vm_binding_is_authoritative_and_does_not_cross_zone_state` (src/coordinator.rs:486) - VmZoneConflict, VmNotRegistered, force-shutdown + ordinal staging scoping.
+- `startup_reaches_ready_only_after_runtime_recovery_and_mandatory_handlers` (src/main.rs:288) - full happy path to Ready.
+- `unauthenticated_runtime_is_rejected_before_handler_recovery` (src/main.rs:303) - AuthenticationUnavailable gate.
+- `an_empty_store_checkpoint_is_not_fabricated` (src/main.rs:316) - checkpoint_revision 0 accepted, not fabricated.
+- `ambiguous_recovery_is_rejected_before_configuration_publication` (src/main.rs:333) - ambiguous_operation_count → InvalidRecoverySnapshot.
+- `restart_discards_process_local_recovery_and_preserves_unknown` (src/main.rs:350) - restart resets stage, authority readiness, handlers to Recovering.
+- `restart_rejects_a_stale_recovery_snapshot` (src/main.rs:370) - pre-restart snapshot → InvalidRecoverySnapshot after reconnect.
+- `restart_epoch_is_scoped_to_the_bound_authority_index` (src/main.rs:384) - restart invalidates only the bound index.
+- `a_missing_mandatory_handler_blocks_readiness` (src/main.rs:396) - missing mandatory → MandatoryHandlerNotReady.
+- `production_startup_waits_for_real_handler_admission` (src/main.rs:416) - start_production composite: ReconcilingSystemCore → MandatoryHandlerNotReady → Ready.
+- `unregistered_controller_endpoint_blocks_recovery` (src/main.rs:437) - ControllerEndpointUnavailable gate.
+- `watch_must_be_admitted_before_recovery` (src/main.rs:450) - watch_admitted=false → WatchAdmissionUnavailable.
+- `authority_rehydration_is_a_startup_barrier` (src/main.rs:467) - unrehydrated authority → AuthorityRehydrationUnavailable.
+- `inventory_adapter_mints_only_an_opaque_receipt` (src/migration.rs:91) - LegacyTpmStateId Debug redacted.
+- `migration_decision_binds_vm_and_intent` (src/migration.rs:97) - decision Debug sealed; validates_binding binds zone+state id.
+- `adoption_required_keeps_the_broker_migration_path_active` (src/migration.rs:115) - adoption_required decision requires migration and validates binding.
+- `complete_relist_drives_create_repair_and_delete_plan` (src/owner_reconcile.rs:1910) - plan yields Repair/Create/RequestDeletion from drifted+extra relist.
+- `uncertain_batch_recovery_preserves_existing_siblings` (src/owner_reconcile.rs:1959) - recover_batch with uncertain result + relisted recovery keeps siblings; converged.
+- `repair_and_delete_keep_exact_uid_revision_preconditions` (src/owner_reconcile.rs:2004) - Repair/Delete carry exact expected uid+revision.
+- `authoritative_relist_replaces_stale_children` (src/owner_reconcile.rs:2035) - relist replaces stale children; plan converges.
+- `deleting_children_keep_owner_pending_until_relisted_absent` (src/owner_reconcile.rs:2053) - deleting children block convergence until relisted absent.
+- `planning_fails_closed_until_the_owner_index_is_relisted` (src/owner_reconcile.rs:2072) - plan before relist → OwnerNotRelisted.
+- `owner_cannot_be_listed_as_its_own_child` (src/owner_reconcile.rs:2085) - self-child → InvalidChild in relist and plan.
+- `child_mutation_propagates_through_each_ancestor` (src/owner_reconcile.rs:2116) - graph propagation order and depth through 3 ancestors.
+- `owner_propagation_requires_a_durable_revision` (src/owner_reconcile.rs:2135) - revision 0 → InvalidRevision.
+- `owner_graph_rejects_cross_zone_and_cycles` (src/owner_reconcile.rs:2146) - cross-zone bind → InvalidBinding; cycle → CycleOrDepth.
+- `owner_trigger_coalescing_keeps_high_water_revision` (src/owner_reconcile.rs:2163) - coalesce keeps max revision.
+- `process_scheduling_prioritizes_deletion_then_workload_then_controller` (src/owner_reconcile.rs:2184) - classification and rank ordering.
+- `owner_chain_depth_bound_is_enforced_during_binding` (src/owner_reconcile.rs:2208) - depth bound → CycleOrDepth.
+- `owner_diagnostics_redact_body_digest_names_and_uids` (src/owner_reconcile.rs:2235) - DesiredChild/ObservedChild Debug redaction.
 
 No `#[ignore]`d tests. No duplicates or trivial tests found: every test pins a distinct observable behavior/boundary/error path; overlapping pairs (async reservation happy vs retry path, revoke_session vs revoke_assignment, startup happy path vs start_production, zone-isolation trio, OwnerGraph cycle vs depth bound) each pin something the other does not.

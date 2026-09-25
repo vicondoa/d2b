@@ -1,17 +1,17 @@
-# d2b-resource-runtime — unit-test audit
+# d2b-resource-runtime - unit-test audit
 tests: 137 · src files: 15
 net: -5 tests, -103 lines
 
-Note: census counts 137 test attributes; 136 are real test fns — the extra hit is a
+Note: census counts 137 test attributes; 136 are real test fns - the extra hit is a
 `#[tokio::test(start_paused = true)]` mention inside a doc comment (src/resource.rs:1551).
 resource.rs itself has zero test fns (its `test_support` module is shared harness, not tests).
 
 ## Findings (biggest net first)
-- duplicate: `async_recv_drains_then_missed_then_ends` (src/watch.rs:891) — covered by `slow_subscriber_gets_explicit_missed_never_silent_drop` (src/watch.rs:737). Both pin the same hub behavior: a subscriber whose delivery buffer overflows under publish churn receives an explicit `Missed` delivery (never a silent drop) with at most `delivery_buffer` changes delivered. The keeper pins strictly more: the Missed frontier equals the last delivered change and `events_after(missed)` maps onto the `RevisionExpired` relist path. The deleted test's only extra is consuming via std `recv()` instead of `try_recv()` — a consumer-side API difference, not hub behavior; its "ends" assertion is incidental (the stream closes when the hub drops at test end).
-- trivial: `watch_and_manager_shapes_send_and_receive_intact` (src/context.rs:1594) — echoes protocol shapes (`WatchRegistration`, `StubCall::Get`, `WatchSatisfied`) through channels and asserts they arrive field-identical. Moving a value through a channel cannot transform it (Rust move semantics), and the Send bounds are compile-time. Nothing lost.
-- trivial: `modules_resolve` (src/lib.rs:69) — echoes each module's `MODULE_NAME` constant against its literal name; the crate compiling already proves the module tree resolves. Nothing lost.
-- trivial: `regenerate_failure_kind_reference` (src/error.rs:1026, `#[ignore]`d) — writes the committed reference doc and asserts nothing; the registry↔doc freshness contract is pinned by `failure_kind_reference_doc_matches_the_registry` (src/error.rs:1011). Deleting it would leave the documented `--ignored` regeneration command without a body (manual regeneration needed).
-- trivial: `wire_budget_bounds_sequence_for_u32_low_word` (src/revision.rs:183) — asserts `WIRE_SEQUENCE_BUDGET == 1 << 32`, a constant echo of the definition beside it; the wire-format comment carries the intent. Nothing lost.
+- duplicate: `async_recv_drains_then_missed_then_ends` (src/watch.rs:891) - covered by `slow_subscriber_gets_explicit_missed_never_silent_drop` (src/watch.rs:737). Both pin the same hub behavior: a subscriber whose delivery buffer overflows under publish churn receives an explicit `Missed` delivery (never a silent drop) with at most `delivery_buffer` changes delivered. The keeper pins strictly more: the Missed frontier equals the last delivered change and `events_after(missed)` maps onto the `RevisionExpired` relist path. The deleted test's only extra is consuming via std `recv()` instead of `try_recv()` - a consumer-side API difference, not hub behavior; its "ends" assertion is incidental (the stream closes when the hub drops at test end).
+- trivial: `watch_and_manager_shapes_send_and_receive_intact` (src/context.rs:1594) - echoes protocol shapes (`WatchRegistration`, `StubCall::Get`, `WatchSatisfied`) through channels and asserts they arrive field-identical. Moving a value through a channel cannot transform it (Rust move semantics), and the Send bounds are compile-time. Nothing lost.
+- trivial: `modules_resolve` (src/lib.rs:69) - echoes each module's `MODULE_NAME` constant against its literal name; the crate compiling already proves the module tree resolves. Nothing lost.
+- trivial: `regenerate_failure_kind_reference` (src/error.rs:1026, `#[ignore]`d) - writes the committed reference doc and asserts nothing; the registry↔doc freshness contract is pinned by `failure_kind_reference_doc_matches_the_registry` (src/error.rs:1011). Deleting it would leave the documented `--ignored` regeneration command without a body (manual regeneration needed).
+- trivial: `wire_budget_bounds_sequence_for_u32_low_word` (src/revision.rs:183) - asserts `WIRE_SEQUENCE_BUDGET == 1 << 32`, a constant echo of the definition beside it; the wire-format comment carries the intent. Nothing lost.
 
 ## Keep
 - context.rs remaining 11 tests pin: ensure_child persist-before-commit-ack routing (exactly one EnsureChild, no spawn-shaped call), ManagerRpc surfacing for closed/dropped channels (get and view), classified lookup Present/Absent/Unavailable (row + view planes), requeue exactly-once scheduling and cancel-isolation under paused time, typed spec decode caching/downcast/mismatch, the evaluate-and-register single-mailbox-handler pattern, watch routing with subscriber identity, and ServiceResourceContext reads + fail-closed refusal.
