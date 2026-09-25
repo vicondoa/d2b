@@ -12,6 +12,11 @@ pub struct BootstrapPsk(Zeroizing<Vec<u8>>);
 
 impl BootstrapPsk {
     /// Construct a bounded PSK.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::InvalidConfiguration`] when the secret is
+    /// empty or exceeds the 8192-byte bound.
     pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self, AzureVmError> {
         let mut bytes = bytes.into();
         if bytes.is_empty() || bytes.len() > 8_192 {
@@ -22,6 +27,10 @@ impl BootstrapPsk {
     }
 
     /// Compare against a presented PSK without exposing it.
+    ///
+    /// The comparison is constant-time in the presented length: it walks
+    /// the longer of the two secrets with zero padding and never exits
+    /// early on a mismatch.
     pub fn matches(&self, presented: &[u8]) -> bool {
         let mut difference = self.0.len() ^ presented.len();
         let length = self.0.len().max(presented.len());
@@ -79,6 +88,14 @@ impl BootstrapAdmission {
     }
 
     /// Consume the PSK if the nonce is fresh and the deadline is valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AzureVmError::BootstrapPskExpired`] when the deadline
+    /// elapsed, [`AzureVmError::BootstrapPskReplayed`] when the admission
+    /// was already consumed, and
+    /// [`AzureVmError::BootstrapEnrollmentFailed`] when the presented PSK
+    /// does not match.
     pub fn consume(
         &mut self,
         presented: &[u8],
@@ -120,9 +137,10 @@ impl BootstrapAdmission {
 }
 
 /// Bootstrap service session state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BootstrapServiceState {
     /// Waiting for one IKpsk2 enrollment.
+    #[default]
     Waiting,
     /// Enrollment completed and KK may be used.
     Enrolled,
@@ -131,16 +149,9 @@ pub enum BootstrapServiceState {
 }
 
 /// Gateway Guest bootstrap service.
+#[derive(Default)]
 pub struct BootstrapService {
     state: BootstrapServiceState,
-}
-
-impl Default for BootstrapService {
-    fn default() -> Self {
-        Self {
-            state: BootstrapServiceState::Waiting,
-        }
-    }
 }
 
 impl BootstrapService {

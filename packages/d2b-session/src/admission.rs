@@ -1179,22 +1179,27 @@ impl AuthenticatedSessionRouteBinding {
         &self.context
     }
 
+    /// Borrow the authenticated Zone.
     pub fn zone(&self) -> &ZoneId {
         &self.zone
     }
 
+    /// Borrow the authenticated subject reference.
     pub fn subject_ref(&self) -> &ResourceRef {
         &self.subject_ref
     }
 
+    /// Borrow the authenticated subject UID.
     pub fn subject_uid(&self) -> &ResourceUid {
         &self.subject_uid
     }
 
+    /// Return the evidence class that authenticated the subject.
     pub const fn evidence_class(&self) -> EvidenceClass {
         self.evidence_class
     }
 
+    /// Return the authenticated locality.
     pub const fn locality(&self) -> Locality {
         self.locality
     }
@@ -1596,14 +1601,7 @@ impl<C> AuthenticatedComponentSession<C> {
         frame: Vec<u8>,
         now_tick: u64,
     ) -> Result<()> {
-        if !permit.lease.is_valid_at(now_tick)
-            || !matches!(
-                permit.request.verb,
-                SessionVerb::Invoke | SessionVerb::AuditExport | SessionVerb::SupportBundle
-            )
-        {
-            return Err(SessionError::new(SessionErrorCode::PolicyDenied));
-        }
+        validate_ttrpc_permit(&permit, now_tick)?;
         self.driver.send_ttrpc(frame).await
     }
 

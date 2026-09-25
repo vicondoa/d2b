@@ -4,28 +4,19 @@ use core::fmt;
 
 use crate::{
     authority::{
-        GpuAuthorityAdmission, GpuAuthorityLease, GpuClosureProof, GpuPlatformToken,
+        opaque_token, GpuAuthorityAdmission, GpuAuthorityLease, GpuClosureProof, GpuPlatformToken,
         GpuProcessIdentity, GpuProcessObservation,
     },
     workers::{GpuWorkerSpec, VideoWorkerSpec},
 };
 
-/// One Core-derived GPU device effect token.
-#[derive(Clone, PartialEq, Eq)]
-pub struct GpuEffectToken([u8; 32]);
-
-impl GpuEffectToken {
-    /// Construct a token at the Core adapter boundary.
-    pub const fn from_core(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-}
-
-impl fmt::Debug for GpuEffectToken {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("GpuEffectToken(<redacted>)")
-    }
-}
+opaque_token!(
+    GpuEffectToken,
+    32,
+    "One Core-derived GPU device effect token.",
+    [Clone, PartialEq, Eq],
+    []
+);
 
 /// Opaque set of broker-resolved device grants.
 #[derive(Clone, PartialEq, Eq)]
@@ -35,6 +26,11 @@ pub struct GpuEffectTokenSet {
 
 impl GpuEffectTokenSet {
     /// Construct a bounded token set supplied by Core.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuEffectError::DeviceQuotaExceeded`] when no token or more
+    /// than eight tokens are supplied.
     pub fn from_core(tokens: Vec<GpuEffectToken>) -> Result<Self, GpuEffectError> {
         if tokens.is_empty() || tokens.len() > 8 {
             return Err(GpuEffectError::DeviceQuotaExceeded);
@@ -62,22 +58,13 @@ impl fmt::Debug for GpuEffectTokenSet {
     }
 }
 
-/// Opaque worker LaunchTicket.
-#[derive(Clone, PartialEq, Eq)]
-pub struct GpuLaunchTicket([u8; 16]);
-
-impl GpuLaunchTicket {
-    /// Construct a ticket at the Core adapter boundary.
-    pub const fn from_core(bytes: [u8; 16]) -> Self {
-        Self(bytes)
-    }
-}
-
-impl fmt::Debug for GpuLaunchTicket {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("GpuLaunchTicket(<redacted>)")
-    }
-}
+opaque_token!(
+    GpuLaunchTicket,
+    16,
+    "Opaque worker LaunchTicket.",
+    [Clone, PartialEq, Eq],
+    []
+);
 
 /// Closed GPU effect failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +85,7 @@ pub enum GpuEffectError {
     StaleDeviceIdentity,
     /// A Host-global claim conflicts with another owner.
     AuthorityConflict,
-/// A worker closure did not prove the owned process was gone.
+    /// A worker closure did not prove the owned process was gone.
     CloseUnconfirmed,
     /// The frozen GPU/video wire contract diverged.
     WireContractMismatch,

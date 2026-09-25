@@ -88,6 +88,11 @@ pub struct GpuController {
 
 impl GpuController {
     /// Construct an authority-bound controller from Core admission evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuControllerError::Selection`] when the arbitration and
+    /// settings do not admit a GPU worker process.
     pub fn new_authorized(
         admission: GpuAuthorityAdmission,
         settings: GpuSettings,
@@ -166,6 +171,16 @@ impl GpuController {
     /// The Host-global reservation is acquired before the first open or
     /// spawn and remains retained until [`Self::finalize_lifecycle`] confirms
     /// every worker closure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuControllerError::InvalidState`] when the finalizer is
+    /// missing or the controller is in a terminal phase,
+    /// [`GpuControllerError::Authority`] when video is configured without a
+    /// separated principal, [`GpuControllerError::Selection`] when a worker
+    /// spec cannot be derived, and [`GpuControllerError::Effect`] when a
+    /// reservation, open, or spawn effect fails or a started worker identity
+    /// fails validation.
     pub fn reconcile_lifecycle<P: GpuLifecycleEffectPort>(
         &mut self,
         port: &mut P,
@@ -269,7 +284,6 @@ impl GpuController {
                     GpuControllerError::Effect(error)
                 })?;
             self.gpu_role = Some(spec.process().role());
-            self.gpu_identity = Some(identity.clone());
             if let Err(error) = validate_started_identity(
                 &identity,
                 spec.process().role(),
@@ -277,6 +291,7 @@ impl GpuController {
                 admission.platform(),
                 generation,
             ) {
+                self.gpu_identity = Some(identity);
                 self.phase = GpuPhase::Failed;
                 tracing::warn!(
                     device = %self.device_uid.to_canonical_string(),
@@ -286,6 +301,7 @@ impl GpuController {
                 );
                 return Err(GpuControllerError::Effect(error));
             }
+            self.gpu_identity = Some(identity);
         }
         self.phase = GpuPhase::GpuReady;
         if self.settings.video_sidecar && self.video_identity.is_none() {
@@ -322,7 +338,6 @@ impl GpuController {
                     );
                     GpuControllerError::Effect(error)
                 })?;
-            self.video_identity = Some(identity.clone());
             self.video_started = true;
             if let Err(error) = validate_started_identity(
                 &identity,
@@ -331,6 +346,7 @@ impl GpuController {
                 admission.platform(),
                 generation,
             ) {
+                self.video_identity = Some(identity);
                 self.phase = GpuPhase::Failed;
                 tracing::warn!(
                     device = %self.device_uid.to_canonical_string(),
@@ -340,12 +356,24 @@ impl GpuController {
                 );
                 return Err(GpuControllerError::Effect(error));
             }
+            self.video_identity = Some(identity);
         }
         self.phase = GpuPhase::Ready;
         Ok(GpuReconcileOutcome::Converged)
     }
 
     /// Adopt matching GPU/video workers after a daemon restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuControllerError::InvalidState`] when the finalizer is
+    /// missing, the controller is in a terminal phase, or admission is
+    /// absent, [`GpuControllerError::Authority`] when video is configured
+    /// without a separated principal,
+    /// [`GpuControllerError::Selection`] when a worker spec cannot be
+    /// derived, [`GpuControllerError::Quarantined`] when the restart
+    /// observation is ambiguous, and [`GpuControllerError::Effect`] when a
+    /// probe effect fails or an observed identity does not match.
     pub fn adopt_lifecycle<P: GpuLifecycleEffectPort>(
         &mut self,
         lease: GpuAuthorityLease,
@@ -464,6 +492,11 @@ matched.push(observed);
     }
 
     /// Close workers and release Host-global authority after exact proofs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuControllerError::Effect`] when a stop effect fails or a
+    /// closure proof does not match the stopped worker identity.
     pub fn finalize_lifecycle<P: GpuLifecycleEffectPort>(
         &mut self,
         port: &mut P,

@@ -1798,14 +1798,11 @@ fn decode_attachment_control(bytes: &[u8]) -> Result<AttachmentControl> {
             SessionErrorCode::AttachmentDescriptorMismatch,
         ));
     }
-    let mut descriptors = Vec::with_capacity(usize::from(count));
-    let mut offset = 3;
-    for _ in 0..count {
-        descriptors.push(decode_attachment_descriptor(
-            &bytes[offset..offset + ATTACHMENT_DESCRIPTOR_BYTES],
-        )?);
-        offset += ATTACHMENT_DESCRIPTOR_BYTES;
-    }
+    let descriptors = bytes[3..]
+        .chunks_exact(ATTACHMENT_DESCRIPTOR_BYTES)
+        .take(usize::from(count))
+        .map(decode_attachment_descriptor)
+        .collect::<Result<Vec<_>>>()?;
     Ok(AttachmentControl::Batch(AttachmentPacket {
         declared_count: count,
         descriptors: BoundedVec::new(descriptors)?,

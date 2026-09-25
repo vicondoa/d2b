@@ -570,28 +570,7 @@ pub fn explicit_binding_children_with_user(
             }
             BindingChildPlacement::Guest => target_ref.clone(),
         };
-        let Some(producer_ref) = producer_ref.transpose()? else {
-            children.push(BindingChildIntent {
-                owner_ref: binding_ref.clone(),
-                provider_ref: provider_ref.clone(),
-                resource_ref,
-                execution_ref,
-                kind: declaration.kind,
-                placement: declaration.placement,
-                role: declaration.role,
-                producer_ref: None,
-                process_provider: declaration.process_provider,
-                process_template: declaration.process_template,
-                process_domain: declaration.process_domain,
-                process_class: declaration.process_class,
-                process_user: if declaration.process_user {
-                    user_ref.clone()
-                } else {
-                    None
-                },
-            });
-            continue;
-        };
+        let producer_ref: Option<ResourceRef> = producer_ref.transpose()?;
         children.push(BindingChildIntent {
             owner_ref: binding_ref.clone(),
             provider_ref: provider_ref.clone(),
@@ -600,7 +579,7 @@ pub fn explicit_binding_children_with_user(
             kind: declaration.kind,
             placement: declaration.placement,
             role: declaration.role,
-            producer_ref: Some(producer_ref),
+            producer_ref,
             process_provider: declaration.process_provider,
             process_template: declaration.process_template,
             process_domain: declaration.process_domain,

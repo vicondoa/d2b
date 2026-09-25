@@ -1546,15 +1546,18 @@ fn field(key: &'static str, value: impl Into<String>) -> CredentialTelemetryFiel
     }
 }
 
-fn validate_zone(value: String) -> Result<String, CredentialObservabilityError> {
-    if value.is_empty()
-        || value.len() > 63
-        || !value.as_bytes()[0].is_ascii_lowercase()
-        || !value
+fn is_valid_zone(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        || contains_sensitive_shape(&value)
-    {
+        && !contains_sensitive_shape(value)
+}
+
+fn validate_zone(value: String) -> Result<String, CredentialObservabilityError> {
+    if !is_valid_zone(&value) {
         return Err(CredentialObservabilityError::ForbiddenTelemetryField);
     }
     Ok(value)
@@ -1588,7 +1591,7 @@ fn forbidden_telemetry_key(key: &str) -> bool {
 
 fn allowed_telemetry_value(key: &str, value: &str) -> bool {
     match key {
-        "d2b.zone" => validate_zone(value.to_owned()).is_ok(),
+        "d2b.zone" => is_valid_zone(value),
         "d2b.provider" | "d2b.credential.provider" | "provider" => matches!(
             value,
             "credential-secret-service" | "credential-entra" | "credential-managed-identity"

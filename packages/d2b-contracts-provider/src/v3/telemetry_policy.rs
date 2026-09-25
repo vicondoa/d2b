@@ -489,7 +489,7 @@ pub fn validate_descriptor(descriptor: &MetricDescriptor) -> Result<(), MetricPo
         return Err(MetricPolicyError::DescriptorNotAllowlisted);
     };
 
-    let mut seen = BTreeSet::new();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
     if descriptor.labels.len() > 16 {
         return Err(MetricPolicyError::DescriptorMalformed);
     }
@@ -497,7 +497,7 @@ pub fn validate_descriptor(descriptor: &MetricDescriptor) -> Result<(), MetricPo
         if label.key.is_empty() || label.key.len() > 64 {
             return Err(MetricPolicyError::DescriptorMalformed);
         }
-        if !seen.insert(label.key.clone()) {
+        if !seen.insert(&label.key) {
             return Err(MetricPolicyError::DescriptorMalformed);
         }
         validate_label_key(&label.key)?;

@@ -1,3 +1,11 @@
+//! Typed v0.4.0 public `vms.json` manifest.
+//!
+//! The manifest is the world-readable VM roster the daemon renders: a
+//! reserved `_manifest` sentinel, a reserved `_observability` block, and
+//! one entry per VM keyed by its name. Every type here mirrors the
+//! camelCase wire shape with `deny_unknown_fields` admission, and the
+//! parser accepts the current and legacy-compat manifest versions.
+
 use crate::error::Error;
 use schemars::{
     JsonSchema,
@@ -27,6 +35,8 @@ use crate::runtime::RuntimeMetadata;
 pub const MANIFEST_VERSION_CURRENT: u32 = 7;
 pub const MANIFEST_VERSION_LEGACY_COMPAT: u32 = 6;
 
+/// The typed public `vms.json` manifest: reserved sentinels plus one
+/// [`VmEntry`] per VM keyed by its name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ManifestV04 {
     #[serde(rename = "_manifest")]
@@ -38,6 +48,13 @@ pub struct ManifestV04 {
 }
 
 impl ManifestV04 {
+    /// Parse a manifest from its canonical compact JSON bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a manifest parse error when the bytes are not valid JSON,
+    /// carry an unknown or malformed field, or declare a manifest version
+    /// outside the current and legacy-compat pair.
     pub fn from_slice(bytes: &[u8]) -> Result<Self, Error> {
         let parsed: Self = serde_json::from_slice(bytes).map_err(|error| {
             Error::manifest_parse_error("vms.json", manifest_parse_reason(&error.to_string()))
@@ -64,6 +81,12 @@ impl ManifestV04 {
         Self::from_slice(&bytes)
     }
 
+    /// Render the manifest as compact JSON with a trailing newline.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialize-failed parse error when the manifest cannot be
+    /// rendered (a state the typed fields make unreachable in practice).
     pub fn to_compact_json(&self) -> Result<String, Error> {
         let mut rendered = serde_json::to_string(self)
             .map_err(|_| Error::manifest_parse_error("vms.json", "serialize-failed"))?;
@@ -153,6 +176,7 @@ impl JsonSchema for ManifestV04 {
     }
 }
 
+/// The reserved `_manifest` sentinel: the schema version of the file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManifestMeta {
@@ -192,6 +216,7 @@ impl JsonSchema for ManifestMeta {
     }
 }
 
+/// The reserved `_observability` block: host-wide telemetry wiring.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ObservabilityMeta {
@@ -204,6 +229,7 @@ pub struct ObservabilityMeta {
     pub vm_name: String,
 }
 
+/// One VM's public roster entry, keyed by its name in the manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmEntry {
@@ -253,6 +279,7 @@ fn default_autostart() -> bool {
     true
 }
 
+/// Per-VM lifecycle policy: graceful shutdown and live activation.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmLifecycle {
@@ -261,6 +288,7 @@ pub struct VmLifecycle {
     pub live_activation: VmLiveActivation,
 }
 
+/// Graceful-shutdown policy for one VM.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmGracefulShutdown {
@@ -268,6 +296,7 @@ pub struct VmGracefulShutdown {
     pub timeout_seconds: Option<u32>,
 }
 
+/// Live-activation policy for one VM.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmLiveActivation {
@@ -283,6 +312,8 @@ impl Default for VmGracefulShutdown {
     }
 }
 
+/// LAN policy for one VM: east-west traffic allowance and its effective
+/// value after host-wide policy is applied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmLanPolicy {
@@ -290,6 +321,7 @@ pub struct VmLanPolicy {
     pub effective_east_west: bool,
 }
 
+/// Per-VM observability wiring: agent socket and vsock transport.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmObservability {
@@ -299,6 +331,7 @@ pub struct VmObservability {
     pub vsock_host_socket: Option<String>,
 }
 
+/// Shell-session metadata for one VM.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmShellMetadata {
@@ -308,6 +341,7 @@ pub struct VmShellMetadata {
     pub max_sessions: u32,
 }
 
+/// A validated shell name (`^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct ManifestShellName(pub String);

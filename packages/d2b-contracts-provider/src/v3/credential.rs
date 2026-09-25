@@ -117,6 +117,12 @@ macro_rules! opaque_credential_value {
 
         impl $name {
             /// Validate a raw identifier and retain only its domain-separated digest.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`CredentialContractError::InvalidOpaqueValue`] when
+            /// the value is empty, exceeds the domain bound, or contains a
+            /// character outside the allowed identifier set.
             pub fn parse(value: impl AsRef<str>) -> Result<Self, CredentialContractError> {
                 let value = value.as_ref();
                 validate_opaque_source(value, $max)?;
@@ -129,6 +135,11 @@ macro_rules! opaque_credential_value {
             }
 
             /// Reconstruct a value from its authorized one-way wire representation.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`CredentialContractError::InvalidOpaqueValue`] when
+            /// the digest is not the canonical `sha256:` form.
             pub fn from_opaque_digest(
                 value: impl Into<String>,
             ) -> Result<Self, CredentialContractError> {
@@ -291,17 +302,29 @@ impl<'de> Deserialize<'de> for CredentialScope {
 
 /// Rotation policy class.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum RotationPolicyClass {
+    #[default]
     OnExpiry,
     Proactive,
     OnDemand,
 }
 
 /// Rotation settings.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CredentialRotationPolicy {
     policy: RotationPolicyClass,
@@ -356,16 +379,6 @@ impl CredentialRotationPolicy {
     /// Return the lease lifetime cap.
     pub const fn max_lease_lifetime_ms(&self) -> u64 {
         self.max_lease_lifetime_ms
-    }
-}
-
-impl Default for CredentialRotationPolicy {
-    fn default() -> Self {
-        Self {
-            policy: RotationPolicyClass::OnExpiry,
-            proactive_window_ms: None,
-            max_lease_lifetime_ms: 0,
-        }
     }
 }
 
@@ -434,29 +447,32 @@ impl<'de> Deserialize<'de> for ExpirySpec {
 
 /// How active leases are treated on a revocation trigger.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    JsonSchema,
 )]
 #[serde(rename_all = "kebab-case")]
 pub enum RevocationAction {
+    #[default]
     Immediate,
     DrainLeases,
 }
 
 /// Revocation settings.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CredentialRevocationPolicy {
     pub on_owner_delete: RevocationAction,
     pub on_provider_generation: RevocationAction,
-}
-
-impl Default for CredentialRevocationPolicy {
-    fn default() -> Self {
-        Self {
-            on_owner_delete: RevocationAction::Immediate,
-            on_provider_generation: RevocationAction::Immediate,
-        }
-    }
 }
 
 redacted_debug!(CredentialRevocationPolicy);

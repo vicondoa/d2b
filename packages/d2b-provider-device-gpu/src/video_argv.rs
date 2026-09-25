@@ -19,7 +19,6 @@
 //! decoded media stream.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
-#![allow(missing_docs)]
 
 use serde::{Deserialize, Serialize};
 
@@ -96,10 +95,12 @@ pub fn wire_contract_snapshot() -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum VideoBackend {
+    /// VAAPI decode (NVDEC through nvidia-vaapi-driver).
     Vaapi,
 }
 
 impl VideoBackend {
+    /// Return the kebab-case backend spelling used in `--backend`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Vaapi => "vaapi",
@@ -130,12 +131,25 @@ pub struct VideoArgvInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum VideoArgvError {
-    InvalidCrosvmBinaryPath { path: String },
+    /// The crosvm binary path is empty or not absolute.
+    InvalidCrosvmBinaryPath {
+        /// The offending path.
+        path: String,
+    },
+    /// The VM name is empty.
     EmptyVmName,
+    /// The socket path is empty.
     EmptySocketPath,
 }
 
 /// Render the video-decoder argv.
+///
+/// # Errors
+///
+/// Returns [`VideoArgvError::InvalidCrosvmBinaryPath`] when the binary path
+/// is empty or not absolute, [`VideoArgvError::EmptyVmName`] when the VM
+/// name is empty, and [`VideoArgvError::EmptySocketPath`] when the socket
+/// path is empty.
 pub fn generate_video_argv(input: &VideoArgvInput) -> Result<Vec<String>, VideoArgvError> {
     if input.crosvm_binary_path.is_empty() || !input.crosvm_binary_path.starts_with('/') {
         return Err(VideoArgvError::InvalidCrosvmBinaryPath {

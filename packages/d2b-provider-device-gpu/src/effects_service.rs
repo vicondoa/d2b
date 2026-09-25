@@ -190,7 +190,7 @@ impl<'a> DeclaredWorkerGpuPort<'a> {
         if view.owner_key.as_ref() != Some(&self.device_key()) {
             return Err(GpuEffectError::StaleDeviceIdentity);
         }
-        let _ = Self::declared_row_template(&view, role)?;
+        Self::declared_row_template(&view, role)?;
         Ok(Some(view))
     }
 

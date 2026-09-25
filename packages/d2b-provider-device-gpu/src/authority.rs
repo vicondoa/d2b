@@ -13,76 +13,68 @@ use d2b_contracts_resource::v3::{
 
 use crate::process::GpuProcessRole;
 
-/// Core-derived identity for one physical GPU or render node backing.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct GpuBackingToken([u8; 32]);
+/// Generate an opaque `[u8; N]` token newtype with a redacting `Debug` impl
+/// and the requested accessors.
+macro_rules! opaque_token {
+    ($name:ident, $bytes:expr, $doc:literal, [$($derive:ident),*], [$($method:ident),*]) => {
+        #[doc = $doc]
+        #[derive($($derive),*)]
+        pub struct $name([u8; $bytes]);
 
-impl GpuBackingToken {
-    /// Construct a backing token at the trusted Core boundary.
-    pub const fn from_core(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
+        impl $name {
+            /// Construct a token at the trusted Core boundary.
+            pub const fn from_core(bytes: [u8; $bytes]) -> Self {
+                Self(bytes)
+            }
 
-    /// Whether the token is the forbidden all-zero identity.
-    pub fn is_zero(&self) -> bool {
-        self.0 == [0; 32]
-    }
+            $(
+                opaque_token!(@method $method $name $bytes);
+            )*
+        }
 
-    /// Borrow the token for another trusted adapter comparison.
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
+        impl fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(concat!(stringify!($name), "(<redacted>)"))
+            }
+        }
+    };
+    (@method is_zero $name:ident $bytes:expr) => {
+        /// Whether the token is the forbidden all-zero identity.
+        pub fn is_zero(&self) -> bool {
+            self.0 == [0; $bytes]
+        }
+    };
+    (@method as_bytes $name:ident $bytes:expr) => {
+        /// Borrow the token for another trusted adapter comparison.
+        pub const fn as_bytes(&self) -> &[u8; $bytes] {
+            &self.0
+        }
+    };
 }
 
-impl fmt::Debug for GpuBackingToken {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("GpuBackingToken(<redacted>)")
-    }
-}
+pub(crate) use opaque_token;
 
-/// Core-derived platform identity for one GPU effect.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct GpuPlatformToken([u8; 32]);
-
-impl GpuPlatformToken {
-    /// Construct a platform token at the trusted Core boundary.
-    pub const fn from_core(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// Whether the token is the forbidden all-zero identity.
-    pub fn is_zero(&self) -> bool {
-        self.0 == [0; 32]
-    }
-}
-
-impl fmt::Debug for GpuPlatformToken {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("GpuPlatformToken(<redacted>)")
-    }
-}
-
-/// Core-assigned worker principal.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct GpuPrincipalToken([u8; 32]);
-
-impl GpuPrincipalToken {
-    /// Construct a principal token at the trusted Core boundary.
-    pub const fn from_core(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// Whether the token is the forbidden all-zero identity.
-    pub fn is_zero(&self) -> bool {
-        self.0 == [0; 32]
-    }
-}
-
-impl fmt::Debug for GpuPrincipalToken {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("GpuPrincipalToken(<redacted>)")
-    }
-}
+opaque_token!(
+    GpuBackingToken,
+    32,
+    "Core-derived identity for one physical GPU or render node backing.",
+    [Clone, PartialEq, Eq, PartialOrd, Ord, Hash],
+    [is_zero, as_bytes]
+);
+opaque_token!(
+    GpuPlatformToken,
+    32,
+    "Core-derived platform identity for one GPU effect.",
+    [Clone, PartialEq, Eq, PartialOrd, Ord, Hash],
+    [is_zero]
+);
+opaque_token!(
+    GpuPrincipalToken,
+    32,
+    "Core-assigned worker principal.",
+    [Clone, PartialEq, Eq, PartialOrd, Ord, Hash],
+    [is_zero]
+);
 
 /// Opaque proof that a Device owner is authorized to hold GPU authority.
 #[derive(Clone, PartialEq, Eq)]
@@ -96,6 +88,12 @@ pub struct GpuOwnerProof {
 
 impl GpuOwnerProof {
     /// Bind a proof to an exact Zone, holder, Device, Host, and generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuAuthorityError::WrongPrincipal`] when the Zone reference
+    /// is not a `Zone` resource or the holder reference is neither a `Guest`
+    /// nor a `Host` resource.
     pub fn new(
         zone_ref: ResourceRef,
         holder_ref: ResourceRef,
@@ -164,6 +162,13 @@ pub struct GpuAuthorityAdmission {
 
 impl GpuAuthorityAdmission {
     /// Construct an admission before any device or process effect.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuAuthorityError::StaleDeviceIdentity`] when a backing,
+    /// platform, or principal token is the forbidden all-zero identity, and
+    /// [`GpuAuthorityError::ArbitrationViolation`] when the holder ceiling
+    /// or render-node mode contradicts the arbitration class.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         owner: GpuOwnerProof,
@@ -197,6 +202,12 @@ impl GpuAuthorityAdmission {
     }
 
     /// Attach the distinct Core-assigned video principal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuAuthorityError::PrincipalNotSeparated`] when the video
+    /// principal is the forbidden all-zero identity or equals the GPU
+    /// principal.
     pub fn with_video_principal(
         mut self,
         video_principal: GpuPrincipalToken,
@@ -261,27 +272,13 @@ impl fmt::Debug for GpuAuthorityAdmission {
     }
 }
 
-/// Opaque Host-global GPU lease.
-#[derive(Clone, PartialEq, Eq)]
-pub struct GpuAuthorityLease([u8; 16]);
-
-impl GpuAuthorityLease {
-    /// Construct a lease at the trusted authority adapter boundary.
-    pub const fn from_core(bytes: [u8; 16]) -> Self {
-        Self(bytes)
-    }
-
-    /// Borrow the opaque lease token at the daemon adapter boundary.
-    pub const fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
-    }
-}
-
-impl fmt::Debug for GpuAuthorityLease {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("GpuAuthorityLease(<redacted>)")
-    }
-}
+opaque_token!(
+    GpuAuthorityLease,
+    16,
+    "Opaque Host-global GPU lease.",
+    [Clone, PartialEq, Eq],
+    [as_bytes]
+);
 
 /// Opaque identity of one broker-supervised GPU worker.
 #[derive(Clone, PartialEq, Eq)]
@@ -398,7 +395,7 @@ pub enum GpuAuthorityError {
     StaleDeviceIdentity,
     /// The arbitration and render-node settings disagree.
     ArbitrationViolation,
-    }
+}
 
 impl GpuAuthorityError {
     /// Return the stable, identity-free error code.
@@ -408,7 +405,6 @@ impl GpuAuthorityError {
             Self::PrincipalNotSeparated => "gpu-principal-not-separated",
             Self::StaleDeviceIdentity => "gpu-device-identity-stale",
             Self::ArbitrationViolation => "gpu-arbitration-violation",
-            
         }
     }
 }

@@ -21,7 +21,6 @@
 //! the Guest controller does not receive or assemble it.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
-#![allow(missing_docs)]
 
 use serde::{Deserialize, Serialize};
 
@@ -31,12 +30,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GpuContextType {
+    /// The base virgl context.
     Virgl,
+    /// The virgl2 context.
     Virgl2,
+    /// The cross-domain context.
     CrossDomain,
 }
 
 impl GpuContextType {
+    /// Return the kebab-case context-type spelling used in `--params`.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Virgl => "virgl",
@@ -100,11 +103,20 @@ pub struct GpuArgvInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", tag = "kind")]
 pub enum GpuArgvError {
-    InvalidCrosvmBinaryPath { path: String },
+    /// The crosvm binary path is empty or not absolute.
+    InvalidCrosvmBinaryPath {
+        /// The offending path.
+        path: String,
+    },
+    /// The VM name is empty.
     EmptyVmName,
+    /// The socket path is empty.
     EmptySocketPath,
+    /// The Wayland socket is empty.
     EmptyWaylandSock,
+    /// No context type is declared.
     EmptyContextTypes,
+    /// No display is declared.
     EmptyDisplays,
 }
 
@@ -155,6 +167,16 @@ fn render_params(params: &GpuParams) -> Result<String, GpuArgvError> {
 }
 
 /// Render the `crosvm device gpu` argv.
+///
+/// # Errors
+///
+/// Returns [`GpuArgvError::InvalidCrosvmBinaryPath`] when the binary path
+/// is empty or not absolute, [`GpuArgvError::EmptyVmName`] when the VM
+/// name is empty, [`GpuArgvError::EmptySocketPath`] when the socket path
+/// is empty, [`GpuArgvError::EmptyWaylandSock`] when the Wayland socket
+/// is empty, [`GpuArgvError::EmptyContextTypes`] when no context type is
+/// declared, and [`GpuArgvError::EmptyDisplays`] when no display is
+/// declared.
 pub fn generate_gpu_argv(input: &GpuArgvInput) -> Result<Vec<String>, GpuArgvError> {
     if input.crosvm_binary_path.is_empty() || !input.crosvm_binary_path.starts_with('/') {
         return Err(GpuArgvError::InvalidCrosvmBinaryPath {
