@@ -90,6 +90,13 @@ pub struct SemanticProjectionProtocolVersion(String);
 
 impl SemanticProjectionProtocolVersion {
     /// Parse a bounded projection-protocol version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticContractError::SchemaViolation`] when the value is
+    /// not exactly `<major>.<minor>` with one to three digits per component
+    /// and no leading zeroes in multi-digit components, or exceeds the
+    /// protocol-version byte bound.
     pub fn parse(value: impl Into<String>) -> Result<Self, SemanticContractError> {
         let value = value.into();
         if value.len() > MAX_SEMANTIC_PROJECTION_PROTOCOL_VERSION_BYTES {
@@ -466,6 +473,11 @@ impl SemanticLayerSchema {
     }
 
     /// Admit a set of top-level field names against this frozen layer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticContractError::SchemaViolation`] when a name is not in
+    /// the allowed set or a required name is missing.
     pub fn validate_names<'a>(
         &self,
         names: impl IntoIterator<Item = &'a str>,
@@ -581,6 +593,11 @@ impl SemanticTypeContract {
     /// `provider_extensions` carries the registrations of whichever Provider
     /// implementations are installed. Passing none yields the discoverable
     /// common base with no Provider package selected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticContractError::SchemaViolation`] when a provider
+    /// extension registration is invalid.
     pub fn schema_contract(
         &self,
         provider_extensions: impl IntoIterator<Item = ProviderExtensionRegistration>,
@@ -611,6 +628,15 @@ impl SemanticTypeContract {
     /// frozen field set; the caller supplies the values, because the
     /// specification does not fix an interior for every required field. See
     /// each family module for which interiors it leaves open.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticContractError::MinimalBaseReservedField`] when
+    /// `base_values` carries a field the envelope owns,
+    /// [`SemanticContractError::MinimalBaseFieldSetMismatch`] when the supplied
+    /// names differ from the required base field set, and
+    /// [`SemanticContractError::SchemaViolation`] when the assembled spec is
+    /// invalid.
     pub fn minimal_base_spec(
         &self,
         provider_ref: ResourceRef,
@@ -857,6 +883,11 @@ impl SemanticProjectionBinding {
     }
 
     /// Derive the provider-neutral half of a signed projection factory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticContractError::ProjectionFactoryInvalid`] when the
+    /// factory cannot be constructed from the derived semantic binding.
     pub fn projection_factory(&self) -> Result<ProjectionFactory, SemanticContractError> {
         Ok(ProjectionFactory::new(
             self.service_type.clone(),
@@ -874,6 +905,13 @@ impl SemanticProjectionBinding {
     /// A projection permits only `providerRef`, the semantic base and import
     /// fields, and ResourceImport ownership. A `spec.provider` extension is
     /// rejected: Core never synthesizes one and never copies a remote one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticContractError::ProjectionProviderExtensionForbidden`]
+    /// when the spec carries a `spec.provider` extension and
+    /// [`SemanticContractError::SchemaViolation`] when a field name is outside
+    /// the projection's allowed set or a required name is missing.
     pub fn validate_projection_spec(
         &self,
         spec: &ResourceSpec,
@@ -1056,6 +1094,12 @@ impl SemanticPairContract {
     /// in the Binding's Zone before calling. This admits only the type half:
     /// `serviceRef` must name this pair's Service ResourceType, and the target
     /// must be in this pair's closed allowed target set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticContractError::WrongResourceType`] when `service_ref`
+    /// does not name this pair's Service ResourceType or the target is outside
+    /// the closed allowed target set.
     pub fn admit_binding_refs(
         &self,
         service_ref: &ResourceRef,
@@ -1080,6 +1124,11 @@ impl SemanticPairContract {
     /// a `*Binding`. This type-only helper does not establish resource origin;
     /// final export admission must use the stored envelope through
     /// [`ProjectionFactory::admits_export_target`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticContractError::WrongResourceType`] when the reference
+    /// does not name the owner Service ResourceType.
     pub fn admit_export_target(
         &self,
         resource_ref: &ResourceRef,

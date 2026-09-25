@@ -4,7 +4,7 @@ use core::fmt;
 use d2b_contracts_provider::v3::semantic_services::{
     SemanticFamily,
     child_resources::{
-        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        ProcessChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
         explicit_binding_children, explicit_binding_children_with_user,
     },
 };
@@ -19,7 +19,7 @@ const SECURITY_KEY_PROVIDER_REF: &str = "Provider/device-security-key";
 
 const SECURITY_KEY_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Guest,
         "guest-frontend",
         "Provider/system-systemd",
@@ -36,7 +36,7 @@ const SECURITY_KEY_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
 
 const SECURITY_KEY_BINDING_CHILD_REQUESTS_WITH_USER: [BindingChildRequest; 2] = [
     BindingChildRequest::process_for_user(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Guest,
         "guest-frontend",
         "Provider/system-systemd",

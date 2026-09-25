@@ -3,7 +3,7 @@
 use d2b_contracts_provider::v3::semantic_services::{
     SemanticFamily,
     child_resources::{
-        BindingChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
+        ProcessChildKind, BindingChildPlacement, BindingChildRequest, BindingChildSet,
         explicit_binding_children,
     },
 };
@@ -244,7 +244,7 @@ impl TelemetryComponentSession {
 
 const TELEMETRY_ZONE_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Host,
         "collector",
         "Provider/system-minijail",
@@ -257,7 +257,7 @@ const TELEMETRY_ZONE_BINDING_CHILD_REQUESTS: [BindingChildRequest; 2] = [
 
 const TELEMETRY_GUEST_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Host,
         "collector",
         "Provider/system-minijail",
@@ -267,7 +267,7 @@ const TELEMETRY_GUEST_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
     ),
     BindingChildRequest::endpoint(BindingChildPlacement::Host, "ingest-endpoint", "collector"),
     BindingChildRequest::process(
-        BindingChildKind::Process,
+        ProcessChildKind::Process,
         BindingChildPlacement::Host,
         "forwarder",
         "Provider/system-minijail",
