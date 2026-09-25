@@ -1,9 +1,9 @@
 use d2b_contracts_resource::v3::{ExecutionDomain, ResourceRef};
 use d2b_provider_audio_pipewire::{
     AudioArbitrationState, AudioBindingController, AudioBindingPhase, AudioChannel, AudioGrant,
-    AudioLeaseId, AudioMediator, AudioMediatorError, AudioReadiness, FakeAudioMediator,
-    GuestAudioReadiness, HostAudioReadiness, LevelPercent, shared_microphone_arbiter,
-    validate_audio_binding,
+    AudioLeaseId, AudioMediator, AudioMediatorError, AudioReadiness, AUDIO_QUEUE_BOUND,
+    FakeAudioMediator, GuestAudioReadiness, HostAudioReadiness, LevelPercent,
+    shared_microphone_arbiter, validate_audio_binding,
 };
 
 #[derive(Debug)]
@@ -303,7 +303,7 @@ fn speaker_admission_rejects_before_mutating_mediator() {
     let mut requested = binding();
     requested.grants.speaker_level =
         Some(d2b_provider_audio_pipewire::LevelPercent::new(25).expect("bounded test level"));
-    for lease in 1..=64 {
+    for lease in 1..=AUDIO_QUEUE_BOUND as u64 {
         controller
             .reconcile(&requested, "zone-a", AudioLeaseId::new(lease))
             .unwrap();
@@ -311,7 +311,7 @@ fn speaker_admission_rejects_before_mutating_mediator() {
     let last_level = controller.mediator().level();
     assert_eq!(
         controller
-            .reconcile(&requested, "zone-a", AudioLeaseId::new(65))
+            .reconcile(&requested, "zone-a", AudioLeaseId::new(AUDIO_QUEUE_BOUND as u64 + 1))
             .unwrap_err(),
         d2b_provider_audio_pipewire::AudioControllerError::Admission
     );
