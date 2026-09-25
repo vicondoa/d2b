@@ -431,6 +431,8 @@ pub enum RelayCredentialError {
     Unavailable,
     /// Lease is expired.
     Expired,
+    /// The system clock was before the Unix epoch.
+    Clock,
     /// Lease has the wrong role.
     RoleMismatch,
     /// The exact lease was not active in the credential Provider.
@@ -448,6 +450,7 @@ impl fmt::Display for RelayCredentialError {
             Self::InvalidScope => "relay-credential-scope-invalid",
             Self::Unavailable => "relay-credential-unavailable",
             Self::Expired => "relay-credential-expired",
+            Self::Clock => "relay-credential-clock",
             Self::RoleMismatch => "relay-credential-role-mismatch",
             Self::UnknownLease => "relay-credential-unknown-lease",
         })
