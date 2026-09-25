@@ -82,7 +82,6 @@ impl std::error::Error for SystemdConfigError {}
 /// Restart-on-failure policy with a bounded counter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestartPolicy {
-    restart_on_failure: bool,
     max_restarts: u32,
     attempts: u32,
     reset_after_ticks: u64,
@@ -93,7 +92,6 @@ impl RestartPolicy {
     /// Construct a bounded restart-on-failure policy.
     pub const fn on_failure(max_restarts: u32, reset_after_ticks: u64) -> Self {
         Self {
-            restart_on_failure: true,
             max_restarts,
             attempts: 0,
             reset_after_ticks,
@@ -104,7 +102,7 @@ impl RestartPolicy {
     /// Decide whether a terminal result may restart the process.
     pub fn should_restart(&mut self, outcome: ProcessOutcome) -> bool {
         self.healthy_ticks = 0;
-        if !self.restart_on_failure || outcome.exit_class == ProcessExitClass::CleanExit {
+        if outcome.exit_class == ProcessExitClass::CleanExit {
             return false;
         }
         if self.attempts >= self.max_restarts {
