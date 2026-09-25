@@ -35,7 +35,9 @@ use super::{
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SealedLane {
+    /// The lane whose validations were accepted.
     pub lane: EvidenceLane,
+    /// The validations accepted for the lane, each bound to its record digest.
     pub validations: Vec<SealedValidation>,
 }
 
@@ -48,7 +50,9 @@ pub struct SealedLane {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SealedValidation {
+    /// Validation identifier accepted into the seal.
     pub validation: String,
+    /// SHA-256 of the exact evidence record the seal accepted.
     pub record_sha256: String,
 }
 
@@ -61,19 +65,37 @@ pub struct SealedValidation {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SealRecord {
+    /// The artifact kind this seal belongs to (`SEAL_ARTIFACT_KIND`).
     pub artifact_kind: String,
+    /// Delivery schema version this seal was written as.
     pub schema_version: u32,
+    /// Program name the seal was produced under.
     pub program: String,
+    /// Wave the seal belongs to.
     pub wave: String,
+    /// Candidate the seal binds.
     pub candidate_id: CandidateId,
+    /// Content identity of the sealed material.
     pub content_id: ContentId,
+    /// SHA-256 of the candidate snapshot the seal commits to.
     pub snapshot_sha256: SnapshotSha256,
+    /// The sealed material itself (see the struct contract above).
     pub material: CandidateMaterial,
+    /// Per-lane accepted validations bound into the seal.
     pub evidence: Vec<SealedLane>,
 }
 
 impl SealRecord {
     /// Re-validates a seal read back from delivery state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the artifact kind is not [`SEAL_ARTIFACT_KIND`],
+    /// the schema version is unsupported, the `program`/`wave` pair is
+    /// invalid or disagrees with the sealed material, the recorded digests
+    /// do not re-derive from the material, the candidate address does not
+    /// match, a sealed validation identifier or record digest is malformed,
+    /// or the required evidence lanes are missing.
     pub fn validate(&self, candidate: &CandidateDir) -> Result<()> {
         ensure_artifact_kind(&self.artifact_kind, SEAL_ARTIFACT_KIND, "wave seal")?;
         if self.schema_version != DELIVERY_SCHEMA_VERSION {

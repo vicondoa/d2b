@@ -94,6 +94,12 @@ impl EvidenceLane {
         }
     }
 
+    /// Parses a lane name from its wire string.
+    ///
+    /// # Errors
+    ///
+    /// Returns a usage error when `value` is neither `github-ci` nor
+    /// `local-host`.
     pub fn parse(value: &str) -> Result<Self> {
         EVIDENCE_LANES
             .into_iter()
@@ -120,7 +126,9 @@ fn parse_result(value: &str) -> Result<EvidenceResult> {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputDigest {
+    /// Lowercase hex SHA-256 of the validator log bytes.
     pub sha256: String,
+    /// Log size in bytes.
     pub bytes: u64,
 }
 
@@ -128,17 +136,27 @@ pub struct OutputDigest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceRecord {
+    /// The artifact kind this record belongs to (`EVIDENCE_ARTIFACT_KIND`).
     pub artifact_kind: String,
+    /// Delivery schema version this record was written as.
     pub schema_version: u32,
+    /// Program name the evidence was produced under.
     pub program: String,
+    /// Wave the evidence belongs to.
     pub wave: String,
+    /// Candidate this evidence is bound to.
     pub candidate_id: CandidateId,
+    /// Content identity of the candidate material.
     pub content_id: ContentId,
+    /// SHA-256 of the candidate snapshot the evidence vouches for.
     pub snapshot_sha256: SnapshotSha256,
+    /// Lane the validation ran in (`github-ci` or `local-host`).
     pub lane: EvidenceLane,
     /// Lane-unique validation identifier, for example `test-integration`.
     pub validation: String,
+    /// Validation outcome.
     pub result: EvidenceResult,
+    /// Import time as UNIX seconds.
     pub imported_at_unix: u64,
     /// Command line that was run. Never its output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,6 +177,14 @@ impl EvidenceRecord {
             .join(format!("{}.json", self.validation))
     }
 
+    /// Validates this record's shape before it is committed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the artifact kind is not
+    /// [`EVIDENCE_ARTIFACT_KIND`], the schema version is unsupported, the
+    /// `program`/`wave` pair is invalid, the `validation` identifier is
+    /// malformed, or a supplied `command`/`locator` is not a single line.
     pub fn validate(&self) -> Result<()> {
         if self.artifact_kind != EVIDENCE_ARTIFACT_KIND {
             return Err(DeliveryError::new(format!(

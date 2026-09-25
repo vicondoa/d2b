@@ -84,6 +84,7 @@ impl WaveSnapshot {
         })
     }
 
+    /// The three identifiers bound to this snapshot, as a single value.
     pub fn digests(&self) -> CandidateDigests {
         CandidateDigests {
             content_id: self.content_id.clone(),
@@ -92,10 +93,12 @@ impl WaveSnapshot {
         }
     }
 
+    /// The program this snapshot's wave belongs to.
     pub fn program(&self) -> &str {
         &self.material.program
     }
 
+    /// The wave this snapshot was sealed for.
     pub fn wave(&self) -> &str {
         &self.material.wave
     }
