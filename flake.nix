@@ -72,7 +72,8 @@
       # closed if the entry is removed or reshaped.
       codegraphNpmSpec = let
         mcp = builtins.fromJSON (builtins.readFile ./.omp/mcp.json);
-        args = mcp.mcpServers.codegraph.args;
+        args = mcp.mcpServers.codegraph.args
+          or (throw "codegraph npm spec missing from .omp/mcp.json");
         isPkg = a: builtins.match "@colbymchenry/codegraph@[0-9][0-9a-zA-Z.-]*" a != null;
         found = nixpkgs.lib.findFirst isPkg
           (throw "codegraph npm spec missing from .omp/mcp.json") args;
@@ -286,11 +287,13 @@
             ])}
             export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
             # CodeGraph CLI via npm for manual runs; .omp/mcp.json uses npx
-            # for MCP. Guarded install: once per machine, cached under
-            # $HOME, never written into the repo.
+            # for MCP. Version-aware install against the same pinned spec the
+            # MCP wiring reads: a stale or foreign `codegraph` on PATH is
+            # reinstalled to the pin, so the manual CLI cannot drift from the
+            # MCP wiring. Cached under $HOME, never written into the repo.
             export NPM_CONFIG_PREFIX="''${NPM_CONFIG_PREFIX:-$HOME/.cache/d2b-npm-global}"
             export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-            command -v codegraph >/dev/null 2>&1 || npm install -g ${codegraphNpmSpec}
+            npm ls -g ${codegraphNpmSpec} >/dev/null 2>&1 || npm install -g ${codegraphNpmSpec} || echo "codegraph install failed; retry with: npm install -g ${codegraphNpmSpec}"
             echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
           '';
         };
