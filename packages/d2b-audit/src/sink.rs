@@ -409,8 +409,7 @@ fn scan_chain_state(directory: &Path) -> Result<ScanState, AuditSinkError> {
             )
             .map_err(|_| AuditSinkError::ChainMismatch)?
         {
-            let line = String::from_utf8(bytes).map_err(|_| AuditSinkError::ChainMismatch)?;
-            let record = serde_json::from_str::<AuditRecord>(&line)
+            let record = serde_json::from_slice::<AuditRecord>(&bytes)
                 .map_err(|_| AuditSinkError::ChainMismatch)?;
             record
                 .verify(&previous)
