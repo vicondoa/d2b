@@ -537,6 +537,47 @@ mod tests {
         assert!(!spawned_only.ready_for(&binding(3)));
     }
 
+    /// The `current` constructor's fail-closed fence: a non-Guest resource
+    /// ref, a zero reconnect generation, and a malformed boot-identity
+    /// digest all answer `AuthenticationFailed` before any evidence exists.
+    /// (The empty-name branch is defense-in-depth: `ResourceName::parse`
+    /// rejects empty names, so no public constructor can produce it.)
+    #[test]
+    fn current_rejects_non_guest_refs_zero_reconnects_and_malformed_digests() {
+        assert!(GuestSessionEvidence::current(
+            guest_ref(),
+            BOOT_DIGEST,
+            3,
+            vec!["resource-read".to_owned()],
+            true,
+            true,
+        )
+        .is_ok());
+
+        assert_eq!(
+            GuestSessionEvidence::current(
+                ResourceRef::parse("Process/test").expect("Process ref"),
+                BOOT_DIGEST,
+                3,
+                [],
+                true,
+                true,
+            ),
+            Err(GuestSessionError::AuthenticationFailed),
+            "a non-Guest resource ref is refused"
+        );
+        assert_eq!(
+            GuestSessionEvidence::current(guest_ref(), BOOT_DIGEST, 0, [], true, true),
+            Err(GuestSessionError::AuthenticationFailed),
+            "a zero reconnect generation is refused"
+        );
+        assert_eq!(
+            GuestSessionEvidence::current(guest_ref(), "not-a-digest", 3, [], true, true),
+            Err(GuestSessionError::AuthenticationFailed),
+            "a malformed boot-identity digest is refused"
+        );
+    }
+
     #[test]
     fn binding_rejects_zero_and_malformed_generations() {
         assert_eq!(
