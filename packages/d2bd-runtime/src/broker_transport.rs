@@ -28,7 +28,7 @@ pub fn dispatch_broker_request_to_socket(
     caller_role: BrokerCallerRole,
     timeout: Option<Duration>,
 ) -> Result<BrokerResponse, TypedError> {
-    let audit_join = default_audit_join_context(&request);
+    let audit_join = default_audit_join_context(&request)?;
     let envelope = BrokerRequestEnvelope {
         request,
         caller_role,
@@ -57,13 +57,21 @@ pub fn dispatch_broker_request_to_socket(
     }
 }
 
-pub fn default_audit_join_context(request: &BrokerRequest) -> Option<AuditJoinContext> {
-    let (zone_id, operation_identity) = request.authoritative_audit_join()?;
-    Some(AuditJoinContext {
-        zone_id: CanonicalAuditDigest::parse(zone_id).expect("canonical broker zone digest"),
-        operation_identity: CanonicalAuditDigest::parse(operation_identity)
-            .expect("canonical broker operation digest"),
-    })
+pub fn default_audit_join_context(
+    request: &BrokerRequest,
+) -> Result<Option<AuditJoinContext>, TypedError> {
+    let Some((zone_id, operation_identity)) = request.authoritative_audit_join() else {
+        return Ok(None);
+    };
+    let zone_id = CanonicalAuditDigest::parse(zone_id)
+        .map_err(|_| TypedError::WireInvalidFrame { detail: "audit zone identity invalid".to_owned() })?;
+    let operation_identity = CanonicalAuditDigest::parse(operation_identity).map_err(|_| {
+        TypedError::WireInvalidFrame { detail: "audit operation identity invalid".to_owned() }
+    })?;
+    Ok(Some(AuditJoinContext {
+        zone_id,
+        operation_identity,
+    }))
 }
 
 pub fn broker_remaining_before_op(
@@ -306,3 +314,39 @@ impl std::fmt::Display for ModeBoundBrokerError {
 }
 
 impl std::error::Error for ModeBoundBrokerError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use d2b_contracts_broker::broker_wire::{HelloRequest, SecretByIdRequest};
+
+    fn request_with_opaque_id(opaque_id: &str) -> BrokerRequest {
+        BrokerRequest::InjectSecretById(SecretByIdRequest {
+            opaque_id: opaque_id.to_owned(),
+            tracing_span_id: None,
+        })
+    }
+
+    #[test]
+    fn malformed_audit_join_material_does_not_panic() {
+        // The audit-join material is wire-supplied (a client-controlled
+        // opaque id), so a non-canonical value must never panic the daemon.
+        let request = request_with_opaque_id("not-a-canonical-digest");
+        let context = default_audit_join_context(&request)
+            .expect("malformed audit-join material must not panic")
+            .expect("audit join is present for secret requests");
+        assert!(context.zone_id.as_str().starts_with("sha256:"));
+    }
+
+    #[test]
+    fn request_without_audit_join_yields_none() {
+        let request = BrokerRequest::Hello(HelloRequest {
+            client_version: "test".to_owned(),
+            supported_features: Vec::new(),
+        });
+        assert_eq!(
+            default_audit_join_context(&request).expect("hello carries no audit join"),
+            None
+        );
+    }
+}
