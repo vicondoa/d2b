@@ -887,9 +887,10 @@ where
 fn one_candidate(
     candidates: AcaSandboxCandidates,
 ) -> Result<Option<AcaSandboxRecord>, AcaControllerError> {
-    match candidates.as_slice() {
-        [] => Ok(None),
-        [candidate] => Ok(Some(candidate.clone())),
+    let mut candidates = candidates.into_iter();
+    match (candidates.next(), candidates.next()) {
+        (Some(candidate), None) => Ok(Some(candidate)),
+        (None, None) => Ok(None),
         _ => Err(AcaControllerError::AmbiguousAdoption),
     }
 }
@@ -898,12 +899,11 @@ fn one_disk_image(
     candidates: crate::AcaDiskImageCandidates,
     generation: u64,
 ) -> Result<Option<AcaDiskImageRecord>, AcaControlError> {
-    match candidates.as_slice() {
-        [] => Ok(None),
-        [candidate] if candidate.generation == generation => Ok(Some(candidate.clone())),
-        [..] if candidates.as_slice().len() == 1 => {
-            Err(AcaControlError::new(AcaControlErrorKind::Conflict))
-        }
+    let mut candidates = candidates.into_iter();
+    match (candidates.next(), candidates.next()) {
+        (Some(candidate), None) if candidate.generation == generation => Ok(Some(candidate)),
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(AcaControlError::new(AcaControlErrorKind::Conflict)),
         _ => Err(AcaControlError::new(AcaControlErrorKind::Ambiguous)),
     }
 }

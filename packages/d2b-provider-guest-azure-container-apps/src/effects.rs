@@ -584,6 +584,15 @@ impl AcaDiskImageCandidates {
     }
 }
 
+impl IntoIterator for AcaDiskImageCandidates {
+    type Item = AcaDiskImageRecord;
+    type IntoIter = std::vec::IntoIter<AcaDiskImageRecord>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum AcaSandboxLifecycle {
@@ -627,6 +636,15 @@ impl AcaSandboxCandidates {
 
     pub fn as_slice(&self) -> &[AcaSandboxRecord] {
         &self.0
+    }
+}
+
+impl IntoIterator for AcaSandboxCandidates {
+    type Item = AcaSandboxRecord;
+    type IntoIter = std::vec::IntoIter<AcaSandboxRecord>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
 }
 
