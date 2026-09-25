@@ -112,8 +112,6 @@ impl PositiveDecisionCache {
 
     /// Insert one positive decision, evicting expired entries and refusing
     /// insertions past the bound. An already-expired entry is never stored.
-
-
     pub fn insert_allow(
         &self,
         key: AuthorizationCacheKey,
