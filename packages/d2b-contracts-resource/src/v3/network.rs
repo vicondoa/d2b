@@ -942,9 +942,6 @@ impl<'de> Deserialize<'de> for NetworkAttachmentEntry {
     }
 }
 
-/// Canonical authored Network attachment spec.
-pub type AttachmentSpec = NetworkAttachmentEntry;
-
 /// The Network ResourceType base spec.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
