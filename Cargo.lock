@@ -1253,12 +1253,10 @@ dependencies = [
 name = "d2b-provider-device-gpu"
 version = "0.0.0-bootstrap"
 dependencies = [
- "async-trait",
  "d2b-contracts-resource",
  "d2b-core-controller",
  "d2b-provider-toolkit",
  "d2b-resource-runtime",
- "d2b-resource-types",
  "parking_lot",
  "serde",
  "serde_json",
@@ -1630,7 +1628,6 @@ dependencies = [
  "d2b-resource-types",
  "schemars",
  "serde",
- "serde_json",
  "tokio",
 ]
 
@@ -1837,7 +1834,7 @@ dependencies = [
  "tokio-tungstenite",
  "tracing",
  "urlencoding",
- "webpki-roots 0.26.11",
+ "webpki-roots 1.0.9",
  "zeroize",
 ]
 
