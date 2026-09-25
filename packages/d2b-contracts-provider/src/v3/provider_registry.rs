@@ -44,6 +44,7 @@ pub enum ProviderRegistryError {
     MappingBoundExceeded,
     UnknownAxis,
     AxisMismatch,
+    GenerationMismatch,
 }
 
 impl core::fmt::Display for ProviderRegistryError {
@@ -57,6 +58,7 @@ impl core::fmt::Display for ProviderRegistryError {
             Self::MappingBoundExceeded => "provider-registry-mapping-bound-exceeded",
             Self::UnknownAxis => "provider-registry-axis-unknown",
             Self::AxisMismatch => "provider-registry-axis-mismatch",
+            Self::GenerationMismatch => "provider-registry-generation-mismatch",
         })
     }
 }
@@ -193,7 +195,7 @@ impl ProviderRegistryPublication {
             .iter()
             .any(|entry| entry.provider_generation != generation)
         {
-            return Err(ProviderRegistryError::AxisMismatch);
+            return Err(ProviderRegistryError::GenerationMismatch);
         }
         entries.sort_by(|left, right| left.mapping_id.cmp(&right.mapping_id));
         if entries
@@ -259,7 +261,7 @@ mod tests {
         );
         assert_eq!(
             ProviderRegistryPublication::new(generation, vec![entry(3, "one")]).unwrap_err(),
-            ProviderRegistryError::AxisMismatch
+            ProviderRegistryError::GenerationMismatch
         );
         assert_eq!(
             ProviderRegistryPublication::new(generation, vec![entry(4, "one"), entry(4, "one")])
