@@ -1361,9 +1361,7 @@ where
     async fn assess_update(
         &self,
         guest: &GuestSnapshot,
-        children: &[OwnedChildSnapshot],
     ) -> Result<Option<UpgradeReason>, CloudHypervisorResourceApiError> {
-        let _ = children;
         match self
             .session
             .call(CloudHypervisorResourceRequest::AssessUpdate {
@@ -1571,7 +1569,6 @@ pub trait CloudHypervisorResourceApi: Send + Sync {
     async fn assess_update(
         &self,
         _guest: &GuestSnapshot,
-        _children: &[OwnedChildSnapshot],
     ) -> Result<Option<UpgradeReason>, CloudHypervisorResourceApiError> {
         Ok(None)
     }
@@ -1916,10 +1913,7 @@ where
                 .await;
         }
 
-        let upgrade_required = self
-            .api
-            .assess_update(&guest, &children.values().cloned().collect::<Vec<_>>())
-            .await
+        let upgrade_required = self.api.assess_update(&guest).await
             .inspect_err(|error| {
                 tracing::warn!(
                     zone = ?guest.zone,
