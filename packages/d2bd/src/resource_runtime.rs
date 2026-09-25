@@ -366,22 +366,31 @@ async fn credential_dependency_facts(
     plane: &dyn ControllerPlaneView,
     provider_ref: &ResourceRef,
     execution_ref: &ResourceRef,
-) -> Option<CredentialDependencyFacts> {
-    let provider = credential_dependency_row(plane, provider_ref).await?;
-    let execution = credential_dependency_row(plane, execution_ref).await?;
-    Some(CredentialDependencyFacts {
+) -> Result<Option<CredentialDependencyFacts>, ResourceRuntimeError> {
+    let Some(provider) = credential_dependency_row(plane, provider_ref).await? else {
+        return Ok(None);
+    };
+    let Some(execution) = credential_dependency_row(plane, execution_ref).await? else {
+        return Ok(None);
+    };
+    Ok(Some(CredentialDependencyFacts {
         provider_uid: provider.uid.as_str().to_owned(),
         provider_generation: provider.generation.get(),
         provider_ready: credential_row_ready(&provider),
         execution_ready: credential_row_ready(&execution),
-    })
+    }))
 }
 
+/// One credential dependency row read from its authority (the manager).
+///
+/// A manager RPC failure is an error - never reported as absence
+/// (`bridge_manager_row`'s contract); `Ok(None)` is the honest
+/// not-committed answer.
 async fn credential_dependency_row(
     plane: &dyn ControllerPlaneView,
     target: &ResourceRef,
-) -> Option<StoredResource> {
-    bridge_manager_row(plane, target).await.ok().flatten()
+) -> Result<Option<StoredResource>, ResourceRuntimeError> {
+    bridge_manager_row(plane, target).await
 }
 
 
@@ -4472,8 +4481,28 @@ impl ZoneResourceRuntime {
                 let provider_ref = provider_ref.clone();
                 let execution_ref = execution_ref.clone();
                 Box::pin(async move {
-                    let plane = published_plane_view(&planes, &zone)?;
-                    credential_dependency_facts(plane.as_ref(), &provider_ref, &execution_ref).await
+                    let Some(plane) = published_plane_view(&planes, &zone) else {
+                        return None;
+                    };
+                    match credential_dependency_facts(
+                        plane.as_ref(),
+                        &provider_ref,
+                        &execution_ref,
+                    )
+                    .await
+                    {
+                        Ok(facts) => facts,
+                        Err(error) => {
+                            tracing::warn!(
+                                zone = %zone,
+                                provider = %provider_ref,
+                                execution = %execution_ref,
+                                error = %error,
+                                "credential dependency facts: manager read failed",
+                            );
+                            None
+                        }
+                    }
                 })
             }),
             lease: Arc::new(|_credential_ref: &ResourceRef| Box::pin(async { None })),
