@@ -69,7 +69,7 @@ impl fmt::Debug for OpaqueEndpointId {
 
 impl fmt::Display for OpaqueEndpointId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("opaque-endpoint")
+        formatter.write_str(&self.0)
     }
 }
 
@@ -108,7 +108,7 @@ impl fmt::Debug for OpaqueBindingId {
 
 impl fmt::Display for OpaqueBindingId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("opaque-binding")
+        formatter.write_str(&self.0)
     }
 }
 
@@ -351,6 +351,8 @@ struct TransportEntry {
     phase: Arc<Mutex<TransportPhase>>,
     exit: Arc<Mutex<Option<BridgeExit>>>,
     stats: Arc<BridgeStats>,
+    endpoint_id: OpaqueEndpointId,
+    binding_id: OpaqueBindingId,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -569,9 +571,18 @@ where
         let task_stats = Arc::clone(&stats);
         let task_subscribers = Arc::clone(&subscribers);
         let task_history = Arc::clone(&history);
+        let task_endpoint_id = request.endpoint_id.clone();
+        let task_binding_id = request.binding_id.clone();
         let task = tokio::spawn(async move {
-            let (effect_stream, _named_stream, reason) =
-                run_bridge(effect_stream, named_stream, stop, Arc::clone(&task_stats)).await;
+            let (effect_stream, _named_stream, reason) = run_bridge(
+                effect_stream,
+                named_stream,
+                stop,
+                Arc::clone(&task_stats),
+                &task_endpoint_id,
+                &task_binding_id,
+            )
+            .await;
             let effect_result = timeout(
                 Duration::from_millis(CLOSE_GRACE_MS),
                 task_effect.close(effect_stream),
@@ -589,6 +600,8 @@ where
                 emit_event(
                     &task_subscribers,
                     &task_history,
+                    &task_endpoint_id,
+                    &task_binding_id,
                     TransportEvent::Error {
                         kind: "bridge-io",
                         recoverable: false,
@@ -602,6 +615,8 @@ where
                     emit_event(
                         &task_subscribers,
                         &task_history,
+                        &task_endpoint_id,
+                        &task_binding_id,
                         TransportEvent::BytesTransferred { rx_bytes, tx_bytes },
                     )
                     .await;
@@ -614,11 +629,20 @@ where
                 TransportPhase::Degraded
             };
             if released {
-                emit_event(&task_subscribers, &task_history, TransportEvent::Released).await;
+                emit_event(
+                    &task_subscribers,
+                    &task_history,
+                    &task_endpoint_id,
+                    &task_binding_id,
+                    TransportEvent::Released,
+                )
+                .await;
             } else {
                 emit_event(
                     &task_subscribers,
                     &task_history,
+                    &task_endpoint_id,
+                    &task_binding_id,
                     TransportEvent::Error {
                         kind: "close-unconfirmed",
                         recoverable: true,
@@ -639,6 +663,8 @@ where
                 phase,
                 exit,
                 stats,
+                endpoint_id: request.endpoint_id,
+                binding_id: request.binding_id,
                 _permit: permit,
             },
         );
@@ -794,6 +820,8 @@ where
                 {
                     tracing::debug!(
                         provider = "transport-vsock",
+                        endpoint = %entry.endpoint_id,
+                        binding = %entry.binding_id,
                         "transport event history dropped for a full observer channel"
                     );
                 }
@@ -905,6 +933,8 @@ fn remaining_until(deadline: Instant) -> Duration {
 async fn emit_event(
     subscribers: &EventSubscribers,
     history: &Arc<Mutex<Vec<TransportEvent>>>,
+    endpoint_id: &OpaqueEndpointId,
+    binding_id: &OpaqueBindingId,
     event: TransportEvent,
 ) {
     history.lock().await.push(event);
@@ -915,6 +945,8 @@ async fn emit_event(
         } else if sender.try_send(event).is_err() {
             tracing::debug!(
                 provider = "transport-vsock",
+                endpoint = %endpoint_id,
+                binding = %binding_id,
                 "transport event dropped for a full or closed subscriber channel"
             );
             false

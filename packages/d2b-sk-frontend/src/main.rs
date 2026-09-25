@@ -38,7 +38,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use d2b_provider_toolkit::{AllocatorEnrollment, run_guest};
-use d2b_sk_frontend::{Config, SecurityKeyFrontend, VsockAllocatorLink, uhid::UhidDevice};
+use d2b_sk_frontend::{Config, SecurityKeyFrontend, UhidDevice, VsockAllocatorLink};
 
 fn exit_on_error<T, E: Display>(result: Result<T, E>) -> T {
     match result {

@@ -43,7 +43,7 @@ use d2b_contracts_provider::v3::credential::{
 use d2b_contracts_provider::v3::credential_controller::CredentialProviderKind;
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, CanonicalJsonValue, ControllerGeneration, DesiredLifecycle, ResourceRef,
-    ResourceSpec, ResourceUid,
+    ResourceSpec, ResourceUid, ZoneId,
     execution_policy::{BoundedToken, BudgetSpec, DurationMs, ExecutionDomain},
     identity::ReconnectGeneration,
     process::{
@@ -292,7 +292,7 @@ pub trait CredentialDriverEffects: Send + Sync + 'static {
 /// and the zone-authority controller generation (KTD7).
 pub struct CredentialDriverArgs {
     /// The zone the plane serves.
-    pub zone: String,
+    pub zone: ZoneId,
     /// Zone controller generation folded into every revocation request
     /// (old `policy_snapshot.controller_generation`).
     pub controller_generation: ControllerGeneration,
@@ -340,7 +340,7 @@ impl ResourceDriverFactory for CredentialDriverFactory {
 
 /// One Credential resource's driver.
 pub struct CredentialDriver {
-    zone: String,
+    zone: ZoneId,
     controller_generation: ControllerGeneration,
     effects: Arc<dyn CredentialDriverEffects>,
 }
@@ -453,11 +453,12 @@ impl CredentialDriver {
             "Guest" => PlacementBinding::GuestAgent,
             _ => return Err(invalid()),
         };
-        let zone_ref = format!("Zone/{}", self.zone);
+        let zone_ref = ResourceRef::parse(&format!("Zone/{}", self.zone.as_str()))
+            .expect("a validated zone id renders a canonical zone reference");
         let placement = d2b_provider_credential_managed_identity::ManagedIdentityPlacement::new(
             placement,
             execution_ref.clone(),
-            ResourceRef::parse(&zone_ref).map_err(|_| invalid())?,
+            zone_ref,
         )
         .map_err(|_| invalid())?;
         let controller =
@@ -782,7 +783,7 @@ impl ResourceDriver for CredentialDriver {
             return Ok(RecoveryOutcome::Missing);
         }
         let agent_ref = self.agent_ref(ctx, DriverOp::Recover)?;
-        let agent_key = ResourceKey::new(&self.zone, PROCESS_TYPE_NAME, agent_ref.name().as_str());
+        let agent_key = ResourceKey::new(self.zone.as_str(), PROCESS_TYPE_NAME, agent_ref.name().as_str());
         let present = self
             .owned_processes(ctx, DriverOp::Recover)
             .await?
@@ -841,7 +842,7 @@ impl ResourceDriver for CredentialDriver {
         }
         let child = self.agent_child(ctx, &spec, &provider_ref, &facts, DriverOp::Reconcile)?;
         let agent_ref = self.agent_ref(ctx, DriverOp::Reconcile)?;
-        let agent_key = ResourceKey::new(&self.zone, PROCESS_TYPE_NAME, agent_ref.name().as_str());
+        let agent_key = ResourceKey::new(self.zone.as_str(), PROCESS_TYPE_NAME, agent_ref.name().as_str());
         let owned = self.owned_processes(ctx, DriverOp::Reconcile).await?;
         match owned.iter().find(|row| row.key == agent_key) {
             Some(row) if row.deleting => {
@@ -1037,7 +1038,7 @@ mod tests {
     use d2b_contracts_provider::v3::credential::CredentialLeaseState;
     use d2b_contracts_resource::v3::identity::ReconnectGeneration;
     use d2b_contracts_resource::v3::process::ProcessSpec;
-    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceSpec};
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceSpec, ZoneId};
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
         WatchRegistration,
@@ -1267,7 +1268,7 @@ mod tests {
         // seam from the facets (the factory), tests drive the behavior
         // directly over the recording double.
         CredentialDriver {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").unwrap(),
             controller_generation: ControllerGeneration::new(1).unwrap(),
             effects,
         }
@@ -1285,7 +1286,7 @@ mod tests {
     #[test]
     fn factory_registers_only_the_credential_resource_type() {
         let factory = CredentialDriverFactory::new(CredentialDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").unwrap(),
             controller_generation: ControllerGeneration::new(1).unwrap(),
             facets: facets(),
         });
@@ -1297,7 +1298,7 @@ mod tests {
     #[tokio::test]
     async fn factory_created_driver_validates_through_the_erased_boundary() {
         let factory = CredentialDriverFactory::new(CredentialDriverArgs {
-            zone: "dev".to_owned(),
+            zone: ZoneId::parse("dev").unwrap(),
             controller_generation: ControllerGeneration::new(1).unwrap(),
             facets: facets(),
         });

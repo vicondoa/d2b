@@ -157,7 +157,7 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
             );
             return Err(ProcessConformanceError::ProviderMismatch);
         }
-        if ticket.provider_ref().to_canonical_string() != "Provider/system-minijail" {
+        if ticket.provider_ref().to_canonical_string() != crate::PROVIDER_REF {
             warn!(
                 provider = PROVIDER_NAME,
                 resource = %ticket.process_ref().to_canonical_string(),
@@ -190,7 +190,7 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
             return Err(ProcessConformanceError::UserRefRequired);
         }
         if let Some(gate) = self.platform_gate
-            && let Err(error) = launch::validate_launch_ticket(ticket, gate)
+            && let Err(error) = launch::validate_platform_gate(gate)
         {
             warn!(
                 provider = PROVIDER_NAME,

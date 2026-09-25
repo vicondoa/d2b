@@ -60,7 +60,7 @@ use d2b_core_controller::main::{
     CoreProcess, RecoverySnapshot, RuntimeReadiness as CoreRuntimeReadiness, StartupStage,
 };
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
-use d2b_provider_zone::zone_status::{
+use d2b_provider_zone::{
     SystemCoreStatusEmitter, ZoneRuntimeMetadata, ZoneStatusInput,
 };
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;

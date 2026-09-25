@@ -1,8 +1,6 @@
 //! Minijail launch admission and mandatory platform gate.
 
-use d2b_process_conformance::{LaunchTicket, ProcessConformanceError};
-
-use crate::PROVIDER_NAME;
+use d2b_process_conformance::ProcessConformanceError;
 
 /// Linux placement requirements that cannot be downgraded by config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,21 +45,15 @@ impl PlatformGate {
     }
 }
 
-/// Validate provider identityand platform evidence before spawn dispatch.
+/// Validate the mandatory platform gate before spawn dispatch.
+///
+/// Provider identity is checked by the controller itself
+/// (`MinijailProcessProvider::validate`); this admission step only
+/// verifies the platform evidence the daemon observed.
 ///
 /// # Errors
 ///
-/// Returns `ProviderMismatch` when the ticket selects a different
-/// Process Provider, and `PlatformGateRejected` when the platform gate
-/// fails.
-pub fn validate_launch_ticket(
-    ticket: &LaunchTicket,
-    gate: PlatformGate,
-) -> Result<(), ProcessConformanceError> {
-    if ticket.selected_provider().as_str() != PROVIDER_NAME
-        || ticket.provider_ref().to_canonical_string() != crate::PROVIDER_REF
-    {
-        return Err(ProcessConformanceError::ProviderMismatch);
-    }
+/// Returns `PlatformGateRejected` when the platform gate fails.
+pub fn validate_platform_gate(gate: PlatformGate) -> Result<(), ProcessConformanceError> {
     gate.validate()
 }

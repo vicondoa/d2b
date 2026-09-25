@@ -846,6 +846,7 @@ dependencies = [
  "d2b-broker",
  "d2b-broker-fixture-handlers",
  "regex",
+ "serde",
  "serde_json",
  "tokio",
  "tracing-subscriber",

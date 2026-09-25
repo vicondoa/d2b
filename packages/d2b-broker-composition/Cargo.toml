@@ -58,6 +58,7 @@ d2b-broker-fixture-handlers = { path = "../d2b-broker-fixture-handlers", version
 # The dependency-surface audit parses `cargo metadata` output and runs the
 # lexical source probes.
 regex = "1"
+serde = { workspace = true }
 serde_json = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
