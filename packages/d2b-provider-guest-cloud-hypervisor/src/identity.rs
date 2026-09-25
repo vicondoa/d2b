@@ -114,6 +114,16 @@ impl ChildRole {
             Self::VmmProcess | Self::ChApiEndpoint | Self::GuestControlEndpoint => None,
         }
     }
+
+    /// Return the teardown and upgrade ordering rank for this role.
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::ChApiEndpoint => 0,
+            Self::GuestControlEndpoint => 1,
+            Self::VmmProcess => 2,
+            Self::SystemVolume => 3,
+        }
+    }
 }
 
 /// The exact closed set of direct Cloud Hypervisor child roles.
@@ -583,6 +593,15 @@ pub struct GuestChildBatch {
 
 impl GuestChildBatch {
     /// Construct the complete UID-free child batch from a valid descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ChildIdentityError::WrongResourceType`] when the owner is
+    /// not a `Guest` or the execution reference is not a `Host`,
+    /// [`ChildIdentityError::ChildNameInvalid`] when a deterministic child
+    /// name exceeds the ResourceName bound, and the child-body construction
+    /// errors (`DescriptorInvalid`, `CanonicalJson`, `InvalidToken`,
+    /// `InvalidRevision`) when a child body cannot be built.
     pub fn from_descriptor(
         zone: ZoneId,
         owner_ref: ResourceRef,

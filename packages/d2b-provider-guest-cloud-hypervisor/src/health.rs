@@ -39,6 +39,11 @@ pub struct GuestSessionEvidenceBinding {
 
 impl GuestSessionEvidenceBinding {
     /// Validate and construct one exact Guest-session evidence binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestSessionError::Protocol`] when any identity, digest, or
+    /// generation value fails its bounded parse.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         guest_uid: impl Into<String>,
@@ -192,6 +197,13 @@ pub struct GuestSessionEvidence {
 
 impl GuestSessionEvidence {
     /// Construct current evidence from an authenticated ComponentSession.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestSessionError::AuthenticationFailed`] when the Guest
+    /// reference, boot-identity digest, or reconnect generation is not
+    /// authenticated, and [`GuestSessionError::Protocol`] when a capability
+    /// name is malformed or the set exceeds the bound.
     pub fn current(
         guest_ref: ResourceRef,
         boot_identity_digest: impl Into<String>,
@@ -229,6 +241,13 @@ impl GuestSessionEvidence {
 
     /// Construct current evidence with exact Guest, descriptor, generation,
     /// Endpoint, and seed commitments.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::current`]: `AuthenticationFailed`
+    /// when the Guest reference, boot-identity digest, or reconnect
+    /// generation is not authenticated, and `Protocol` when a capability
+    /// name is malformed or the set exceeds the bound.
     pub fn current_bound(
         guest_ref: ResourceRef,
         boot_identity_digest: impl Into<String>,
@@ -258,6 +277,11 @@ impl GuestSessionEvidence {
     }
 
     /// Construct a stale evidence snapshot after a disconnected session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GuestSessionError::AuthenticationFailed`] when the Guest
+    /// reference or reconnect generation is not authenticated.
     pub fn stale(
         guest_ref: ResourceRef,
         reconnect_generation: u64,
