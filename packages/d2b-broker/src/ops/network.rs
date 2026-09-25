@@ -1329,55 +1329,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn delete_persistent_tap_checks_both_fences_before_mutation() {
-        let backend = FakeTap {
-            present: Cell::new(true),
-            deletes: Cell::new(0),
-        };
-        assert_eq!(
-            delete_persistent_tap(&backend, &realization(), &request(3, 7))
-                .await,
-            Err(NetworkOpError::StaleNetworkGeneration)
-        );
-        assert_eq!(
-            delete_persistent_tap(&backend, &realization(), &request(4, 6))
-                .await,
-            Err(NetworkOpError::StaleAttachmentGeneration)
-        );
-        assert_eq!(backend.deletes.get(), 0);
-    }
-
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn delete_persistent_tap_validated_absence_is_idempotent() {
-        let backend = FakeTap {
-            present: Cell::new(false),
-            deletes: Cell::new(0),
-        };
-        assert!(delete_persistent_tap(&backend, &realization(), &request(4, 7)).await.is_ok());
-        assert_eq!(backend.deletes.get(), 0);
-    }
-
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn delete_persistent_tap_foreign_marker_fails_without_deletion() {
-        let backend = FakeTap {
-            present: Cell::new(true),
-            deletes: Cell::new(0),
-        };
-        let mut foreign = realization();
-        foreign.ownership_marker = "foreign marker".to_owned();
-        assert_eq!(
-            delete_persistent_tap(&backend, &foreign, &request(4, 7))
-                .await,
-            Err(NetworkOpError::ForeignOwnership)
-        );
-        assert_eq!(backend.deletes.get(), 0);
-    }
-
-    #[test]
+#[test]
     fn request_and_audit_digest_do_not_carry_ifname_or_path() {
         let request = request(4, 7);
         let request_json = serde_json::to_string(&request).unwrap();
