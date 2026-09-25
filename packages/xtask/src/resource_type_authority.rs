@@ -177,7 +177,10 @@ const COMMITTED_V3_ORDER: &[&str] = &[
 
 /// One provider crate's declaration file.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DeclarationFile {
+    /// The declaring crate package name; the wire key `crate` is a Rust
+    /// keyword, so it is renamed explicitly.
     #[serde(rename = "crate")]
     crate_name: String,
     types: Vec<TypeDeclaration>,
@@ -188,8 +191,8 @@ struct DeclarationFile {
 
 /// One declared resource type row.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TypeDeclaration {
-    #[serde(rename = "resourceType")]
     resource_type: String,
 }
 
