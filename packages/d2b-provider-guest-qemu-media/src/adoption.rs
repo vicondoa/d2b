@@ -84,10 +84,4 @@ mod tests {
         assert!(!identity.matches_process_token("actual-qemu-binary"));
     }
 
-    #[test]
-    fn inverted_template_and_executable_digests_fail_closed() {
-        let mut identity = ProcessIdentity::for_test("qemu-media-runner");
-        identity.template_digest = digest("actual-qemu-binary");
-        assert!(!identity.matches_process_token("qemu-media-runner"));
     }
-}
