@@ -53,6 +53,12 @@ pub struct AudioBindingChildRequest<'a> {
 /// [`AudioBinding::new`].
 pub trait AudioBindingChildSource: Send + Sync + 'static {
     /// The Process and Endpoint intents one binding owns.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unavailable` when the child source is not currently
+    /// available and should retry, and `InvalidResource` when the binding
+    /// spec fails closed into children.
     fn binding_children(
         &self,
         request: &AudioBindingChildRequest<'_>,
@@ -114,6 +120,11 @@ impl InteractionType for AudioBinding {
     }
 
     /// The binding spec decodes with its typed `providerRef` re-inserted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidResource` when the envelope does not decode as an
+    /// `AudioBindingSpec`.
     fn validate(
         &self,
         envelope: &InteractionSpecEnvelope,
@@ -122,6 +133,11 @@ impl InteractionType for AudioBinding {
     }
 
     /// The service the binding realizes from and the target it attaches to.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidResource` when the envelope does not decode as an
+    /// `AudioBindingSpec`.
     fn dependencies(
         &self,
         envelope: &InteractionSpecEnvelope,
@@ -131,6 +147,13 @@ impl InteractionType for AudioBinding {
     }
 
     /// The binding's worker and endpoint children, as manager child rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unavailable` when the child source is not currently
+    /// available and should retry, and `InvalidResource` when the
+    /// envelope does not decode as an `AudioBindingSpec` or the binding
+    /// fails closed into children.
     fn desired_children(
         &self,
         children: &InteractionChildContext<'_>,
