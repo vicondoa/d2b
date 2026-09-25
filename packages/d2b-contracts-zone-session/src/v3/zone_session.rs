@@ -391,6 +391,26 @@ pub const ZONE_ENROLLMENT_PROTOCOL: &str = "d2b-zone-enrollment-v1";
 /// Largest encoded Zone enrollment control payload one endpoint accepts.
 pub const MAX_ZONE_ENROLLMENT_PAYLOAD_BYTES: usize = 16 * 1024;
 
+// ---------------------------------------------------------------------------
+// ZoneLink cryptoperiod defaults
+// ---------------------------------------------------------------------------
+
+/// Default absolute lifetime of one allocator-issued bootstrap PSK.
+///
+/// The canonical definition shared by the child-local ZoneLink handler and the
+/// bus-side enrollment machine; both re-export this constant rather than
+/// restating it, so a cryptoperiod change cannot silently desynchronize the
+/// two sides.
+pub const BOOTSTRAP_PSK_TTL_MS_DEFAULT: u64 = 300_000;
+
+/// Default maximum lifetime of one enrolled `Noise_KK` session.
+///
+/// The canonical definition shared by the child-local ZoneLink handler and the
+/// bus-side enrollment machine; both re-export this constant rather than
+/// restating it, so a cryptoperiod change cannot silently desynchronize the
+/// two sides.
+pub const KK_SESSION_MAX_LIFETIME_MS_DEFAULT: u64 = 86_400_000;
+
 /// The exact link identity one Zone enrollment control payload names.
 ///
 /// These are comparison inputs, never authority: the authority is the
