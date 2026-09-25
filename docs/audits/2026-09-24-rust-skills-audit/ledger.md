@@ -31,27 +31,27 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 
 | id | lens | cluster | sev | audit verdict | blast/effort | outcome | wave | commit | anchor | reason or policy citation | escalation |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `RS-0037` | `idiom` | `d2b` | medium | actionable | leaf |  |  |  | `packages/d2b/src/dispatch.rs:688-706, packages/d2b/src/dispatch.rs:1169-1175` |  |  |
-| `RS-0031` | `idiom` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/doctor.rs:529, packages/d2b/src/doctor.rs:579, packages/d2b/src/doctor.rs` |  |  |
-| `RS-0036` | `idiom` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/zone_doctor.rs:598-601` |  |  |
-| `RS-0032` | `idiom` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/resource.rs:525, packages/d2b/src/resource.rs:546, packages/d2b/src/resou` |  |  |
-| `RS-0033` | `idiom` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/zone_audit.rs:805, packages/d2b/src/zone_audit.rs:838` |  |  |
-| `RS-0034` | `idiom` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/zone_audit.rs:349, packages/d2b/src/zone_audit.rs:395` |  |  |
-| `RS-0035` | `idiom` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/zone_audit.rs:591, packages/d2b/src/zone_audit.rs:607` |  |  |
+| `RS-0037` | `idiom` | `d2b` | medium | actionable | leaf | applied | U2 | d4e4604e4 | `packages/d2b/src/dispatch.rs` | all_known_subcommands derived from parser via modern_cli_subcommands minus PROJECTION_COMMANDS; test updated; mutation (re-add up) fails updated assertion |  |
+| `RS-0031` | `idiom` | `d2b` | low | actionable | leaf | applied | U2 | 0a4f73a1f | `packages/d2b/src/doctor.rs` | PidfdEntries::state_detail() added; five detail matches replaced |  |
+| `RS-0036` | `idiom` | `d2b` | low | actionable | leaf | applied | U2 | 0a4f73a1f | `packages/d2b/src/zone_doctor.rs` | summarize uses DoctorSummary::default() |  |
+| `RS-0032` | `idiom` | `d2b` | low | actionable | leaf | applied-variant | U2 | 0a4f73a1f | `packages/d2b/src/resource.rs` | typed/typed_noun consume TypedResourceArgs by value; 7 dispatch sites pass args.clone() because match binds by reference (deviation recorded |  |
+| `RS-0033` | `idiom` | `d2b` | low | actionable | leaf | applied | U2 | 0a4f73a1f | `packages/d2b/src/zone_audit.rs` | valid_hash deleted; call sites now use valid_digest |  |
+| `RS-0034` | `idiom` | `d2b` | low | actionable | leaf | applied | U2 | 0a4f73a1f | `packages/d2b/src/zone_audit.rs` | nested verify_chain() shared by v1/v2 validation paths |  |
+| `RS-0035` | `idiom` | `d2b` | low | actionable | leaf | applied | U2 | 0a4f73a1f | `packages/d2b/src/zone_audit.rs` | validate_fields(class, fields, fn) merged; thin wrappers keep both validators |  |
 | `RS-0001` | `idiom` | `d2b-audit` | medium | actionable | leaf |  |  |  | `packages/d2b-audit/src/export.rs:255, packages/d2b-audit/src/segment.rs:980, packages/d2b-` |  |  |
 | `RS-0002` | `idiom` | `d2b-audit` | low | actionable | leaf |  |  |  | `packages/d2b-audit/src/export.rs:103` |  |  |
 | `RS-0003` | `idiom` | `d2b-audit` | low | actionable | leaf |  |  |  | `packages/d2b-audit/src/sink.rs:393, packages/d2b-audit/src/sink.rs:403` |  |  |
-| `RS-0011` | `idiom` | `d2b-broker` | medium | actionable | leaf |  |  |  | `src/ops/device_worker.rs:312-335, src/ops/device_worker.rs:339-369, src/ops/device_worker.` |  |  |
-| `RS-0006` | `idiom` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/runtime.rs:10392, packages/d2b-broker/src/runtime.rs:10418, packag` |  |  |
-| `RS-0007` | `idiom` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/runtime.rs:10132` |  |  |
-| `RS-0008` | `idiom` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/sys.rs:2816-2820` |  |  |
-| `RS-0009` | `idiom` | `d2b-broker` | low | actionable | leaf |  |  |  | `src/ops/exec_reconcile.rs:404, src/ops/exec_reconcile.rs:505, src/ops/exec_reconcile.rs:55` |  |  |
-| `RS-0010` | `idiom` | `d2b-broker` | low | actionable | leaf |  |  |  | `src/ops/store_view_farm.rs:97-190, src/ops/store_view_farm.rs:228-300` |  |  |
-| `RS-0012` | `idiom` | `d2b-broker` | low | actionable | leaf |  |  |  | `src/envelope/mod.rs:424-464, src/envelope/mod.rs:466-493, src/envelope/mod.rs:540-565, src` |  |  |
+| `RS-0011` | `idiom` | `d2b-broker` | medium | actionable | leaf | applied | U2 | c155578ca | `packages/d2b-broker/src/ops/device_worker.rs` | find_resource_row helper drives row_owner_ref/device_guest_owner/tpm_devices_of_guest |  |
+| `RS-0006` | `idiom` | `d2b-broker` | low | actionable | leaf | applied | U2 | 99d7247ee | `packages/d2b-broker/src/runtime.rs` | parse_common_flags helper extracted; parse_probe_flags now takes Vec<String>; error strings preserved |  |
+| `RS-0007` | `idiom` | `d2b-broker` | low | actionable | leaf | applied | U2 | 99d7247ee | `packages/d2b-broker/src/runtime.rs` | push loop replaced with filter_map; foreign lock Err early return preserved; merged with RS-0006 in same commit |  |
+| `RS-0008` | `idiom` | `d2b-broker` | low | actionable | leaf | applied | U2 | d2096735c | `packages/d2b-broker/src/sys.rs` | format_errno reversal now iter_mut/zip without intermediate allocation |  |
+| `RS-0009` | `idiom` | `d2b-broker` | low | actionable | leaf | applied | U2 | 4234afe18 | `packages/d2b-broker/src/ops/exec_reconcile.rs` | seven hand-copied absolute-path checks factored into require_absolute; error wording normalized; no test asserts old strings |  |
+| `RS-0010` | `idiom` | `d2b-broker` | low | actionable | leaf | applied | U2 | 5a2fa07c7 | `packages/d2b-broker/src/ops/store_view_farm.rs` | run_store_helper and store_helper_failure extracted; both namespaced builders share them |  |
+| `RS-0012` | `idiom` | `d2b-broker` | low | actionable | leaf | applied | U2 | ac44605b7 | `packages/d2b-broker/src/envelope/mod.rs` | open/publish/init_trusted_context_store gated #[cfg(test)]; only in-crate test callers existed; Drop persist path left ungated |  |
 | `RS-0004` | `idiom` | `d2b-broker-composition` | low | actionable | leaf |  |  |  | `packages/d2b-broker-composition/src/dependency_surface.rs:136` |  |  |
 | `RS-0005` | `idiom` | `d2b-broker-composition` | low | actionable | leaf |  |  |  | `packages/d2b-broker-composition/src/seam.rs:270, packages/d2b-broker-composition/src/seam.` |  |  |
-| `RS-0013` | `idiom` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/router.rs:1773-1781` |  |  |
-| `RS-0014` | `idiom` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/operations.rs:302-310` |  |  |
+| `RS-0013` | `idiom` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/router.rs` | resolve_for_service uses filter_map+next() over collect-then-index; bus check+tests passed |  |
+| `RS-0014` | `idiom` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/operations.rs` | abort_destination uses drain(..).partition and aborts drained handles; tests passed |  |
 | `RS-0015` | `idiom` | `d2b-contracts-broker` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-broker/src/kernel_client.rs:225-227` |  |  |
 | `RS-0016` | `idiom` | `d2b-contracts-broker` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-broker/src/host_generation.rs:162-167, packages/d2b-contracts-broke` |  |  |
 | `RS-0017` | `idiom` | `d2b-contracts-broker` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-broker/src/broker_wire.rs:2904-2912, packages/d2b-contracts-broker/` |  |  |
@@ -144,10 +144,10 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0113` | `idiom` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/forward_rendezvous.rs:672, packages/d2bd/src/shared_provider_effects.rs:` |  |  |
 | `RS-0107` | `idiom` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/resource_runtime.rs:6896` |  |  |
 | `RS-0110` | `idiom` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/composition.rs:21306-21319, packages/d2bd/src/composition.rs:21291` |  |  |
-| `RS-0114` | `idiom` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `autostart.rs:228-245` |  |  |
-| `RS-0115` | `idiom` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/unsafe_local_helper.rs:789, packages/d2bd-runtime/src/unix_trans` |  |  |
-| `RS-0116` | `idiom` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/guest_mode.rs:849, packages/d2bd-runtime/src/guest_component_ses` |  |  |
-| `RS-0117` | `idiom` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/console_session.rs:162` |  |  |
+| `RS-0114` | `idiom` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/autostart.rs` | build_autostart_plan uses iterator partition into the two sorted Vec halves |  |
+| `RS-0115` | `idiom` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/unsafe_local_helper.rs` | fd extraction loops are filter_map+flatten collects |  |
+| `RS-0116` | `idiom` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/guest_mode.rs` | monotonic_tick deduped into runtime_util (LazyLock per repo std; lazy init preserved} |  |
+| `RS-0117` | `idiom` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/console_session.rs` | ConsoleSessionTable derives Default; manual impl deleted |  |
 | `RS-0118` | `idiom` | `xtask` | medium | actionable | leaf |  |  |  | `packages/xtask/src/gen_layer_catalogs.rs:147, packages/xtask/src/gen_layer_catalogs.rs:158` |  |  |
 | `RS-0120` | `idiom` | `xtask` | medium | actionable | leaf |  |  |  | `packages/xtask/src/main.rs:1031, packages/xtask/src/main.rs:1142, packages/xtask/src/main.` |  |  |
 | `RS-0123` | `idiom` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/resource_type_authority.rs:704, packages/xtask/src/resource_type_author` |  |  |
@@ -156,20 +156,20 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0121` | `idiom` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/main.rs:459` |  |  |
 | `RS-0122` | `idiom` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/provider_crate_policy.rs:6662, packages/xtask/src/provider_crate_policy` |  |  |
 | `RS-0964` | `own` | `X3-cross-crate-duplication` | medium | actionable | family |  |  |  | `packages/d2bd/src/resource_plane_v3.rs:3227, packages/d2b-resource-runtime/src/target.rs:4` |  |  |
-| `RS-0150` | `own` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/dispatch.rs:548, packages/d2b/src/debug.rs:472, packages/d2b/src/debug.rs` |  |  |
-| `RS-0151` | `own` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/dispatch.rs:977` |  |  |
-| `RS-0152` | `own` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/dispatch.rs:296-313, packages/d2b/src/dispatch.rs:347, packages/d2b/src/d` |  |  |
-| `RS-0149` | `own` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/doctor.rs:1062, packages/d2b/src/doctor.rs:1069, packages/d2b/src/doctor.` |  |  |
+| `RS-0150` | `own` | `d2b` | low | actionable | leaf | applied | U2 | d4e4604e4 | `packages/d2b/src/dispatch.rs` | cursor/page_token/reference moved into calls;call-site reassignment unchanged |  |
+| `RS-0151` | `own` | `d2b` | low | actionable | leaf | applied | U2 | d4e4604e4 | `packages/d2b/src/dispatch.rs` | try_parse_from consumes raw_args by value (sole caller, never reused) |  |
+| `RS-0152` | `own` | `d2b` | low | actionable | leaf | applied | U2 | d4e4604e4 | `packages/d2b/src/dispatch.rs` | host_error_envelope takes impl Into<String>;;&format! results move in directly |  |
+| `RS-0149` | `own` | `d2b` | low | actionable | leaf | applied | U2 | 0a4f73a1f | `packages/d2b/src/doctor.rs` | json! literal clones dropped (schema_version, issue_kinds, issues) |  |
 | `RS-0125` | `own` | `d2b-audit` | low | actionable | leaf |  |  |  | `packages/d2b-audit/src/operation.rs:79` |  |  |
-| `RS-0129` | `own` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/pidfd.rs:210` |  |  |
-| `RS-0131` | `own` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/media.rs:220` |  |  |
-| `RS-0130` | `own` | `d2b-broker` | low | actionable | leaf |  |  |  | `src/envelope/mod.rs:671` |  |  |
+| `RS-0129` | `own` | `d2b-broker` | low | actionable | leaf | applied | U2 | c3ac2bb59 | `packages/d2b-broker/src/ops/pidfd.rs` | redundant payload.argv.clone removed; impl param renamed _payload |  |
+| `RS-0131` | `own` | `d2b-broker` | low | actionable | leaf | applied | U2 | b09261be0 | `packages/d2b-broker/src/ops/media.rs` | unwrap_or_else(/_/ vec![record]) in enroll; merged with RS-0630 docs in same commit |  |
+| `RS-0130` | `own` | `d2b-broker` | low | actionable | leaf | applied | U2 | ac44605b7 | `packages/d2b-broker/src/envelope/mod.rs` | Bootstrap reply shrunk to Result<(),>; state.clone removal; merged with RS-0012/RS-0628 in same commit |  |
 | `RS-0126` | `own` | `d2b-broker-composition` | low | actionable | leaf |  |  |  | `packages/d2b-broker-composition/src/dependency_surface.rs:251, packages/d2b-broker-composi` |  |  |
 | `RS-0127` | `own` | `d2b-broker-composition` | low | actionable | leaf |  |  |  | `packages/d2b-broker-composition/src/dependency_surface.rs:272` |  |  |
 | `RS-0128` | `own` | `d2b-broker-composition` | low | actionable | leaf |  |  |  | `packages/d2b-broker-composition/src/dependency_surface.rs:340, packages/d2b-broker-composi` |  |  |
-| `RS-0132` | `own` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/router.rs:480, packages/d2b-bus/src/router.rs:2928` |  |  |
-| `RS-0133` | `own` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/session/prologue.rs:72-78` |  |  |
-| `RS-0134` | `own` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/session/contract.rs:1046-1056, packages/d2b-bus/src/session/zone_link` |  |  |
+| `RS-0132` | `own` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/router.rs` | ScopedCommitTransport::validate added; authorization_request validates borrowed data instead of cloning |  |
+| `RS-0133` | `own` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/session/prologue.rs` | of_subject hashes &str slices via hash_resource_ref; digest byte-identical (full bus suite passed |  |
+| `RS-0134` | `own` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/session/contract.rs` | private verify_body() shared by verify()/revalidate(); clone removed |  |
 | `RS-0137` | `own` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/telemetry_policy.rs:497, packages/d2b-contracts-pro` |  |  |
 | `RS-0135` | `own` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/provider.rs:2497, packages/d2b-contracts-provider/s` |  |  |
 | `RS-0138` | `own` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/credential_controller.rs:1591, packages/d2b-contrac` |  |  |
@@ -256,10 +256,10 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0223` | `own` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/forward_rendezvous.rs:456, packages/d2bd/src/forward_rendezvous.rs:458-4` |  |  |
 | `RS-0220` | `own` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/composition.rs:20638` |  |  |
 | `RS-0224` | `own` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/shared_provider_effects.rs:690, packages/d2bd/src/shared_provider_effect` |  |  |
-| `RS-0225` | `own` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `dag.rs:423-424` |  |  |
-| `RS-0226` | `own` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/unsafe_local_helper.rs:625, packages/d2bd-runtime/src/unsafe_loc` |  |  |
-| `RS-0227` | `own` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/console_session.rs:250, packages/d2bd-runtime/src/console_sessio` |  |  |
-| `RS-0228` | `own` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/daemon_audit.rs:976, packages/d2bd-runtime/src/daemon_audit.rs:1` |  |  |
+| `RS-0225` | `own` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/supervisor/dag.rs` | run_split matches &state, binds reason by ref,and moves state into api_ready afterwards |  |
+| `RS-0226` | `own` | `d2bd-runtime` | low | actionable | leaf | applied-variant | U2 | c44ccbd0b | `packages/d2bd-runtime/src/unsafe_local_helper.rs` | complete_pending takes &str; two call sites pass as_str; third kept to_string because E0505 forbids borrow+move of result in one call (deviation) |  |
+| `RS-0227` | `own` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/console_session.rs` | Borrow<str> implemented; five map lookups/removes resolve without String alloc |  |
+| `RS-0228` | `own` | `d2bd-runtime` | low | actionable | leaf | applied-variant | U2 | c44ccbd0b | `packages/d2bd-runtime/src/daemon_audit.rs` | write_event* and enqueue take DaemonEvent by value, drop clone; caller migration in d2bd/src/composition.rs left to W1Daemon/orchestrator (cross-crate} |  |
 | `RS-0231` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/provider_crate_policy.rs:577, packages/xtask/src/provider_crate_policy.` |  |  |
 | `RS-0236` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/production_closure.rs:263, packages/xtask/src/production_closure.rs:379` |  |  |
 | `RS-0238` | `own` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/blocking_census.rs:1270, packages/xtask/src/blocking_census.rs:1287` |  |  |
@@ -655,33 +655,33 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0611` | `obs` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/readiness.rs:327` |  |  |
 | `RS-0612` | `obs` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/pidfs_probe.rs:129, packages/d2bd-runtime/src/pidfs_probe.rs:132` |  |  |
 | `RS-0613` | `obs` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/console_session.rs:450` |  |  |
-| `RS-0659` | `docs` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/exec_client.rs:497, packages/d2b/src/exec_client.rs:507, packages/d2b/src` |  |  |
-| `RS-0658` | `docs` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/doctor.rs:91, packages/d2b/src/doctor.rs:163, packages/d2b/src/host_valid` |  |  |
+| `RS-0659` | `docs` | `d2b` | low | actionable | leaf | applied | U2 | 4784e6cda | `packages/d2b/src/exec_client.rs` | one-line docs for expect_start/expect_detached_create/list/logs/status/kill |  |
+| `RS-0658` | `docs` | `d2b` | low | actionable | leaf | applied | U2 | 4784e6cda | `packages/d2b/src/doctor.rs` | docs for doctor/validate/CLI surface incl. crate-level doc |  |
 | `RS-0614` | `docs` | `d2b-audit` | low | actionable | leaf |  |  |  | `packages/d2b-audit/src/export.rs:74, packages/d2b-audit/src/record_types.rs:428, packages/` |  |  |
-| `RS-0624` | `docs` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/fd_passing.rs:13, packages/d2b-broker/src/fd_passing.rs:31-70` |  |  |
-| `RS-0630` | `docs` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/media.rs:35, packages/d2b-broker/src/ops/media.rs:167-186, pac` |  |  |
-| `RS-0625` | `docs` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/sys.rs:120-121, packages/d2b-broker/src/sys.rs:185, packages/d2b-b` |  |  |
-| `RS-0631` | `docs` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/protocol.rs:13, packages/d2b-broker/src/protocol.rs:16, packages/d` |  |  |
-| `RS-0632` | `docs` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/state_dir.rs:47, packages/d2b-broker/src/ops/state_dir.rs:53, ` |  |  |
-| `RS-0621` | `docs` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/audit.rs:124, packages/d2b-broker/src/audit.rs:84, packages/d2b-br` |  |  |
+| `RS-0624` | `docs` | `d2b-broker` | medium | actionable | leaf | applied | U2 | 93ced15b2 | `packages/d2b-broker/src/fd_passing.rs` | doc comments added per row |  |
+| `RS-0630` | `docs` | `d2b-broker` | medium | actionable | leaf | applied | U2 | b09261be0 | `packages/d2b-broker/src/ops/media.rs` | MediaOpError variants, outcome structs/fields, eight pub ops fns documented with # Errors |  |
+| `RS-0625` | `docs` | `d2b-broker` | medium | actionable | leaf | applied | U2 | d2096735c | `packages/d2b-broker/src/sys.rs` | doc comments added; merged with RS-0008/RS-0626 in same commit |  |
+| `RS-0631` | `docs` | `d2b-broker` | medium | actionable | leaf | applied | U2 | ba9873712 | `packages/d2b-broker/src/protocol.rs` | MAX_FRAME_SIZE and connect/bind/send_json_frame/recv_json_frame documented |  |
+| `RS-0632` | `docs` | `d2b-broker` | medium | actionable | leaf | applied | U2 | 6b709ea9a | `packages/d2b-broker/src/ops/state_dir.rs` | DirKind, PrepareDirRequest/fields, PrepareDirAudit, ReplaceOrCreateResult, prepare_dir and live helpers documented with # Errors |  |
+| `RS-0621` | `docs` | `d2b-broker` | medium | actionable | leaf | applied | U2 | 1643cd532 | `packages/d2b-broker/src/audit.rs` | field docs on AuditDropSummary/AuditEntry; contract docs on AuditLog::open/audit_drop_summary |  |
 | `RS-0616` | `docs` | `d2b-broker` | medium | actionable | family |  |  |  | `packages/d2b-broker/src/runtime.rs:1, packages/d2b-broker/src/runtime.rs:324, packages/d2b` |  |  |
-| `RS-0622` | `docs` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/host_generation_handoff.rs:35` |  |  |
-| `RS-0623` | `docs` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/route.rs:29` |  |  |
-| `RS-0615` | `docs` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/usbip_lock.rs:81, packages/d2b-broker/src/ops/usbip_lock.rs:90` |  |  |
-| `RS-0617` | `docs` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/usbip_host.rs:17, packages/d2b-broker/src/ops/usbip_host.rs:15` |  |  |
-| `RS-0626` | `docs` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/sys.rs:258, packages/d2b-broker/src/sys.rs:268, packages/d2b-broke` |  |  |
-| `RS-0618` | `docs` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/sysctl.rs:32, packages/d2b-broker/src/ops/sysctl.rs:40, packag` |  |  |
-| `RS-0619` | `docs` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/storage_contract.rs:21` |  |  |
-| `RS-0620` | `docs` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/pidfd.rs:112, packages/d2b-broker/src/ops/pidfd.rs:191, packag` |  |  |
-| `RS-0627` | `docs` | `d2b-broker` | low | actionable | leaf |  |  |  | `src/ops/store_view_farm.rs:66-72, src/ops/store_view_farm.rs:191-197` |  |  |
-| `RS-0628` | `docs` | `d2b-broker` | low | actionable | leaf |  |  |  | `src/envelope/mod.rs:1118, src/envelope/mod.rs:1136, src/envelope/mod.rs:1187` |  |  |
-| `RS-0629` | `docs` | `d2b-broker` | low | actionable | leaf |  |  |  | `src/ops/nm.rs:293-301, src/ops/nm.rs:303-308` |  |  |
-| `RS-0633` | `docs` | `d2b-bus` | medium | actionable | leaf |  |  |  | `packages/d2b-bus/src/router.rs:1126, packages/d2b-bus/src/router.rs:1135, packages/d2b-bus` |  |  |
-| `RS-0637` | `docs` | `d2b-bus` | medium | actionable | leaf |  |  |  | `packages/d2b-bus/src/operations.rs:124-125` |  |  |
-| `RS-0634` | `docs` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/router.rs:67-68` |  |  |
-| `RS-0635` | `docs` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/router.rs:1895, packages/d2b-bus/src/authorization.rs:401, packages/d` |  |  |
-| `RS-0636` | `docs` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/router.rs:3709, packages/d2b-bus/src/router.rs:3261, packages/d2b-bus` |  |  |
-| `RS-0638` | `docs` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/streams.rs:39-40, packages/d2b-bus/src/operations.rs:24-25, packages/` |  |  |
+| `RS-0622` | `docs` | `d2b-broker` | medium | actionable | leaf | applied | U2 | 7ac3d8cdf | `packages/d2b-broker/src/ops/host_generation_handoff.rs` | doc comments added per row |  |
+| `RS-0623` | `docs` | `d2b-broker` | medium | actionable | leaf | applied | U2 | 025b075a8 | `packages/d2b-broker/src/ops/route.rs` | doc comments added per row |  |
+| `RS-0615` | `docs` | `d2b-broker` | low | actionable | leaf | applied | U2 | 34f355adf | `packages/d2b-broker/src/ops/usbip_lock.rs` | doc comments added per row |  |
+| `RS-0617` | `docs` | `d2b-broker` | low | actionable | leaf | applied | U2 | 4bfa5fd51 | `packages/d2b-broker/src/ops/usbip_host.rs` | doc comments added per row |  |
+| `RS-0626` | `docs` | `d2b-broker` | low | actionable | leaf | applied | U2 | d2096735c | `packages/d2b-broker/src/sys.rs` | doc comments added; merged with RS-0008/RS-0625 in same commit |  |
+| `RS-0618` | `docs` | `d2b-broker` | low | actionable | leaf | applied | U2 | 7cf9b6478 | `packages/d2b-broker/src/ops/sysctl.rs` | doc comments added per row |  |
+| `RS-0619` | `docs` | `d2b-broker` | low | actionable | leaf | applied | U2 | 380e073d5 | `packages/d2b-broker/src/ops/storage_contract.rs` | doc comments added per row |  |
+| `RS-0620` | `docs` | `d2b-broker` | low | actionable | leaf | applied | U2 | e507a1e71 | `packages/d2b-broker/src/ops/mod.rs` | doc comments added per row |  |
+| `RS-0627` | `docs` | `d2b-broker` | low | actionable | leaf | applied | U2 | 5a2fa07c7 | `packages/d2b-broker/src/ops/store_view_farm.rs` | journal sentence trimmed and # Errors block added; merged with RS-0010 in same commit |  |
+| `RS-0628` | `docs` | `d2b-broker` | low | actionable | leaf | applied | U2 | ac44605b7 | `packages/d2b-broker/src/envelope/mod.rs` | # Errors blocks on call/call_with_fds/call_nested_with_fds naming ENVELOPE_REFUSALS vocabulary; merged |  |
+| `RS-0629` | `docs` | `d2b-broker` | low | actionable | leaf | applied | U2 | 098cdc0e5 | `packages/d2b-broker/src/ops/nm.rs` | apply_with_reload/remove_with_reload docs rewritten as plain contracts |  |
+| `RS-0633` | `docs` | `d2b-bus` | medium | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/router.rs` | docs for BusEvent/BusFailureReason variants,and BusObserver methods |  |
+| `RS-0637` | `docs` | `d2b-bus` | medium | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/operations.rs` | Cancellation docs: minted by bus, one attempt, is_cancelled |  |
+| `RS-0634` | `docs` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a | `packages/d2b-bus/src/router.rs` | one-line docs for DEFAULT_MAX_ROUTES_PER_SESSION,and DEFAULT_MAX_TOTAL_ROUTES |  |
+| `RS-0635` | `docs` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a,6355caebb | `packages/d2b-bus/src/router.rs` | docs for install body, authz error class, session-failure accessors, as_str wire labels |  |
+| `RS-0636` | `docs` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a,6355caebb | `packages/d2b-bus/src/router.rs` | # Errors on BusIngress::invoke, ZoneRegistrar::register_component_session,and BusEndpoint::invoke |  |
+| `RS-0638` | `docs` | `d2b-bus` | low | actionable | leaf | applied | U2 | fbf92683a,6355caebb | `packages/d2b-bus/src/streams.rs` | # Errors on StreamName::parse, OperationId::parse, ZoneBoundPolicyIdentity::digest,and ZoneEndpointPolicy::lower |  |
 | `RS-0639` | `docs` | `d2b-contracts-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-contracts-broker/src/host_generation.rs:47, packages/d2b-contracts-broker/src` |  |  |
 | `RS-0640` | `docs` | `d2b-contracts-broker` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-broker/src/broker_wire.rs:246, packages/d2b-contracts-broker/src/br` |  |  |
 | `RS-0641` | `docs` | `d2b-contracts-control` | medium | actionable | leaf |  |  |  | `cli_output.rs:10, cli_output.rs:14, cli_output.rs:49, cli_output.rs:130` |  |  |
@@ -784,15 +784,15 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0735` | `docs` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/resource_runtime.rs:8294, packages/d2bd/src/resource_runtime.rs:8390, pa` |  |  |
 | `RS-0740` | `docs` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/provider_effects.rs:91, packages/d2bd/src/provider_effects.rs:711, packa` |  |  |
 | `RS-0742` | `docs` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/forward_rendezvous.rs:1046-1049, packages/d2bd/src/forward_rendezvous.rs` |  |  |
-| `RS-0743` | `docs` | `d2bd-runtime` | medium | actionable | leaf |  |  |  | `json_io.rs:10, json_io.rs:41` |  |  |
-| `RS-0747` | `docs` | `d2bd-runtime` | medium | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/unsafe_local_helper.rs:1, packages/d2bd-runtime/src/unsafe_local` |  |  |
-| `RS-0744` | `docs` | `d2bd-runtime` | medium | actionable | leaf |  |  |  | `vm_start_support.rs:14, vm_start_support.rs:44, vm_start_support.rs:89` |  |  |
-| `RS-0748` | `docs` | `d2bd-runtime` | medium | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/exec_session.rs:181, packages/d2bd-runtime/src/exec_session.rs:2` |  |  |
-| `RS-0749` | `docs` | `d2bd-runtime` | medium | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/readiness.rs:15, packages/d2bd-runtime/src/readiness.rs:78, pack` |  |  |
-| `RS-0745` | `docs` | `d2bd-runtime` | medium | actionable | leaf |  |  |  | `broker_transport.rs:60, broker_transport.rs:69, broker_transport.rs:116, broker_transport.` |  |  |
-| `RS-0746` | `docs` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `ssh_host_key_preflight.rs:312, ssh_host_key_preflight.rs:298-301` |  |  |
-| `RS-0750` | `docs` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/ch_api.rs:11, packages/d2bd-runtime/src/ch_api.rs:15, packages/d` |  |  |
-| `RS-0751` | `docs` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/target_runtime.rs:256, packages/d2bd-runtime/src/target_runtime.` |  |  |
+| `RS-0743` | `docs` | `d2bd-runtime` | medium | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/json_io.rs` | resolve_bundle_artifact_path and load_manifest documented (+# Errors) |  |
+| `RS-0747` | `docs` | `d2bd-runtime` | medium | actionable | leaf | applied | U2 | c44ccbd0b | `packages/d2bd-runtime/src/unsafe_local_helper.rs` | module doc plus consts, enums, HelperRegistry struct,and its 7 pub methods documented |  |
+| `RS-0744` | `docs` | `d2bd-runtime` | medium | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/vm_start_support.rs` | VmStartNodeMode enum, vm_start_node_mode, tracked_role_id,and store-view resolver documented |  |
+| `RS-0748` | `docs` | `d2bd-runtime` | medium | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/exec_session.rs` | exec-session DTO fields documented (ExecStartSpec, ExecSessionInfo, Established, WorkerSpawn) |  |
+| `RS-0749` | `docs` | `d2bd-runtime` | medium | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/readiness.rs` | six readiness predicates/functions documented (+# Errors);async twin was already documented |  |
+| `RS-0745` | `docs` | `d2bd-runtime` | medium | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/broker_transport.rs` | 5 broker-transport helpers documented;default_audit_join_context has no panic post-wave0 (re-verified) |  |
+| `RS-0746` | `docs` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/ssh_host_key_preflight.rs` | workflow tokens dropped from doc and trace comment; 0440-with-ACL why kept |  |
+| `RS-0750` | `docs` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/ch_api.rs` | consts with provenance, ChApiError variants, ChVmInfo fields,and both entry fns documented |  |
+| `RS-0751` | `docs` | `d2bd-runtime` | low | actionable | leaf | applied | U2 | c4b29ded7 | `packages/d2bd-runtime/src/target_runtime.rs` | AdmissionBudget/AdmissionPermit/ProviderDeployment accessors documented incl. release idempotence |  |
 | `RS-0755` | `docs` | `xtask` | medium | actionable | leaf |  |  |  | `packages/xtask/src/blocking_census.rs:71, packages/xtask/src/blocking_census.rs:658, packa` |  |  |
 | `RS-0756` | `docs` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/changelog.rs:149, packages/xtask/src/delivery/evidence.rs:97, packages/` |  |  |
 | `RS-0754` | `docs` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/delivery/snapshot.rs:87, packages/xtask/src/delivery/snapshot.rs:95, pa` |  |  |
