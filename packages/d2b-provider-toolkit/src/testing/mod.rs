@@ -31,7 +31,7 @@ pub mod fixture;
 
 pub use fakes::{
     FakeBus, FakeCoreClient, FakeEffectPort, FakePortError, FakeResourceStore, FakeSupervisor,
-    FaultPlan, MAX_RECORDED_CALLS,
+    FaultPlan, MAX_RECORDED_CALLS, SharedLog,
 };
 pub use fixture::{
     DeterministicClock, FIXTURE_NOW_UNIX_MS, FakeProvider, Fixture, SampleLeaseRequest,

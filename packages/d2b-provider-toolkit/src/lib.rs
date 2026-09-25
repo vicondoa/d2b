@@ -153,7 +153,7 @@ pub use testing::{
     AdmissionRefusal, AdmittedRow, DeterministicClock, FIXTURE_NOW_UNIX_MS, FakeBus,
     FakeCoreClient, FakeEffectPort, FakePortError, FakeProvider, FakeResourceStore, FakeSupervisor,
     FaultInjector, FaultPlan, Fixture, HarnessDeclarations, MAX_RECORDED_CALLS, PlaneCall,
-    RecordingPlanePort, RowPhase, RowStatus, SampleLeaseRequest, TestHarness, block_on,
+    RecordingPlanePort, RowPhase, RowStatus, SampleLeaseRequest, SharedLog, TestHarness, block_on,
     sample_lease_request,
 };
 
