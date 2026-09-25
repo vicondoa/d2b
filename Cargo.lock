@@ -795,7 +795,6 @@ dependencies = [
  "d2b-core",
  "d2b-provider-config-nixos",
  "d2b-resource-client",
- "d2b-zone-routing",
  "nix 0.29.0",
  "rustix 0.38.44",
  "schemars",
@@ -884,7 +883,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "snow",
- "tempfile",
  "tokio",
  "ttrpc",
 ]
@@ -2156,7 +2154,6 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-provider",
  "d2b-contracts-resource",
- "rustix 0.38.44",
  "serde",
  "serde_json",
  "sha2",
