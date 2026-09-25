@@ -8276,7 +8276,7 @@ fn record_workload_launch_result(
     state
         .daemon_audit
         .write_event_with_authority(
-            &d2bd_runtime::daemon_audit::DaemonEvent::WorkloadLauncher {
+            d2bd_runtime::daemon_audit::DaemonEvent::WorkloadLauncher {
                 target: context.target.clone(),
                 item_id: context.item_id.clone(),
                 operation_id: operation_id.to_string(),
@@ -12395,7 +12395,8 @@ fn emit_provider_shell_audit(state: &ServerState, event: ProviderShellAudit<'_>)
     let _ =
         state
             .daemon_audit
-            .write_event(&d2bd_runtime::daemon_audit::DaemonEvent::ShellLifecycle {
+            .write_event(
+                d2bd_runtime::daemon_audit::DaemonEvent::ShellLifecycle {
                 target: event.target.to_owned(),
                 peer_uid: event.peer_uid,
                 provider: event.provider,
@@ -13849,7 +13850,7 @@ fn new_public_shell_session_handle() -> Result<String, TypedError> {
 
 fn emit_detached_create_audit(state: &ServerState, peer_uid: u32, vm: &str, exec_id: &str) {
     if let Err(err) = state.daemon_audit.write_event(
-        &d2bd_runtime::daemon_audit::DaemonEvent::ComponentSessionExecDetachedCreate {
+        d2bd_runtime::daemon_audit::DaemonEvent::ComponentSessionExecDetachedCreate {
             vm: vm.to_owned(),
             peer_uid,
             action: d2bd_runtime::daemon_audit::DetachedExecAuditAction::Create,
@@ -15155,22 +15156,15 @@ async fn audit_resource_plane(
     action: d2bd_runtime::daemon_audit::ResourcePlaneAction,
     result: d2bd_runtime::daemon_audit::ResourcePlaneResult,
 ) -> Result<(), std::io::Error> {
+    let event = d2bd_runtime::daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
+        zone: zone.as_str().to_owned(),
+        action,
+        result,
+    };
+    let authority = d2bd_runtime::daemon_audit::DaemonAuditLog::authority_for(&event);
     state
         .daemon_audit
-        .write_event_with_authority_async(
-            &d2bd_runtime::daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
-                zone: zone.as_str().to_owned(),
-                action,
-                result,
-            },
-            d2bd_runtime::daemon_audit::DaemonAuditLog::authority_for(
-                &d2bd_runtime::daemon_audit::DaemonEvent::ResourcePlaneLifecycle {
-                    zone: zone.as_str().to_owned(),
-                    action,
-                    result,
-                },
-            ),
-        )
+        .write_event_with_authority_async(event, authority)
         .await
 }
 
@@ -16338,7 +16332,7 @@ fn emit_vm_shutdown_intent_audit(
 ) -> Result<(), std::io::Error> {
     let peer_uid = broker_caller_uid(caller_role);
     state.daemon_audit.write_event_with_authority(
-        &d2bd_runtime::daemon_audit::DaemonEvent::VmShutdownIntent {
+        d2bd_runtime::daemon_audit::DaemonEvent::VmShutdownIntent {
             vm: vm.to_owned(),
             peer_uid,
             provider: provider_audit_label(provider),
@@ -16359,7 +16353,7 @@ fn emit_vm_shutdown_outcome_audit(
 ) -> Result<(), std::io::Error> {
     let peer_uid = broker_caller_uid(caller_role);
     state.daemon_audit.write_event_with_authority(
-        &d2bd_runtime::daemon_audit::DaemonEvent::VmShutdownOutcome {
+        d2bd_runtime::daemon_audit::DaemonEvent::VmShutdownOutcome {
             vm: vm.to_owned(),
             peer_uid,
             provider: provider_audit_label(provider),
@@ -19384,7 +19378,7 @@ fn dispatch_broker_vm_start_inner(
         );
         // Emit audit-log entry on api-ready timeout.
         if let Err(err) = state.daemon_audit.write_event(
-            &d2bd_runtime::daemon_audit::DaemonEvent::ApiReadyTimeout {
+            d2bd_runtime::daemon_audit::DaemonEvent::ApiReadyTimeout {
                 vm: request.vm.clone(),
                 runner: VM_RUNNER_ROLE_ID.to_owned(),
                 elapsed_secs: api_timeout.as_secs(),
@@ -19649,7 +19643,7 @@ fn emit_vm_start_runner_exited_audit(
         exit_signal: status.and_then(|status| status.signal),
         elapsed_ms,
     };
-    if let Err(error) = state.daemon_audit.write_event(&event) {
+    if let Err(error) = state.daemon_audit.write_event(event) {
         tracing::warn!(
             vm = %vm,
             role_id = %role_id,
@@ -28716,7 +28710,8 @@ mod broker_dispatch_tests {
         // dispatch_broker_vm_start writes.
         state
             .daemon_audit
-            .write_event(&d2bd_runtime::daemon_audit::DaemonEvent::ApiReadyTimeout {
+            .write_event(
+                d2bd_runtime::daemon_audit::DaemonEvent::ApiReadyTimeout {
                 vm: "vm-a".to_owned(),
                 runner: VM_RUNNER_ROLE_ID.to_owned(),
                 elapsed_secs: 120,
