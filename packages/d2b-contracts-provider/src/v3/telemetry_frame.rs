@@ -73,7 +73,15 @@ pub fn parse_raw_frame(bytes: &[u8]) -> Result<TelemetryFrame, TelemetryFrameErr
     if bytes.len() > MAX_TELEMETRY_FRAME_BYTES {
         return Err(TelemetryFrameError::RawOversize);
     }
-    serde_json::from_slice::<TelemetryFrame>(bytes).map_err(|_| TelemetryFrameError::Malformed)
+    serde_json::from_slice::<TelemetryFrame>(bytes).map_err(|error| {
+        // The pinned serde_json has no `Category::UnknownField`; the only way
+        // to distinguish a top-level unknown field is by its stable message.
+        if error.to_string().starts_with("unknown field") {
+            TelemetryFrameError::UnknownField
+        } else {
+            TelemetryFrameError::Malformed
+        }
+    })
 }
 
 /// Validate a previously parsed shared frame.
@@ -484,6 +492,14 @@ fn json_kind(value: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_top_level_unknown_field_reports_the_unknown_field_class() {
+        assert_eq!(
+            parse_raw_frame(br#"{"signal":"metric","value":1,"extra":true}"#),
+            Err(TelemetryFrameError::UnknownField)
+        );
+    }
 
     #[test]
     fn shared_frame_rejects_unknown_keys_and_non_finite_values() {

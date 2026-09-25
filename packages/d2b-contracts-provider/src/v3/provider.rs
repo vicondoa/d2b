@@ -27,7 +27,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use schemars::JsonSchema;
+use schemars::{JsonSchema, r#gen::SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::semantic_services::{
@@ -1317,18 +1317,38 @@ impl core::fmt::Debug for ComponentExecution {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ComponentExecutionWire {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    binary_ref: Option<BinaryRef>,
+impl Serialize for ComponentExecution {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        if let Self::Launchable { binary_ref } = self {
+            map.serialize_entry("binaryRef", binary_ref)?;
+        }
+        map.end()
+    }
 }
 
-impl From<&ComponentExecution> for ComponentExecutionWire {
-    fn from(execution: &ComponentExecution) -> Self {
-        Self {
-            binary_ref: execution.binary_ref().cloned(),
-        }
+impl JsonSchema for ComponentExecution {
+    fn schema_name() -> String {
+        "ComponentExecution".to_owned()
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> schemars::schema::Schema {
+        let mut properties = schemars::Map::new();
+        properties.insert(
+            "binaryRef".to_owned(),
+            _gen.subschema_for::<Option<BinaryRef>>(),
+        );
+        let validation = schemars::schema::ObjectValidation {
+            properties,
+            ..Default::default()
+        };
+        let object = schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::InstanceType::Object.into()),
+            object: Some(Box::new(validation)),
+            ..Default::default()
+        };
+        object.into()
     }
 }
 
@@ -1341,8 +1361,6 @@ impl From<&ComponentExecution> for ComponentExecutionWire {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentDescriptor {
     #[serde(flatten)]
-    execution_wire: ComponentExecutionWire,
-    #[serde(skip)]
     execution: ComponentExecution,
     component_id: BoundedToken,
     component_type: ComponentType,
@@ -1427,7 +1445,6 @@ impl ComponentDescriptor {
         }
         Ok(Self {
             execution: ComponentExecution::InProcessBootstrap,
-            execution_wire: ComponentExecutionWire::default(),
             component_id,
             component_type,
             exported_resource_types,
@@ -1446,7 +1463,6 @@ impl ComponentDescriptor {
 
     /// Set the execution mode encoded by the signed descriptor.
     pub fn with_execution(mut self, execution: ComponentExecution) -> Self {
-        self.execution_wire = ComponentExecutionWire::from(&execution);
         self.execution = execution;
         self
     }
@@ -4359,5 +4375,20 @@ mod tests {
         let component = format!("{:?}", controller());
         assert!(!component.contains("volume-controller"));
         assert!(!component.contains("sha256:"));
+    }
+
+    #[test]
+    fn execution_mode_round_trips_through_the_flat_binary_ref_field() {
+        for execution in [
+            ComponentExecution::InProcessBootstrap,
+            ComponentExecution::Launchable {
+                binary_ref: BinaryRef::parse("volume-controller").unwrap(),
+            },
+        ] {
+            let descriptor = controller().with_execution(execution.clone());
+            let wire = serde_json::to_value(&descriptor).unwrap();
+            let round_tripped = serde_json::from_value::<ComponentDescriptor>(wire).unwrap();
+            assert_eq!(round_tripped.execution(), &execution);
+        }
     }
 }

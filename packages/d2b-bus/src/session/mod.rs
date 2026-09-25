@@ -94,8 +94,6 @@ pub use d2b_session::{
     AttachmentValidationError,
     BootstrapAdmission,
     BootstrapPsk,
-    // Cancellation and the request registry.
-    Cancellation,
     // The session drive loop.
     ComponentSessionDriver,
     DeadlineBudget,
