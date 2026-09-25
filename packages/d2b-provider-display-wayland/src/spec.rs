@@ -231,11 +231,7 @@ impl core::fmt::Debug for DisplayIdentity {
 
 /// Authenticated desired state for one Wayland display session.
 #[derive(Clone, PartialEq, Eq, Serialize)]
-#[serde(
-    rename_all = "camelCase",
-    deny_unknown_fields,
-    try_from = "WaylandSessionSpecWire"
-)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WaylandSessionSpec {
     guest_ref: ResourceRef,
     host_ref: ResourceRef,
