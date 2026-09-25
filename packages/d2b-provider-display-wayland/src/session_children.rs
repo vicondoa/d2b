@@ -305,6 +305,9 @@ fn durable_process_payload_for_generation(
         .map_err(|_| WorkerEffectError::LaunchRejected)
 }
 
+/// Lowercase hex digits for two-digit-per-byte encoding.
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+
 /// The bounded session-uid suffix of one worker role's durable names.
 fn durable_display_suffix(session_uid: &ResourceUid, role: DisplayProcessRole) -> String {
     let mut digest = Sha256::new();
@@ -314,7 +317,8 @@ fn durable_display_suffix(session_uid: &ResourceUid, role: DisplayProcessRole) -
     let digest = digest.finalize();
     let mut suffix = String::with_capacity(40);
     for byte in digest.iter().take(20) {
-        suffix.push_str(&format!("{byte:02x}"));
+        suffix.push(HEX_DIGITS[(byte >> 4) as usize] as char);
+        suffix.push(HEX_DIGITS[(byte & 0x0f) as usize] as char);
     }
     suffix
 }
