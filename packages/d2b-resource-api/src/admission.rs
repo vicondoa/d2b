@@ -341,8 +341,7 @@ impl StoreAdmissionBinding {
             ..
         } = admitted;
         let mutations = mutations
-            .iter()
-            .cloned()
+            .into_iter()
             .map(prepare_mutation)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(MutationSealBody {

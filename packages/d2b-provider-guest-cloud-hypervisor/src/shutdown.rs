@@ -417,7 +417,7 @@ pub fn plan_finalization(
     }
 
     let mut children = input.direct_children;
-    children.sort_by_key(|child| (deletion_rank(child.role), child.target.clone()));
+    children.sort_by_key(|child| (child.role.rank(), child.target.clone()));
     if let Some(child) = children
         .iter()
         .find(|child| !child.deletion_requested)
@@ -481,15 +481,6 @@ fn blocked_plan(guest_uid: ResourceUid, reason: FinalizationBlockReason) -> Gues
         guest_uid,
         disposition: FinalizationDisposition::Blocked(reason),
         steps: Vec::new(),
-    }
-}
-
-fn deletion_rank(role: ChildRole) -> u8 {
-    match role {
-        ChildRole::ChApiEndpoint => 0,
-        ChildRole::GuestControlEndpoint => 1,
-        ChildRole::VmmProcess => 2,
-        ChildRole::SystemVolume => 3,
     }
 }
 
@@ -605,7 +596,7 @@ pub fn plan_upgrade(
             return Err(LifecyclePlanError::ChildDuplicate);
         }
     }
-    children.sort_by_key(|child| (upgrade_rank(child.role), child.target.clone()));
+    children.sort_by_key(|child| (child.role.rank(), child.target.clone()));
     let durable_volumes = children
         .iter()
         .filter(|child| child.role == ChildRole::SystemVolume)
@@ -662,15 +653,6 @@ pub fn plan_upgrade(
         next_session_generation,
         steps,
     })
-}
-
-fn upgrade_rank(role: ChildRole) -> u8 {
-    match role {
-        ChildRole::ChApiEndpoint => 0,
-        ChildRole::GuestControlEndpoint => 1,
-        ChildRole::VmmProcess => 2,
-        ChildRole::SystemVolume => 3,
-    }
 }
 
 /// Failure while building a bounded lifecycle plan.

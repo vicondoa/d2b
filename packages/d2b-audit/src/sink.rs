@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::{self, BufRead},
+    io,
     os::unix::fs::OpenOptionsExt,
     path::Path,
     sync::Mutex,
@@ -85,6 +85,12 @@ impl core::fmt::Debug for AuditSink {
 
 impl AuditSink {
     /// Open the default 64 MiB, 30-day sink.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuditSinkError::Unavailable`] when the segment cannot be
+    /// opened or synchronized, and [`AuditSinkError::ChainMismatch`] when the
+    /// existing chain fails verification during the startup scan.
     pub fn open(directory: impl AsRef<Path>) -> Result<Self, AuditSinkError> {
         Self::open_with_limits(
             directory,
@@ -171,6 +177,16 @@ impl AuditSink {
     }
 
     /// Append one record under its durability class.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuditSinkError::StatePoisoned`] when the internal lock state
+    /// is poisoned, [`AuditSinkError::ChainMismatch`] when the record does not
+    /// name the sink's current chain head or duplicates a durable mutation
+    /// with a different hash, [`AuditSinkError::Serialization`] when the
+    /// record cannot be encoded, and [`AuditSinkError::Poisoned`] or
+    /// [`AuditSinkError::Unavailable`] when the segment write or privileged
+    /// sync fails.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn append(
         &self,
@@ -237,6 +253,12 @@ impl AuditSink {
     }
 
     /// Prune old immutable segments.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuditSinkError::StatePoisoned`] when the internal lock state
+    /// is poisoned, [`AuditSinkError::Unavailable`] when pruning fails, and
+    /// [`AuditSinkError::Poisoned`] when the post-prune chain rescan fails.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn prune_old(&self, now_ms: u64) -> Result<usize, AuditSinkError> {
         let mut state = self
@@ -380,8 +402,12 @@ fn scan_chain_state(directory: &Path) -> Result<ScanState, AuditSinkError> {
             .open(path)
             .map_err(|_| AuditSinkError::Unavailable)?;
         let mut reader = io::BufReader::new(file);
-        while let Some(bytes) =
-            read_bounded_line(&mut reader).map_err(|_| AuditSinkError::ChainMismatch)?
+        while let Some(bytes) = crate::segment::read_bounded_line(
+                &mut reader,
+                "audit-scan-line-truncated",
+                "audit-scan-line-limit",
+            )
+            .map_err(|_| AuditSinkError::ChainMismatch)?
         {
             let line = String::from_utf8(bytes).map_err(|_| AuditSinkError::ChainMismatch)?;
             let record = serde_json::from_str::<AuditRecord>(&line)
@@ -395,19 +421,12 @@ fn scan_chain_state(directory: &Path) -> Result<ScanState, AuditSinkError> {
             {
                 let key = (key, mutation_id.to_owned());
                 if durable_mutations
-                    .insert(key, record.record_hash().clone())
+                    .insert(key.clone(), record.record_hash().clone())
                     .is_some()
                 {
                     return Err(AuditSinkError::ChainMismatch);
                 }
-                if let Some(mutation_id) = record.mutation_id()
-                    && let Ok(key) = record.zone_operation_key()
-                {
-                    mutation_predecessors.insert(
-                        (key, mutation_id.to_owned()),
-                        record.previous_hash().clone(),
-                    );
-                }
+                mutation_predecessors.insert(key, record.previous_hash().clone());
             }
         }
     }
@@ -416,34 +435,6 @@ fn scan_chain_state(directory: &Path) -> Result<ScanState, AuditSinkError> {
         durable_mutations,
         mutation_predecessors,
     })
-}
-
-fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {
-    let mut bytes = Vec::new();
-    loop {
-        let chunk = reader.fill_buf()?;
-        if chunk.is_empty() {
-            return if bytes.is_empty() {
-                Ok(None)
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "audit-scan-line-truncated",
-                ))
-            };
-        }
-        let newline = chunk.iter().position(|byte| *byte == b'\n');
-        let take = newline.map_or(chunk.len(), |index| index + 1);
-        if bytes.len().saturating_add(take) > crate::export::MAX_EXPORT_LINE_BYTES {
-            return Err(io::Error::other("audit-scan-line-limit"));
-        }
-        bytes.extend_from_slice(&chunk[..take]);
-        reader.consume(take);
-        if newline.is_some() {
-            bytes.pop();
-            return Ok(Some(bytes));
-        }
-    }
 }
 
 #[cfg(test)]

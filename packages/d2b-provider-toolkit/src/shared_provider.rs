@@ -768,7 +768,11 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
                         .any(|child| owned_child_matches_child_ensure(row, child))
             })
             .collect::<Vec<_>>();
-        obsolete.sort_by_key(|row| (teardown_rank(&row.key.type_name), row.key.name.clone()));
+        obsolete.sort_by(|a, b| {
+            teardown_rank(&a.key.type_name)
+                .cmp(&teardown_rank(&b.key.type_name))
+                .then_with(|| a.key.name.cmp(&b.key.name))
+        });
         let mut mutated = false;
         for row in obsolete {
             ctx.delete(&row.key)

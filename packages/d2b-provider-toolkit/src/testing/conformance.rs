@@ -264,6 +264,15 @@ impl ProviderResourceTypeBinding {
 ///
 /// This is the check that runs before a Provider is admitted, without
 /// calling the Provider.
+///
+/// # Errors
+///
+/// Returns [`ConformanceError::NoResourceTypeBinding`] when no binding is
+/// declared, [`ConformanceError::DuplicateResourceTypeBinding`] when a
+/// resource type is bound twice, [`ConformanceError::ResourceTypeNotInstalled`]
+/// when the bound resource type has no installed contract, and
+/// [`ConformanceError::BaseSchemaMismatch`] when the base binding does not
+/// match the installed contract.
 pub fn check_descriptor_conformance(
     bindings: &[ProviderResourceTypeBinding],
     installed: &[ResourceSchemaContract],
@@ -288,6 +297,15 @@ pub fn check_descriptor_conformance(
 /// Live conformance for one binding: the Provider advertises the installed
 /// base schema identity, and the canonical minimal valid base spec is
 /// accepted without any `spec.provider` extension.
+///
+/// # Errors
+///
+/// Returns [`ConformanceError::ResourceTypeNotInstalled`] when the bound
+/// resource type has no installed contract,
+/// [`ConformanceError::BaseSchemaMismatch`] when the base binding does not
+/// match the installed contract, and
+/// [`ConformanceError::MinimalBaseRejected`] when the canonical minimal base
+/// spec is not accepted.
 pub fn check_provider_conformance(
     binding: &ProviderResourceTypeBinding,
     installed: &[ResourceSchemaContract],

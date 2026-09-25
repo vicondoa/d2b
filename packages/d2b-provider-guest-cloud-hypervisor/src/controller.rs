@@ -1709,7 +1709,6 @@ struct StatusProjectionOptions<'a> {
 
 /// Cloud Hypervisor Guest controller.
 pub struct CloudHypervisorController<A> {
-    _config: crate::CloudHypervisorConfig,
     graph: BootstrapGraph,
     descriptor: VerifiedGuestSetupDescriptor,
     registration: CloudHypervisorControllerRegistration,
@@ -1719,7 +1718,6 @@ pub struct CloudHypervisorController<A> {
     pending_retired_child_uids: BTreeSet<(ZoneId, ResourceRef, ResourceUid)>,
     retired_child_uids: BTreeSet<(ZoneId, ResourceRef, ResourceUid)>,
     upgrade_progress: BTreeMap<ResourceUid, (UpgradeReason, usize)>,
-    observed_process_status: Option<ProcessAdoptionStatus>,
     lifecycle_intent: Option<DesiredLifecycle>,
 }
 
@@ -1741,7 +1739,6 @@ where
         let registration =
             CloudHypervisorControllerRegistration::from_verified_descriptor(&descriptor)?;
         Ok(Self {
-            _config: config,
             graph,
             descriptor,
             registration,
@@ -1751,7 +1748,6 @@ where
             pending_retired_child_uids: BTreeSet::new(),
             retired_child_uids: BTreeSet::new(),
             upgrade_progress: BTreeMap::new(),
-            observed_process_status: None,
             lifecycle_intent: None,
         })
     }
@@ -1857,7 +1853,6 @@ where
                 ),
             ));
         }
-        self.observed_process_status = None;
         let child_plan = BootstrapGraph::plan_children(
             guest.zone.clone(),
             guest.resource_ref.clone(),
@@ -2010,11 +2005,8 @@ where
                     );
                     lifecycle_conditions.push(GuestCondition::VmmProcessExited);
                     force_degraded = true;
-                    self.observed_process_status = Some(ProcessAdoptionStatus::Absent);
                 }
-                ProcessAdoptionStatus::Current | ProcessAdoptionStatus::Adopted => {
-                    self.observed_process_status = Some(ProcessAdoptionStatus::Current);
-                }
+                ProcessAdoptionStatus::Current | ProcessAdoptionStatus::Adopted => {}
             }
             if adoption_blocked {
                 let status = self.project_status(
@@ -2039,10 +2031,6 @@ where
                 return Ok(CloudHypervisorReconcileOutcome::from_status(status, false));
             }
         }
-        if self.observed_process_status.is_none() {
-            self.observed_process_status = Some(ProcessAdoptionStatus::Absent);
-        }
-
         let missing = expected_refs
             .iter()
             .filter(|target| !children.contains_key(*target))

@@ -622,6 +622,12 @@ fn stored_of(
 /// daemon's reader bridges (G5, U12): they merge manager rows into the old
 /// plane's store-shaped readers through exactly this rendering, so a bridged
 /// row is identical to the row the manager-backed API serves.
+///
+/// # Errors
+///
+/// Returns the `StoreError` classes the envelope renderer produces when the
+/// row's metadata does not decode or the rendered envelope exceeds the
+/// resource envelope bound.
 pub fn manager_row_stored(view: &ResourceView) -> Result<StoredResource, StoreError> {
     stored_from_view(view)
 }

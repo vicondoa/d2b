@@ -36,6 +36,14 @@ pub struct PlannedStep {
 
 impl StartupPlan {
     /// Derive the order from the drivers' declared steps.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StartupPlanRefusal::MissingInput`] when a step names an
+    /// input no predecessor commits, [`StartupPlanRefusal::DuplicateOutput`]
+    /// when two steps commit the same output, and
+    /// [`StartupPlanRefusal::Cycle`] when the declared inputs and outputs
+    /// form a cycle.
     pub fn derive(drivers: &[DriverDescriptor]) -> Result<Self, StartupPlanRefusal> {
         let mut declared: Vec<(WellKnownType, &'static StartupStep)> = Vec::new();
         for driver in drivers {
@@ -51,6 +59,11 @@ impl StartupPlan {
     /// A provider crate assembles its `DriverDescriptor`s once; a test or a
     /// composition root that already holds the rows states them directly.
     /// Both feed one derivation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same refusals as [`Self::derive`]: `MissingInput`,
+    /// `DuplicateOutput`, or `Cycle`.
     pub fn declare(
         rows: &'static [(WellKnownType, &'static [StartupStep])],
     ) -> Result<Self, StartupPlanRefusal> {

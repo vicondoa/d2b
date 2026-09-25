@@ -2,7 +2,7 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex},
+    sync::Mutex,
 };
 use tracing::{error, warn};
 
@@ -335,7 +335,7 @@ impl core::fmt::Debug for NotificationLifecycleReceipt {
 
 /// Core-owned lifecycle supervisor that issues receipts only after host effects.
 pub struct NotificationLifecycleSupervisor<B: NotificationLifecycleBackend> {
-    backend: Arc<B>,
+    backend: B,
     state: Mutex<LifecycleState>,
 }
 
@@ -343,7 +343,7 @@ impl<B: NotificationLifecycleBackend> NotificationLifecycleSupervisor<B> {
     /// Construct one lifecycle supervisor over an authoritative host backend.
     pub fn new(backend: B) -> Self {
         Self {
-            backend: Arc::new(backend),
+            backend,
             state: Mutex::new(LifecycleState::default()),
         }
     }

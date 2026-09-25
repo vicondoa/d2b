@@ -51,6 +51,12 @@ impl std::error::Error for EvidenceError {}
 /// the refused, policy, unknown, and errored classes. A caller-supplied key
 /// is accepted only when it exactly equals the canonical key built from the
 /// explicit Zone and operation identity.
+///
+/// # Errors
+///
+/// Returns [`EvidenceError::KeyMismatch`] when `supplied_key` is absent or
+/// differs from the canonical key, and [`EvidenceError::DecisionResultInvalid`]
+/// when the decision/result pair is not one of the closed terminal pairs.
 pub fn evidence_from_decision_result(
     zone: ZoneId,
     operation: OperationIdentity,

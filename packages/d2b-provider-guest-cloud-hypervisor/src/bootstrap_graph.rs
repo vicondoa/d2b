@@ -128,16 +128,6 @@ impl BootstrapGraph {
         })
     }
 
-    /// Check the dependency barrier.
-    pub fn readiness(
-        &self,
-        devices_ready: bool,
-        networks_ready: bool,
-        volumes_ready: bool,
-    ) -> DependencyReadiness {
-        self.vmm_readiness(devices_ready, networks_ready, volumes_ready, true, true)
-    }
-
     /// Check all pre-start dependencies without performing an effect.
     pub fn vmm_readiness(
         &self,
@@ -414,11 +404,11 @@ mod tests {
         let graph = BootstrapGraph::new(Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
             .unwrap();
         assert_eq!(
-            graph.readiness(true, true, true),
+            graph.vmm_readiness(true, true, true, true, true),
             DependencyReadiness::Ready
         );
         assert_eq!(
-            graph.readiness(true, true, false),
+            graph.vmm_readiness(true, true, false, true, true),
             DependencyReadiness::Pending
         );
     }

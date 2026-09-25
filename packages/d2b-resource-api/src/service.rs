@@ -195,6 +195,12 @@ impl<S> ResourceService<S, UnavailableUpgradeDispatcher>
 where
     S: ResourceStoreBackend,
 {
+    /// Construct a service bound to the authorizer's store identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreBindingError`] when the store authority or seal
+    /// identity is already bound to another backend.
     pub fn new(
         store: Arc<S>,
         authorizer: Arc<NativeAuthorizer>,
@@ -206,6 +212,11 @@ where
     ///
     /// The backend must independently fence its authenticated session
     /// generation; this preserves only the store authority and seal identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreBindingError`] when the authorizer has no session store
+    /// binding or the store identity is already bound.
     pub fn new_session_bound(
         store: Arc<S>,
         authorizer: Arc<NativeAuthorizer>,
@@ -244,6 +255,12 @@ where
 {
     /// Authenticate and authorize a Guest lifecycle operation against the
     /// current store row, returning the one-use downstream lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AuthorizationDenied` when the target is not a `Guest`, the
+    /// Zone is invalid, or the subject is not authorized, and the store
+    /// error classes when the current row cannot be read.
     pub async fn admit_guest_lifecycle(
         &self,
         subject: &crate::AuthenticatedSubjectContext,
@@ -852,7 +869,7 @@ where
     pub async fn commit_scoped_batch(
         &self,
         trusted: TrustedRequest<wire::CommitBatchRequest>,
-        scoped_mutations: Vec<ScopedResourceMutation>,
+        scoped_mutations: &[ScopedResourceMutation],
     ) -> wire::CommitBatchResponse {
         self.commit_batch_with_scope(trusted, Some(scoped_mutations), None)
             .await
@@ -861,7 +878,7 @@ where
     async fn commit_batch_with_scope(
         &self,
         trusted: TrustedRequest<wire::CommitBatchRequest>,
-        scoped_mutations: Option<Vec<ScopedResourceMutation>>,
+        scoped_mutations: Option<&[ScopedResourceMutation]>,
         configuration_generation: Option<ConfigurationGeneration>,
     ) -> wire::CommitBatchResponse {
         if trusted.request.mutations.is_empty() {

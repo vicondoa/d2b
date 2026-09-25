@@ -28,6 +28,11 @@ use tracing::warn;
 /// adapter.  Descriptors are numbered from zero and may not repeat, reorder,
 /// or skip an index; rejecting before dispatch prevents an adapter from
 /// confusing a stale attachment with a current one.
+///
+/// # Errors
+///
+/// Returns [`ProviderToolkitError::NonMonotoneAttachmentIndexes`] when an
+/// index is not exactly its zero-based position.
 pub fn validate_attachment_indexes(indexes: &[u32]) -> Result<(), ProviderToolkitError> {
     for (expected, observed) in indexes.iter().enumerate() {
         if *observed != expected as u32 {

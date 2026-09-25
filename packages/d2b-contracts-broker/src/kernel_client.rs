@@ -110,6 +110,14 @@ pub struct KernelReply {
 /// dispatched under. The reply carries the invocation id the audit record
 /// keys on and the descriptors the kernel minted; a refusal keeps its
 /// closed code and detail.
+///
+/// # Errors
+///
+/// Returns [`KernelInvokeError::Transport`] when any transport step (dial,
+/// frame write, reply poll, frame read, or decode) fails, including a reply
+/// timeout, [`KernelInvokeError::Protocol`] when the broker answers a
+/// non-envelope response, and [`KernelInvokeError::Refused`] when the
+/// broker refuses the invocation with its closed code and detail.
 pub fn envelope_invoke_kernel(
     socket_path: &Path,
     io_timeout: Duration,
@@ -221,9 +229,9 @@ pub fn envelope_invoke_kernel(
             "unexpected response kind: {response:?}"
         )));
     };
-    if response.refusal.is_some() {
+    if let Some(code) = response.refusal.clone() {
         return Err(KernelInvokeError::Refused {
-            code: response.refusal.clone().unwrap_or_default(),
+            code,
             detail: response.detail.clone(),
         });
     }

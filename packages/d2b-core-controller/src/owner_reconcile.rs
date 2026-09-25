@@ -1072,7 +1072,6 @@ impl OwnerIndex {
         let observed = self
             .children
             .get(owner)
-            .cloned()
             .ok_or(OwnerReconcileError::OwnerNotRelisted)?;
         let mut mutations = Vec::new();
         let mut create_children = Vec::new();
@@ -1103,7 +1102,7 @@ impl OwnerIndex {
                 Some(_) => {}
             }
         }
-        for (target, actual) in &observed {
+        for (target, actual) in observed {
             if !desired_by_ref.contains_key(target) && !actual.deletion_requested {
                 mutations.push(OwnerMutation::RequestDeletion {
                     target: target.clone(),
@@ -1128,7 +1127,7 @@ impl OwnerIndex {
             self.limits.max_depth,
         )?;
         let deletion_order = ordered_observed_refs(
-            &observed,
+            observed,
             desired_by_ref.keys(),
             self.limits.max_work_items,
             self.limits.max_depth,
@@ -1145,7 +1144,7 @@ impl OwnerIndex {
             .collect::<BTreeMap<_, _>>();
         mutations.sort_by_key(|mutation| {
             let (target, deleting, kind) =
-                mutation_sort_parts(mutation, &desired_by_ref, &observed);
+                mutation_sort_parts(mutation, &desired_by_ref, observed);
             let position = if deleting {
                 deletion_positions
                     .get(target)

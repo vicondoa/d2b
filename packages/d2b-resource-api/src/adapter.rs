@@ -68,6 +68,14 @@ impl std::error::Error for ScopedQueryFrameError {}
 
 /// Attach bus-admitted assignment evidence to the existing ttrpc CommitBatch
 /// request without creating another transport.
+///
+/// # Errors
+///
+/// Returns [`ScopedCommitFrameError::InvalidFrame`] when the frame is not a
+/// well-formed ttrpc request, [`ScopedCommitFrameError::InvalidRequest`] when
+/// the frame is not a `CommitBatch` call or already carries scoped admission,
+/// and [`ScopedCommitFrameError::Assignment`] when the assignment evidence
+/// cannot be encoded.
 pub fn attach_scoped_commit_frame(
     frame: &[u8],
     transport: &ScopedCommitTransport,
@@ -116,6 +124,13 @@ pub fn attach_scoped_commit_frame(
 ///
 /// The selector inputs are transport-neutral so the resource API does not
 /// depend on the message bus's query type.
+///
+/// # Errors
+///
+/// Returns [`ScopedQueryFrameError::InvalidFrame`] when the frame is not a
+/// well-formed ttrpc request, and [`ScopedQueryFrameError::InvalidRequest`]
+/// when the frame is not the expected query call or its payload does not
+/// decode.
 pub fn attach_scoped_query_frame(
     frame: &[u8],
     resource_types: &[ResourceTypeName],
@@ -206,6 +221,12 @@ pub fn decode_scoped_commit_request(
 ///
 /// Scoped evidence is bus-owned. A plain ResourceCall must never be able to
 /// smuggle the field through the same RPC and receive a storage fence.
+///
+/// # Errors
+///
+/// Returns [`ScopedCommitFrameError::InvalidFrame`] when the frame is not a
+/// well-formed ttrpc request, and [`ScopedCommitFrameError::InvalidRequest`]
+/// when the frame is not a `CommitBatch` call or carries scoped admission.
 pub fn reject_scoped_commit_frame(frame: &[u8]) -> Result<(), ScopedCommitFrameError> {
     let header_bytes: [u8; MESSAGE_HEADER_LENGTH] = frame
         .get(..MESSAGE_HEADER_LENGTH)
@@ -294,7 +315,7 @@ where
     pub async fn scoped_commit_batch(
         &self,
         request: wire::CommitBatchRequest,
-        scoped_mutations: Vec<ScopedResourceMutation>,
+        scoped_mutations: &[ScopedResourceMutation],
     ) -> wire::CommitBatchResponse {
         self.client()
             .scoped_commit_batch(request, scoped_mutations)
@@ -422,7 +443,7 @@ where
         Ok(match scoped {
             Some(transport) => {
                 self.client()
-                    .scoped_commit_batch(request, transport.mutations().to_vec())
+                    .scoped_commit_batch(request, transport.mutations())
                     .await
             }
             None => self.service().commit_batch(self.trusted(request)).await,

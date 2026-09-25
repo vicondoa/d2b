@@ -294,6 +294,14 @@ impl NotificationSink {
     }
 
     /// Deliver after the configured Guest-source category admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::types::NotificationError::InvalidOpaqueKey`] when the
+    /// Guest source rejects the session or request, and the delivery
+    /// validation errors (`FieldBounds`, `InvalidIcon`, `InvalidActions`,
+    /// `InvalidTimeout`, `InvalidOpaqueKey`, `ObserverDisabled`) when the
+    /// request or observer stream fails its bounded validation.
     pub fn deliver_from_guest_source<P: DesktopNotificationPort + ?Sized>(
         &mut self,
         port: &mut P,

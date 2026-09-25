@@ -861,6 +861,7 @@ impl core::fmt::Debug for CompiledRole {
 }
 
 impl CompiledRole {
+    /// Validate and compile one signed role's rule set.
     pub fn new(
         role_ref: ResourceRef,
         rules: Vec<PolicyRule>,
@@ -909,6 +910,8 @@ impl core::fmt::Debug for CompiledRoleBinding {
 }
 
 impl CompiledRoleBinding {
+    /// Validate and compile one role binding's subject, scope, and relay
+    /// authority.
     pub fn new(
         role_ref: ResourceRef,
         subjects: impl IntoIterator<Item = BoundSubject>,
@@ -1090,6 +1093,7 @@ impl core::fmt::Debug for PolicySet {
 }
 
 impl PolicySet {
+    /// Validate and index one policy revision's roles and bindings.
     pub fn new(
         catalog: &ApiCatalog,
         policy_revision: u64,
@@ -1476,6 +1480,14 @@ impl NativeAuthorizer {
             .ok_or(StoreBindingError)
     }
 
+    /// Hand the one-use seal acceptor for a store to its owning service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreSealHandoffError::AlreadyTaken`] when the store's seal
+    /// slot is already installed, and
+    /// [`StoreSealHandoffError::AuthorizerUnavailable`] when the authorizer
+    /// cannot take the slot.
     pub fn take_store_seal(
         &self,
         store: StoreSealIdentity,
@@ -1530,6 +1542,12 @@ impl NativeAuthorizer {
     /// authority.  This method only creates the Resource API capability after
     /// the live policy grants the subject a session connection, so generated
     /// handlers never receive an unbound or caller-authored identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthorizationDenial::ZoneMismatch`] when the session Zone is
+    /// invalid, and [`AuthorizationDenial::NoMatchingGrant`] when the
+    /// positive capabilities do not include the Connect session verb.
     pub fn issue_authenticated_subject(
         &self,
         context: AuthenticatedSubjectContext,
@@ -1547,6 +1565,20 @@ impl NativeAuthorizer {
         ))
     }
 
+    /// Authorize one request against the current policy and return the
+    /// one-use grant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthorizationDenial::NoMatchingGrant`] when the request
+    /// targets no granted resource, [`AuthorizationDenial::UnknownResourceType`]
+    /// when a target names an unknown resource type,
+    /// [`AuthorizationDenial::ZoneMismatch`] when the subject Zone does not
+    /// match the request Zone, [`AuthorizationDenial::PolicyUnavailable`] or
+    /// [`AuthorizationDenial::PolicyRevisionChanged`] when the policy is
+    /// missing or stale, and the relay and bootstrap denials
+    /// (`RelayOriginInvalid`, `RelayGrantMissing`, `RelayTargetGrantMissing`,
+    /// `BootstrapDenied`) when the relay or bootstrap admission refuses.
     pub fn authorize(
         &self,
         context: &AuthenticatedSubjectContext,

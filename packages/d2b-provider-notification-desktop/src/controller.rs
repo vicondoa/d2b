@@ -657,23 +657,24 @@ impl SourceProcessEffectReceipt {
     }
 
     fn expected_acknowledgements(plan: &SourceReconcileResult) -> Vec<SourceEffectAcknowledgement> {
-        let mut acknowledgements = Vec::new();
-        acknowledgements.extend(plan.start_endpoints.iter().map(|endpoint| {
-            SourceEffectAcknowledgement::Source {
+        let mut acknowledgements: Vec<_> = plan
+            .start_endpoints
+            .iter()
+            .map(|endpoint| SourceEffectAcknowledgement::Source {
                 start: true,
                 endpoint_digest: endpoint.endpoint_digest().to_owned(),
                 source_generation: endpoint.source_generation(),
                 display_generation: endpoint.display_generation(),
-            }
-        }));
-        acknowledgements.extend(plan.stop_endpoints.iter().map(|endpoint| {
-            SourceEffectAcknowledgement::Source {
-                start: false,
-                endpoint_digest: endpoint.endpoint_digest().to_owned(),
-                source_generation: endpoint.source_generation(),
-                display_generation: endpoint.display_generation(),
-            }
-        }));
+            })
+            .chain(plan.stop_endpoints.iter().map(|endpoint| {
+                SourceEffectAcknowledgement::Source {
+                    start: false,
+                    endpoint_digest: endpoint.endpoint_digest().to_owned(),
+                    source_generation: endpoint.source_generation(),
+                    display_generation: endpoint.display_generation(),
+                }
+            }))
+            .collect();
         if plan.start_host_sink {
             acknowledgements.push(SourceEffectAcknowledgement::HostSink {
                 start: true,
@@ -1030,7 +1031,7 @@ impl NotificationController {
             }
         };
         let source_error = result.source_error;
-        self.commit_reconciliation(display, config, result.clone())?;
+        self.commit_reconciliation(display, config, &result)?;
         source_error.map_or(Ok(result), Err)
     }
 
@@ -1055,7 +1056,7 @@ impl NotificationController {
             return Err("notification-process-effect-proof-mismatch");
         }
         let source_error = result.source_error;
-        self.commit_reconciliation(display, config, result.clone())?;
+        self.commit_reconciliation(display, config, &result)?;
         source_error.map_or(Ok(result), Err)
     }
 
@@ -1298,14 +1299,14 @@ impl NotificationController {
         &mut self,
         display: &DisplayDependencyEvidence,
         config: &NotificationProviderConfig,
-        result: SourceReconcileResult,
+        result: &SourceReconcileResult,
     ) -> Result<(), &'static str> {
-        for source in result.stop {
-            self.active_sources.remove(&source);
+        for source in &result.stop {
+            self.active_sources.remove(source);
         }
-        for endpoint in result.start_endpoints {
+        for endpoint in &result.start_endpoints {
             self.active_sources
-                .insert(endpoint.source_ref().clone(), endpoint);
+                .insert(endpoint.source_ref().clone(), endpoint.clone());
         }
         let fingerprint = display.is_ready().then(|| display_fingerprint(display));
         self.active_display_fingerprint = fingerprint;

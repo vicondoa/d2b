@@ -129,17 +129,15 @@ pub fn crate_dir(crate_name: &str) -> Option<PathBuf> {
 
 /// The workspace root, when it can be located from the environment.
 pub fn workspace_root() -> Option<PathBuf> {
-    let mut current = std::env::var("CARGO_MANIFEST_DIR")
+    let current = std::env::var("CARGO_MANIFEST_DIR")
         .ok()
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())?;
-    for _ in 0..4 {
-        if current.join("Cargo.toml").is_file() && current.join("packages").is_dir() {
-            return Some(current);
-        }
-        current = current.parent()?.to_path_buf();
-    }
-    None
+    std::iter::successors(Some(current), |candidate| candidate.parent().map(Path::to_path_buf))
+        .take(4)
+        .find(|candidate| {
+            candidate.join("Cargo.toml").is_file() && candidate.join("packages").is_dir()
+        })
 }
 
 /// Run the offline half of the audit: probe one handler crate's sources on
@@ -247,12 +245,18 @@ pub fn audit_crate(crate_name: &str) -> Result<SurfaceReport, String> {
         build_script: false,
         source_violations: Vec::new(),
     };
-    for name in &added {
-        if FORBIDDEN_SYSCALL_SURFACE_CRATES.contains(&name.as_str()) {
-            report.forbidden_dependencies.push(name.clone());
-        }
-        if is_proc_macro(&metadata, name) {
-            report.proc_macro_dependencies.push(name.clone());
+    for name in added {
+        match (
+            FORBIDDEN_SYSCALL_SURFACE_CRATES.contains(&name.as_str()),
+            is_proc_macro(&metadata, &name),
+        ) {
+            (true, true) => {
+                report.forbidden_dependencies.push(name.clone());
+                report.proc_macro_dependencies.push(name);
+            }
+            (true, false) => report.forbidden_dependencies.push(name),
+            (false, true) => report.proc_macro_dependencies.push(name),
+            (false, false) => {}
         }
     }
     // A handler crate that DECLARES a syscall-surface dependency directly
@@ -269,7 +273,10 @@ pub fn audit_crate(crate_name: &str) -> Result<SurfaceReport, String> {
                 let aliased = regex::Regex::new(&format!(r#"package\s*=\s*"{crate_name}""#))
                     .expect("static pattern compiles");
                 if (direct_key.is_match(&text) || aliased.is_match(&text))
-                    && !report.forbidden_dependencies.contains(&crate_name.to_string())
+                    && !report
+                        .forbidden_dependencies
+                        .iter()
+                        .any(|name| name == crate_name)
                 {
                     report.forbidden_dependencies.push((*crate_name).to_owned());
                 }
@@ -337,16 +344,16 @@ fn dependency_tree(
         nodes.insert(id, node);
     }
     let mut reachable: Vec<String> = Vec::new();
-    let mut queue = vec![root_id.to_owned()];
+    let mut queue = vec![root_id];
     let mut seen = std::collections::BTreeSet::new();
     while let Some(id) = queue.pop() {
-        if !seen.insert(id.clone()) {
+        if !seen.insert(id) {
             continue;
         }
-        let Some(node) = nodes.get(id.as_str()) else {
+        let Some(node) = nodes.get(id) else {
             continue;
         };
-        if let Some(owner_name) = package_name_of_id(metadata, &id).filter(|name| *name != crate_name)
+        if let Some(owner_name) = package_name_of_id(metadata, id).filter(|name| *name != crate_name)
         {
             reachable.push(owner_name.to_owned());
         }
@@ -371,7 +378,7 @@ fn dependency_tree(
                 kind.get("target").filter(|target| !target.is_null()).is_none()
             });
             if follows {
-                queue.push(dep_id.to_owned());
+                queue.push(dep_id);
             }
         }
     }
