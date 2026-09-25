@@ -9,7 +9,7 @@ use d2b_contracts::{
 };
 pub use d2b_contracts_resource::v3::ZoneResourceIdentity;
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Protocol version this wire vocabulary speaks; peers must agree on it.
@@ -115,8 +115,8 @@ pub struct HelperScopeSnapshot {
     pub state: HelperScopeState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "HelperSnapshotWire")]
 /// Bounded snapshot of every scope the helper currently runs.
 pub struct HelperSnapshot {
     pub generation: u64,
@@ -151,25 +151,23 @@ struct HelperSnapshotWire {
     scopes: Vec<HelperScopeSnapshot>,
 }
 
-impl<'de> Deserialize<'de> for HelperSnapshot {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = HelperSnapshotWire::deserialize(deserializer)?;
+impl TryFrom<HelperSnapshotWire> for HelperSnapshot {
+    type Error = &'static str;
+
+    fn try_from(wire: HelperSnapshotWire) -> Result<Self, Self::Error> {
         let snapshot = Self {
             generation: wire.generation,
             scopes: wire.scopes,
         };
         snapshot
             .validate()
-            .map_err(|_| serde::de::Error::custom("invalid helper snapshot"))?;
+            .map_err(|_| "invalid helper snapshot")?;
         Ok(snapshot)
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "HelperLaunchRequestWire")]
 /// One launch request the daemon commits to the helper.
 ///
 /// The workload target, item id, and argv are redacted in `Debug`.
@@ -224,12 +222,10 @@ struct HelperLaunchRequestWire {
     realm_accent_color: RealmAccentColor,
 }
 
-impl<'de> Deserialize<'de> for HelperLaunchRequest {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = HelperLaunchRequestWire::deserialize(deserializer)?;
+impl TryFrom<HelperLaunchRequestWire> for HelperLaunchRequest {
+    type Error = &'static str;
+
+    fn try_from(wire: HelperLaunchRequestWire) -> Result<Self, Self::Error> {
         let request = Self {
             request_id: wire.request_id,
             operation_id: wire.operation_id,
@@ -242,7 +238,7 @@ impl<'de> Deserialize<'de> for HelperLaunchRequest {
         };
         request
             .validate_bounds()
-            .map_err(|_| serde::de::Error::custom("invalid helper launch request"))?;
+            .map_err(|_| "invalid helper launch request")?;
         Ok(request)
     }
 }
