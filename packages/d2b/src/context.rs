@@ -1187,6 +1187,7 @@ impl ZoneContext {
     ) -> CliFailure {
         let message = bounded_message(message);
         let mut failure = CliFailure::new(exit_code, format!("{error_class}: {message}"));
+        failure.code = error_class.to_owned();
         if mode.is_json() {
             let envelope = json!({
                 "ok": false,

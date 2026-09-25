@@ -175,8 +175,8 @@ pub(crate) fn run(
 
 fn can_fallback_to_local_state(error: &CliFailure) -> bool {
     matches!(
-        error.message.split(':').next(),
-        Some("zone-unavailable" | "deadline-exceeded" | "exec-protocol-error")
+        error.code.as_str(),
+        "zone-unavailable" | "deadline-exceeded" | "exec-protocol-error"
     )
 }
 
