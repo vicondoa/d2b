@@ -1740,7 +1740,6 @@ dependencies = [
  "d2b-contracts-resource",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
 ]
 
@@ -1910,7 +1909,6 @@ dependencies = [
  "d2b-provider-volume-virtiofs",
  "d2b-resource-runtime",
  "d2b-resource-types",
- "parking_lot",
  "serde_json",
  "tokio",
  "tracing",

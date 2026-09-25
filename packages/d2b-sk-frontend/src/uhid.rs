@@ -502,7 +502,8 @@ mod tests {
 
     #[test]
     fn parse_event_dispatch_table() {
-        let cases: &[(u32, fn(&UhidEvent) -> bool)] = &[
+        type Case = (u32, fn(&UhidEvent) -> bool);
+        let cases: &[Case] = &[
             (UHID_OUTPUT, |e| matches!(e, UhidEvent::Output { .. })),
             (UHID_GET_REPORT, |e| matches!(e, UhidEvent::GetReport { .. })),
             (UHID_START, |e| matches!(e, UhidEvent::Lifecycle(()))),

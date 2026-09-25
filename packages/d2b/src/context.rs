@@ -562,6 +562,7 @@ impl CliSocket {
     /// cannot observe each other's datagrams. The buffer keeps its full
     /// length between calls, so the zeroed 1 MiB allocation happens once per
     /// socket instead of once per received frame.
+    #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
     async fn read_frame(&self) -> io::Result<Vec<u8>> {
         loop {
             let mut ready = self.fd.readable().await?;

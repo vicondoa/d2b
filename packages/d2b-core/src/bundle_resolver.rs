@@ -2429,6 +2429,7 @@ impl BundleResolver {
         runner_intents.extend(
             self.guest_vmm_intents
                 .values()
+                .flat_map(|guests| guests.values())
                 .cloned()
                 .map(|intent| (intent.intent_id.clone(), intent)),
         );
@@ -3765,28 +3766,28 @@ fn render_host_nft_script(host: &HostJson) -> String {
     } else {
         format!(" comment \"d2b managed: {}\"", model.ownership_id)
     };
-    write!(
+    writeln!(
         buf,
-        "table {} {} {{\n",
+        "table {} {} {{",
         model.family.to_lowercase(),
         model.table
     )
     .expect("writing to a String cannot fail");
     for chain in &model.chains {
-        write!(buf, "  chain {} {{\n", chain.name).expect("writing to a String cannot fail");
+        writeln!(buf, "  chain {} {{", chain.name).expect("writing to a String cannot fail");
         if let (Some(hook), Some(priority)) = (chain.hook.as_ref(), chain.priority) {
-            write!(buf, "    type filter hook {hook} priority {priority};\n")
+            writeln!(buf, "    type filter hook {hook} priority {priority};")
                 .expect("writing to a String cannot fail");
         }
         if let Some(policy) = chain.policy.as_ref() {
-            write!(buf, "    policy {policy};\n").expect("writing to a String cannot fail");
+            writeln!(buf, "    policy {policy};").expect("writing to a String cannot fail");
         }
         if !chain.purpose.is_empty() {
-            write!(buf, "    # purpose: {}\n", chain.purpose)
+            writeln!(buf, "    # purpose: {}", chain.purpose)
                 .expect("writing to a String cannot fail");
         }
         if !comment.is_empty() {
-            write!(buf, "    ct state established,related accept{comment};\n")
+            writeln!(buf, "    ct state established,related accept{comment};")
                 .expect("writing to a String cannot fail");
         }
         // Per-env forward acceptance: workload traffic exits each env
@@ -3799,9 +3800,9 @@ fn render_host_nft_script(host: &HostJson) -> String {
         // before the nixos chain runs.
         if chain.hook.as_deref() == Some("forward") {
             for env in &host.environments {
-                write!(
+                writeln!(
                     buf,
-                    "    iifname \"br-{}-up\" ct state new accept{comment};\n",
+                    "    iifname \"br-{}-up\" ct state new accept{comment};",
                     env.env
                 )
                 .expect("writing to a String cannot fail");
@@ -3822,14 +3823,14 @@ fn render_host_nft_script(host: &HostJson) -> String {
                     .map(u16::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
-                write!(
+                writeln!(
                     buf,
-                    "    iifname != \"lo\" meta l4proto tcp tcp dport {{ {backend_ports} }} drop{comment};\n"
+                    "    iifname != \"lo\" meta l4proto tcp tcp dport {{ {backend_ports} }} drop{comment};"
                 )
                 .expect("writing to a String cannot fail");
-                write!(
+                writeln!(
                     buf,
-                    "    iifname != \"lo\" meta l4proto tcp tcp dport 3240 drop{comment};\n"
+                    "    iifname != \"lo\" meta l4proto tcp tcp dport 3240 drop{comment};"
                 )
                 .expect("writing to a String cannot fail");
             }
@@ -3848,19 +3849,14 @@ fn render_env_nft_subset(host: &HostJson, env: &NetEnv) -> String {
     let chain = format!("forward-{}", env.env);
     let bridge_ifname = format!("br-{}-up", env.env);
     let mut buf = String::new();
-    write!(
+    writeln!(buf, "table inet d2b {{").expect("writing to a String cannot fail");
+    writeln!(buf, "  chain \"{chain}\" {{ comment \"{marker}\";")
+        .expect("writing to a String cannot fail");
+    writeln!(buf, "    ct state established,related accept comment \"{marker}\";")
+        .expect("writing to a String cannot fail");
+    writeln!(
         buf,
-        "table inet d2b {{\n  chain \"{chain}\" {{ comment \"{marker}\";\n"
-    )
-    .expect("writing to a String cannot fail");
-    write!(
-        buf,
-        "    ct state established,related accept comment \"{marker}\";\n",
-    )
-    .expect("writing to a String cannot fail");
-    write!(
-        buf,
-        "    iifname \"{}\" ct state new accept comment \"{}\";\n",
+        "    iifname \"{}\" ct state new accept comment \"{}\";",
         bridge_ifname, marker
     )
     .expect("writing to a String cannot fail");
@@ -4047,9 +4043,9 @@ fn render_hosts_managed_block(host: &HostJson) -> String {
     buf.push('\n');
     buf.push_str("# managed by d2b broker - do not edit by hand\n");
     for env in &host.environments {
-        write!(
+        writeln!(
             buf,
-            "# env {} bridge {} mtu {}\n",
+            "# env {} bridge {} mtu {}",
             env.env,
             env.bridge.as_str(),
             env.mtu

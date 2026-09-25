@@ -3,8 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::metric_label_policy::{
-    IdentityCanaries, MetricDescriptor, MetricPolicyError, canonical_descriptor,
-    validate_data_point,
+    IdentityCanaries, MetricDescriptor, MetricPolicyError, validate_data_point,
 };
 pub use d2b_contracts_provider::v3::telemetry_policy::label;
 
@@ -193,6 +192,7 @@ pub const STORE_WRITE_BUCKETS_SECONDS: &[f64] = &[0.001, 0.005, 0.01, 0.025, 0.0
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metric_label_policy::canonical_descriptor;
 
     #[test]
     fn controller_hint_buckets_accept_in_range_and_reject_out_of_range_values() {

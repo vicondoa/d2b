@@ -177,10 +177,10 @@ impl RecordProtector {
             return Err(SessionError::new(SessionErrorCode::RecordMalformed));
         }
         self.receive_sequence.accept(header.sequence)?;
-        if self.replay_order.len() == REPLAY_CACHE_ENTRIES {
-            if let Some(evicted) = self.replay_order.pop_front() {
-                self.replay_digests.remove(&evicted);
-            }
+        if self.replay_order.len() == REPLAY_CACHE_ENTRIES
+            && let Some(evicted) = self.replay_order.pop_front()
+        {
+            self.replay_digests.remove(&evicted);
         }
         self.replay_order.push_back(digest);
         self.replay_digests.insert(digest);

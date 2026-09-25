@@ -686,14 +686,13 @@ fn admit_or_record<T, U>(engine: &mut SessionEngine<T>, result: Result<U>) -> Re
 where
     T: OwnedTransport,
 {
-    result.map_err(|error| {
+    result.inspect_err(|&error| {
         engine.record_failure(
             MetricEvent::ConnectAttempt,
             ChannelClass::SessionControl,
             OperationClass::Connect,
             error,
         );
-        error
     })
 }
 

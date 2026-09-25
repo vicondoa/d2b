@@ -7,7 +7,7 @@ use super::{
     ObservedGeneration, ResourceGeneration, ResourceRef, Timestamp,
     resource_schema::{
         CanonicalJsonObject, ExtensionSchemaId, ExtensionSchemaLayer, SchemaVersion,
-        canonical_json_bytes, validate_canonical_string,
+        validate_canonical_string,
     },
 };
 use crate::ids::OperationId;
@@ -845,6 +845,7 @@ impl std::error::Error for ResourceStatusError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::v3::resource_schema::canonical_json_bytes;
 
     fn timestamp() -> Timestamp {
         Timestamp::parse("2026-07-22T00:00:01.000Z").unwrap()
