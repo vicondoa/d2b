@@ -924,7 +924,10 @@ pub struct WorkerSpawn {
 /// `establish_tx`, then services `WorkerCommand`s until the channel closes.
 /// Dropping the sender (owner disconnect) returns the worker, drops the
 /// runtime, and drops every client clone - prompting the guest teardown.
-pub fn spawn_session_worker(spawn: WorkerSpawn) -> JoinHandle<()> {
+///
+/// Returns an error when the OS thread cannot be spawned (thread exhaustion
+/// or resource limits), before any worker state is created.
+pub fn spawn_session_worker(spawn: WorkerSpawn) -> std::io::Result<JoinHandle<()>> {
     let WorkerSpawn {
         connector,
         spec,
@@ -935,7 +938,7 @@ pub fn spawn_session_worker(spawn: WorkerSpawn) -> JoinHandle<()> {
         clock,
         owner_reaper,
     } = spawn;
-    std::thread::Builder::new()
+    Ok(std::thread::Builder::new()
         .name("d2b-exec".to_owned())
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -962,8 +965,7 @@ pub fn spawn_session_worker(spawn: WorkerSpawn) -> JoinHandle<()> {
                 Arc::new(TerminalReaper::new(clock, terminal_ttl)),
                 owner_reaper,
             ));
-        })
-        .expect("spawn exec session worker thread")
+        })?)
 }
 
 async fn worker_main(
@@ -2519,7 +2521,8 @@ mod tests {
             terminal_ttl: EXEC_TERMINAL_CLEANUP_TTL,
             clock: Arc::new(SystemClock),
             owner_reaper: Arc::new(NoopReaper),
-        });
+        })
+        .expect("spawn exec session worker thread");
         let reply = establish_rx.blocking_recv().expect("establish reply");
         (control_tx, worker, reply)
     }
@@ -3659,7 +3662,8 @@ mod tests {
             owner_reaper: Arc::new(RecordingReaper {
                 reaped: reaped_for_worker,
             }),
-        });
+        })
+        .expect("spawn exec session worker thread");
         establish_rx
             .blocking_recv()
             .expect("establish")
