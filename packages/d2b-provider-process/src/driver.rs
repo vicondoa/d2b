@@ -2170,6 +2170,7 @@ mod tests {
     use crate::effects::{ProviderAdoption, ProviderLiveness};
     use crate::execution::ExecutionMode;
     use d2b_contracts_resource::v3::execution_policy::BoundedToken;
+    use d2b_contracts_resource::v3::process::ProcessSpec;
     use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
     use d2b_process_conformance::testing::fixtures;
     use d2b_process_conformance::{
@@ -2196,7 +2197,7 @@ mod tests {
     use super::{
         AllowedSources, EPHEMERAL_PROCESS_TYPE_NAME, PROCESS_TYPE_NAME, ProcessDriver,
         ProcessDriverArgs, ProcessDriverErrorKind, ProcessDriverFactory, ProcessDriverStatus,
-        process_family_descriptors, process_spec_decoder,
+        process_family_descriptors, process_spec_decoder, restart_delay,
     };
 
     use crate::test_support::{FakeFacets, FakeFacetsConfig};
@@ -4302,5 +4303,50 @@ mod tests {
         let failure = driver.validate(&mut f.ctx).await.unwrap_err();
         assert_eq!(failure.class(), FailureClass::Terminal);
         assert_eq!(failure.op(), DriverOp::Validate);
+    }
+
+// -- execution-target gate -------------------------------------------------
+
+/// A Guest `executionRef` under a Host-mode driver is refused
+/// `process-execution-unsupported`: the Host driver drives Host-executing
+/// rows only, and the whole Guest-mode gate is otherwise unpinned.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+#[tokio::test]
+    async fn validate_rejects_a_guest_execution_under_a_host_driver() {
+        let mut row = test_row();
+        row.spec = br#"{"providerRef":"Provider/system-minijail","executionRef":"Guest/vm-a","processClass":"worker","template":"reaction","drainTimeout":"250ms"}"#
+            .to_vec();
+        let fake = Arc::new(FakeFacets::new(FakeFacetsConfig::default()));
+        let mut f = fixture(row);
+        let mut driver = driver(fake).await;
+
+        let failure = driver.validate(&mut f.ctx).await.unwrap_err();
+        assert_eq!(failure.class(), FailureClass::Terminal);
+        assert_eq!(failure.op(), DriverOp::Validate);
+        assert!(
+            failure.to_string().contains("process-execution-unsupported"),
+            "failure names the execution gate: {failure}"
+        );
+    }
+
+// -- restart backoff arithmetic -------------------------------------------
+
+/// The preserved restart backoff: `base * multiplier^(count-1)`, capped at
+/// `backoff_max`. Every restart test observes count == 1 (delay == base),
+/// so the 2nd+ restart arithmetic and the cap are pinned here.
+#[test]
+    fn restart_delay_backs_off_exponentially_and_caps_at_the_maximum() {
+        let spec: ProcessSpec = serde_json::from_slice(
+            br#"{"executionRef":"Host/host-system","processClass":"worker","template":"reaction","restartPolicy":{"backoffBase":"1s","backoffMax":"60s","backoffMultiplierMilli":2000,"maxRestarts":2,"resetAfter":"300s"}}"#,
+        )
+        .expect("spec decodes");
+        assert_eq!(restart_delay(&spec, 1), Duration::from_secs(1), "first restart waits the base");
+        assert_eq!(restart_delay(&spec, 2), Duration::from_secs(2), "2x multiplier");
+        assert_eq!(restart_delay(&spec, 3), Duration::from_secs(4), "4x multiplier");
+        assert_eq!(
+            restart_delay(&spec, 7),
+            Duration::from_secs(60),
+            "the exponential backoff is capped at backoff_max"
+        );
     }
 }

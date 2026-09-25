@@ -2843,3 +2843,474 @@ impl OperationHandler for SpawnRunnerHandler {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+    use d2b_contracts_resource::v3::ZoneId;
+    use d2b_core::bundle::{Bundle, BundleGeneration};
+    use d2b_core::host::HostJson;
+    use d2b_core::manifest_v04::ManifestV04;
+    use d2b_core::processes::{
+        NodeId, ProcessNode, ProcessesJson, RoleProfile, VmProcessDag, VmProcessInvariants,
+    };
+    use d2b_core::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
+    use std::collections::BTreeMap;
+    use std::os::fd::RawFd;
+    use std::sync::Arc;
+
+    /// The envelope context of one direct invocation: no U10 kernel seam.
+    fn test_ctx<'a>(
+        zone: &'a ZoneId,
+        caller: &'a ResourceRef,
+        operation: &'a ResourceRef,
+        fds: &'a [RawFd],
+        kernel: Option<&'a KernelCaller>,
+    ) -> OperationCtx<'a> {
+        OperationCtx {
+            zone,
+            caller,
+            operation,
+            invocation_id: "test-invocation",
+            fds,
+            chain_identities: &[],
+            kernel,
+        }
+    }
+
+    /// Wrap one JSON value as an already-validated canonical payload.
+    fn payload(value: serde_json::Value) -> ValidatedPayload {
+        ValidatedPayload::new(
+            CanonicalJsonObject::parse(&serde_json::to_vec(&value).expect("payload serializes"))
+                .expect("payload is a canonical object"),
+        )
+    }
+
+    /// The trusted-bundle fixture the driver tests share: host fixture +
+    /// golden v04 manifest, no zone resource bundles, no runner intents.
+    fn bundle_without_runner_intents() -> BundleResolver {
+        let host: HostJson = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                realm_workloads_launcher_v2_path: None,
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::new(),
+        )
+    }
+
+    /// The same fixture with one trusted `virtiofsd` runner intent for
+    /// `vm-a` (`runner:vm:vm-a:role:virtiofsd`).
+    fn bundle_with_runner_intent() -> BundleResolver {
+        let host: HostJson = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                realm_workloads_launcher_v2_path: None,
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: vec![VmProcessDag {
+                    vm: "vm-a".to_owned(),
+                    workload_identity: None,
+                    nodes: vec![ProcessNode {
+                        id: NodeId("virtiofsd".to_owned()),
+                        execution_ref: Some("Host/host-system".to_owned()),
+                        execution_domain: None,
+                        user_ref: None,
+                        role: ProcessRole::Virtiofsd,
+                        unit: None,
+                        binary_path: Some(
+                            "/nix/store/000-virtiofsd/bin/virtiofsd".to_owned(),
+                        ),
+                        argv: vec!["virtiofsd".to_owned()],
+                        env: Vec::new(),
+                        plan_ops: Vec::new(),
+                        network_interfaces: Vec::new(),
+                        profile: RoleProfile {
+                            profile_id: "virtiofsd".to_owned(),
+                            uid: 1100,
+                            gid: 1100,
+                            adr_carve_out: None,
+                            caps: Vec::new(),
+                            namespaces: NamespaceSet {
+                                mount: true,
+                                pid: true,
+                                net: false,
+                                ipc: false,
+                                uts: false,
+                                user: false,
+                            },
+                            seccomp_policy_ref: None,
+                            mount_policy: MountPolicy {
+                                read_only_paths: vec!["/nix/store".to_owned()],
+                                writable_paths: Vec::new(),
+                                nix_store_read_only: true,
+                                hide_device_nodes_by_default: true,
+                                device_binds: Vec::new(),
+                                bind_mounts: Vec::new(),
+                            },
+                            cgroup_placement: CgroupPlacement {
+                                subtree: "d2b.slice/vm-a/virtiofsd".to_owned(),
+                                controllers: vec!["cpu".to_owned()],
+                                delegated: true,
+                            },
+                            user_namespace: None,
+                            umask: None,
+                        },
+                        readiness: Vec::new(),
+                    }],
+                    edges: Vec::new(),
+                    invariants: VmProcessInvariants {
+                        swtpm_pre_start_flush: true,
+                        per_vm_audit_pipeline: true,
+                        usbip_gating: true,
+                        tpm_ownership_migration_without_running_vm_mutation: true,
+                    },
+                }],
+            },
+            manifest,
+            BTreeMap::new(),
+        )
+    }
+
+    /// One wired-but-unreachable kernel seam: a socket path that cannot be
+    /// dialed, so any handler that reaches the nested leg fails before the
+    /// socket is ever touched.
+    fn kernel(bundle: BundleResolver) -> KernelCaller {
+        KernelCaller {
+            socket_path: PathBuf::from("/nonexistent/d2b-broker.sock"),
+            caller_role: BrokerCallerRole::NotAuthorized,
+            bundle: Arc::new(bundle),
+            runner_lookup: None,
+        }
+    }
+
+    fn zone() -> ZoneId {
+        ZoneId::parse("work").expect("zone")
+    }
+
+    fn caller() -> ResourceRef {
+        ResourceRef::parse("Process/worker").expect("caller")
+    }
+
+    // -- the fail-closed refusal paths of the family handlers -------------
+
+    /// Every kernel-dependent handler refuses a direct invocation with no
+    /// wired seam before any effect runs: `kernel-seam-unwired` is the
+    /// closed refusal of a Zone whose composition point never wired a
+    /// kernel leg.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn family_operations_without_a_kernel_seam_refuse_fail_closed() {
+        let zone = zone();
+        let caller = caller();
+        let operation = ResourceRef::parse("Operation/spawn-runner").expect("operation");
+        let socket = std::fs::File::open("/dev/null").expect("null device");
+        let fds = [socket.as_raw_fd()];
+
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+
+        let refusal = OpenPidfdHandler
+            .execute(
+                ctx,
+                payload(serde_json::json!({
+                    "vmId": "vm-a",
+                    "roleId": "virtiofsd",
+                    "bundleRunnerIntentRef": "runner:vm:vm-a:role:virtiofsd",
+                    "pid": 1,
+                    "expectedStartTimeTicks": 1,
+                })),
+            )
+            .await
+            .expect_err("open-pidfd without a seam");
+        assert_eq!(refusal.code(), KERNEL_SEAM_UNWIRED);
+
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+        let refusal = OpenPeerPidfdHandler
+            .execute(ctx, payload(serde_json::json!({})))
+            .await
+            .expect_err("open-peer-pidfd without a seam");
+        assert_eq!(refusal.code(), KERNEL_SEAM_UNWIRED);
+
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+        let refusal = ObserveRunnerHandler
+            .execute(
+                ctx,
+                payload(serde_json::json!({
+                    "vmId": "vm-a",
+                    "roleId": "virtiofsd",
+                    "role": "virtiofsd",
+                    "bundleRunnerIntentRef": "runner:vm:vm-a:role:virtiofsd",
+                })),
+            )
+            .await
+            .expect_err("observe-runner without a seam");
+        assert_eq!(refusal.code(), KERNEL_SEAM_UNWIRED);
+
+        for (handler, name) in [
+            (&PrepareRuntimeDirHandler as &dyn OperationHandler, "prepare-runtime-dir"),
+            (&PrepareStateDirHandler as &dyn OperationHandler, "prepare-state-dir"),
+        ] {
+            let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+            let refusal = handler
+                .execute(
+                    ctx,
+                    payload(serde_json::json!({
+                        "vmId": "vm-a",
+                        "pathClass": "runtime",
+                    })),
+                )
+                .await
+                .expect_err("prepare-directory without a seam");
+            assert_eq!(refusal.code(), KERNEL_SEAM_UNWIRED, "{name}");
+        }
+
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+        let refusal = CgroupKillHandler
+            .execute(
+                ctx,
+                payload(serde_json::json!({ "vmId": "vm-a", "roleId": "virtiofsd" })),
+            )
+            .await
+            .expect_err("cgroup-kill without a seam");
+        assert_eq!(refusal.code(), KERNEL_SEAM_UNWIRED);
+
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+        let refusal = SignalRunnerHandler
+            .execute(
+                ctx,
+                payload(serde_json::json!({
+                    "vmId": "vm-a",
+                    "roleId": "virtiofsd",
+                    "signal": "term",
+                })),
+            )
+            .await
+            .expect_err("signal-runner without a seam");
+        assert_eq!(refusal.code(), KERNEL_SEAM_UNWIRED);
+
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+        let refusal = DeregisterRunnerPidfdHandler
+            .execute(
+                ctx,
+                payload(serde_json::json!({ "vmId": "vm-a", "roleId": "virtiofsd" })),
+            )
+            .await
+            .expect_err("deregister-runner-pidfd without a seam");
+        assert_eq!(refusal.code(), KERNEL_SEAM_UNWIRED);
+
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+        let refusal = SpawnRunnerHandler
+            .execute(
+                ctx,
+                payload(serde_json::json!({
+                    "vmId": "vm-a",
+                    "roleId": "virtiofsd",
+                    "role": "virtiofsd",
+                    "bundleRunnerIntentRef": "runner:vm:vm-a:role:virtiofsd",
+                })),
+            )
+            .await
+            .expect_err("spawn-runner without a seam");
+        assert_eq!(refusal.code(), KERNEL_SEAM_UNWIRED);
+    }
+
+    /// The inspection handler serves the family catalog without a seam and
+    /// refuses a payload naming no member type.
+    #[tokio::test]
+    async fn inspect_process_family_answers_the_member_catalog_and_refuses_unknown_types() {
+        let zone = zone();
+        let caller = caller();
+        let operation = ResourceRef::parse("Operation/inspect-process-family").expect("operation");
+        let fds = [];
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+
+        let result = InspectProcessFamilyHandler
+            .execute(ctx, payload(serde_json::json!({ "resourceType": "Process" })))
+            .await
+            .expect("inspection succeeds");
+        let object = result.object();
+        assert_eq!(object.get("family"), Some(&CanonicalJsonValue::String("process".to_owned())));
+        assert_eq!(
+            object.get("resourceType"),
+            Some(&CanonicalJsonValue::String("Process".to_owned()))
+        );
+        assert_eq!(
+            object.get("zone"),
+            Some(&CanonicalJsonValue::String("work".to_owned()))
+        );
+
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+        let refusal = InspectProcessFamilyHandler
+            .execute(ctx, payload(serde_json::json!({ "resourceType": "Bogus" })))
+            .await
+            .expect_err("unknown member type");
+        assert_eq!(refusal.code(), INVALID_PROCESS_TYPE);
+    }
+
+    /// The reap-poll handler answers the drain shape with an empty
+    /// notification set: every reaped child the daemon owns is drained by
+    /// the per-entry walk, never through this operation.
+    #[tokio::test]
+    async fn poll_child_reaped_answers_an_empty_notification_set() {
+        let zone = zone();
+        let caller = caller();
+        let operation = ResourceRef::parse("Operation/poll-child-reaped").expect("operation");
+        let fds = [];
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
+
+        let result = PollChildReapedHandler
+            .execute(ctx, payload(serde_json::json!({})))
+            .await
+            .expect("poll succeeds");
+        assert_eq!(
+            result.object().get("notifications"),
+            Some(&CanonicalJsonValue::Array(Vec::new()))
+        );
+    }
+
+    /// A cgroup-kill request naming a runner no trusted intent covers is
+    /// refused `runner-unknown`, never forwarded to a kernel.
+    #[tokio::test]
+    async fn cgroup_kill_refuses_a_runner_the_bundle_does_not_track() {
+        let zone = zone();
+        let caller = caller();
+        let operation = ResourceRef::parse("Operation/cgroup-kill").expect("operation");
+        let fds = [];
+        let kernel = kernel(bundle_without_runner_intents());
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, Some(&kernel));
+
+        let refusal = CgroupKillHandler
+            .execute(
+                ctx,
+                payload(serde_json::json!({ "vmId": "vm-a", "roleId": "virtiofsd" })),
+            )
+            .await
+            .expect_err("unknown runner cgroup");
+        assert_eq!(refusal.code(), RUNNER_UNKNOWN);
+    }
+
+    /// A signal request for a runner the daemon's pidfd table does not
+    /// track is refused `runner-unknown`; the daemon's lookup is the
+    /// authoritative presence source.
+    #[tokio::test]
+    async fn signal_runner_refuses_a_runner_the_daemon_does_not_track() {
+        let zone = zone();
+        let caller = caller();
+        let operation = ResourceRef::parse("Operation/signal-runner").expect("operation");
+        let fds = [];
+        let kernel = kernel(bundle_without_runner_intents());
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, Some(&kernel));
+
+        let refusal = SignalRunnerHandler
+            .execute(
+                ctx,
+                payload(serde_json::json!({
+                    "vmId": "vm-a",
+                    "roleId": "virtiofsd",
+                    "signal": "term",
+                })),
+            )
+            .await
+            .expect_err("untracked runner");
+        assert_eq!(refusal.code(), RUNNER_UNKNOWN);
+    }
+
+    /// A spawn request that declares inherited descriptors is refused
+    /// fail-closed: the family rows declare no fd facet, so a forwarded
+    /// family call can never carry SCM_RIGHTS attachments.
+    #[tokio::test]
+    async fn spawn_runner_refuses_inherited_descriptors_the_fd_less_contract_cannot_carry() {
+        let zone = zone();
+        let caller = caller();
+        let operation = ResourceRef::parse("Operation/spawn-runner").expect("operation");
+        let fds = [];
+        let kernel = kernel(bundle_with_runner_intent());
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, Some(&kernel));
+
+        let refusal = SpawnRunnerHandler
+            .execute(
+                ctx,
+                payload(serde_json::json!({
+                    "vmId": "vm-a",
+                    "roleId": "virtiofsd",
+                    "role": "virtiofsd",
+                    "bundleRunnerIntentRef": "runner:vm:vm-a:role:virtiofsd",
+                    "inheritedFdCount": 1,
+                })),
+            )
+            .await
+            .expect_err("inherited descriptors on an fd-less contract");
+        assert_eq!(refusal.code(), INHERITED_FDS_UNSUPPORTED);
+    }
+
+    /// A typed adoption whose VM identity disagrees with the trusted bundle
+    /// intent is refused as an intent mismatch before any kernel leg.
+    #[tokio::test]
+    async fn open_pidfd_refuses_a_request_that_mismatches_the_trusted_intent() {
+        let zone = zone();
+        let caller = caller();
+        let operation = ResourceRef::parse("Operation/open-pidfd").expect("operation");
+        let fds = [];
+        let kernel = kernel(bundle_with_runner_intent());
+        let ctx = test_ctx(&zone, &caller, &operation, &fds, Some(&kernel));
+
+        let refusal = OpenPidfdHandler
+            .execute(
+                ctx,
+                payload(serde_json::json!({
+                    "vmId": "vm-b",
+                    "roleId": "virtiofsd",
+                    "bundleRunnerIntentRef": "runner:vm:vm-a:role:virtiofsd",
+                    "pid": 1,
+                    "expectedStartTimeTicks": 1,
+                })),
+            )
+            .await
+            .expect_err("request mismatches the trusted intent");
+        assert_eq!(refusal.code(), INTENT_MISMATCH);
+    }
+}
