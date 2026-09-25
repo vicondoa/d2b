@@ -199,7 +199,7 @@ impl std::error::Error for ObserveError {
         self.fallback
             .as_ref()
             .map(|error| error as &(dyn std::error::Error + 'static))
-            .or_else(|| Some(&self.probe as &(dyn std::error::Error + 'static)))
+            .or(Some(&self.probe as &(dyn std::error::Error + 'static)))
     }
 }
 

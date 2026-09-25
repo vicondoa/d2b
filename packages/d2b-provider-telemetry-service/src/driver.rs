@@ -95,7 +95,7 @@ impl TelemetryServiceDriverErrorKind {
 pub struct TelemetryServiceDriverError {
     kind: TelemetryServiceDriverErrorKind,
     op: DriverOp,
-    source: Option<ResourceError>,
+    source: Option<Box<ResourceError>>,
 }
 
 impl TelemetryServiceDriverError {
@@ -105,7 +105,7 @@ impl TelemetryServiceDriverError {
 
     /// Retain the underlying store failure as the chain's source (R13).
     fn with_source(mut self, source: ResourceError) -> Self {
-        self.source = Some(source);
+        self.source = Some(Box::new(source));
         self
     }
 }
@@ -118,7 +118,7 @@ impl core::fmt::Display for TelemetryServiceDriverError {
 
 impl std::error::Error for TelemetryServiceDriverError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source.as_ref().map(|source| source as &(dyn std::error::Error + 'static))
+        self.source.as_ref().map(|error| error.as_ref() as &(dyn std::error::Error + 'static))
     }
 }
 
