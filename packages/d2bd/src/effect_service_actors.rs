@@ -554,7 +554,9 @@ impl Actor for EffectServiceSupervisor {
         let zone = state.zone.clone();
         for row in args.rows.into_iter().filter(|row| row.zone == zone) {
             state.rows.insert(row.service.clone(), row.clone());
-            let _ = state.spawn_service_actor(&myself, &row).await;
+            if let Err(error) = state.spawn_service_actor(&myself, &row).await {
+                tracing::warn!(service = %row.service, zone = %row.zone, %error, "effect service actor respawn declined");
+            }
         }
         Ok(state)
     }
@@ -613,7 +615,9 @@ async fn supervise_exit(
         return;
     };
     // Respawn bumps the generational binding revision (KTD5).
-    let _ = state.spawn_service_actor(myself, &row).await;
+    if let Err(error) = state.spawn_service_actor(myself, &row).await {
+        tracing::warn!(service = %row.service, zone = %row.zone, %error, "effect service actor respawn declined");
+    }
 }
 
 #[cfg(test)]
