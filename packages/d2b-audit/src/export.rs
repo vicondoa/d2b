@@ -358,4 +358,165 @@ mod tests {
         );
         let _ = fs::remove_dir_all(directory);
     }
+
+    fn record(previous_hash: crate::AuditHash, ts_ms: u64) -> AuditRecord {
+        AuditRecord::new(
+            ts_ms,
+            "work",
+            "op",
+            "corr",
+            None,
+            "test",
+            previous_hash,
+            AuditRecordFields::ProcessEffect(ProcessEffectFields {
+                event: "launch".to_owned(),
+                provider: "systemd".to_owned(),
+                domain: "system".to_owned(),
+                no_isolation: false,
+                execution_ref_digest:
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+                        .to_owned(),
+                process_uid: "uid".to_owned(),
+                outcome: "ok".to_owned(),
+                exit_class: None,
+            }),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn export_respects_after_and_before_segment_boundaries() {
+        let directory = d2b_core::test_support::scratch_root("audit-export").join("target")
+            .join(format!("d2b-audit-export-range-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let first = record(genesis_hash(), 1);
+        let second = record(first.record_hash().clone(), 2);
+        fs::write(
+            directory.join("audit-20240101000000000000.jsonl"),
+            format!("{}\n", serde_json::to_string(&first).unwrap()),
+        )
+        .unwrap();
+        fs::write(
+            directory.join("audit-20240201000000000000.jsonl"),
+            format!("{}\n", serde_json::to_string(&second).unwrap()),
+        )
+        .unwrap();
+        let after_first = export_segments_range(
+            &directory,
+            Some("audit-20240101000000000000.jsonl"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(after_first.len(), 1);
+        assert!(after_first[0].to_json().contains("\"ts_ms\":2"));
+        let before_second = export_segments_range(
+            &directory,
+            None,
+            Some("audit-20240201000000000000.jsonl"),
+        )
+        .unwrap();
+        assert_eq!(before_second.len(), 1);
+        assert!(before_second[0].to_json().contains("\"ts_ms\":1"));
+        let both_bounded = export_segments_range(
+            &directory,
+            Some("audit-20240101000000000000.jsonl"),
+            Some("audit-20240201000000000000.jsonl"),
+        )
+        .unwrap();
+        assert!(both_bounded.is_empty());
+        let error = export_segments_range(&directory, Some("not-a-segment"), None).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(error.to_string(), "audit-segment-boundary-invalid");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn export_fails_closed_at_the_directory_entry_limit() {
+        let directory = d2b_core::test_support::scratch_root("audit-export").join("target")
+            .join(format!("d2b-audit-export-entries-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        for index in 0..=MAX_EXPORT_DIRECTORY_ENTRIES {
+            fs::write(directory.join(format!("entry-{index}")), b"").unwrap();
+        }
+        let error = export_segments(&directory).unwrap_err();
+        assert_eq!(error.to_string(), "audit-export-directory-limit");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn export_fails_closed_at_the_scan_line_limit() {
+        let directory = d2b_core::test_support::scratch_root("audit-export").join("target")
+            .join(format!("d2b-audit-export-scan-lines-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let mut content = String::with_capacity(MAX_EXPORT_SCAN_LINES * 2);
+        for _ in 0..=MAX_EXPORT_SCAN_LINES {
+            content.push_str("x\n");
+        }
+        fs::write(
+            directory.join("audit-20240101000000000000.jsonl"),
+            content,
+        )
+        .unwrap();
+        // Exclude the segment from emission so unparseable lines do not
+        // accumulate encoded error bytes; the scan budget must be the first
+        // limit to fire.
+        let error = export_segments_range(
+            &directory,
+            Some("audit-20240101000000000000.jsonl"),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "audit-export-scan-limit");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn export_fails_closed_at_the_scan_byte_limit() {
+        let directory = d2b_core::test_support::scratch_root("audit-export").join("target")
+            .join(format!("d2b-audit-export-scan-bytes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let line = "a".repeat(MAX_EXPORT_LINE_BYTES - 1);
+        let mut content = String::with_capacity(MAX_EXPORT_SCAN_BYTES + MAX_EXPORT_LINE_BYTES);
+        for _ in 0..1025 {
+            content.push_str(&line);
+            content.push('\n');
+        }
+        fs::write(
+            directory.join("audit-20240101000000000000.jsonl"),
+            content,
+        )
+        .unwrap();
+        let error = export_segments(&directory).unwrap_err();
+        assert_eq!(error.to_string(), "audit-export-scan-limit");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn export_fails_closed_at_the_encoded_byte_limit() {
+        let directory = d2b_core::test_support::scratch_root("audit-export").join("target")
+            .join(format!("d2b-audit-export-bytes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("audit-20240101000000000000.jsonl");
+        let mut file = fs::File::create(&path).unwrap();
+        let mut previous = genesis_hash();
+        for _ in 0..3000 {
+            let record = record(previous, 1);
+            writeln!(file, "{}", serde_json::to_string(&record).unwrap()).unwrap();
+            previous = record.record_hash().clone();
+        }
+        drop(file);
+        let error = export_segments(&directory).unwrap_err();
+        assert_eq!(error.to_string(), "audit-export-limit");
+        let _ = fs::remove_dir_all(directory);
+    }
 }
