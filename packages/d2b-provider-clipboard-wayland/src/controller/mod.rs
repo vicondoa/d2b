@@ -14,8 +14,6 @@ pub const CLIPBOARD_REPAIR_INTERVAL_SECS: u64 = 300;
 pub struct ClipboardRunnerContract {
     service_package: &'static str,
     repair_interval_secs: u64,
-    watched_configuration_is_dependency: bool,
-    component_session_only: bool,
 }
 
 impl ClipboardRunnerContract {
@@ -31,12 +29,12 @@ impl ClipboardRunnerContract {
 
     /// Whether configuration is dependency-only.
     pub const fn watched_configuration_is_dependency(self) -> bool {
-        self.watched_configuration_is_dependency
+        true
     }
 
     /// Whether clipboard state remains on typed ComponentSession streams.
     pub const fn component_session_only(self) -> bool {
-        self.component_session_only
+        true
     }
 }
 
@@ -45,8 +43,6 @@ pub const fn clipboard_runner_contract() -> ClipboardRunnerContract {
     ClipboardRunnerContract {
         service_package: crate::MANAGEMENT_SERVICE,
         repair_interval_secs: CLIPBOARD_REPAIR_INTERVAL_SECS,
-        watched_configuration_is_dependency: true,
-        component_session_only: true,
     }
 }
 
