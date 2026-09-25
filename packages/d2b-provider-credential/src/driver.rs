@@ -1049,7 +1049,6 @@ mod tests {
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
     use parking_lot::Mutex;
 
     use crate::session::{
@@ -1254,7 +1253,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             row,
-            TargetHandle::Host,
             credential_spec_decoder(),
             manager,
             Arc::new(NullRequeue),

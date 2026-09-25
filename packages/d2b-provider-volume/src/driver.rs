@@ -758,7 +758,6 @@ mod tests {
         ResourceKey, ResourceProvenance, StoredDesiredResource,
     };
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
     use super::{VolumeDriverArgs, VolumeDriverFactory, volume_spec_decoder};
     use crate::test_support::{RecordingRuntime, recording_facets};
 
@@ -971,7 +970,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = ResourceContext::new(
             row,
-            TargetHandle::Host,
             volume_spec_decoder(),
             Arc::new(manager),
             Arc::new(NullRequeue),
@@ -1259,7 +1257,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut ctx2 = ResourceContext::new(
             grown,
-            TargetHandle::Host,
             volume_spec_decoder(),
             Arc::new(manager.clone()),
             Arc::new(NullRequeue),
@@ -1288,7 +1285,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut ctx3 = ResourceContext::new(
             shrunk,
-            TargetHandle::Host,
             volume_spec_decoder(),
             Arc::new(manager.clone()),
             Arc::new(NullRequeue),

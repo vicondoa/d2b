@@ -1075,7 +1075,6 @@ mod tests {
         ResourceKey, ResourceProvenance, ResourceTypeName, StoredDesiredResource,
     };
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
     use serde_json::json;
 
     use super::{
@@ -1372,7 +1371,6 @@ mod tests {
         let family = RecordingFamily::new(Arc::clone(&log), phase, finalize, declares_children);
         let ctx = ResourceContext::new(
             row,
-            TargetHandle::Host,
             decoder(),
             Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
             Arc::clone(&requeue) as Arc<dyn RequeueScheduler>,

@@ -306,7 +306,6 @@ pub struct ResourceActorState {
     /// Manager endpoint behind the driver context (R2).
     manager_endpoint: Arc<dyn ManagerEndpoint>,
     decoder: Arc<dyn SpecDecoder>,
-    target: crate::target::TargetHandle,
     /// Runtime-only retryable-failure backoff (R13).
     backoff: Duration,
     /// The rung of the retry ladder the next operational failure schedules
@@ -556,7 +555,6 @@ impl ResourceActorState {
     fn rebuild_context(&mut self) {
         let ctx = ResourceContext::new(
             self.row.clone(),
-            self.target,
             self.decoder.clone(),
             self.manager_endpoint.clone(),
             self.timers.clone(),
@@ -709,7 +707,6 @@ impl Actor for ResourceActor {
         let (watch_tx, watch_rx) = mpsc::unbounded_channel();
         let ctx = ResourceContext::new(
             row.clone(),
-            args.target,
             args.decoder.clone(),
             manager_endpoint.clone(),
             timers.clone(),
@@ -721,7 +718,6 @@ impl Actor for ResourceActor {
             manager: args.manager,
             manager_endpoint,
             decoder: args.decoder,
-            target: args.target,
             backoff: args.backoff,
             retry_backoff: args.backoff,
             owner_key: args.owner_key,

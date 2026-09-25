@@ -14,7 +14,6 @@ use crate::error::{FailureComparison, ResourceError};
 use crate::identity::{ResourceKey, ResourceTypeName, StoredDesiredResource};
 use crate::manager::ResourceView;
 use crate::spec_store::EnsureOutcome;
-use crate::target::TargetHandle;
 
 // ---------------------------------------------------------------------------
 // Long effects (R5; spec section 14)
@@ -363,7 +362,6 @@ impl ResourceContext {
     /// manager-wired hooks.
     pub fn new(
         row: StoredDesiredResource,
-        _target: TargetHandle,
         decoder: Arc<dyn SpecDecoder>,
         manager: Arc<dyn ManagerEndpoint>,
         requeue: Arc<dyn RequeueScheduler>,
@@ -810,7 +808,6 @@ pub(crate) mod test_support {
     use crate::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use crate::manager::ResourceView;
     use crate::spec_store::EnsureOutcome;
-    use crate::target::TargetHandle;
 
     /// Decoder that always fails; tests wiring their own decode hooks pass
     /// [`super::typed_spec_decoder`] closures instead.
@@ -1023,7 +1020,6 @@ pub(crate) mod test_support {
         Fixture {
             ctx: ResourceContext::new(
                 row,
-                TargetHandle::Host,
                 decoder,
                 Arc::new(manager),
                 Arc::new(requeue),
