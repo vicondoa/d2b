@@ -122,21 +122,6 @@ pub struct ProcessStatusReport {
     pub adoption: AdoptionCondition,
 }
 
-impl Serialize for CompiledDigests {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("CompiledDigests", 7)?;
-        state.serialize_field("sandbox", &self.sandbox)?;
-        state.serialize_field("budget", &self.budget)?;
-        state.serialize_field("mounts", &self.mounts)?;
-        state.serialize_field("devices", &self.devices)?;
-        state.serialize_field("network", &self.network)?;
-        state.serialize_field("endpoints", &self.endpoints)?;
-        state.serialize_field("fdTable", &self.fd_table)?;
-        state.end()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

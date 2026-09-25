@@ -11,12 +11,12 @@ use d2b_contracts_provider::v3::semantic_services::child_resources::{
     BindingChildIntent, BindingChildKind, BindingChildPlacement,
 };
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef, ResourceTypeName, ResourceUid,
-    ZoneRevision, canonical_digest,
+    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef, ResourceTypeName,
+    canonical_digest,
 };
 use d2b_contracts_zone_session::v3::resource_bundle::BundleResource;
 
-use crate::{ObservedChild, OwnerReconcileError, ResourceKey};
+use crate::OwnerReconcileError;
 
 /// One provider-supplied desired child body paired with its semantic intent.
 #[derive(Clone, PartialEq, Eq)]
@@ -162,102 +162,6 @@ pub fn semantic_child_digest(
     semantic.insert("spec".to_owned(), spec.clone());
     let canonical = CanonicalJsonValue::Object(semantic).to_canonical_bytes();
     Ok(canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical))
-}
-
-/// Build an observed child row from a complete Resource API envelope.
-///
-/// This is the Core-side adapter used after a relist. It deliberately derives
-/// the digest from the stored body instead of trusting a Provider-supplied
-/// payload digest, keeping UID/revision fencing separate from desired-state
-/// convergence.
-pub fn observed_child_from_resource(
-    target: ResourceKey,
-    owner: &ResourceKey,
-    owner_generation: d2b_contracts_resource::v3::ResourceGeneration,
-    revision: ZoneRevision,
-    canonical_resource: &[u8],
-    deletion_requested: bool,
-    deletion_ready: bool,
-) -> Result<ObservedChild, BindingChildMaterializationError> {
-    let digest = semantic_child_digest(canonical_resource)?;
-    let value = CanonicalJsonValue::parse(canonical_resource)
-        .map_err(|_| BindingChildMaterializationError::MalformedResource)?;
-    let CanonicalJsonValue::Object(root) = value else {
-        return Err(BindingChildMaterializationError::MalformedResource);
-    };
-    let Some(CanonicalJsonValue::String(resource_type)) = root.get("type") else {
-        return Err(BindingChildMaterializationError::MalformedResource);
-    };
-    if resource_type != target.resource_ref().resource_type().as_str() {
-        return Err(BindingChildMaterializationError::IdentityMismatch);
-    }
-    let Some(CanonicalJsonValue::Object(metadata)) = root.get("metadata") else {
-        return Err(BindingChildMaterializationError::MalformedResource);
-    };
-    let Some(CanonicalJsonValue::String(name)) = metadata.get("name") else {
-        return Err(BindingChildMaterializationError::MalformedResource);
-    };
-    if name != target.resource_ref().name().as_str() {
-        return Err(BindingChildMaterializationError::IdentityMismatch);
-    }
-    let Some(CanonicalJsonValue::String(zone)) = metadata.get("zone") else {
-        return Err(BindingChildMaterializationError::MalformedResource);
-    };
-    if zone != target.zone().as_str() {
-        return Err(BindingChildMaterializationError::OwnerMismatch);
-    }
-    let Some(CanonicalJsonValue::String(uid)) = metadata.get("uid") else {
-        return Err(BindingChildMaterializationError::MalformedResource);
-    };
-    if ResourceUid::parse(uid).map_err(|_| BindingChildMaterializationError::IdentityMismatch)?
-        != *target.uid()
-    {
-        return Err(BindingChildMaterializationError::IdentityMismatch);
-    }
-    let Some(CanonicalJsonValue::Integer(observed_revision)) = metadata.get("revision") else {
-        return Err(BindingChildMaterializationError::MalformedResource);
-    };
-    let observed_revision = u64::try_from(*observed_revision)
-        .ok()
-        .map(ZoneRevision::new)
-        .filter(|observed_revision| observed_revision.get() != 0)
-        .ok_or(BindingChildMaterializationError::MalformedResource)?;
-    if observed_revision != revision {
-        return Err(BindingChildMaterializationError::OwnerReconcile(
-            OwnerReconcileError::StaleRevision,
-        ));
-    }
-    let Some(owner_ref) = metadata.get("ownerRef") else {
-        return Err(BindingChildMaterializationError::OwnerMismatch);
-    };
-    let CanonicalJsonValue::String(owner_ref) = owner_ref else {
-        return Err(BindingChildMaterializationError::OwnerMismatch);
-    };
-    let owner_ref = ResourceRef::parse(owner_ref)
-        .map_err(|_| BindingChildMaterializationError::OwnerMismatch)?;
-    let Some(CanonicalJsonValue::Integer(generation)) = metadata.get("generation") else {
-        return Err(BindingChildMaterializationError::MalformedResource);
-    };
-    let generation = u64::try_from(*generation)
-        .ok()
-        .and_then(|generation| d2b_contracts_resource::v3::ResourceGeneration::new(generation).ok())
-        .ok_or(BindingChildMaterializationError::MalformedResource)?;
-    let observed = ObservedChild::with_owner_and_dependencies(
-        target,
-        owner,
-        owner_generation,
-        revision,
-        digest,
-        deletion_requested,
-        deletion_ready,
-        std::iter::empty(),
-    )
-    .map_err(BindingChildMaterializationError::OwnerReconcile)?
-    .with_generation(generation);
-    if observed.owner_ref() != Some(&owner_ref) {
-        return Err(BindingChildMaterializationError::OwnerMismatch);
-    }
-    Ok(observed)
 }
 
 /// Build the canonical, UID-free Resource API create payload for one child.
