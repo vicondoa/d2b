@@ -161,6 +161,7 @@ pub enum AuditDecision {
 }
 
 impl AuditDecision {
+    /// The audit-record `decision` spelling of this category.
     pub fn as_str(&self) -> &'static str {
         match self {
             AuditDecision::Allowed => "allowed",

@@ -10128,13 +10128,14 @@ async fn active_locked_usbip_bind_intents(
     resolver: &BundleResolver,
 ) -> Result<Vec<d2b_core::bundle_resolver::ResolvedUsbipBindIntent>, BrokerError> {
     let mut out = Vec::new();
-    for id in resolver.usbip_bind_intent_ids() {
-        let Some(intent) = resolver.find_usbip_bind_intent(id) else {
-            continue;
-        };
-        let Some(owner) = crate::ops::usbip_lock::peek_owner(&intent.lock_path) else {
-            continue;
-        };
+    for (intent, owner) in resolver
+        .usbip_bind_intent_ids()
+        .filter_map(|id| resolver.find_usbip_bind_intent(id))
+        .filter_map(|intent| {
+            let owner = crate::ops::usbip_lock::peek_owner(&intent.lock_path)?;
+            Some((intent, owner))
+        })
+    {
         if owner != intent.vm_name {
             return Err(BrokerError::LiveHandler(format!(
                 "usbip proxy reconcile refused foreign lock for opaque intent {}",
@@ -10387,36 +10388,12 @@ fn run_probe(
 }
 
 #[cfg(feature = "layer1-bootstrap")]
-fn parse_probe_flags(rest: Vec<String>) -> Result<(PathBuf, Option<u32>), RunError> {
+fn parse_common_flags(
+    rest: &[String],
+    extra: &mut dyn FnMut(&str, &[String], &mut usize) -> Result<(), RunError>,
+) -> Result<(PathBuf, Option<u32>), RunError> {
     let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
     let mut test_uid = None;
-    let mut index = 0;
-    while index < rest.len() {
-        match rest[index].as_str() {
-            "--socket-path" => {
-                index += 1;
-                socket_path = PathBuf::from(expect_arg(&rest, index, "--socket-path")?);
-            }
-            "--test-uid" => {
-                index += 1;
-                test_uid = Some(
-                    expect_arg(&rest, index, "--test-uid")?
-                        .parse()
-                        .map_err(|_| RunError::Usage("invalid --test-uid".to_owned()))?,
-                );
-            }
-            other => return Err(RunError::Usage(format!("unknown probe flag: {other}"))),
-        }
-        index += 1;
-    }
-    Ok((socket_path, test_uid))
-}
-
-#[cfg(feature = "layer1-bootstrap")]
-fn parse_stub_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, String), RunError> {
-    let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
-    let mut test_uid = None;
-    let mut operation = None;
     let mut index = 0;
     while index < rest.len() {
         match rest[index].as_str() {
@@ -10432,14 +10409,31 @@ fn parse_stub_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, String), R
                         .map_err(|_| RunError::Usage("invalid --test-uid".to_owned()))?,
                 );
             }
-            "--operation" => {
-                index += 1;
-                operation = Some(expect_arg(rest, index, "--operation")?.to_owned());
-            }
-            other => return Err(RunError::Usage(format!("unknown probe-stub flag: {other}"))),
+            other => extra(other, rest, &mut index)?,
         }
         index += 1;
     }
+    Ok((socket_path, test_uid))
+}
+
+#[cfg(feature = "layer1-bootstrap")]
+fn parse_probe_flags(rest: Vec<String>) -> Result<(PathBuf, Option<u32>), RunError> {
+    parse_common_flags(&rest, &mut |flag, _, _| {
+        Err(RunError::Usage(format!("unknown probe flag: {flag}")))
+    })
+}
+
+#[cfg(feature = "layer1-bootstrap")]
+fn parse_stub_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, String), RunError> {
+    let mut operation = None;
+    let (socket_path, test_uid) = parse_common_flags(rest, &mut |flag, rest, index| {
+        if flag != "--operation" {
+            return Err(RunError::Usage(format!("unknown probe-stub flag: {flag}")));
+        }
+        *index += 1;
+        operation = Some(expect_arg(rest, *index, "--operation")?.to_owned());
+        Ok(())
+    })?;
     Ok((
         socket_path,
         test_uid,
@@ -10449,40 +10443,21 @@ fn parse_stub_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, String), R
 
 #[cfg(feature = "layer1-bootstrap")]
 fn parse_export_flags(rest: &[String]) -> Result<(PathBuf, Option<u32>, CallerRole), RunError> {
-    let mut socket_path = PathBuf::from(DEFAULT_SOCKET_PATH);
-    let mut test_uid = None;
     let mut caller_role = None;
-    let mut index = 0;
-    while index < rest.len() {
-        match rest[index].as_str() {
-            "--socket-path" => {
-                index += 1;
-                socket_path = PathBuf::from(expect_arg(rest, index, "--socket-path")?);
-            }
-            "--test-uid" => {
-                index += 1;
-                test_uid = Some(
-                    expect_arg(rest, index, "--test-uid")?
-                        .parse()
-                        .map_err(|_| RunError::Usage("invalid --test-uid".to_owned()))?,
-                );
-            }
-            "--caller-role" => {
-                index += 1;
-                caller_role = crate::bootstrap::wire::caller_role_from_cli(expect_arg(
-                    rest,
-                    index,
-                    "--caller-role",
-                )?);
-            }
-            other => {
-                return Err(RunError::Usage(format!(
-                    "unknown probe-export-audit flag: {other}"
-                )));
-            }
+    let (socket_path, test_uid) = parse_common_flags(rest, &mut |flag, rest, index| {
+        if flag != "--caller-role" {
+            return Err(RunError::Usage(format!(
+                "unknown probe-export-audit flag: {flag}"
+            )));
         }
-        index += 1;
-    }
+        *index += 1;
+        caller_role = crate::bootstrap::wire::caller_role_from_cli(expect_arg(
+            rest,
+            *index,
+            "--caller-role",
+        )?);
+        Ok(())
+    })?;
     Ok((
         socket_path,
         test_uid,

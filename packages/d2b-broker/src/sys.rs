@@ -116,7 +116,12 @@ unsafe fn getsockopt_int(fd: RawFd, optname: libc::c_int) -> io::Result<libc::c_
     }
 }
 
-/// Audited SO_PEERCRED helper for accepted Unix seqpacket connections.
+/// Audited SO_PEERCRED helper for accepted Unix seqpacket connections:
+/// returns the peer's `(uid, gid, pid)` triple.
+///
+/// # Errors
+///
+/// Returns the socket error when `SO_PEERCRED` cannot be read for `fd`.
 #[allow(unsafe_code)]
 pub fn peer_credentials(fd: RawFd) -> io::Result<(u32, u32, i32)> {
     // SAFETY: the borrowed fd is valid for the duration of this call; ownership stays with the caller.
@@ -181,6 +186,12 @@ pub fn tun_create_tap_fd(fd: &OwnedFd, ifname: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Set the TUN `TUNSETPERSIST` ioctl: whether the tap persists after
+/// its fd closes.
+///
+/// # Errors
+
+/// Returns the ioctl error when the setting cannot be applied to `fd`.
 #[allow(unsafe_code)]
 pub fn tun_set_persist(fd: &OwnedFd, persist: bool) -> io::Result<()> {
     let value: libc::c_int = if persist { 1 } else { 0 };
@@ -190,6 +201,13 @@ pub fn tun_set_persist(fd: &OwnedFd, persist: bool) -> io::Result<()> {
     }
     Ok(())
 }
+
+/// Set the TUN `TUNSETOWNER` ioctl:the uid that may open the tap.
+///
+/// # Errors
+
+/// Returns [`io::ErrorKind::InvalidInput`] when `uid` exceeds the
+/// `c_int` range, and the ioctl error when the setting cannot be applied.
 
 #[allow(unsafe_code)]
 pub fn tun_set_owner(fd: &OwnedFd, uid: u32) -> io::Result<()> {
@@ -205,6 +223,15 @@ pub fn tun_set_owner(fd: &OwnedFd, uid: u32) -> io::Result<()> {
     }
     Ok(())
 }
+
+/// Set the TUN `TUNSETGROUP` ioctl:the gid that may open the tap.
+///
+/// # Errors
+
+/// Returns [`io::ErrorKind::InvalidInput`] when `gid` exceeds the
+/// `c_int` range, and the ioctl error when the setting cannot be applied.
+
+
 
 #[allow(unsafe_code)]
 pub fn tun_set_group(fd: &OwnedFd, gid: u32) -> io::Result<()> {
@@ -255,6 +282,8 @@ pub mod path_safe {
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
 
+    /// Reject a symlink at `path` via `lstat`, returning
+    /// [`io::ErrorKind::PermissionDenied`] when one sits there.
     pub fn refuse_symlink(path: &Path) -> io::Result<()> {
         match fs::symlink_metadata(path) {
             Ok(md) if md.file_type().is_symlink() => Err(io::Error::new(
@@ -265,6 +294,8 @@ pub mod path_safe {
         }
     }
 
+    /// Reject a world-writable (or symlink) parent directory, the most
+    /// common path-safety regression.for broker file targets.
     pub fn refuse_world_writable_parent(path: &Path) -> io::Result<()> {
         let parent = path.parent().ok_or_else(|| {
             io::Error::new(
@@ -295,6 +326,8 @@ pub mod path_safe {
         Ok(())
     }
 
+    /// Refuse a parent directory not owned by uid 0,using the strict
+    /// no-exception rule for production paths under `/etc` and `/run`.
     pub fn refuse_non_root_parent(path: &Path) -> io::Result<()> {
         refuse_non_root_parent_except(path, None)
     }
@@ -326,6 +359,7 @@ pub mod path_safe {
         Ok(())
     }
 
+    /// Symlink-refusing read of `path` to a string, via `O_NOFOLLOW`.
     pub fn read_to_string_nofollow(path: &Path) -> io::Result<String> {
         refuse_symlink(path)?;
         let mut f = OpenOptions::new()
@@ -337,6 +371,8 @@ pub mod path_safe {
         Ok(s)
     }
 
+/// Write `body` to `path`, refusing symlinks and world-writable parents
+    /// and opening with `O_NOFOLLOW`.
     pub fn write_nofollow(path: &Path, body: &[u8]) -> io::Result<()> {
         refuse_world_writable_parent(path)?;
         refuse_symlink(path)?;
@@ -395,6 +431,8 @@ pub mod path_safe {
             })?;
         Ok((parent.to_path_buf(), name.to_owned()))
     }
+    /// Remove `path` via an fd-relative unlink of its basename, refusing
+    /// symlink traversal in the parent directory.
     pub fn remove_nofollow(path: &Path) -> io::Result<()> {
         let (parent, name) = parent_and_name(path)?;
         let parent_fd = open_dir_path_safe(&parent)?;
@@ -2892,8 +2930,8 @@ pub mod pidfd_sys {
             n /= 10;
             len += 1;
         }
-        for i in 0..len {
-            buf[i] = tmp[len - 1 - i];
+        for (dst, src) in buf[..len].iter_mut().zip(tmp[..len].iter().rev()) {
+            *dst = *src;
         }
         len
     }

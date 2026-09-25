@@ -109,6 +109,7 @@ pub enum PidfdMethod {
 }
 
 impl PidfdMethod {
+    /// The stable audit spelling of this method kind.
     pub fn as_str(&self) -> &'static str {
         match self {
             PidfdMethod::Clone3 => "clone3",
@@ -124,6 +125,7 @@ impl PidfdMethod {
 pub struct StartTime(pub u64);
 
 impl StartTime {
+    /// Whether the two observed start times agree (same process era).
     pub fn matches(self, other: StartTime) -> bool {
         self.0 == other.0
     }
@@ -188,6 +190,7 @@ pub struct PidfdPayload {
 pub struct RealPidfdSpawner;
 
 impl RealPidfdSpawner {
+    /// A real syscall-backed spawner, preferring `clone3(CLONE_PIDFD)`.
     pub fn new() -> Self {
         Self
     }
@@ -196,7 +199,7 @@ impl RealPidfdSpawner {
 impl PidfdSpawner for RealPidfdSpawner {
     fn spawn(
         &self,
-        payload: PidfdPayload,
+        _payload: PidfdPayload,
     ) -> Result<(PidfdHandle, OwnedFd, PidfdMethod), PidfdOpError> {
         use crate::sys::pidfd_sys;
         use std::os::fd::AsRawFd;
@@ -207,7 +210,6 @@ impl PidfdSpawner for RealPidfdSpawner {
         // before exec). Keeping that wiring out of the broker crate
         // preserves the `#![deny(unsafe_code)]` posture on every code
         // path the daemon will reach via the SCM_RIGHTS pidfd transport.
-        let _argv = payload.argv.clone();
         let child_main = || -> i32 { 0 };
 
         let outcome = pidfd_sys::clone3_pidfd_or_fork_fallback(0, child_main).map_err(|err| {

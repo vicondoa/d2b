@@ -288,11 +288,13 @@ fn rollback(path: &Path, prior: Option<&str>) -> io::Result<()> {
     }
 }
 
-/// Runtime entry-point for `ApplyNmUnmanaged`.
+/// Runtime entry-point for `ApplyNmUnmanaged`:apply an intent through the
+/// live executor path.
 ///
-/// The dispatcher now lands on `ops::nm` even though the live path is
-/// still a thin wrapper. That preserves a stable integration point for
-/// future coexistence/reload-verification work.
+/// The intent's declared reload behavior is verified before any mutation
+/// (`atomic-reload`, `none`, and the empty sentinel are the only accepted
+/// spellings),and NetworkManager is reloaded after a successful write
+/// when the behavior calls for it.
 pub async fn apply_with_reload(
     executor: &dyn ReconcileExecutor,
     intent: &ResolvedNmUnmanagedIntent,
@@ -300,6 +302,9 @@ pub async fn apply_with_reload(
     crate::live_handlers::live_apply_nm_unmanaged(executor, intent).await
 }
 
+/// Remove one NetworkManager unmanaged drop-in the intent names,verifying
+/// the same reload-behavior contract before mutation and running the
+/// `systemctl` reload when the behavior calls for it.
 pub async fn remove_with_reload(
     intent: &ResolvedNmUnmanagedIntent,
 ) -> Result<(), crate::live_handlers::LiveHandlerError> {

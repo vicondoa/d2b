@@ -20,6 +20,7 @@ pub struct ApplySysctlRequest {
 }
 
 impl ApplySysctlRequest {
+    /// Build a request writing under the default `/proc/sys` root.
     pub fn with_default_root(intents: Vec<SysctlIntent>) -> Self {
         Self {
             intents,
@@ -28,6 +29,7 @@ impl ApplySysctlRequest {
     }
 }
 
+/// One applied sysctl write with its before/after values and drift verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplySysctlOutcome {
     pub key: String,
@@ -36,6 +38,8 @@ pub struct ApplySysctlOutcome {
     pub drift: bool,
 }
 
+/// A failed sysctl application: an I/O failure or a readback drift
+/// after the write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplySysctlError {
     Io(String),
@@ -109,6 +113,8 @@ pub async fn apply_sysctl_intents(
     Ok(out)
 }
 
+/// A sysctl-apply failure from the executor or the post-write readback:
+/// an executor error, a readback I/O failure, or observed drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyWithReadbackError {
     ReconcileExec(ReconcileExecError),

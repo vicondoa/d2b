@@ -389,6 +389,15 @@ impl SystemLiveExec {
     }
 }
 
+fn require_absolute(path: &Path, what: &str) -> Result<(), ReconcileExecError> {
+    if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
+        return Err(ReconcileExecError::InvalidInput {
+            detail: format!("{what} must be absolute: {path:?}"),
+        });
+    }
+    Ok(())
+}
+
 impl ReconcileExecutor for SystemReconcileExecutor {
     fn apply_nft_script<'a>(
         &'a self,
@@ -396,18 +405,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         script: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !nft_binary
-                .to_str()
-                .map(|s| s.starts_with('/'))
-                .unwrap_or(false)
-            {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!(
-                        "nft binary path must be absolute, got {:?}",
-                        nft_binary.display().to_string()
-                    ),
-                });
-            }
+            require_absolute(nft_binary, "nft binary path")?;
             if script.is_empty() {
                 return Err(ReconcileExecError::InvalidInput {
                     detail: "nft script is empty".to_owned(),
@@ -504,11 +502,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         mode: u32,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
-                });
-            }
+            require_absolute(path, "path")?;
             let parent = path
                 .parent()
                 .ok_or_else(|| ReconcileExecError::InvalidInput {
@@ -548,11 +542,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         owner_gid: u32,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
-                });
-            }
+            require_absolute(path, "path")?;
             let parent = path
                 .parent()
                 .ok_or_else(|| ReconcileExecError::InvalidInput {
@@ -595,11 +585,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         value: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
-                });
-            }
+            require_absolute(path, "path")?;
             if value.contains('\n') {
                 return Err(ReconcileExecError::InvalidInput {
                     detail: format!("path value contains newline: {value:?}"),
@@ -619,11 +605,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         path: &'a Path,
     ) -> Pin<Box<dyn Future<Output = Result<String, ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !path.to_str().map(|s| s.starts_with('/')).unwrap_or(false) {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!("path must be absolute: {:?}", path.display().to_string()),
-                });
-            }
+            require_absolute(path, "path")?;
             crate::sys::path_safe::read_to_string_nofollow(path).map_err(|e| {
                 ReconcileExecError::Io {
                     path: path.display().to_string(),
@@ -640,18 +622,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         route_spec: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !ip_binary
-                .to_str()
-                .map(|s| s.starts_with('/'))
-                .unwrap_or(false)
-            {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!(
-                        "ip binary path must be absolute, got {:?}",
-                        ip_binary.display().to_string()
-                    ),
-                });
-            }
+            require_absolute(ip_binary, "ip binary path")?;
             if route_spec.is_empty() {
                 return Err(ReconcileExecError::InvalidInput {
                     detail: "route spec is empty".to_owned(),
@@ -695,18 +666,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         bus_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !usbip_binary
-                .to_str()
-                .map(|s| s.starts_with('/'))
-                .unwrap_or(false)
-            {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!(
-                        "usbip binary path must be absolute, got {:?}",
-                        usbip_binary.display().to_string()
-                    ),
-                });
-            }
+            require_absolute(usbip_binary, "usbip binary path")?;
             if bus_id.is_empty() {
                 return Err(ReconcileExecError::InvalidInput {
                     detail: "usbip bus_id is empty".to_owned(),
@@ -811,14 +771,7 @@ impl ReconcileExecutor for SystemReconcileExecutor {
         comment: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<GeneratedSshKey, ReconcileExecError>> + Send + 'a>> {
         Box::pin(async move {
-            if !key_path.is_absolute() {
-                return Err(ReconcileExecError::InvalidInput {
-                    detail: format!(
-                        "ssh-keygen path must be absolute, got {:?}",
-                        key_path.display().to_string()
-                    ),
-                });
-            }
+            require_absolute(key_path, "ssh-keygen path")?;
             if comment.contains('\n') {
                 return Err(ReconcileExecError::InvalidInput {
                     detail: "ssh-keygen comment must be single-line".to_owned(),

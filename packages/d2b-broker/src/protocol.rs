@@ -10,8 +10,16 @@ use nix::sys::socket::{
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::io::unix::AsyncFd;
 
+/// The maximum JSON frame body size, excluding the 4-byte length
+/// prefix: frames declaring a larger body are refused.
 pub const MAX_FRAME_SIZE: usize = 1024 * 1024;
 
+/// Connect a `SOCK_SEQPACKET` Unix socket to `path`, returning the
+/// connected CLOEXEC fd.
+///
+/// # Errors
+
+/// Returns the socket error when the socket cannot be created or connected.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn connect_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     let fd = socket(
@@ -26,6 +34,12 @@ pub fn connect_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     Ok(fd)
 }
 
+/// Bind-and-listen a `SOCK_SEQPACKET` Unix socket at `path`, returning
+/// the listening CLOEXEC fd with a backlog of 64.
+///
+/// # Errors
+
+/// Returns the socket error when create, bind, or listen fails.
 pub fn bind_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     let fd = socket(
         AddressFamily::Unix,
@@ -40,6 +54,15 @@ pub fn bind_seqpacket(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     Ok(fd)
 }
 
+/// Serialise `value` as JSON and send it as one frame on `fd`:a 4-byte
+/// little-endian length prefix followed by the body,refusing bodies over
+/// [`MAX_FRAME_SIZE`]. Byte-equivalent to
+/// [`send_json_frame_with_fds`] when no descriptors are attached.
+///
+/// # Errors
+
+/// Returns [`io::ErrorKind::InvalidData`] for serialisation or cap
+/// violations,and socket / short-write errors for the send itself.
 pub fn send_json_frame<T: Serialize>(fd: RawFd, value: &T) -> io::Result<()> {
     send_json_frame_with_fds(fd, value, &[])
 }
@@ -81,6 +104,15 @@ pub fn send_json_frame_with_fds<T: Serialize>(
     crate::fd_passing::send_fds(fd, &frame, fds)
 }
 
+/// Receive one JSON frame from `fd`:a 4-byte little-endian length
+/// prefix followed by the body,capped at [`MAX_FRAME_SIZE`]; returns
+/// `None` when the peer closed the socket empty.
+///
+/// # Errors
+
+/// Returns [`io::ErrorKind::UnexpectedEof`] for short frames and
+/// [`io::ErrorKind::InvalidData`] for length-prefix mismatches and decode
+/// failures.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn recv_json_frame<T: DeserializeOwned>(fd: RawFd) -> io::Result<Option<T>> {
     let mut buffer = vec![0_u8; MAX_FRAME_SIZE + 4];

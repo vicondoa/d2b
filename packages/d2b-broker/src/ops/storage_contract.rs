@@ -17,6 +17,9 @@ use nix::unistd::{Gid, Group, Uid, User};
 
 use super::hosts::stable_hash_str;
 
+/// A storage/sync contract refusal: an unknown storage or lock id, a
+/// deliberate refusal or invalid subject, or an I/O failure on a resolved
+/// path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageContractError {
     UnknownStorage(String),
