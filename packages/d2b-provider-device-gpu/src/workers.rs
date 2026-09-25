@@ -12,6 +12,11 @@ pub struct GpuWorkerSpec {
 
 impl GpuWorkerSpec {
     /// Build the fixed GPU or render-node worker shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuProcessSelectionError`] when the Device UID or role does
+    /// not admit a GPU worker process declaration.
     pub fn gpu(
         device_uid: &ResourceUid,
         settings: &GpuSettings,
@@ -50,6 +55,11 @@ pub struct VideoWorkerSpec {
 
 impl VideoWorkerSpec {
     /// Build the separate video worker shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuProcessSelectionError`] when the Device UID or role does
+    /// not admit a video worker process declaration.
     pub fn new(
         device_uid: &ResourceUid,
         settings: &GpuSettings,

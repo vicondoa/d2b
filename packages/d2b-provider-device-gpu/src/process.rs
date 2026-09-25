@@ -26,6 +26,11 @@ pub struct GpuProcessDeclaration {
 
 impl GpuProcessDeclaration {
     /// Construct a declaration from a Device UID and selected role.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuProcessSelectionError::InvalidUid`] when the Device UID
+    /// cannot produce a canonical short name.
     pub fn new(
         device_uid: &ResourceUid,
         role: GpuProcessRole,
@@ -75,6 +80,12 @@ impl fmt::Display for GpuProcessSelectionError {
 impl std::error::Error for GpuProcessSelectionError {}
 
 /// Select the worker set for one Device.
+///
+/// # Errors
+///
+/// Returns [`GpuProcessSelectionError::Settings`] when the settings fail
+/// validation and [`GpuProcessSelectionError::InvalidUid`] when the Device
+/// UID cannot produce a canonical short name.
 pub fn select_processes(
     device_uid: &ResourceUid,
     arbitration: DeviceArbitration,
@@ -99,6 +110,11 @@ pub fn select_processes(
 }
 
 /// Derive the required `device-<uid-short>-*` name.
+///
+/// # Errors
+///
+/// Returns [`GpuProcessSelectionError::InvalidUid`] when the Device UID
+/// cannot produce a canonical short name.
 pub fn gpu_process_name(
     device_uid: &ResourceUid,
     role: GpuProcessRole,
