@@ -957,7 +957,7 @@ pub fn spawn_session_worker(spawn: WorkerSpawn) -> std::io::Result<JoinHandle<()
         clock,
         owner_reaper,
     } = spawn;
-    Ok(std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("d2b-exec".to_owned())
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -984,7 +984,7 @@ pub fn spawn_session_worker(spawn: WorkerSpawn) -> std::io::Result<JoinHandle<()
                 Arc::new(TerminalReaper::new(clock, terminal_ttl)),
                 owner_reaper,
             ));
-        })?)
+        })
 }
 
 #[cfg(test)]
