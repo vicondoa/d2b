@@ -1286,7 +1286,6 @@ pub(crate) fn operation_id_for_sessions(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardConfig {
     policy: Policy,
-    host_entry_ttl_secs: u64,
     guest_entry_ttl_secs: u64,
 }
 
@@ -1294,7 +1293,6 @@ impl Default for ClipboardConfig {
     fn default() -> Self {
         Self {
             policy: Policy::default(),
-            host_entry_ttl_secs: 3600,
             guest_entry_ttl_secs: 3600,
         }
     }
@@ -1307,11 +1305,6 @@ impl ClipboardConfig {
             policy,
             ..Self::default()
         }
-    }
-
-    /// Return the policy.
-    pub const fn policy(&self) -> &Policy {
-        &self.policy
     }
 
     /// Return item byte limit.
@@ -1332,11 +1325,6 @@ impl ClipboardConfig {
     /// Return per-Guest rate limit.
     pub const fn max_guest_rate_per_min(&self) -> u32 {
         self.policy.max_guest_rate_per_min()
-    }
-
-    /// Return Host entry TTL.
-    pub const fn host_entry_ttl_secs(&self) -> u64 {
-        self.host_entry_ttl_secs
     }
 
     /// Return Guest entry TTL.
