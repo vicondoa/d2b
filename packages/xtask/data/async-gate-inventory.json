@@ -392,6 +392,16 @@
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
+      "file": "packages/d2b-provider-device-tpm/src/effects_service.rs",
+      "line": 1202,
+      "reason": "synchronous lock acquisition, no await while the guard is held"
+    },
+    {
+      "file": "packages/d2b-provider-device-tpm/src/effects_service.rs",
+      "line": 1244,
+      "reason": "synchronous lock acquisition, no await while the guard is held"
+    },
+    {
       "file": "packages/d2b-provider-device-usbip/src/test_support.rs",
       "line": 46,
       "reason": "test-support recorder lock"
