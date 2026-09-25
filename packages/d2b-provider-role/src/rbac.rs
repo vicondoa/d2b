@@ -89,7 +89,6 @@ impl core::fmt::Debug for PositiveDecisionCache {
 impl PositiveDecisionCache {
     /// Construct a bounded positive-only cache.max_entries = 0
     /// disables caching entirely.
-
     pub fn new(max_entries: usize) -> Self {
         Self {
             max_entries,
@@ -98,7 +97,6 @@ impl PositiveDecisionCache {
     }
 
     /// Whether a non-expired entry matching the exact evidence is present.
-
     pub fn contains(
         &self,
         key: &AuthorizationCacheKey,

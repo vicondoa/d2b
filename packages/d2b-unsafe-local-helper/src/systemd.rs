@@ -257,10 +257,9 @@ impl UserScopeManager for SystemdUserScopeManager {
                 .call_method("KillUnit", &(scope.unit_name.as_str(), "all", signal))
                 .map(|_| ())
                 .map_err(map_stop_error)
+                && error != ScopeError::NotFound
             {
-                if error != ScopeError::NotFound {
-                    return Err(error);
-                }
+                return Err(error);
             }
             Ok(())
         })
@@ -275,10 +274,10 @@ impl UserScopeManager for SystemdUserScopeManager {
             let manager = Self::manager_proxy(connection)?;
             let result: Result<OwnedObjectPath, zbus::Error> =
                 manager.call("StopUnit", &(scope.unit_name.as_str(), "replace"));
-            if let Err(error) = result.map(|_| ()).map_err(map_stop_error) {
-                if error != ScopeError::NotFound {
-                    return Err(error);
-                }
+            if let Err(error) = result.map(|_| ()).map_err(map_stop_error)
+                && error != ScopeError::NotFound
+            {
+                return Err(error);
             }
             Ok(())
         })

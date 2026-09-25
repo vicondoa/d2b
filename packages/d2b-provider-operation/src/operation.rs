@@ -135,7 +135,6 @@ pub struct OperationAudit {
 
 impl OperationAudit {
     /// Construct one audit facet after checking the field bounds.
-
     /// # Errors
     ///
     /// Returns `TooManyAuditFields` when the retained-field or
@@ -197,7 +196,6 @@ pub struct AuditJoin {
 
 impl AuditJoin {
     /// Construct one audit-join facet after checking the field bound.
-
     /// # Errors
     ///
     /// Returns `InvalidAuditJoin` when the field list is empty or over
@@ -355,7 +353,6 @@ pub struct OperationFds {
 
 impl OperationFds {
     /// Construct one fd contract after checking the list bounds.
-
     /// # Errors
     ///
     /// Returns `TooManyFds` when any of the request, response, or
@@ -418,7 +415,6 @@ impl Default for OperationBounds {
 
 impl OperationBounds {
     /// Construct one bounds facet.
-
     /// # Errors
     ///
     /// Returns `InvalidBounds` when a limit is zero or exceeds its
@@ -492,7 +488,6 @@ pub struct OperationSpec {
 
 impl OperationSpec {
     /// Construct an operation spec after checking the facet invariants.
-
     /// # Errors
     ///
     /// Returns `InvalidOwnerRef` when the owner reference does not name

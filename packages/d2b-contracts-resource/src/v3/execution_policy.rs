@@ -98,7 +98,6 @@ pub fn redacted_debug_field_ref<T: ?Sized, R: ?Sized + core::fmt::Debug>(
 }
 
 /// Renders one `redacted_debug!` field closure's owned value.
-
 /// The closure receives `&T` and returns an owned `R` (a collection length,
 /// an option presence, or the `"<redacted>"` literal); the returned value is
 /// passed to the debug formatter unchanged.

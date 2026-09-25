@@ -2435,22 +2435,23 @@ impl BundleResolver {
         vm.nodes
             .iter()
             .flat_map(|node| &node.plan_ops)
-            .filter_map(|plan_op| match plan_op {
-                SpawnRunnerPlanOp::DiskInit {
+            .map(|plan_op| {
+                let SpawnRunnerPlanOp::DiskInit {
                     target_path,
                     size_bytes,
                     mode,
                     owner_uid,
                     owner_gid,
                     if_absent,
-                } => Some(ResolvedDiskInitOp {
+                } = plan_op;
+                ResolvedDiskInitOp {
                     target_path: target_path.clone(),
                     size_bytes: *size_bytes,
                     mode: *mode,
                     owner_uid: *owner_uid,
                     owner_gid: *owner_gid,
                     if_absent: *if_absent,
-                }),
+                }
             })
             .collect()
     }
