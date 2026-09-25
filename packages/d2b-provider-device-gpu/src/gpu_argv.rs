@@ -52,7 +52,7 @@ impl GpuContextType {
 /// Display config; one entry per virtual display. The audit shape is
 /// `[{"hidden":true}]` (single hidden display).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GpuDisplayConfig {
     /// Whether the display surface is hidden from the host
     /// compositor. Audit shape: `true` (the cross-domain handoff
@@ -63,7 +63,7 @@ pub struct GpuDisplayConfig {
 /// `--params` payload. Rendered as compact JSON (no spaces) so the
 /// audit-shape diff stays byte-stable.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct GpuParams {
     /// Colon-separated context types (`virgl:virgl2:cross-domain`).
     pub context_types: Vec<GpuContextType>,
@@ -77,7 +77,7 @@ pub struct GpuParams {
 
 /// All inputs required to render the `crosvm device gpu` argv.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GpuArgvInput {
     /// Absolute store path to the `crosvm` binary.
     pub crosvm_binary_path: String,
@@ -372,6 +372,49 @@ mod tests {
                 "rejection vector: {name}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_unknown_fields() {
+        let json = r#"{
+            "crosvmBinaryPath": "/nix/store/GPUGPU-gpu-crosvm/bin/crosvm",
+            "vmName": "corp-vm",
+            "socketPath": "/run/d2b/vms/corp-vm/gpu.sock",
+            "waylandSock": "/run/d2b-gpu/corp-vm/wayland-0",
+            "params": {
+                "context-types": ["virgl", "virgl2", "cross-domain"],
+                "displays": [{"hidden": true}],
+                "egl": true,
+                "vulkan": true
+            },
+            "extraArgs": []
+        }"#;
+        let parsed = serde_json::from_str::<GpuArgvInput>(json);
+        assert!(parsed.is_ok(), "baseline shape must still parse: {parsed:?}");
+        let top_level = json.replace(
+            "\"extraArgs\": []",
+            "\"extraArgs\": [], \"unexpectedField\": 1",
+        );
+        assert!(
+            serde_json::from_str::<GpuArgvInput>(&top_level).is_err(),
+            "unknown top-level field must be rejected"
+        );
+        let nested = json.replace(
+            "\"context-types\": [\"virgl\", \"virgl2\", \"cross-domain\"]",
+            "\"context-types\": [\"virgl\", \"virgl2\", \"cross-domain\"], \"unexpected\": true",
+        );
+        assert!(
+            serde_json::from_str::<GpuArgvInput>(&nested).is_err(),
+            "unknown field inside params must be rejected"
+        );
+        let display = json.replace(
+            "\"displays\": [{\"hidden\": true}]",
+            "\"displays\": [{\"hidden\": true, \"unexpected\": true}]",
+        );
+        assert!(
+            serde_json::from_str::<GpuArgvInput>(&display).is_err(),
+            "unknown field inside a display config must be rejected"
+        );
     }
 
     #[test]
