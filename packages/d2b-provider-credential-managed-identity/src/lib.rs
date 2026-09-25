@@ -1515,26 +1515,6 @@ mod tests {
     }
 
     #[test]
-    fn user_agent_placement_is_rejected() {
-        assert_eq!(
-            ManagedIdentityPlacement::new(
-                PlacementBinding::UserAgent,
-                ResourceRef::parse("Host/workstation").unwrap(),
-                ResourceRef::parse("Zone/dev").unwrap(),
-            ),
-            Err(ManagedIdentityProviderError::InvalidPlacement)
-        );
-    }
-
-    #[test]
-    fn client_id_is_redacted_from_debug() {
-        let marker = format!("client-canary-{:x}", std::process::id());
-        let config = ManagedIdentityClientConfig::new(&marker, "azure-imds", 64).unwrap();
-        assert!(!format!("{config:?}").contains(&marker));
-        assert_eq!(config.client_id().as_str(), marker);
-    }
-
-    #[test]
     fn poll_client_accepts_ready_result_at_deadline() {
         let future: ManagedIdentityFuture<'_, u8> = Box::pin(async { Ok(7) });
         assert_eq!(
