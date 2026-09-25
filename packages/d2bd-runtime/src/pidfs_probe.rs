@@ -137,14 +137,17 @@ pub(crate) fn enforce_probe_outcome_with(
             }
         }
         PidfsProbeOutcome::PidfsNotPresent { st_dev } => {
-            let msg = format!(
-                "pidfs probe: pidfd_open(2) succeeded but fstat returned st_dev=0 (pidfs not present in this kernel build). v1.1+ requires pidfs for BootedNotify identity. Operators must rebuild the kernel with pidfs enabled (CONFIG_FS_PID=y / CONFIG_PIDFD_STAT=y on kernel >= 6.9). Observed st_dev={st_dev}."
-            );
             if allow_soft_fail {
-                tracing::warn!("{msg} (soft-fail enabled)");
+                tracing::warn!(
+                    pidfs_st_dev = %st_dev,
+                    "pidfs probe: pidfd_open(2) succeeded but fstat returned st_dev=0 (pidfs not present in this kernel build). v1.1+ requires pidfs for BootedNotify identity. Operators must rebuild the kernel with pidfs enabled (CONFIG_FS_PID=y / CONFIG_PIDFD_STAT=y on kernel >= 6.9). (soft-fail enabled)"
+                );
                 Ok(())
             } else {
-                tracing::error!("{msg}");
+                tracing::error!(
+                    pidfs_st_dev = %st_dev,
+                    "pidfs probe: pidfd_open(2) succeeded but fstat returned st_dev=0 (pidfs not present in this kernel build). v1.1+ requires pidfs for BootedNotify identity. Operators must rebuild the kernel with pidfs enabled (CONFIG_FS_PID=y / CONFIG_PIDFD_STAT=y on kernel >= 6.9)."
+                );
                 Err(TypedError::InternalIo {
                     context: "pidfs-runtime-probe".to_owned(),
                     detail: format!("pidfs absent (st_dev={st_dev})"),
@@ -152,10 +155,10 @@ pub(crate) fn enforce_probe_outcome_with(
             }
         }
         PidfsProbeOutcome::UnexpectedError { detail } => {
-            let msg = format!(
-                "pidfs probe: unexpected error: {detail}. Treating as soft-defer for diagnostic purposes; investigate before relying on BootedNotify identity in production."
+            tracing::warn!(
+                detail = %detail,
+                "pidfs probe: unexpected error. Treating as soft-defer for diagnostic purposes; investigate before relying on BootedNotify identity in production."
             );
-            tracing::warn!("{msg}");
             // Always soft-defer on unexpected errors - they indicate
             // a permissions / namespace edge case, not a missing
             // pidfs.
