@@ -56,7 +56,16 @@ impl StoreSealIdentity {
     }
 
     /// Bind the seal identity to a nonzero store epoch.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds when `store_epoch` is zero; a zero epoch is
+    /// a caller defect, never a valid binding.
     pub fn with_store_epoch(mut self, store_epoch: u64) -> Self {
+        debug_assert!(
+            store_epoch != 0,
+            "store epoch must be nonzero; a zero epoch is a caller defect"
+        );
         self.store_epoch = store_epoch;
         self
     }
@@ -300,4 +309,15 @@ fn open_rejects_same_authority_with_mismatched_declared_identity() {
         .expect("mismatched declared identity must be refused");
     assert_eq!(error.reason_code(), "mutation-seal-store-identity-mismatch");
     assert_eq!(error.store_slot(), Some(slot));
+}
+
+#[test]
+#[should_panic(expected = "store epoch must be nonzero")]
+fn with_store_epoch_rejects_a_zero_epoch() {
+    let identity = StoreSealIdentity::new(
+        StoreSlot::new(0).unwrap(),
+        ZoneId::parse("work").unwrap(),
+        ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+    );
+    let _ = identity.with_store_epoch(0);
 }

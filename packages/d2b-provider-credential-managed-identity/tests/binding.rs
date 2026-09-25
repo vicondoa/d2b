@@ -14,7 +14,6 @@ use d2b_contracts_resource::v3::identity::Locality;
 use d2b_provider_credential_managed_identity::{
     ManagedIdentityCredentialProvider, ManagedIdentityCredentialProviderFactory,
     PROVIDER_KIND, PROVIDER_REVOKE_FINALIZER, ManagedIdentityController,
-    ManagedIdentityTeardownPlan,
 };
 
 use common::{
@@ -1210,30 +1209,20 @@ fn finalization_revokes_only_the_callers_owned_handles() {
 
 #[test]
 fn controller_cleanup_keeps_the_finalizer_until_agent_deletion_is_observed() {
-    assert_eq!(
-        ManagedIdentityController::teardown_plan(true, false, false),
-        ManagedIdentityTeardownPlan {
-            stop_agent: true,
-            delete_agent: false,
-            clear_provider_revoke: false,
-        }
-    );
-    assert_eq!(
-        ManagedIdentityController::teardown_plan(false, true, false),
-        ManagedIdentityTeardownPlan {
-            stop_agent: false,
-            delete_agent: true,
-            clear_provider_revoke: false,
-        }
-    );
-    assert_eq!(
-        ManagedIdentityController::teardown_plan(false, true, true),
-        ManagedIdentityTeardownPlan {
-            stop_agent: false,
-            delete_agent: false,
-            clear_provider_revoke: true,
-        }
-    );
+    let stop = ManagedIdentityController::teardown_plan(true, false, false);
+    assert!(stop.stop_agent());
+    assert!(!stop.delete_agent());
+    assert!(!stop.clear_provider_revoke());
+
+    let delete = ManagedIdentityController::teardown_plan(false, true, false);
+    assert!(!delete.stop_agent());
+    assert!(delete.delete_agent());
+    assert!(!delete.clear_provider_revoke());
+
+    let clear = ManagedIdentityController::teardown_plan(false, true, true);
+    assert!(!clear.stop_agent());
+    assert!(!clear.delete_agent());
+    assert!(clear.clear_provider_revoke());
     assert_eq!(PROVIDER_KIND.as_str(), "credential-managed-identity");
     assert_eq!(
         PROVIDER_REVOKE_FINALIZER,

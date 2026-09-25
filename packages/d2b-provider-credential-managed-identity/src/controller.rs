@@ -81,14 +81,32 @@ impl core::fmt::Debug for AgentProcessSpec {
 }
 
 /// Ordered teardown effects owned by the controller.
+///
+/// The fields are private: only [`ManagedIdentityController::teardown_plan`]
+/// constructs a plan, so the emitted combinations are the only
+/// representable ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ManagedIdentityTeardownPlan {
+    stop_agent: bool,
+    delete_agent: bool,
+    clear_provider_revoke: bool,
+}
+
+impl ManagedIdentityTeardownPlan {
     /// Whether the agent must first drain and stop.
-    pub stop_agent: bool,
+    pub const fn stop_agent(self) -> bool {
+        self.stop_agent
+    }
+
     /// Whether the controller may delete the agent Process.
-    pub delete_agent: bool,
+    pub const fn delete_agent(self) -> bool {
+        self.delete_agent
+    }
+
     /// Whether revocation and Process deletion permit finalizer release.
-    pub clear_provider_revoke: bool,
+    pub const fn clear_provider_revoke(self) -> bool {
+        self.clear_provider_revoke
+    }
 }
 
 /// Common status plus closed client state.

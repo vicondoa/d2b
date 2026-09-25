@@ -125,9 +125,6 @@ impl DeviceAuthorityDescriptor {
 
 redacted_debug!(DeviceAuthorityDescriptor);
 
-/// Short alias used by Provider descriptors.
-pub type AuthorityDescriptor = DeviceAuthorityDescriptor;
-
 /// Core-derived opaque identity for one physical device backing.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -146,9 +143,6 @@ impl DeviceAuthorityKey {
 }
 
 redacted_debug!(DeviceAuthorityKey);
-
-/// Short alias for the Core-derived physical backing key.
-pub type OpaqueAuthorityKey = DeviceAuthorityKey;
 
 impl<'de> Deserialize<'de> for DeviceAuthorityKey {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -756,9 +750,6 @@ impl DeviceStatusResource {
 
 redacted_debug!(DeviceStatusResource);
 
-/// Alias used by ResourceType status adapters.
-pub type DeviceStatus = DeviceStatusResource;
-
 impl<'de> Deserialize<'de> for DeviceStatusResource {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -913,9 +904,6 @@ impl DeviceResourceVerb {
         ]
     }
 }
-
-/// Alias used by RBAC policy code.
-pub type DeviceRbacVerb = DeviceResourceVerb;
 
 /// Closed Device effect operation classes used by Core's adapter.
 #[derive(
@@ -1114,9 +1102,6 @@ pub const DEVICE_OTEL_RESOURCE_ATTRIBUTES: [&str; 2] = ["d2b.zone", "d2b.provide
 
 /// Device telemetry contract version.
 pub const DEVICE_TELEMETRY_CONTRACT_VERSION: &str = "device-telemetry/v1";
-
-/// Alias used by semantic telemetry adapters.
-pub type DeviceTelemetryLabels = DeviceMetricLabels;
 
 const fn one() -> u32 {
     1
