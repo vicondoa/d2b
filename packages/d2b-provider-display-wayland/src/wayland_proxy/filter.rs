@@ -75,7 +75,7 @@ use wl_proxy::{
     state::{State, StateHandler},
 };
 
-use crate::wayland_proxy::{
+use wayland_proxy::{
     bridge::{
         BridgeConfig, BridgeConnectionState, BridgeHandoff, BridgeReconnectMachine,
         BridgeTransferKind, BridgeTransferMetadata, LocalTransferFd,
@@ -604,9 +604,9 @@ impl VirtualClipboardState {
             return;
         };
         match bridge.handoff_transfer_fd(&local_fd, metadata) {
-            crate::wayland_proxy::bridge::HandoffStatus::Delivered => {
+            wayland_proxy::bridge::HandoffStatus::Delivered => {
                 let _ = local_fd
-                    .close_after_handoff(crate::wayland_proxy::bridge::HandoffStatus::Delivered);
+                    .close_after_handoff(wayland_proxy::bridge::HandoffStatus::Delivered);
                 log::debug!(
                     "[d2b-wlproxy] target={} event=clipboard-bridge reason=handoff-delivered kind={:?} mime={}",
                     self.identity_label,
@@ -614,12 +614,12 @@ impl VirtualClipboardState {
                     bounded_log_mime(&metadata.mime_type)
                 );
             }
-            crate::wayland_proxy::bridge::HandoffStatus::Backpressure => {
+            wayland_proxy::bridge::HandoffStatus::Backpressure => {
                 self.enqueue_bridge_handoff(local_fd, metadata);
             }
-            crate::wayland_proxy::bridge::HandoffStatus::Failed(error) => {
+            wayland_proxy::bridge::HandoffStatus::Failed(error) => {
                 let _ = local_fd.close_after_handoff(
-                    crate::wayland_proxy::bridge::HandoffStatus::Failed(error),
+                    wayland_proxy::bridge::HandoffStatus::Failed(error),
                 );
                 self.mark_bridge_disconnected();
                 self.ensure_bridge_connected();
@@ -678,13 +678,13 @@ impl VirtualClipboardState {
     fn handle_pending_handoff_status(
         &mut self,
         pending: PendingBridgeHandoff,
-        status: crate::wayland_proxy::bridge::HandoffStatus,
+        status: wayland_proxy::bridge::HandoffStatus,
     ) -> PendingHandoffStep {
         match status {
-            crate::wayland_proxy::bridge::HandoffStatus::Delivered => {
+            wayland_proxy::bridge::HandoffStatus::Delivered => {
                 let _ = pending
                     .fd
-                    .close_after_handoff(crate::wayland_proxy::bridge::HandoffStatus::Delivered);
+                    .close_after_handoff(wayland_proxy::bridge::HandoffStatus::Delivered);
                 log::debug!(
                     "[d2b-wlproxy] target={} event=clipboard-bridge reason=queued-handoff-delivered kind={:?} mime={}",
                     self.identity_label,
@@ -693,11 +693,11 @@ impl VirtualClipboardState {
                 );
                 PendingHandoffStep::Continue
             }
-            crate::wayland_proxy::bridge::HandoffStatus::Backpressure => {
+            wayland_proxy::bridge::HandoffStatus::Backpressure => {
                 self.pending_bridge_handoffs.push_front(pending);
                 PendingHandoffStep::Stop
             }
-            crate::wayland_proxy::bridge::HandoffStatus::Failed(error) => {
+            wayland_proxy::bridge::HandoffStatus::Failed(error) => {
                 let identity_label = self.identity_label.clone();
                 let kind = pending.metadata.kind;
                 let mime = bounded_log_mime(&pending.metadata.mime_type);
@@ -1115,7 +1115,7 @@ impl FilterRegistryHandler {
         }
 
         let (action, _) = self.policy.lookup(iface_name);
-        let crate::wayland_proxy::policy::GlobalAction::Allow = action else {
+        let wayland_proxy::policy::GlobalAction::Allow = action else {
             // Denied: ignore and suppress global_remove forwarding too.
             if self.policy.log_filtered_globals {
                 self.diag.borrow_mut().global_filtered(iface_name);
@@ -2664,7 +2664,7 @@ impl WlEglstreamDisplayHandler for FilterEglstreamDisplayHandler {
     ) {
         if eglstream_handle_is_fd(r#type) {
             if let Some(decoration) = &self.decoration {
-                id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(
+                id.set_handler(wayland_proxy::decoration::tracking_buffer_handler(
                     decoration,
                 ));
                 decoration.borrow_mut().record_buffer(id, width, height);
@@ -2707,7 +2707,7 @@ impl WlDrmHandler for FilterDrmHandler {
         stride: u32,
         format: u32,
     ) {
-        id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(
+        id.set_handler(wayland_proxy::decoration::tracking_buffer_handler(
             &self.decoration,
         ));
         self.decoration
@@ -2731,7 +2731,7 @@ impl WlDrmHandler for FilterDrmHandler {
         offset2: i32,
         stride2: i32,
     ) {
-        id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(
+        id.set_handler(wayland_proxy::decoration::tracking_buffer_handler(
             &self.decoration,
         ));
         self.decoration
@@ -2757,7 +2757,7 @@ impl WlDrmHandler for FilterDrmHandler {
         offset2: i32,
         stride2: i32,
     ) {
-        id.set_handler(crate::wayland_proxy::decoration::tracking_buffer_handler(
+        id.set_handler(wayland_proxy::decoration::tracking_buffer_handler(
             &self.decoration,
         ));
         self.decoration
@@ -2875,7 +2875,7 @@ mod tests {
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixListener;
 
-    use crate::wayland_proxy::{
+    use wayland_proxy::{
         bridge::BridgeReconnectPolicy,
         policy::{FilterPolicy, PolicyInput},
     };
@@ -3107,7 +3107,7 @@ mod tests {
 
         let step = clipboard.handle_pending_handoff_status(
             pending,
-            crate::wayland_proxy::bridge::HandoffStatus::Backpressure,
+            wayland_proxy::bridge::HandoffStatus::Backpressure,
         );
 
         assert_eq!(step, PendingHandoffStep::Stop);
@@ -3237,7 +3237,7 @@ mod tests {
 
         for name in 0..6 {
             handler.diag.borrow_mut().bind_denied(
-                crate::wayland_proxy::diag::DropReason::BindDeniedUnadvertised,
+                wayland_proxy::diag::DropReason::BindDeniedUnadvertised,
                 name,
                 "zwp_text_input_manager_v3",
             );
@@ -3365,7 +3365,7 @@ mod tests {
     fn prepare_global_hides_clipboard_boundary_even_when_policy_allows_it() {
         let diag = Rc::new(RefCell::new(DiagRateLimiter::new("work".to_owned())));
         let policy = Rc::new(FilterPolicy::build(
-            crate::wayland_proxy::policy::PolicyInput {
+            wayland_proxy::policy::PolicyInput {
                 allow_globals: vec!["zwp_primary_selection_device_manager_v1".to_owned()],
                 ..PolicyInput::new(local_identity())
             },

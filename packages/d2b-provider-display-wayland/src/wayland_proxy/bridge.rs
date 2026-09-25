@@ -17,7 +17,7 @@ use std::{
 use d2b_contracts::{workload::WorkloadProviderKind, workload_identity::WorkloadTarget};
 use serde::Serialize;
 
-use crate::wayland_proxy::identity::ProxyIdentity;
+use wayland_proxy::identity::ProxyIdentity;
 
 const LINUX_SUN_PATH_BYTES: usize = 108;
 

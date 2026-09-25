@@ -40,7 +40,7 @@ use wl_proxy::{
     },
 };
 
-use crate::wayland_proxy::diag::{DiagRateLimiter, bounded_error_detail};
+use wayland_proxy::diag::{DiagRateLimiter, bounded_error_detail};
 
 pub const DEFAULT_BORDER_THICKNESS: u32 = 4;
 pub const WRAPPER_RAIL_WIDTH: u32 = 9;
