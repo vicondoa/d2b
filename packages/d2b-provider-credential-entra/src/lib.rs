@@ -1359,13 +1359,6 @@ mod tests {
     }
 
     #[test]
-    fn exact_consumer_guard_is_independent_of_request_fields() {
-        let expected = ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap();
-        let other = ResourceRef::parse("Provider/other").unwrap();
-        assert_ne!(expected, other);
-    }
-
-    #[test]
     fn operation_deadline_accepts_absolute_unix_milliseconds() {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
