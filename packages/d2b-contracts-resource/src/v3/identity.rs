@@ -266,9 +266,6 @@ impl JsonSchema for Timestamp {
     }
 }
 
-/// A ComponentSession purpose selected by trusted endpoint policy.
-pub type ValidatedSessionPurpose = SessionPurpose;
-
 /// A validated resource-service name.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]

@@ -825,7 +825,7 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            Err(ResourceError::ManagerRpc("unexpected ensure_child".into()))
+            Err(ResourceError::ManagerRejected { reason: "unexpected ensure_child".into() })
         }
 
         async fn get(
@@ -842,7 +842,7 @@ mod tests {
                 .expect("calls")
                 .push(format!("view:{}/{}", key.type_name, key.name));
             if self.fail_reads.load(Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
             Ok(self.view_of(key))
         }
@@ -871,7 +871,7 @@ mod tests {
                 .expect("calls")
                 .push("list-owned".to_owned());
             if self.fail_reads.load(Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRpc("scripted read failure".into()));
+                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
             Ok(self
                 .rows

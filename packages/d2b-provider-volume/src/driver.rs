@@ -879,7 +879,7 @@ mod tests {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            Err(ResourceError::ManagerRpc("watches unused in this unit".into()))
+            Err(ResourceError::ManagerRejected { reason: "watches unused in this unit".into() })
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {

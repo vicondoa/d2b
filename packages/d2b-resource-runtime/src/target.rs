@@ -490,11 +490,6 @@ impl TargetBinding {
         Self { directory, assignment }
     }
 
-    /// The per-Zone directory this binding resolves through.
-    pub fn directory(&self) -> &Arc<TargetDirectory> {
-        &self.directory
-    }
-
     /// The recorded assignment.
     pub const fn assignment(&self) -> &TargetAssignment {
         &self.assignment

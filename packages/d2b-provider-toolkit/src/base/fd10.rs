@@ -868,6 +868,7 @@ impl GuestCredentialBackend {
     }
 
     /// Bind a prearmed backend socket for Layer-1 transport tests.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_socket_for_test(socket: SeqpacketSocket) -> Arc<Self> {
         Arc::new(Self {
             state: Arc::new(tokio::sync::Mutex::new(GuestCredentialBackendState {
@@ -881,6 +882,7 @@ impl GuestCredentialBackend {
 
     /// Bind a prearmed backend socket to an authenticated route for transport
     /// and session-fencing tests.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_socket_for_test_with_route(
         socket: SeqpacketSocket,
         route: AuthenticatedSessionRouteBinding,

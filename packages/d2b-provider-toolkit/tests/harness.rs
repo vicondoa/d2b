@@ -469,6 +469,40 @@ async fn an_ungranted_and_an_uncommitted_invocation_are_refused_and_audited() {
     assert_eq!(harness.envelope().grant_count(), 0);
 }
 
+/// The U10 seam: a forwarded invocation spells the operation in the
+/// catalog's PascalCase wire name, which the bounded token grammar rejects;
+/// the refused invocation still lands its Denied record under the
+/// canonicalized spelling.
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+
+#[tokio::test]
+async fn a_refused_pascalcase_forwarded_invocation_still_lands_a_denied_record() {
+    let harness = harness();
+    let error = harness
+        .envelope()
+        .invoke_named_with_fds_under_chain(
+            "HarnessAbsent",
+            "invocation-broker-11",
+            &caller(),
+            CanonicalJsonObject::empty(),
+            &[],
+            &[],
+            None,
+        )
+        .await
+        .expect_err("no declared handler serves the forwarded spelling");
+    assert_eq!(error.code(), "uncommitted-operation");
+
+    let events = harness.audit_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].outcome(), ProviderAgentAuditOutcome::Denied);
+    assert_eq!(
+        events[0].method().as_str(),
+        "harnessabsent",
+        "the Denied record carries the canonicalized forwarded spelling"
+    );
+}
+
 /// The happy U7 path: a committed row resolves to the declaring service's
 /// declared method, the resolution carries the method's contract facets
 /// (the row schema reference among them), and dispatch reaches the
