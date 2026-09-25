@@ -7,10 +7,12 @@ pub use d2b_contracts::audio::LevelPercent;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
+/// `d2b vm list` output: one row per VM.
 pub struct ListOutputV2(pub Vec<ListItemOutputV2>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One `d2b vm list` row.
 pub struct ListItemOutputV2 {
     pub name: String,
     pub env: Option<String>,
@@ -46,6 +48,7 @@ pub struct ListItemOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `usb probe` output: the command echo plus one entry per probed device.
 pub struct UsbProbeOutputV1 {
     pub command: String,
     pub entries: Vec<crate::public_wire::UsbipProbeEntry>,
@@ -53,6 +56,7 @@ pub struct UsbProbeOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `realm list` output: one policy summary per realm.
 pub struct RealmListOutputV1 {
     pub command: String,
     pub realms: Vec<RealmPolicyOutputV1>,
@@ -60,6 +64,7 @@ pub struct RealmListOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+/// `realm inspect` output: the flattened policy summary of one realm.
 pub struct RealmInspectOutputV1 {
     pub command: String,
     #[serde(flatten)]
@@ -68,6 +73,7 @@ pub struct RealmInspectOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `op inspect` output: trace, local, and per-realm views.
 pub struct OpInspectOutputV1 {
     pub command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,6 +85,7 @@ pub struct OpInspectOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Trace identifiers for one `op inspect` run.
 pub struct OpInspectTraceOutputV1 {
     pub trace_id: String,
     pub span_id: String,
@@ -86,6 +93,7 @@ pub struct OpInspectTraceOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Local counts and source for one `op inspect` run.
 pub struct OpInspectLocalOutputV1 {
     pub vm_count: u32,
     pub gateway_count: u32,
@@ -94,6 +102,7 @@ pub struct OpInspectLocalOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One realm's view in `op inspect` output.
 pub struct OpInspectRealmOutputV1 {
     pub realm: String,
     pub mode: String,
@@ -105,6 +114,7 @@ pub struct OpInspectRealmOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One degraded scope in `op inspect` output.
 pub struct OpInspectDegradedOutputV1 {
     pub scope: String,
     pub reason: String,
@@ -113,6 +123,7 @@ pub struct OpInspectDegradedOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One realm's policy summary, shared by list and inspect output.
 pub struct RealmPolicyOutputV1 {
     pub realm: String,
     pub mode: String,
@@ -127,14 +138,19 @@ pub struct RealmPolicyOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
+/// `d2b status` output: one of the VM, inventory, or bridge-check shapes.
 pub enum StatusOutputV2 {
+    /// Per-VM status.
     Vm(Box<StatusVmOutputV2>),
+    /// Whole-inventory status.
     Inventory(Box<StatusInventoryOutputV2>),
+    /// Bridge isolation check status.
     CheckBridges(Box<StatusBridgeCheckOutputV2>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `d2b status --inventory` output: runtime plus one row per VM.
 pub struct StatusInventoryOutputV2 {
     pub runtime: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,27 +160,36 @@ pub struct StatusInventoryOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
+/// api-ready state of the last VM start in split mode.
 pub enum ApiReadyStatusV1 {
+    /// A simple closed state.
     Simple(ApiReadySimple),
+    /// A terminal error state.
     WithError(ApiReadyErrorV1),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// The error text of a failed api-ready wait.
 pub struct ApiReadyErrorV1 {
     pub error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
+/// Closed api-ready states without an error payload.
 pub enum ApiReadySimple {
+    /// The API became ready.
     Yes,
+    /// The API is still starting.
     Pending,
+    /// The wait timed out.
     Timeout,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One VM's status row.
 pub struct StatusVmOutputV2 {
     pub name: String,
     pub env: Option<String>,
@@ -206,6 +231,7 @@ pub struct StatusVmOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Live-pool integrity verdict for one VM.
 pub struct LivePoolIntegrityOutputV1 {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +245,7 @@ pub struct LivePoolIntegrityOutputV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Legacy per-VM service-state map (V2).
 pub struct StatusServicesOutputV2 {
     pub d2b: String,
     pub microvm: String,
@@ -298,6 +325,7 @@ impl StatusServicesOutputV3 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Runner-parity evidence for one VM.
 pub struct RunnerParityOutputV2 {
     pub declared_runner: String,
     pub runner_parity_path: String,
@@ -306,6 +334,7 @@ pub struct RunnerParityOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Bridge isolation check output for one runtime.
 pub struct StatusBridgeCheckOutputV2 {
     pub mode: String,
     pub status: String,
@@ -315,6 +344,7 @@ pub struct StatusBridgeCheckOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// Full `d2b audit` output: host posture plus per-VM sidecar evidence.
 pub struct AuditOutputV2 {
     pub kvm_dev_mode: String,
     pub wayland_user_in_kvm: bool,
@@ -335,6 +365,7 @@ pub struct AuditOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One VM's virtiofsd audit evidence.
 pub struct AuditVirtiofsdOutputV2 {
     pub user: String,
     pub caps_dropped: Vec<String>,
@@ -344,6 +375,7 @@ pub struct AuditVirtiofsdOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One VM's sshd password-authentication audit evidence.
 pub struct AuditSshOutputV2 {
     #[serde(rename = "PasswordAuthentication")]
     pub password_authentication: Option<bool>,
@@ -351,6 +383,7 @@ pub struct AuditSshOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One bridge's isolation audit evidence.
 pub struct AuditBridgeIsolationOutputV2 {
     pub bridge: String,
     pub tap: String,
@@ -360,6 +393,7 @@ pub struct AuditBridgeIsolationOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One VM's gpu/snd sidecar audit evidence.
 pub struct AuditSidecarsOutputV2 {
     pub gpu_active: bool,
     pub snd_active: bool,
@@ -369,6 +403,7 @@ pub struct AuditSidecarsOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// One environment's usbipd audit evidence.
 pub struct AuditUsbipEnvOutputV2 {
     pub socket_active: bool,
     pub backend_active: bool,
@@ -377,6 +412,7 @@ pub struct AuditUsbipEnvOutputV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `d2b auth status` output for the caller.
 pub struct AuthStatusOutputV2 {
     pub role: AuthRoleV2,
     pub effective_uid: u32,
@@ -387,14 +423,19 @@ pub struct AuthStatusOutputV2 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
+/// The caller's authenticated role.
 pub enum AuthRoleV2 {
+    /// No role is held.
     None,
+    /// Launcher scope only.
     Launcher,
+    /// Admin scope.
     Admin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One admin socket's reachability evidence.
 pub struct AuthSocketStatusV2 {
     pub name: String,
     pub path: String,
@@ -404,6 +445,7 @@ pub struct AuthSocketStatusV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One subcommand denied to the caller, with the refusal reason.
 pub struct AuthDeniedSubcommandV2 {
     pub name: String,
     pub reason: String,

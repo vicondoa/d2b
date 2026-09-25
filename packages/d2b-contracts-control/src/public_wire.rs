@@ -180,6 +180,7 @@ pub enum WorkloadOpResponse {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Workload-list query; the realm filters the result.
 pub struct WorkloadListArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realm: Option<String>,
@@ -275,6 +276,7 @@ pub struct LauncherExecResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `list` query filters: an optional environment and VM name.
 pub struct ListRequest {
     pub env: Option<String>,
     pub vm: Option<String>,
@@ -282,6 +284,7 @@ pub struct ListRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `status` query: optionally check bridges and select one VM.
 pub struct StatusRequest {
     #[serde(default)]
     pub check_bridges: bool,
@@ -290,6 +293,7 @@ pub struct StatusRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// `audit` query: filter, format, cursor, and page limit.
 pub struct AuditRequest {
     pub filter: Option<AuditSelector>,
     #[serde(default)]
@@ -1276,9 +1280,16 @@ impl NamedProcessStreamResponseFrame {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
+/// A validated shell name matching `^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$`.
 pub struct ShellName(String);
 
 impl ShellName {
+    /// Validate and construct a shell name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShellNameError`] when the value does not match the shell
+    /// name pattern.
     pub fn new(value: impl Into<String>) -> Result<Self, ShellNameError> {
         let value = value.into();
         if shell_name_valid(&value) {
@@ -1294,6 +1305,7 @@ impl ShellName {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The value is not a valid shell name.
 pub struct ShellNameError;
 
 impl fmt::Debug for ShellName {
@@ -2404,24 +2416,36 @@ fn is_default_usb_probe_entry_kind(kind: &UsbProbeEntryKind) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One USBIP probe entry describing a bus, its owner, and the next action.
 pub struct UsbipProbeEntry {
     #[serde(default, skip_serializing_if = "is_default_usb_probe_entry_kind")]
     pub kind: UsbProbeEntryKind,
+    /// VM this entry describes.
     pub vm: String,
+    /// Environment the VM belongs to.
     pub env: String,
+    /// Physical bus id probed.
     pub bus_id: String,
+    /// Broker claim lock path.
     pub lock_path: String,
+    /// Claim status.
     pub status: UsbipProbeStatus,
+    /// VM currently holding the claim, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_vm: Option<String>,
+    /// Attached USB slot, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
+    /// Media resource bound to the slot, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_ref: Option<MediaRef>,
+    /// How the device was discovered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_kind: Option<String>,
+    /// Alternate bus ids that match the declaration.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidate_bus_ids: Vec<String>,
+    /// Command the operator should run next.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_up_command: Option<String>,
     #[serde(default)]
@@ -2448,6 +2472,7 @@ pub struct UsbipProbeResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Audit entry filters: scope, severity, and outcome facets.
 pub struct AuditSelector {
     pub env: Option<String>,
     pub severity: Option<String>,
@@ -2492,6 +2517,7 @@ pub struct SocketReachability {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One `list` result row.
 pub struct ListEntry {
     pub env: Option<String>,
     pub graphics: bool,
@@ -2527,6 +2553,7 @@ pub struct ListEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One `status` VM row.
 pub struct VmStatus {
     pub bridge_checks: Vec<BridgeCheck>,
     pub env: Option<String>,
@@ -2563,6 +2590,7 @@ pub struct VmStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The observed service-state map of one VM.
 pub struct PublicVmServices {
     pub gpu: Option<String>,
     pub microvm: String,
@@ -2577,6 +2605,7 @@ pub struct PublicVmServices {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One bridge-presence check result.
 pub struct BridgeCheck {
     pub bridge: IfName,
     pub present: bool,
@@ -2585,6 +2614,7 @@ pub struct BridgeCheck {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The lifecycle envelope of one VM.
 pub struct VmLifecycle {
     #[serde(default)]
     pub degraded: bool,
@@ -2615,6 +2645,7 @@ pub enum VmLifecycleState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The active runner plus its capability and service summaries.
 pub struct RuntimeSummary {
     pub detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2630,6 +2661,7 @@ pub struct RuntimeSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Whether a VM is set to autostart, with the reason.
 pub struct VmAutostartPosture {
     pub mode: String,
     pub reason: String,
@@ -2637,6 +2669,7 @@ pub struct VmAutostartPosture {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Optional guest-media status attached to a VM row.
 pub struct QemuMediaStatus {
     pub firmware_mode: String,
     pub media: Vec<QemuMediaSourceStatus>,
@@ -2645,6 +2678,7 @@ pub struct QemuMediaStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Runner-side QMP media state for one VM.
 pub struct QemuMediaRunnerStatus {
     pub pre_cont_progress: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2655,6 +2689,7 @@ pub struct QemuMediaRunnerStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// One attached media source's status.
 pub struct QemuMediaSourceStatus {
     pub format: String,
     pub media_ref: String,
@@ -2666,6 +2701,7 @@ pub struct QemuMediaSourceStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// The media registry's convergence state for one source.
 pub struct QemuMediaRegistryStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remediation: Option<String>,
