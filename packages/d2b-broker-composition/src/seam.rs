@@ -187,6 +187,40 @@ pub fn register_production_handlers(
     register_declared_handlers(declarations)
 }
 
+/// A wiring violation between the routing rule and the registered handlers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupRoutingViolation {
+    /// A handler is registered for an operation the routing rule refuses
+    /// admission to the in-broker table.
+    UnadmittedHandler {
+        /// The registered operation.
+        operation: String,
+    },
+    /// A committed operation the rule admits has no registered handler.
+    MissingHandlers {
+        /// The admitted operations without handlers.
+        operations: Vec<&'static str>,
+    },
+}
+
+impl fmt::Display for StartupRoutingViolation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnadmittedHandler { operation } => write!(
+                formatter,
+                "handler registered for {operation}, but the routing rule refuses it admission to the in-broker table"
+            ),
+            Self::MissingHandlers { operations } => write!(
+                formatter,
+                "committed operation(s) route to the in-broker leg with no registered handler: {}",
+                operations.join(", ")
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StartupRoutingViolation {}
+
 /// The startup routing invariant.
 ///
 /// Verifies that every committed row the rule would admit in-broker has a
@@ -195,23 +229,22 @@ pub fn register_production_handlers(
 /// gap (an admitted row with no handler, or a handler for a forwarded row)
 /// fails the broker closed at startup instead of surfacing as a
 /// per-call unregistered-handler refusal.
-pub fn verify_startup_routing(registered: &[&str]) -> Result<(), String> {
+pub fn verify_startup_routing(registered: &[&str]) -> Result<(), StartupRoutingViolation> {
     let mut admitted = crate::routing::catalog_admitted_operations();
     for operation in registered {
         let Some(index) = admitted.iter().position(|row| *row == *operation) else {
-            return Err(format!(
-                "handler registered for {operation}, but the routing rule refuses it admission to the in-broker table"
-            ));
+            return Err(StartupRoutingViolation::UnadmittedHandler {
+                operation: (*operation).to_owned(),
+            });
         };
         admitted.remove(index);
     }
     if admitted.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "committed operation(s) route to the in-broker leg with no registered handler: {}",
-            admitted.join(", ")
-        ))
+        Err(StartupRoutingViolation::MissingHandlers {
+            operations: admitted,
+        })
     }
 }
 
