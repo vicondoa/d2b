@@ -59,6 +59,11 @@ NIX_BIN=$(runfile "__NIX_KEY__")
 PYTHON_BIN=$(runfile "__PYTHON_KEY__")
 PEAK_RSS=$(runfile "__PEAK_KEY__")
 FLAKE_PATH=$(runfile "__FLAKE_KEY__")
+# The runfile can be a symlink into the Bazel output tree (runfiles tree
+# layout). Resolve it to the real workspace file so nix never receives a
+# path under bazel-out/, which its flake source rules refuse inside a git
+# repository.
+FLAKE_PATH=$(readlink -f -- "$FLAKE_PATH")
 ROOT=${FLAKE_PATH%/flake.nix}
 if [ "$ROOT" = "$FLAKE_PATH" ]; then
     ROOT=.
