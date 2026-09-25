@@ -16,3 +16,5 @@
 - A cloner running omp outside `nix develop` on a host without node must
   install node (for example `nix profile install nixpkgs#nodejs`) or enter
   the devShell before the `npx`-based server can launch.
+- AGENTS.md gains a Codegraph section with the per-checkout init steps and
+  the agent usage guidance shipped in the tool's own MCP instructions.

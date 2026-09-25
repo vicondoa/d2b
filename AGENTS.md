@@ -52,11 +52,46 @@ Use this index, then open the focused document instead of expanding this file.
 | Add, move, or retire tests | [`tests/AGENTS.md`](./tests/AGENTS.md) |
 | Worktrees, review, PRs, merge, and disk hygiene | [`docs/contributing/workflow.md`](./docs/contributing/workflow.md), especially the [reviewed-head lifecycle](./docs/contributing/workflow.md#reviewed-head-pr-lifecycle) |
 | Changelog or commit grammar | [`docs/contributing/changelog-and-commits.md`](./docs/contributing/changelog-and-commits.md) |
-| Codegraph MCP server and per-clone index init | [`.omp/mcp.json`](./.omp/mcp.json) wires the codegraph MCP server for omp sessions; run `nix develop -c codegraph init` once per fresh clone to build the gitignored `.codegraph/` index, and re-run it if graph tools return empty or stale results. The `npx` launch needs node: inside `nix develop` the devShell provides it; outside it, install node first (for example `nix profile install nixpkgs#nodejs`) or the server will not launch. The tool sends anonymous usage telemetry by default; opt out with `codegraph telemetry off` or `CODEGRAPH_TELEMETRY=0`. |
+| Codegraph MCP server and agent usage | [`.omp/mcp.json`](./.omp/mcp.json) wires the server; see [Codegraph (MCP code intelligence)](#codegraph-mcp-code-intelligence) below for per-checkout init and tool guidance |
 | Gates, heavy lanes, and build profiles | [`docs/contributing/gates-and-lints.md`](./docs/contributing/gates-and-lints.md) |
 | Architecture and per-Guest/provider features | [`docs/contributing/architecture.md`](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Critical subsystem invariants | [`docs/contributing/critical-subsystems.md`](./docs/contributing/critical-subsystems.md) |
 | Contributor orchestration and host distribution | [`d2b-gascity`](https://github.com/vicondoa/d2b-gascity) for orchestration and [`gascity.nix`](https://github.com/vicondoa/gascity.nix) for NixOS distribution and installation |
+
+## Codegraph (MCP code intelligence)
+
+[`.omp/mcp.json`](./.omp/mcp.json) wires the codegraph MCP server (pinned
+`@colbymchenry/codegraph@1.6.0`) into omp sessions. Every checkout - including
+every `git worktree` - builds its own gitignored `.codegraph/` index: run
+`nix develop -c codegraph init` once per fresh clone or worktree, and re-run it
+if graph tools return empty or stale results. The first launch downloads the
+pinned package over the network. The `npx` launch needs node: the devShell
+provides it; outside `nix develop`, install node first (for example
+`nix profile install nixpkgs#nodejs`). The tool sends anonymous usage telemetry
+by default; opt out with `codegraph telemetry off` or `CODEGRAPH_TELEMETRY=0`.
+
+Agent usage, per the tool's own instructions:
+
+- There is a single tool, `codegraph_explore`, and it is Read-equivalent: call
+  it BEFORE grepping or reading files, with a natural-language question or a bag
+  of symbol/file names. It returns the verbatim, line-numbered source of the
+  relevant symbols grouped by file, plus the call paths between them (including
+  dynamic-dispatch hops grep cannot follow) and a blast-radius summary.
+- ONE call usually answers the whole question. Follow up with another
+  `codegraph_explore` naming more specific symbols instead of delegating
+  exploration to a separate file-reading sub-task or a grep + read loop; both
+  repeat work codegraph already did.
+- Trust codegraph results - they come from a full AST parse. Do not re-verify
+  them with grep. Reach for raw `Read`/`Grep` only for details codegraph did not
+  cover or for what it does not index (configs, docs).
+- When a response starts with the staleness banner ("Some files referenced below
+  were edited since the last index sync"), re-read only the listed files; every
+  file not in the banner is fresh. A banner saying auto-sync is disabled means
+  the whole index is frozen: read files directly until it is resolved.
+- If a project reports it is not indexed (no `.codegraph/`), use built-in tools
+  for that project for the rest of the session; indexing is the user's decision.
+- The index lags writes by about one second, and codegraph performs no live
+  correctness validation: the compiler, tests, and linters still own that.
 
 ## Mandatory contributor-agent workflow
 
