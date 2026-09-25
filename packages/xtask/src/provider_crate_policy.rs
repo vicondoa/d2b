@@ -4676,6 +4676,8 @@ struct FamilyKnowledgeSignal {
     class: FamilySignalClass,
     /// The literal, identifier, or state-handle name that carried the signal.
     text: String,
+    /// The count of `ServerState` references for a [`FamilySignalClass::ServerState`] signal.
+    count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5048,6 +5050,7 @@ fn module_family_signals(
                             line: index + 1,
                             class: FamilySignalClass::Assembled,
                             text: content.clone(),
+                            count: None,
                         });
                     }
                 }
@@ -5061,6 +5064,7 @@ fn module_family_signals(
                             line: index + 1,
                             class: FamilySignalClass::Literal,
                             text: content.clone(),
+                            count: None,
                         });
                     }
                 }
@@ -5078,6 +5082,7 @@ fn module_family_signals(
                         line: index + 1,
                         class: FamilySignalClass::Identifier,
                         text: identifier.to_owned(),
+                        count: None,
                     });
                 }
             }
@@ -5101,7 +5106,8 @@ fn module_family_signals(
             family: "d2bd-state",
             line,
             class: FamilySignalClass::ServerState,
-            text: format!("{server_state_count}"),
+            text: String::new(),
+            count: Some(server_state_count),
         });
     }
     Ok(())
@@ -5176,7 +5182,7 @@ fn render_family_knowledge_violation(signal: &FamilyKnowledgeSignal) -> String {
     if !matches!(signal.class, FamilySignalClass::ServerState) {
         diagnostic["text"] = serde_json::Value::String(signal.text.clone());
     } else {
-        diagnostic["count"] = serde_json::Value::from(signal.text.parse::<usize>().unwrap_or(0));
+        diagnostic["count"] = serde_json::Value::from(signal.count.unwrap_or(0));
     }
     diagnostic.to_string()
 }

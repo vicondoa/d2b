@@ -275,11 +275,19 @@ fn broker_operation_values(repo_root: &Path) -> Result<Vec<String>, String> {
     Ok(values)
 }
 
-/// The process-provider ids one consumer admits.
-fn process_provider_ids(metric_label: Option<bool>) -> Vec<String> {
+/// The process-provider ids the surface and audit catalogs admit.
+fn all_process_provider_ids() -> Vec<String> {
     PROCESS_PROVIDERS
         .iter()
-        .filter(|provider| metric_label.is_none_or(|metric| provider.metric_label == metric))
+        .map(|provider| provider.id.to_owned())
+        .collect()
+}
+
+/// The process-provider ids the metric label domain admits.
+fn metric_process_provider_ids() -> Vec<String> {
+    PROCESS_PROVIDERS
+        .iter()
+        .filter(|provider| provider.metric_label)
         .map(|provider| provider.id.to_owned())
         .collect()
 }
@@ -358,7 +366,7 @@ fn surface_catalog_source() -> String {
     source.push_str(&string_slice(
         "PROCESS_PROVIDERS",
         &["The process providers an audit record may name."],
-        &process_provider_ids(None),
+        &all_process_provider_ids(),
     ));
     source.push_str(&doc_lines(&[
         "The resource type a typed noun addresses.",
@@ -484,7 +492,7 @@ fn audit_catalog_source() -> String {
     source.push_str(&string_slice(
         "PROCESS_PROVIDERS",
         &["The process providers a process effect record may name."],
-        &process_provider_ids(None),
+        &all_process_provider_ids(),
     ));
     source.push_str(&doc_lines(&[
         "Whether the resource type is in the registry.",
@@ -525,7 +533,7 @@ fn telemetry_catalog_source(repo_root: &Path) -> Result<String, String> {
     source.push_str(&string_slice(
         "PROCESS_PROVIDERS",
         &["The process provider label domain."],
-        &process_provider_ids(Some(true)),
+        &metric_process_provider_ids(),
     ));
     source.push_str(&string_slice(
         "BROKER_OPERATION_VALUES",
@@ -695,9 +703,9 @@ mod tests {
     /// The process provider vocabulary projects both consumer domains.
     #[test]
     fn process_provider_domains_project_from_one_vocabulary() {
-        assert_eq!(process_provider_ids(None).len(), PROCESS_PROVIDERS.len());
+        assert_eq!(all_process_provider_ids().len(), PROCESS_PROVIDERS.len());
         assert_eq!(
-            process_provider_ids(Some(true)),
+            metric_process_provider_ids(),
             vec!["minijail".to_owned(), "systemd".to_owned()]
         );
     }

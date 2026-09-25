@@ -78,7 +78,7 @@ use crate::ResourceStoreBackend;
 /// carries `(epoch_seconds << 32) | sequence`, where `epoch_seconds =
 /// epoch_nanos / 1_000_000_000` and the sequence occupies the low 32 bits.
 /// Order-preserving within an epoch.
-pub fn wire_revision(revision: RuntimeRevision) -> u64 {
+pub(crate) fn wire_revision(revision: RuntimeRevision) -> u64 {
     (revision.epoch / 1_000_000_000) << 32 | (revision.sequence & 0xffff_ffff)
 }
 
@@ -205,7 +205,7 @@ fn map_manager_error(failure: ResourceError) -> StoreError {
 /// The API caller subject (R28): API operations admit at the manager
 /// boundary under the exact subject the authorization evaluation captured,
 /// with API provenance.
-pub fn api_subject(authorization: &AdmittedAuthorization) -> MutationSubject {
+pub(crate) fn api_subject(authorization: &AdmittedAuthorization) -> MutationSubject {
     MutationSubject {
         principal: authorization.subject_ref.to_canonical_string(),
         origin: ResourceProvenance::Api,
@@ -748,7 +748,7 @@ fn render_envelope(
         return envelope.canonical_bytes().map_err(|_| envelope_invalid());
     }
     let authored: serde_json::Value =
-        serde_json::from_slice(metadata).unwrap_or(serde_json::Value::Null);
+        serde_json::from_slice(metadata).map_err(|_| envelope_invalid())?;
     let field = |name: &str, fallback: serde_json::Value| {
         authored
             .get(name)

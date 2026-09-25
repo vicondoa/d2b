@@ -381,7 +381,8 @@ impl RecoveryAttestation {
             return Err(RecoveryError::TooLarge);
         }
         CanonicalJsonValue::parse(bytes).map_err(RecoveryError::CanonicalJson)?;
-        let value: Self = serde_json::from_slice(bytes).map_err(|_| RecoveryError::Json)?;
+        let value: Self = serde_json::from_slice(bytes)
+            .map_err(|error| RecoveryError::Json(error.to_string()))?;
         value.validate_shape()?;
         Ok(value)
     }
@@ -1558,8 +1559,11 @@ impl<'a> DeliveryLedger<'a> {
 pub enum RecoveryError {
     /// Canonical JSON rejected a duplicate, unknown numeric, or trailing value.
     CanonicalJson(CanonicalJsonError),
-    /// Typed JSON decoding failed.
-    Json,
+    /// Typed JSON decoding failed. Carries the bounded serde detail - field
+    /// names and positions only, never payload values.
+    Json(String),
+    /// The attestation file could not be opened or read.
+    Read,
     /// The record exceeded the bounded artifact size.
     TooLarge,
     /// Fixed artifact, version, or program shape failed.
@@ -1586,21 +1590,28 @@ pub enum RecoveryError {
 
 impl fmt::Display for RecoveryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::CanonicalJson(_) => "strict recovery JSON rejected",
-            Self::Json => "recovery attestation shape rejected",
-            Self::TooLarge => "recovery attestation is too large",
-            Self::Shape => "recovery attestation contract rejected",
-            Self::Binding => "recovery attestation binding rejected",
-            Self::Qualification => "recovery qualification rejected",
-            Self::Timestamp => "recovery timestamp rejected",
-            Self::Expiry => "recovery expiry rejected",
-            Self::Freshness => "recovery evidence is stale or not yet valid",
-            Self::InsufficientTtl => "recovery evidence lacks required remaining lifetime",
-            Self::ClosureUnavailable => "pinned closure or protected GC root is unavailable",
-            Self::ClosureMismatch => "pinned closure binding rejected",
-            Self::Clock => "verifier clock rejected",
-        })
+        match self {
+            Self::CanonicalJson(_) => formatter.write_str("strict recovery JSON rejected"),
+            Self::Json(detail) => {
+                write!(formatter, "recovery attestation shape rejected: {detail}")
+            }
+            Self::Read => formatter.write_str("recovery attestation file could not be read"),
+            Self::TooLarge => formatter.write_str("recovery attestation is too large"),
+            Self::Shape => formatter.write_str("recovery attestation contract rejected"),
+            Self::Binding => formatter.write_str("recovery attestation binding rejected"),
+            Self::Qualification => formatter.write_str("recovery qualification rejected"),
+            Self::Timestamp => formatter.write_str("recovery timestamp rejected"),
+            Self::Expiry => formatter.write_str("recovery expiry rejected"),
+            Self::Freshness => formatter.write_str("recovery evidence is stale or not yet valid"),
+            Self::InsufficientTtl => {
+                formatter.write_str("recovery evidence lacks required remaining lifetime")
+            }
+            Self::ClosureUnavailable => {
+                formatter.write_str("pinned closure or protected GC root is unavailable")
+            }
+            Self::ClosureMismatch => formatter.write_str("pinned closure binding rejected"),
+            Self::Clock => formatter.write_str("verifier clock rejected"),
+        }
     }
 }
 
@@ -1712,12 +1723,12 @@ fn sampled_unix_seconds() -> RecoveryResult<u64> {
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn read_attestation(path: &Path) -> RecoveryResult<Vec<u8>> {
-    let mut file = fs::File::open(path).map_err(|_| RecoveryError::Json)?;
+    let mut file = fs::File::open(path).map_err(|_| RecoveryError::Read)?;
     let mut bytes = Vec::new();
     file.by_ref()
         .take(MAX_JSON_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| RecoveryError::Json)?;
+        .map_err(|_| RecoveryError::Read)?;
     if bytes.len() > MAX_JSON_BYTES {
         return Err(RecoveryError::TooLarge);
     }

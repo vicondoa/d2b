@@ -435,7 +435,7 @@ const V3_PARSER_PROBES: &[(&str, &[&str])] = &[
             "endpoint",
             "list",
             "--endpoint-class",
-            "display",
+            "service",
             "--updates",
             "--json",
         ],

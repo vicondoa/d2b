@@ -1,6 +1,6 @@
 //! EphemeralProcess execution commands.
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 
 use crate::{
@@ -83,11 +83,38 @@ pub(crate) struct ExecLogsArgs {
     pub(crate) max_len: Option<u64>,
 }
 
+/// The exec kill signal vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ExecKillSignal {
+    Term,
+    Kill,
+    Int,
+    Hup,
+}
+
+impl ExecKillSignal {
+    /// The wire spelling of this signal.
+    pub(crate) fn as_wire_str(self) -> &'static str {
+        match self {
+            ExecKillSignal::Term => "term",
+            ExecKillSignal::Kill => "kill",
+            ExecKillSignal::Int => "int",
+            ExecKillSignal::Hup => "hup",
+        }
+    }
+}
+
+impl std::fmt::Display for ExecKillSignal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_wire_str())
+    }
+}
+
 #[derive(Debug, Args, Clone)]
 pub(crate) struct ExecKillArgs {
     pub(crate) resource_ref: String,
-    #[arg(long, default_value = "term")]
-    pub(crate) signal: String,
+    #[arg(long, default_value_t = ExecKillSignal::Term)]
+    pub(crate) signal: ExecKillSignal,
 }
 
 pub(crate) fn run(
@@ -342,19 +369,11 @@ fn kill(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let resource_ref = validate_exec_ref(context, &args.resource_ref, mode)?;
-    if !matches!(args.signal.as_str(), "term" | "kill" | "int" | "hup") {
-        return Err(context.failure(
-            "ref-invalid",
-            "exec signal must be term, kill, int, or hup",
-            mode,
-            2,
-        ));
-    }
     let value = context.invoke(
         "Cancel",
         json!({
             "resourceRef": resource_ref.to_canonical_string(),
-            "signal": args.signal,
+            "signal": args.signal.as_wire_str(),
         }),
         deadline,
         mode,
