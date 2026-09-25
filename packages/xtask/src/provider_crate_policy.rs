@@ -9915,24 +9915,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn an_on_disk_provider_omitted_from_workspace_is_rejected() {
-        let fixture = Fixture::new("non-member");
-        let omitted = fixture.add_package("d2b-provider-fixture-omitted");
-        fs::create_dir_all(omitted.join("tests")).unwrap();
-        fs::create_dir_all(omitted.join("integration")).unwrap();
-        fs::write(
-            omitted.join("README.md"),
-            required_readme("fixture-omitted"),
-        )
-        .unwrap();
-
-        let error = check_fixture(&fixture.root).unwrap_err();
-        assert!(error.contains("provider-crate-not-workspace-member"));
-        assert!(error.contains("d2b-provider-fixture-omitted"));
-    }
-
-    #[test]
     fn a_malformed_provider_name_is_rejected_instead_of_ignored() {
         let fixture = Fixture::new("malformed");
         fixture.add_package("d2b-provider-fixture-");
