@@ -7,7 +7,6 @@
 //! file owns only the resource-bundle envelope and the input/output contract.
 
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     env, fs,
     path::{Path, PathBuf},
@@ -23,15 +22,15 @@ use d2b_contracts_resource::v3::{
 use d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding;
 use d2b_resource_compiler::{
     ArtifactCatalogEntry, BootstrapBoundary, CatalogDigests, Diagnostic, StaticPublisherKeys,
-    VerifiedProviderArtifact, compile_linux_artifact, project_static_controller_processes,
-    resource_sort_key,
+    VerifiedProviderArtifact, bound_message, compile_linux_artifact,
+    project_static_controller_processes, resource_sort_key, sanitize_token,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 const RESOURCE_BUNDLE_DOMAIN_TAG: &str = "d2b:v3:resource-bundle";
-const MAX_DIAGNOSTIC_BYTES: usize = d2b_resource_compiler::MAX_DIAGNOSTIC_BYTES;
+
 const MAX_RESOURCES: usize = 4096;
 const MAX_RESOURCE_BYTES: usize = 512 * 1024;
 const MAX_SCHEMA_BYTES: usize = 8 * 1024 * 1024;
@@ -102,7 +101,7 @@ impl CliError {
         Self {
             code,
             exit_code: 1,
-            message: bound_ascii(message.as_ref()),
+            message: bound_message(message.as_ref()),
         }
     }
 
@@ -110,7 +109,7 @@ impl CliError {
         Self {
             code,
             exit_code,
-            message: bound_ascii(message.as_ref()),
+            message: bound_message(message.as_ref()),
         }
     }
 }
@@ -237,12 +236,11 @@ fn run() -> Result<(), CliError> {
 
 fn parse_args() -> Result<(PathBuf, PathBuf, Option<bool>), CliError> {
     let mut args = env::args_os();
-    let program = args.next().unwrap_or_default();
-    let Some(command) = args.next() else {
-        return Err(usage(&program));
+    let Some(command) = args.nth(1) else {
+        return Err(usage());
     };
     if command != "compile" {
-        return Err(usage(&program));
+        return Err(usage());
     }
 
     let mut input = None;
@@ -251,23 +249,22 @@ fn parse_args() -> Result<(PathBuf, PathBuf, Option<bool>), CliError> {
     while let Some(argument) = args.next() {
         match argument.to_str() {
             Some("--input") => {
-                input = Some(args.next().ok_or_else(|| usage(&program))?);
+                input = Some(args.next().ok_or_else(|| usage())?);
             }
             Some("--output") => {
-                output = Some(args.next().ok_or_else(|| usage(&program))?);
+                output = Some(args.next().ok_or_else(|| usage())?);
             }
             Some("--strict-secrets") => strict_override = Some(true),
             Some("--allow-inline-secrets") => strict_override = Some(false),
-            _ => return Err(usage(&program)),
+            _ => return Err(usage()),
         }
     }
-    let input = input.ok_or_else(|| usage(&program))?;
-    let output = output.ok_or_else(|| usage(&program))?;
+    let input = input.ok_or_else(|| usage())?;
+    let output = output.ok_or_else(|| usage())?;
     Ok((PathBuf::from(input), PathBuf::from(output), strict_override))
 }
 
-fn usage(program: &std::ffi::OsStr) -> CliError {
-    let _ = program;
+fn usage() -> CliError {
     CliError::new(
         "resource-compiler-usage",
         "usage: d2b-resource-compiler compile --input <declared-input.json> --output <bundle.json> [--strict-secrets]",
@@ -319,8 +316,8 @@ fn compile(
             "resource-compiler-content-hash-mismatch",
             format!(
                 "resource bundle contentHash differs between declared ({}) and compiler ({})",
-                safe_token(expected),
-                safe_token(&authored_content_hash)
+                sanitize_token(expected),
+                sanitize_token(&authored_content_hash)
             ),
         ));
     }
@@ -419,8 +416,8 @@ fn verify_artifact_catalog(input: &CompileInput) -> Result<String, CliError> {
             "resource-compiler-catalog-digest-mismatch",
             format!(
                 "artifact catalog digest differs between declared ({}) and realised ({})",
-                safe_token(expected),
-                safe_token(actual)
+                sanitize_token(expected),
+                sanitize_token(actual)
             ),
         ));
     }
@@ -434,7 +431,7 @@ fn verify_artifact_catalog(input: &CompileInput) -> Result<String, CliError> {
                     "provider-artifact-id-not-found",
                     format!(
                         "Provider artifact {} is absent from the realised artifact catalog",
-                        safe_token(&provider.artifact_id)
+                        sanitize_token(&provider.artifact_id)
                     ),
                 ));
             };
@@ -444,9 +441,9 @@ fn verify_artifact_catalog(input: &CompileInput) -> Result<String, CliError> {
                     "provider-artifact-type-invalid",
                     format!(
                         "Provider artifact {} type differs between declared ({}) and realised ({})",
-                        safe_token(&provider.artifact_id),
-                        safe_token(&provider.artifact_type),
-                        safe_token(artifact_type)
+                        sanitize_token(&provider.artifact_id),
+                        sanitize_token(&provider.artifact_type),
+                        sanitize_token(artifact_type)
                     ),
                 ));
             }
@@ -460,9 +457,9 @@ fn verify_artifact_catalog(input: &CompileInput) -> Result<String, CliError> {
                     format!(
                         "provider artifact {} digest package differs between catalog ({}) and \
                          compiler ({})",
-                        safe_token(&provider.artifact_id),
-                        safe_token(realised_package_digest),
-                        safe_token(&provider.package_digest)
+                        sanitize_token(&provider.artifact_id),
+                        sanitize_token(realised_package_digest),
+                        sanitize_token(&provider.package_digest)
                     ),
                 ));
             }
@@ -488,8 +485,8 @@ fn compile_providers(
                 "provider-artifact-type-invalid",
                 format!(
                     "provider artifact {} declares type {} instead of provider",
-                    safe_token(&provider.artifact_id),
-                    safe_token(&provider.artifact_type)
+                    sanitize_token(&provider.artifact_id),
+                    sanitize_token(&provider.artifact_type)
                 ),
             ));
         }
@@ -599,7 +596,7 @@ fn check_provider_resource_admission(
                 "provider-artifact-id-not-found",
                 format!(
                     "Provider resource artifact ID {} is not present in the declared provider catalog",
-                    safe_token(artifact_id)
+                    sanitize_token(artifact_id)
                 ),
             ));
         };
@@ -608,7 +605,7 @@ fn check_provider_resource_admission(
                 "provider-artifact-type-invalid",
                 format!(
                     "Provider resource artifact {} does not select a provider artifact",
-                    safe_token(artifact_id)
+                    sanitize_token(artifact_id)
                 ),
             ));
         }
@@ -635,7 +632,7 @@ fn check_provider_resource_admission(
                     "provider-schema-digest-missing",
                     format!(
                         "Provider {} has no declared schema digest",
-                        safe_token(provider_name)
+                        sanitize_token(provider_name)
                     ),
                 )
             })?;
@@ -644,9 +641,9 @@ fn check_provider_resource_admission(
                 "provider-schema-digest-mismatch",
                 format!(
                     "Provider {} schema digest differs between declared ({}) and compiler ({})",
-                    safe_token(provider_name),
-                    safe_token(expected),
-                    safe_token(&provider.config_schema_digest)
+                    sanitize_token(provider_name),
+                    sanitize_token(expected),
+                    sanitize_token(&provider.config_schema_digest)
                 ),
             ));
         }
@@ -666,9 +663,9 @@ fn check_resource_type_collisions(providers: &[CompiledProvider]) -> Result<(), 
                     "provider-resourcetype-collision",
                     format!(
                         "Provider artifacts {} and {} export the same ResourceType {}",
-                        safe_token(&previous),
-                        safe_token(&provider.input.artifact_id),
-                        safe_token(&resource_type)
+                        sanitize_token(&previous),
+                        sanitize_token(&provider.input.artifact_id),
+                        sanitize_token(&resource_type)
                     ),
                 ));
             }
@@ -696,12 +693,28 @@ fn provider_resource_types(manifest: &ProviderManifest) -> BTreeSet<String> {
     types
 }
 
+/// Write sink that counts serialized bytes without retaining them.
+struct ByteCounter(usize);
+
+impl std::io::Write for ByteCounter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.0 += buffer.len();
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn validate_resources(input: &CompileInput, strict_secrets: bool) -> Result<(), CliError> {
     let mut previous_key: Option<(String, String)> = None;
-    let schema_cache = SchemaCache::new(input.schema_root.as_deref())?;
+    let mut schema_cache = SchemaCache::new(input.schema_root.as_deref())?;
     let mut identities = BTreeSet::new();
     for (index, resource) in input.resources.iter().enumerate() {
-        if serde_json::to_vec(resource).map_or(usize::MAX, |bytes| bytes.len()) > MAX_RESOURCE_BYTES
+        let mut counter = ByteCounter(0);
+        if serde_json::to_writer(&mut counter, resource).is_err()
+            || counter.0 > MAX_RESOURCE_BYTES
         {
             return Err(CliError::new(
                 "resource-compiler-resource-too-large",
@@ -767,9 +780,9 @@ fn validate_resources(input: &CompileInput, strict_secrets: bool) -> Result<(), 
                 "resource-compiler-resource-zone-mismatch",
                 format!(
                     "resource {} is assigned to Zone {} instead of the declared Zone {}",
-                    safe_token(name),
-                    safe_token(zone),
-                    safe_token(&input.zone)
+                    sanitize_token(name),
+                    sanitize_token(zone),
+                    sanitize_token(&input.zone)
                 ),
             ));
         }
@@ -795,7 +808,7 @@ fn validate_resources(input: &CompileInput, strict_secrets: bool) -> Result<(), 
                 "resource-compiler-inline-secret",
                 format!(
                     "resource {} contains inline secret-shaped material",
-                    safe_token(name)
+                    sanitize_token(name)
                 ),
             ));
         }
@@ -1145,7 +1158,7 @@ fn schema_shape_matches(schema: &Value, value: &Value) -> bool {
 
 struct SchemaCache {
     root: Option<PathBuf>,
-    schemas: RefCell<BTreeMap<String, Value>>,
+    schemas: BTreeMap<String, Value>,
 }
 
 fn validate_schema_document(schema: &Value) -> Result<(), CliError> {
@@ -1266,7 +1279,7 @@ fn validate_schema_node_with_budget(
         {
             return Err(schema_integrity_error(&format!(
                 "{path} contains unsupported keyword {}",
-                safe_token(keyword)
+                sanitize_token(keyword)
             )));
         }
     }
@@ -1464,8 +1477,7 @@ fn validate_schema_node_with_budget(
             )?;
         }
     }
-    if let Some(Value::Object(_)) = object.get("additionalProperties") {
-        let additional = object.get("additionalProperties").expect("checked above");
+    if let Some(additional @ Value::Object(_)) = object.get("additionalProperties") {
         validate_schema_node_with_budget(
             additional,
             root,
@@ -1474,8 +1486,7 @@ fn validate_schema_node_with_budget(
             budget,
         )?;
     }
-    if let Some(Value::Object(_)) = object.get("items") {
-        let items = object.get("items").expect("checked above");
+    if let Some(items @ Value::Object(_)) = object.get("items") {
         validate_schema_node_with_budget(items, root, &format!("{path}.items"), depth + 1, budget)?;
     }
     for keyword in ["allOf", "anyOf", "oneOf"] {
@@ -1623,13 +1634,13 @@ impl SchemaCache {
         }
         Ok(Self {
             root: root.map(Path::to_owned),
-            schemas: RefCell::new(BTreeMap::new()),
+            schemas: BTreeMap::new(),
         })
     }
 
     #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-    fn schema(&self, resource_type: &str) -> Result<Option<Value>, CliError> {
-        if let Some(schema) = self.schemas.borrow().get(resource_type) {
+    fn schema(&mut self, resource_type: &str) -> Result<Option<Value>, CliError> {
+        if let Some(schema) = self.schemas.get(resource_type) {
             return Ok(Some(schema.clone()));
         }
         let Some(root) = &self.root else {
@@ -1648,7 +1659,7 @@ impl SchemaCache {
                 "resource-compiler-schema-missing",
                 format!(
                     "schema for ResourceType {} is missing",
-                    safe_token(resource_type)
+                    sanitize_token(resource_type)
                 ),
             ));
         }
@@ -1677,7 +1688,6 @@ impl SchemaCache {
             ));
         }
         self.schemas
-            .borrow_mut()
             .insert(resource_type.to_owned(), schema.clone());
         Ok(Some(schema))
     }
@@ -1986,7 +1996,7 @@ fn compare_schema_numbers(
 fn schema_error(path: &str, reason: &str) -> CliError {
     CliError::new(
         "resource-compiler-schema-invalid",
-        format!("{} {}", safe_token(path), reason),
+        format!("{} {}", sanitize_token(path), reason),
     )
 }
 
@@ -2528,35 +2538,4 @@ fn valid_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
 }
 
-fn safe_token(value: &str) -> String {
-    let mut output = String::new();
-    for character in value.chars() {
-        if (character.is_ascii_graphic() && character != '/' && character != '\\')
-            || character == ' '
-        {
-            output.push(character);
-        } else {
-            output.push('?');
-        }
-    }
-    bound_ascii(&output)
-}
 
-fn bound_ascii(value: &str) -> String {
-    let mut output = String::new();
-    for character in value.chars() {
-        let character = if character.is_control() {
-            ' '
-        } else {
-            character
-        };
-        if !character.is_ascii() || output.len() + 1 > MAX_DIAGNOSTIC_BYTES {
-            break;
-        }
-        output.push(character);
-    }
-    if output.len() < value.len() && output.len() + 3 <= MAX_DIAGNOSTIC_BYTES {
-        output.push_str("...");
-    }
-    output
-}

@@ -1721,16 +1721,14 @@ fn check_metadata_closure(
         "provider-manifest.json",
         "provider-manifest.json.sig",
     ]);
-    let mut unexpected = Vec::new();
-    for entry_name in entries {
-        let Some(name) = entry_name.to_str() else {
-            unexpected.push("<non-utf8>".to_owned());
-            continue;
-        };
-        if !expected.contains(name) {
-            unexpected.push(truncate_entry(name));
-        }
-    }
+    let mut unexpected: Vec<String> = entries
+        .into_iter()
+        .filter_map(|entry_name| match entry_name.to_str() {
+            Some(name) if expected.contains(name) => None,
+            Some(name) => Some(truncate_entry(name)),
+            None => Some("<non-utf8>".to_owned()),
+        })
+        .collect();
     if unexpected.is_empty() {
         return Ok(());
     }
@@ -1910,13 +1908,15 @@ fn validate_executables<A: AnchoredDir>(
     if let Some(declared) = declared.as_ref() {
         let declared_names: BTreeSet<_> = declared.keys().cloned().collect();
         if names != declared_names {
-            let mut difference = Vec::new();
-            for name in names.difference(&declared_names) {
-                difference.push(format!("bin={}", truncate_entry(name)));
-            }
-            for name in declared_names.difference(&names) {
-                difference.push(format!("manifest={}", truncate_entry(name)));
-            }
+            let difference: Vec<String> = names
+                .difference(&declared_names)
+                .map(|name| format!("bin={}", truncate_entry(name)))
+                .chain(
+                    declared_names
+                        .difference(&names)
+                        .map(|name| format!("manifest={}", truncate_entry(name))),
+                )
+                .collect();
             return Err(executable_set_mismatch(
                 entry,
                 &difference,
@@ -2398,17 +2398,21 @@ fn safe_label(value: &str) -> String {
     sanitize_token(value)
 }
 
-fn sanitize_token(value: &str) -> String {
-    let mut output = String::new();
-    for character in value.chars() {
-        if (character.is_ascii_graphic() && character != '/' && character != '\\')
-            || character == ' '
-        {
-            output.push(character);
-        } else {
-            output.push('?');
-        }
-    }
+/// Sanitize a token for diagnostic output, replacing non-graphic characters
+/// with `?` and bounding the result.
+pub fn sanitize_token(value: &str) -> String {
+    let output: String = value
+        .chars()
+        .map(|character| {
+            if (character.is_ascii_graphic() && character != '/' && character != '\\')
+                || character == ' '
+            {
+                character
+            } else {
+                '?'
+            }
+        })
+        .collect();
     bound_message(&output)
 }
 
@@ -2435,7 +2439,8 @@ fn magic_hex(bytes: &[u8]) -> String {
     output
 }
 
-fn bound_message(value: &str) -> String {
+/// Bound a diagnostic message to ASCII within the diagnostic byte limit.
+pub fn bound_message(value: &str) -> String {
     let mut output = String::new();
     for character in value.chars() {
         let character = if character.is_control() {
