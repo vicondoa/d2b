@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 /// The target-local Process template used for activation effects.
 pub const ACTIVATION_RUNNER_TEMPLATE: &str = "activation-nixos-runner";
 /// The generic one-shot process resource type used for activation effects.
-pub const ACTIVATION_RUNNER_RESOURCE_TYPE: &str = "EphemeralProcess";
+const ACTIVATION_RUNNER_RESOURCE_TYPE: &str = "EphemeralProcess";
 
 /// Caller role derived from the authenticated daemon request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
