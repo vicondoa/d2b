@@ -958,10 +958,10 @@ mod tests {
     use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
-        ACTIVATION_TYPE_NAME, ActivationApplicationVerifier, ActivationController,
-        ActivationDriver, ActivationDriverArgs, ActivationDriverFactory, ActivationDriverStatus,
-        HostHandoffResult, RunnerRequest, activation_runner_ref, activation_spec_decoder,
-        ordinal_from_name,
+        ACTIVATION_TYPE_NAME, RUNNER_TYPE_NAME, ActivationApplicationVerifier,
+        ActivationController, ActivationDriver, ActivationDriverArgs, ActivationDriverFactory,
+        ActivationDriverStatus, HostHandoffResult, RunnerRequest, activation_detail,
+        activation_runner_ref, activation_spec_decoder, host_handoff_outcome, ordinal_from_name,
     };
     use crate::ActivationVerificationError;
     use crate::test_support::FakeActivationEffects;
@@ -1453,6 +1453,63 @@ mod tests {
         assert_eq!(status(&f.ctx).detail(), ActivationDetail::Applying);
     }
 
+    #[test]
+    fn host_handoff_outcome_maps_equal_generations_to_stale() {
+        assert_eq!(
+            host_handoff_outcome(HostHandoffResult::Completed {
+                source_generation: 2,
+                target_generation: 2,
+            }),
+            ActivationOutcomeCode::StaleGeneration
+        );
+        assert_eq!(
+            host_handoff_outcome(HostHandoffResult::Completed {
+                source_generation: 1,
+                target_generation: 2,
+            }),
+            ActivationOutcomeCode::Succeeded
+        );
+    }
+
+    #[test]
+    fn activation_detail_covers_superseded_and_adopted_branches() {
+        // Superseded: a non-success outcome observed at a Ready phase.
+        assert_eq!(
+            activation_detail(
+                ActivationMode::Switch,
+                ActivationOutcomeCode::StaleGeneration,
+                ResourcePhase::Ready,
+            ),
+            ActivationDetail::Superseded
+        );
+        assert_eq!(
+            activation_detail(
+                ActivationMode::Boot,
+                ActivationOutcomeCode::HelperFailed,
+                ResourcePhase::Ready,
+            ),
+            ActivationDetail::Superseded
+        );
+        // Adopted wins regardless of mode and phase.
+        assert_eq!(
+            activation_detail(
+                ActivationMode::Switch,
+                ActivationOutcomeCode::Adopted,
+                ResourcePhase::Pending,
+            ),
+            ActivationDetail::Adopted
+        );
+        // A non-success outcome at a non-Ready phase stays Planning.
+        assert_eq!(
+            activation_detail(
+                ActivationMode::Switch,
+                ActivationOutcomeCode::StaleGeneration,
+                ResourcePhase::Pending,
+            ),
+            ActivationDetail::Planning
+        );
+    }
+
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_an_existing_runner_and_reports_missing_without_one() {
@@ -1492,6 +1549,59 @@ mod tests {
         assert_eq!(
             host_driver.recover(&mut host.ctx).await.expect("recover"),
             RecoveryOutcome::Missing
+        );
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn recover_adopts_an_existing_owned_runner_and_projects_staged() {
+        let runner_ref = activation_runner_ref(
+            &ResourceRef::parse(&format!("{ACTIVATION_TYPE_NAME}/gen-1"))
+                .expect("generation ref"),
+        );
+        let manager = RecordingManagerEndpoint::new()
+            .with_owner_uid(GENERATION_UID)
+            .with_row(StoredDesiredResource {
+                key: ResourceKey::new("work", RUNNER_TYPE_NAME, runner_ref.name().as_str()),
+                owner_uid: Some(GENERATION_UID),
+                ..generation_row(
+                    "gen-1",
+                    "Guest/guest-a",
+                    ActivationMode::Switch,
+                    None,
+                    [0x77; 16],
+                )
+            });
+        let mut f = fixture(
+            generation_row(
+                "gen-1",
+                "Guest/guest-a",
+                ActivationMode::Switch,
+                None,
+                GENERATION_UID,
+            ),
+            manager.clone(),
+        );
+        let mut d = driver(
+            FakeActivationEffects::new(HostHandoffResult::Incomplete),
+            Arc::new(AllowVerifier),
+        )
+        .await;
+
+        assert_eq!(
+            d.recover(&mut f.ctx).await.expect("recover"),
+            RecoveryOutcome::Adopted
+        );
+        let projected = status(&f.ctx);
+        assert_eq!(projected.phase(), ResourcePhase::Pending);
+        assert_eq!(projected.detail(), ActivationDetail::Staged);
+        assert!(
+            manager
+                .order()
+                .iter()
+                .all(|call| call.starts_with("watch:")),
+            "adoption must not re-mint or dispatch: {:?}",
+            manager.order()
         );
     }
 
