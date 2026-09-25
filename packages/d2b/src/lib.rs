@@ -41,7 +41,7 @@ mod zone_support_bundle;
 pub(crate) const MAX_FRAME_BYTES: usize = d2b_contracts::MAX_FRAME_SIZE;
 
 /// Exit code for api-ready timeout in strict mode.
-pub const EXIT_API_TIMEOUT: i32 = 33;
+pub(crate) const EXIT_API_TIMEOUT: i32 = 33;
 
 #[derive(Debug)]
 pub(crate) struct CliFailure {

@@ -100,7 +100,7 @@ fn repo_root() -> PathBuf {
 fn wave_catalog_section() -> String {
     let source = include_str!("../src/host_validate.rs");
     let start = source
-        .find("pub const WAVE_CATALOG")
+        .find("pub(crate) const WAVE_CATALOG")
         .expect("WAVE_CATALOG declaration is present");
     let tail = &source[start..];
     let end = tail
