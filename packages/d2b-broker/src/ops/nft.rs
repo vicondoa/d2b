@@ -781,13 +781,15 @@ fn render_projection_mutation(
 }
 
 fn projection_digest(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let raw: [u8; 32] = Sha256Hasher::digest(bytes).into();
-    format!(
-        "sha256:{}",
-        raw.iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    )
+    let mut digest = String::with_capacity("sha256:".len() + raw.len() * 2);
+    digest.push_str("sha256:");
+    for byte in raw {
+        digest.push(HEX[(byte >> 4) as usize] as char);
+        digest.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    digest
 }
 
 struct ProjectionLock(std::fs::File);

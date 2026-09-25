@@ -19,6 +19,7 @@
 use std::os::fd::AsFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use d2b_host::hardlink_farm;
 use nix::unistd::{Gid, Uid, chown};
@@ -112,6 +113,15 @@ enum PathKind {
 /// validated live by `tests/host-integration/state-posture-contract.nix`.
 const STATE_POSTURE_CONTRACT: &str = include_str!("state-posture-contract.json");
 
+/// The embedded contract, parsed once. The document is ~600 lines and every
+/// posture pass resolves every row (per-VM passes re-resolve per row too),
+/// so a per-call parse would re-parse the same document many times per sync
+/// pass; the cached parse keeps the fail-closed error path intact.
+static CONTRACT: LazyLock<Result<ContractFile, PostureError>> = LazyLock::new(|| {
+    serde_json::from_str(STATE_POSTURE_CONTRACT)
+        .map_err(|err| contract_error(format!("parse: {err}")))
+});
+
 const STORE_VIEW_TREE_ID: &str = "guest-store-view";
 
 #[derive(Debug, serde::Deserialize)]
@@ -195,8 +205,7 @@ fn contract_store_view_levels(
     principals: &Principals,
     vm: &str,
 ) -> Result<Vec<ResolvedLevel>, PostureError> {
-    let contract: ContractFile = serde_json::from_str(STATE_POSTURE_CONTRACT)
-        .map_err(|err| contract_error(format!("parse: {err}")))?;
+    let contract: &ContractFile = CONTRACT.as_ref().map_err(Clone::clone)?;
     if contract.schema_version != 1 {
         return Err(contract_error(format!(
             "unsupported schemaVersion {}",

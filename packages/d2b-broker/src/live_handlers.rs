@@ -1745,7 +1745,7 @@ fn spawn_obs_vsock_acl_retry(uid: u32, socket: PathBuf) {
     });
 }
 
-fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
+async fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError> {
     if !matches!(
         plan.seccomp_policy_ref.as_deref(),
         Some("w1-vsock-relay" | "w1-otel-host-bridge")
@@ -1756,15 +1756,33 @@ fn refresh_obs_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHandlerError>
         return Ok(());
     };
     let uid = plan.uid;
-    match grant_obs_vsock_acl_once(uid, &socket) {
-        Ok(true) => Ok(()),
-        Ok(false) => {
+    // The initial attempt is a setfacl shellout, which has no async form;
+    // it runs on the broker's bounded dispatch pool like every other
+    // kernel-path step - the same pool the retry path uses - so a socket
+    // that is not there yet holds no worker and no thread. A handler
+    // driven outside a serving broker (tests) has no pool to defer to and
+    // runs the attempt inline, exactly as before.
+    let attempt = match crate::runtime::broker_background() {
+        Some(background) => {
+            let socket = socket.clone();
+            background
+                .dispatches
+                .run(move || grant_obs_vsock_acl_once(uid, &socket))
+                .await
+        }
+        None => Ok(grant_obs_vsock_acl_once(uid, &socket)),
+    };
+    match attempt {
+        Ok(Ok(true)) => Ok(()),
+        Ok(Ok(false)) => {
             spawn_obs_vsock_acl_retry(uid, socket);
             Ok(())
         }
-        Err(detail) => Err(LiveHandlerError::SpawnFailed {
+        Ok(Err(detail)) => Err(LiveHandlerError::SpawnFailed {
             detail: format!("refresh obs-vsock ACL for runner uid {uid}: {detail}"),
         }),
+        // The pool is gone, so the broker is shutting down.
+        Err(_) => Ok(()),
     }
 }
 
@@ -2098,7 +2116,7 @@ async fn refresh_spawn_runner_acls(
             }
         })?;
     }
-    refresh_obs_vsock_acl(plan)?;
+    refresh_obs_vsock_acl(plan).await?;
     refresh_component_session_vsock_acl(plan)?;
 
     Ok(())

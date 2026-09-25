@@ -1163,7 +1163,7 @@ impl BrokerEnvelope {
     ) -> Result<Invocation, EnvelopeRefusal> {
         let invocation_id = format!(
             "invocation-{}",
-            self.invocations.fetch_add(1, Ordering::AcqRel)
+            self.invocations.fetch_add(1, Ordering::Relaxed)
         );
         // The root chain: the broker-minted invocation id and the caller's
         // attested identity. A root call is authorized against the caller's
@@ -2168,7 +2168,7 @@ mod tests {
                 .expect("read forwarded call") else {
                     continue;
                 };
-                observed.fetch_add(1, Ordering::AcqRel);
+                observed.fetch_add(1, Ordering::Relaxed);
                 let (response, response_fds) = answer_from(
                     dispatcher.as_ref(),
                     &request.operation,
