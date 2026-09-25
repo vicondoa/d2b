@@ -42,39 +42,34 @@ impl StorageLifecycleReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case", tag = "kind")]
+#[serde(rename_all = "kebab-case", rename_all_fields = "camelCase", tag = "kind")]
 pub enum StorageLifecycleIssue {
     MissingStorageContract,
     MissingSyncContract,
     LegacyBundleContractsUnavailable {
-        #[serde(rename = "bundleVersion")]
         bundle_version: u32,
     },
     BundleResolverUnavailable,
     StorageContractInvalid {
-        #[serde(rename = "contractId")]
         contract_id: String,
         reason: StorageContractValidationReason,
-        #[serde(rename = "offendingId", skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         #[serde(default)]
         offending_id: Option<String>,
     },
     SyncContractInvalid {
-        #[serde(rename = "contractId")]
         contract_id: String,
         reason: SyncContractValidationReason,
-        #[serde(rename = "offendingId", skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         #[serde(default)]
         offending_id: Option<String>,
     },
     MissingRestartPolicy {
         vm: String,
-        #[serde(rename = "roleId")]
         role_id: String,
     },
     AdoptableMissingCgroupLeaf {
         vm: String,
-        #[serde(rename = "roleId")]
         role_id: String,
     },
 }

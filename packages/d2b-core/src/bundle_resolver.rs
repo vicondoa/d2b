@@ -180,20 +180,16 @@ struct ZoneNativeBundleIndex {
     bundle_version: u32,
     schema_version: String,
     privileges_path: String,
-    #[serde(default)]
     storage_path: Option<String>,
     /// Private site-runtime contract (`site.json`). Optional: a bundle that
     /// predates the artifact leaves the site facts absent.
-    #[serde(default)]
     site_path: Option<String>,
     /// Private host contract artifact (`host.json`). Optional: a bundle that
     /// predates the artifact leaves the empty host model in place, whose
     /// NetworkManager fields are empty strings: the `apply-nm-unmanaged`
     /// kernel fails closed on the empty file path rather than inventing a
     /// contract.
-    #[serde(default)]
     host_path: Option<String>,
-    #[serde(default)]
     realm_workloads_launcher_v2_path: Option<String>,
     zones: Vec<ZoneNativeBundleRef>,
     generation: BundleGeneration,
@@ -616,6 +612,7 @@ impl From<UserNamespaceSpec> for crate::processes::RoleUserNamespace {
 /// Synthesized from the bundle's static installer policy: the
 /// systemd unit file path the daemon ships at + the service name
 /// + the `daemon-config.json` path the unit reads.
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedInstallerIntent {
     pub intent_id: String,
@@ -629,6 +626,7 @@ pub struct ResolvedInstallerIntent {
     pub artifacts: Vec<InstallerArtifact>,
 }
 
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallerArtifact {
     pub path: PathBuf,
@@ -637,6 +635,7 @@ pub struct InstallerArtifact {
 }
 
 /// Resolved migration plan.
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedMigrateIntent {
     pub intent_id: String,
@@ -652,6 +651,7 @@ pub struct ResolvedMigrateIntent {
 
 /// Resolved activation intent for per-VM switch / boot / test / rollback
 /// broker dispatch.
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedActivationIntent {
     pub intent_id: String,
@@ -694,6 +694,7 @@ impl ResolvedStoreViewIntent {
 }
 
 /// Resolved host-GC intent.
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedGcIntent {
     pub intent_id: String,
@@ -701,6 +702,7 @@ pub struct ResolvedGcIntent {
 }
 
 /// Resolved framework-managed SSH key rotation intent.
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedKeysRotateIntent {
     pub intent_id: String,
@@ -709,6 +711,7 @@ pub struct ResolvedKeysRotateIntent {
 }
 
 /// Resolved known_hosts trust intent.
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedHostKeyTrustIntent {
     pub intent_id: String,
@@ -719,6 +722,7 @@ pub struct ResolvedHostKeyTrustIntent {
 }
 
 /// Resolved known_hosts entry removal intent.
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRotateKnownHostIntent {
     pub intent_id: String,
@@ -774,6 +778,7 @@ pub struct ResolvedPrepareDirIntent {
 }
 
 /// Trusted legacy swtpm adoption paths derived from the private bundle.
+#[doc(hidden)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedLegacySwtpmIntent {
     pub intent_id: String,
@@ -1094,10 +1099,9 @@ fn verify_bundle_hash(path: &Path, raw_bytes: &[u8]) -> Result<(), Error> {
                     "missing-bundle-hash",
                 ));
             }
-            eprintln!(
-                "d2b: warning: bundle artifact {} has no bundleHash field; \
-                 skipping self-hash check (re-run nixos-rebuild to add it)",
-                path.display()
+            tracing::warn!(
+                path = %path.display(),
+                "bundle artifact has no bundleHash field; skipping self-hash check"
             );
             return Ok(());
         }
@@ -1293,7 +1297,7 @@ impl BundleResolver {
             serde_json::from_slice(bundle_bytes).map_err(|error| {
                 Error::manifest_parse_error(
                     "bundle.json",
-                    manifest_parse_reason(&error.to_string()),
+                    manifest_parse_reason(&error),
                 )
             })?;
         if index.bundle_version != 1 {
@@ -1394,6 +1398,11 @@ impl BundleResolver {
 
     /// Variant for tests and embedded callers that already hold verified
     /// per-Zone resource-bundle bytes.
+    ///
+    /// Precondition: the per-Zone resource-bundle bytes are verified by
+    /// the caller, and the bundle serializes for audit hashing. The
+    /// precondition is enforced with debug assertions; release builds
+    /// treat a violation as absent data rather than panicking.
     pub fn from_artifacts_with_zone_resource_bundles(
         bundle: Bundle,
         host: HostJson,
@@ -1401,17 +1410,23 @@ impl BundleResolver {
         manifest: ManifestV04,
         zone_resource_bundles: BTreeMap<String, Vec<u8>>,
     ) -> Self {
-        let bundle_hash = stable_digest_bytes(
-            serde_json::to_vec(&bundle)
-                .expect("bundle serialization for audit hashing must succeed")
-                .as_slice(),
+        let bundle_bytes = serde_json::to_vec(&bundle);
+        debug_assert!(
+            bundle_bytes.is_ok(),
+            "bundle serialization for audit hashing must succeed"
         );
+        let bundle_hash = stable_digest_bytes(bundle_bytes.unwrap_or_default().as_slice());
         let provider_controller_templates = zone_resource_bundles
             .values()
             .flat_map(|bytes| {
-                ResourceBundle::from_json(bytes)
-                    .expect("zone resource bundle bytes must be verified")
-                    .process_templates
+                let bundle = ResourceBundle::from_json(bytes);
+                debug_assert!(
+                    bundle.is_ok(),
+                    "zone resource bundle bytes must be verified"
+                );
+                bundle
+                    .map(|bundle| bundle.process_templates)
+                    .unwrap_or_default()
             })
             .collect();
         Self::from_parsed_artifacts(
@@ -2415,7 +2430,7 @@ impl BundleResolver {
         self.processes.vms.iter().find(|vm| vm.vm == vm_id)
     }
 
-    pub fn find_process_node(&self, vm_id: &str, role_id: &str) -> Option<&ProcessNode> {
+    pub(crate) fn find_process_node(&self, vm_id: &str, role_id: &str) -> Option<&ProcessNode> {
         self.find_process_vm(vm_id)
             .and_then(|vm| vm.nodes.iter().find(|node| node.id.0 == role_id))
     }
@@ -2456,7 +2471,7 @@ impl BundleResolver {
             .collect()
     }
 
-    pub fn resolve_vm_start_intent(
+    pub(crate) fn resolve_vm_start_intent(
         &self,
         vm_id: &str,
         role_id: &str,
@@ -2499,13 +2514,6 @@ impl BundleResolver {
             .environments
             .iter()
             .find(|candidate| candidate.env == env)
-    }
-
-    pub fn find_if_name_mapping_for_vm(&self, vm_id: &str) -> Option<&crate::host::IfNameMapping> {
-        self.host
-            .if_name_mappings
-            .iter()
-            .find(|mapping| mapping.vm.as_deref() == Some(vm_id))
     }
 
     pub fn resolve_tap_intent(
@@ -2620,10 +2628,13 @@ impl BundleResolver {
         &self,
         vm_id: &str,
         role_id: &str,
-    ) -> Result<Vec<ResolvedMacvtapIntent>, String> {
-        let node = self
-            .find_process_node(vm_id, role_id)
-            .ok_or_else(|| format!("missing process node vm={vm_id} role={role_id}"))?;
+    ) -> Result<Vec<ResolvedMacvtapIntent>, Error> {
+        let node = self.find_process_node(vm_id, role_id).ok_or_else(|| {
+            Error::manifest_parse_error(
+                "processes.json",
+                format!("missing process node vm={vm_id} role={role_id}"),
+            )
+        })?;
         let mut next_fd = 10;
         let mut out = Vec::new();
         for iface in &node.network_interfaces {
@@ -2631,18 +2642,28 @@ impl BundleResolver {
                 continue;
             }
             let macvtap = iface.macvtap.as_ref().ok_or_else(|| {
-                format!(
-                    "macvtap interface {} for vm={vm_id} role={role_id} is missing macvtap metadata",
-                    iface.id
+                Error::manifest_parse_error(
+                    "processes.json",
+                    format!(
+                        "macvtap interface {} for vm={vm_id} role={role_id} is missing macvtap metadata",
+                        iface.id
+                    ),
                 )
             })?;
             out.push(ResolvedMacvtapIntent {
                 vm_name: vm_id.to_owned(),
                 role_id: role_id.to_owned(),
-                ifname: IfName::new(iface.id.clone())
-                    .map_err(|err| format!("invalid macvtap ifname {}: {err}", iface.id))?,
+                ifname: IfName::new(iface.id.clone()).map_err(|err| {
+                    Error::manifest_parse_error(
+                        "processes.json",
+                        format!("invalid macvtap ifname {}: {err}", iface.id),
+                    )
+                })?,
                 parent_ifname: IfName::new(macvtap.link.clone()).map_err(|err| {
-                    format!("invalid macvtap parent ifname {}: {err}", macvtap.link)
+                    Error::manifest_parse_error(
+                        "processes.json",
+                        format!("invalid macvtap parent ifname {}: {err}", macvtap.link),
+                    )
                 })?,
                 mode: macvtap.mode,
                 mac: iface.mac.clone(),
@@ -4839,7 +4860,7 @@ fn load_guest_setup_descriptors(
     let mut catalog: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
         Error::manifest_parse_error(
             "artifact-catalog.json",
-            manifest_parse_reason(&error.to_string()),
+            manifest_parse_reason(&error),
         )
     })?;
     let catalog_digest = catalog
@@ -5486,7 +5507,7 @@ fn load_zone_storage_rows(
         let bytes = secure_open_and_read(&row_path, policy)?;
         verify_artifact_hash(&row_path, &bytes, bundle.artifact_hashes.as_ref(), key)?;
         let row: ZoneStoreStorageRow = serde_json::from_slice(&bytes).map_err(|error| {
-            Error::manifest_parse_error("storage.json", manifest_parse_reason(&error.to_string()))
+            Error::manifest_parse_error("storage.json", manifest_parse_reason(&error))
         })?;
         if rows.insert(zone_name.to_owned(), row).is_some() {
             return Err(Error::manifest_parse_error(
@@ -5529,7 +5550,7 @@ fn load_zone_native_topology(
         "index.json",
     )?;
     let index: ZoneNativeIndexDocument = serde_json::from_slice(&bytes).map_err(|error| {
-        Error::manifest_parse_error("index.json", manifest_parse_reason(&error.to_string()))
+        Error::manifest_parse_error("index.json", manifest_parse_reason(&error))
     })?;
     if !index.topology.sealed {
         return Err(Error::manifest_parse_error(
@@ -5625,10 +5646,10 @@ fn load_optional_site_artifact(
         site_ref,
     )?;
     let site: SiteJson = serde_json::from_slice(&bytes).map_err(|error| {
-        Error::manifest_parse_error("site.json", manifest_parse_reason(&error.to_string()))
+        Error::manifest_parse_error("site.json", manifest_parse_reason(&error))
     })?;
     site.validate()
-        .map_err(|reason| Error::manifest_parse_error("site.json", reason))?;
+        .map_err(|reason| Error::manifest_parse_error("site.json", reason.to_string()))?;
     Ok(Some(site))
 }
 
@@ -5657,7 +5678,7 @@ fn load_zone_native_host_artifact(
         host_ref,
     )?;
     let host: HostJson = serde_json::from_slice(&bytes).map_err(|error| {
-        Error::manifest_parse_error("host.json", manifest_parse_reason(&error.to_string()))
+        Error::manifest_parse_error("host.json", manifest_parse_reason(&error))
     })?;
     Ok(host)
 }
@@ -5679,7 +5700,7 @@ fn load_optional_storage_artifact(
         storage_ref,
     )?;
     let storage: StorageJson = serde_json::from_slice(&bytes).map_err(|e| {
-        Error::manifest_parse_error("storage.json", manifest_parse_reason(&e.to_string()))
+        Error::manifest_parse_error("storage.json", manifest_parse_reason(&e))
     })?;
     Ok(Some(storage))
 }
@@ -5699,7 +5720,7 @@ fn load_optional_realm_workloads_launcher_v2_artifact(
         serde_json::from_slice(&bytes).map_err(|error| {
             Error::manifest_parse_error(
                 "realm-workloads-launcher-v2.json",
-                manifest_parse_reason(&error.to_string()),
+                manifest_parse_reason(&error),
             )
         })?;
     artifact
@@ -5738,17 +5759,15 @@ fn stable_digest_bytes(input: &[u8]) -> String {
 // Minimal-touch helpers re-exported from types this module needs.
 // ---------------------------------------------------------------
 
-fn manifest_parse_reason(err: &str) -> &'static str {
-    // Bridge to the existing manifest_v04 helper without exposing it.
-    // We just need a stable category string for `Error::manifest_parse_error`.
-    if err.contains("missing field") {
-        "missing-required-field"
-    } else if err.contains("unknown field") {
-        "unknown-field"
-    } else if err.contains("invalid type") {
-        "invalid-type"
-    } else {
-        "parse-failed"
+fn manifest_parse_reason(error: &serde_json::Error) -> &'static str {
+    // Stable category string for `Error::manifest_parse_error`, derived
+    // from the error class rather than the Display text (which is not a
+    // stable API across serde_json versions).
+    match error.classify() {
+        serde_json::error::Category::Data => "invalid-data",
+        serde_json::error::Category::Syntax
+        | serde_json::error::Category::Eof
+        | serde_json::error::Category::Io => "parse-failed",
     }
 }
 
