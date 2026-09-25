@@ -148,6 +148,16 @@ impl SecurityKeyLease {
     }
 
     /// Start a session, claiming physical authority before opening hidraw.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyLeaseError::SessionConflict`] when the lease
+    /// already holds an active or unfinished session,
+    /// [`SecurityKeyLeaseError::AuthorizationDenied`] when no physical
+    /// backing claim remains, [`SecurityKeyLeaseError::Effect`] when the
+    /// physical backing claim or hidraw open fails, and
+    /// [`SecurityKeyLeaseError::InvalidTransition`] when the authority lease
+    /// disappears during cleanup.
     pub fn acquire<P: SecurityKeyEffectPort>(
         &mut self,
         session: SecurityKeySessionId,
@@ -230,6 +240,12 @@ impl SecurityKeyLease {
 
     /// Start a session after rechecking the exact Core Device and holder
     /// binding. The check happens before any physical claim or hidraw open.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyLeaseError::AuthorizationDenied`] when the
+    /// device or holder binding differs from the admission, and the same
+    /// errors as [`Self::acquire`] otherwise.
     pub fn acquire_authorized<P: SecurityKeyEffectPort>(
         &mut self,
         session: SecurityKeySessionId,
@@ -252,6 +268,12 @@ impl SecurityKeyLease {
     }
 
     /// Replace consumed admission evidence with a fresh Core admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyLeaseError::AuthorizationDenied`] when the lease
+    /// is not in a terminal state, still holds a session or authority lease,
+    /// or the admission does not match the device, Zone, or Guest holder.
     pub fn rebind_authorized(
         &mut self,
         device_uid: ResourceUid,
@@ -283,6 +305,12 @@ impl SecurityKeyLease {
     }
 
     /// Complete the active session and release its authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyLeaseError::InvalidTransition`] when no session
+    /// is active and [`SecurityKeyLeaseError::Effect`] when the physical
+    /// backing release fails.
     pub fn complete<P: SecurityKeyEffectPort>(
         &mut self,
         port: &mut P,
@@ -291,6 +319,12 @@ impl SecurityKeyLease {
     }
 
     /// Cancel the active session and release its authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyLeaseError::InvalidTransition`] when no session
+    /// is active and [`SecurityKeyLeaseError::Effect`] when the physical
+    /// backing release fails.
     pub fn cancel<P: SecurityKeyEffectPort>(
         &mut self,
         port: &mut P,
@@ -299,6 +333,12 @@ impl SecurityKeyLease {
     }
 
     /// Expire the active session and release its authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecurityKeyLeaseError::InvalidTransition`] when no session
+    /// is active and [`SecurityKeyLeaseError::Effect`] when the physical
+    /// backing release fails.
     pub fn expire<P: SecurityKeyEffectPort>(
         &mut self,
         port: &mut P,
