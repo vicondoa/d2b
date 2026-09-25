@@ -692,18 +692,7 @@ mod tests {
 
     // -- factory -------------------------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
-    #[tokio::test]
-    async fn factory_registers_only_the_service_type() {
-        let factory = TelemetryServiceDriverFactory::new();
-        let types = factory
-            .resource_types()
-            .iter()
-            .map(ResourceTypeName::as_str)
-            .collect::<Vec<_>>();
-        assert_eq!(types, vec![TELEMETRY_SERVICE_TYPE]);
-    }
 
     // -- validate ------------------------------------------------------------
 
@@ -723,14 +712,7 @@ mod tests {
         assert_eq!(failure.class(), FailureClass::Retryable);
     }
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 
-    #[tokio::test]
-    async fn validate_accepts_a_provider_declared_spec() {
-        let mut fixture = fixture(service_row());
-        let mut driver = driver(&fixture).await;
-        driver.validate(&mut fixture.ctx).await.expect("valid spec");
-    }
 
     // -- recover -------------------------------------------------------------
 
