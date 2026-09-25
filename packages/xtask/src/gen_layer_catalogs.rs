@@ -155,15 +155,6 @@ fn string_slice(name: &str, doc: &[&str], values: &[String]) -> String {
 }
 
 /// Render one closed `&[&str]` constant.
-fn string_array(name: &str, doc: &[&str], values: &[String]) -> String {
-    let mut out = doc_lines(doc);
-    let _ = writeln!(out, "pub const {name}: &[&str] = &[");
-    for value in values {
-        let _ = writeln!(out, "    \"{value}\",");
-    }
-    out.push_str("];\n");
-    out
-}
 
 /// Render one `&[(&str, &str)]` constant.
 fn string_pair_slice(name: &str, doc: &[&str], values: &[(&str, &str)]) -> String {
@@ -296,7 +287,7 @@ fn process_provider_ids(metric_label: Option<bool>) -> Vec<String> {
 /// Render the CLI's surface catalog module.
 fn surface_catalog_source() -> String {
     let mut source = String::from(HEADER);
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "RESOURCE_TYPES",
         &[
             "The resource types the CLI addresses, in registry order.",
@@ -359,12 +350,12 @@ fn surface_catalog_source() -> String {
             .map(|value| (*value).to_owned())
             .collect::<Vec<_>>(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "MUTATION_VERBS",
         &["The resource verbs that write an audit row, in contract order."],
         &resource_mutation_verbs(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "PROCESS_PROVIDERS",
         &["The process providers an audit record may name."],
         &process_provider_ids(None),
@@ -453,7 +444,7 @@ fn surface_catalog_source() -> String {
 /// Render the audit crate's catalog module.
 fn audit_catalog_source() -> String {
     let mut source = String::from(HEADER);
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "RESOURCE_TYPES",
         &[
             "The resource types an audit record may name.",
@@ -463,12 +454,12 @@ fn audit_catalog_source() -> String {
         ],
         &audit_resource_types(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "MUTATION_VERBS",
         &["The resource verbs that write an audit row, in contract order."],
         &resource_mutation_verbs(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "PROCESS_PROVIDERS",
         &["The process providers a process effect record may name."],
         &process_provider_ids(None),
@@ -493,7 +484,7 @@ fn audit_catalog_source() -> String {
 /// Render the provider contracts crate's telemetry catalog module.
 fn telemetry_catalog_source(repo_root: &Path) -> Result<String, String> {
     let mut source = String::from(HEADER);
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "RESOURCE_TYPE_VALUES",
         &[
             "The resource type label domain, projected from the standard",
@@ -504,17 +495,17 @@ fn telemetry_catalog_source(repo_root: &Path) -> Result<String, String> {
         ],
         &metric_resource_types(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "API_VERBS",
         &["The API verb label domain, projected from the Role resource verbs."],
         &resource_verbs(),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "PROCESS_PROVIDERS",
         &["The process provider label domain."],
         &process_provider_ids(Some(true)),
     ));
-    source.push_str(&string_array(
+    source.push_str(&string_slice(
         "BROKER_OPERATION_VALUES",
         &[
             "The broker operation label domain: the committed operation rows'",

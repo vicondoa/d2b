@@ -319,19 +319,19 @@ fn projection_schema_pointers(
 /// `identity::STANDARD_RESOURCE_TYPES` so the resource-type authority can
 /// drive the same render from the per-crate `resource-types.json`
 /// declarations; `gen-nix-inventories` passes the committed registry.
-fn core_schema_pointers(
+fn core_schema_pointers<S: AsRef<str> + std::fmt::Display>(
     schemas: &BTreeSet<String>,
-    standard: &[String],
+    standard: &[S],
 ) -> Result<BTreeMap<String, String>, Box<dyn std::error::Error>> {
     let mut pointers = BTreeMap::new();
     for resource_type in standard {
-        let file = core_schema_file(resource_type);
+        let file = core_schema_file(resource_type.as_ref());
         if !schemas.contains(&file) {
             return Err(render_error(format!(
                 "{resource_type}: committed schema {file} is missing"
             )));
         }
-        pointers.insert(resource_type.clone(), file);
+        pointers.insert(resource_type.as_ref().to_string(), file);
     }
     Ok(pointers)
 }
@@ -468,9 +468,9 @@ fn provider_projections_module() -> String {
 /// `pub(crate)` so the resource-type authority (`resource_type_authority.rs`)
 /// drives the same render from the per-crate declarations, keeping one table
 /// authority per vocabulary.
-pub(crate) fn resource_inventories_module(
+pub(crate) fn resource_inventories_module<S: AsRef<str> + std::fmt::Display>(
     repo_root: &Path,
-    standard: &[String],
+    standard: &[S],
 ) -> Result<String, Box<dyn std::error::Error>> {
     let schemas = committed_schema_files(repo_root)?;
     let core = core_schema_pointers(&schemas, standard)?;
@@ -716,10 +716,7 @@ pub fn gen_nix_inventories(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std
             RESOURCE_INVENTORIES_OUT,
             resource_inventories_module(
                 repo_root,
-                &STANDARD_RESOURCE_TYPES
-                    .iter()
-                    .map(|resource_type| resource_type.to_string())
-                    .collect::<Vec<_>>(),
+                STANDARD_RESOURCE_TYPES.as_slice(),
             )?,
         )?,
         write(

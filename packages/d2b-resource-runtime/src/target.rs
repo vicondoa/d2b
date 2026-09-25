@@ -193,6 +193,7 @@ impl GuestTargetHandle {
         self.session_generation
     }
 
+    /// Whether a live session has ever been registered for this guest.
     pub const fn is_bound(&self) -> bool {
         self.session_generation.is_some()
     }
@@ -483,6 +484,8 @@ pub struct TargetBinding {
 }
 
 impl TargetBinding {
+    /// Bind one resource's recorded assignment to the directory it resolves
+    /// through.
     pub fn new(directory: Arc<TargetDirectory>, assignment: TargetAssignment) -> Self {
         Self { directory, assignment }
     }
@@ -573,15 +576,9 @@ struct DirectoryState {
 /// that decides *whose* authority they may use. It never changes a resource's
 /// Zone identity, never synthesizes a desired resource in a guest namespace,
 /// and never deletes desired state because a target went away.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TargetDirectory {
     inner: Arc<Mutex<DirectoryState>>,
-}
-
-impl Default for TargetDirectory {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl TargetDirectory {
@@ -652,18 +649,28 @@ impl TargetDirectory {
         }
         match &reference.kind {
             TargetKind::Host => {
-                state.host_assignments.insert(source.clone(), assignment.clone());
+                state.host_assignments.insert(source.clone(), assignment);
+                let handle = state
+                    .host_assignments
+                    .get(source)
+                    .expect("host assignment was just inserted")
+                    .clone();
+                Ok(handle)
             }
             TargetKind::Guest => {
-                state
+                let assignments = &mut state
                     .guests
                     .entry(reference)
                     .or_insert_with(Self::new_guest_record)
-                    .assignments
-                    .insert(source.clone(), assignment.clone());
+                    .assignments;
+                assignments.insert(source.clone(), assignment);
+                let handle = assignments
+                    .get(source)
+                    .expect("guest assignment map entry was just inserted")
+                    .clone();
+                Ok(handle)
             }
         }
-        Ok(assignment)
     }
 
     /// The recorded assignment of one resource.

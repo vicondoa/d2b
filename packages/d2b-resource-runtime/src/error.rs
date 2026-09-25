@@ -29,6 +29,7 @@
 //! is generated from that registry by [`render_failure_kind_reference`] (a
 //! test fails when the committed page drifts), never hand-maintained prose.
 
+/// The module declared name, asserted by the crate smoke test.
 pub const MODULE_NAME: &str = "error";
 
 use crate::identity::ResourceKey;

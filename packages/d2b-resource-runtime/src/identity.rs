@@ -17,10 +17,12 @@ pub use crate::spec_store::{ResourceKey, ResourceProvenance, StoredDesiredResour
 pub struct ResourceTypeName(String);
 
 impl ResourceTypeName {
+    /// Build a type name from its string form.
     pub fn new(name: impl Into<String>) -> Self {
         Self(name.into())
     }
 
+    /// The type name as a plain string.
     pub fn as_str(&self) -> &str {
         &self.0
     }

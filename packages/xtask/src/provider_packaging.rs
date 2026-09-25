@@ -160,12 +160,12 @@ fn nix_string(value: &str) -> String {
     escaped
 }
 
-fn nix_string_list(values: impl IntoIterator<Item = String>, indent: usize) -> String {
+fn nix_string_list<S: AsRef<str>>(values: impl IntoIterator<Item = S>, indent: usize) -> String {
     let pad = " ".repeat(indent);
     let inner = " ".repeat(indent + 2);
     let mut out = String::from("[\n");
     for value in values {
-        out.push_str(&format!("{inner}{}\n", nix_string(&value)));
+        out.push_str(&format!("{inner}{}\n", nix_string(value.as_ref())));
     }
     out.push_str(&format!("{pad}]"));
     out

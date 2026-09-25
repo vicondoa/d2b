@@ -574,7 +574,7 @@ pub fn check(repo_root: &Path) -> Result<(), String> {
         .canonicalize()
         .map_err(|_| "provider-crate-layout-input-unreadable".to_owned())?;
     let members = cargo_workspace_members(&repo_root)?;
-    check_members(&repo_root, members.clone())?;
+    check_members(&repo_root, &members)?;
     check_closed_matrix(&repo_root, &members)?;
     check_bazel_dependency_visibility(&repo_root)?;
     check_committed_scope(&repo_root, &members)?;
@@ -5196,14 +5196,14 @@ fn check_shared_family_knowledge_with(
     ratchet: &[SharedFamilyKnowledgeExemption],
 ) -> Result<(), String> {
     let signals = collect_family_signals(repo_root)?;
-    let exempt: BTreeSet<(String, &str)> = ratchet
+    let exempt: BTreeSet<(&str, &str)> = ratchet
         .iter()
-        .map(|row| (row.module.to_owned(), row.token))
+        .map(|row| (row.module, row.token))
         .collect();
     let mut violations = Vec::new();
 
     for signal in &signals {
-        if !exempt.contains(&(signal.module.clone(), signal.token)) {
+        if !exempt.contains(&(signal.module.as_str(), signal.token)) {
             violations.push(render_family_knowledge_violation(signal));
         }
     }
@@ -6356,9 +6356,9 @@ fn check_shared_structural_knowledge_with(
         .iter()
         .map(|row| (row.module, row.class, row.symbol))
         .collect();
-    let family_exempt: BTreeSet<(String, &str)> = family_ratchet
+    let family_exempt: BTreeSet<(&str, &str)> = family_ratchet
         .iter()
-        .map(|row| (row.module.to_owned(), row.token))
+        .map(|row| (row.module, row.token))
         .collect();
     let mut violations = Vec::new();
 
@@ -6372,7 +6372,7 @@ fn check_shared_structural_knowledge_with(
         let covered_by_family = signal.class != StructuralSignalClass::ProviderId
             && signal.class != StructuralSignalClass::RoleLiteral
             && structural_symbol_token(&signal.symbol)
-                .is_some_and(|token| family_exempt.contains(&(signal.module.clone(), token)));
+                .is_some_and(|token| family_exempt.contains(&(signal.module.as_str(), token)));
         if covered_by_family {
             continue;
         }
@@ -6660,13 +6660,8 @@ fn collect_self_binding_scope(
                         pending_role = None;
                     }
                     if code_text(lines[stop]).trim() == "}" {
-                        // A SeedSelfBinding row closes at a line whose trim is "}";
-                        // a multi-line row ends there too; clearing pendings keep
-                        // the next row from inheriting a stale half.
-                        if inner.contains("SeedSelfBinding") {
-                            pending_subject = None;
-                            pending_role = None;
-                        }
+                        // A SeedSelfBinding row closes at a line whose trim is "}".
+                        break;
                     }
                     stop += 1;
                 }
@@ -7254,7 +7249,7 @@ fn apply_citation_fixes(
             }
         }
         spans.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
-        let mut line = lines[index].clone();
+        let mut line = std::mem::take(&mut lines[index]);
         for (start, end, keep) in spans {
             let replacement: String = keep.map(String::from).unwrap_or_default();
             line.replace_range(start..end, &replacement);
@@ -7913,7 +7908,7 @@ fn is_citation_cue(text: &str) -> bool {
     matches!(text, "see" | "cf" | "in" | "from" | "under" | "at" | "per")
 }
 
-fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), String> {
+fn check_members(repo_root: &Path, members: &[WorkspaceMember]) -> Result<(), String> {
     let on_disk = on_disk_providers(repo_root)?;
     let has_provider_member = members.iter().any(|member| {
         name_kind(&member.package_name, member.declares_driver) == ProviderNameKind::Provider
@@ -7928,7 +7923,7 @@ fn check_members(repo_root: &Path, members: Vec<WorkspaceMember>) -> Result<(), 
         .collect();
     let mut violations = Vec::new();
 
-    for member in &members {
+    for member in members {
         match name_kind(&member.package_name, member.declares_driver) {
             ProviderNameKind::Provider => {
                 if !is_provider_directory(repo_root, &member.crate_dir, &member.package_name) {
@@ -8425,7 +8420,7 @@ fn provider_crate_family(crate_name: &str) -> String {
 /// `Process/<name>`, `Host/<name>`, `User/<name>`, or `Guest/<name>`. The
 /// resource model addresses providers and processes by name; naming the
 /// provider one delegates a child to is the one legitimate cross-family
-/// shape ((`d2b-provider-device-usbip/src/lifecycle.rs:25` names the
+/// shape (`d2b-provider-device-usbip/src/lifecycle.rs:25` names the
 /// system-minijail provider that owns its guest-proxy child). A reference
 /// names a provider; it is not knowledge about that provider.
 fn is_resource_reference_literal(content: &str) -> bool {
@@ -8637,7 +8632,7 @@ fn render_provider_family_violation(signal: &ProviderFamilySignal) -> String {
 
 /// One committed exemption row: a provider crate module that legitimately
 /// carries another family's identity token. The list only shrinks: a signal
-/// without a row is a policy failure ((a reintroduction),and a row whose
+/// without a row is a policy failure (a reintroduction),and a row whose
 /// signal the tree no longer carries is stale. No row may be added unless the
 /// change that introduces a legitimate cross-family reference also records
 /// its reason here.
@@ -8645,7 +8640,7 @@ fn render_provider_family_violation(signal: &ProviderFamilySignal) -> String {
 
 #[derive(Clone)]
 struct ProviderFamilyKnowledgeExemption {
-    /// The provider crate that carries the token ((its Cargo package name).
+    /// The provider crate that carries the token (its Cargo package name).
     crate_name: &'static str,
     /// Repository-relative module path that carries the token.
 
@@ -8740,14 +8735,14 @@ fn check_provider_crate_family_knowledge_with(
     ratchet: &[ProviderFamilyKnowledgeExemption],
 ) -> Result<(), String> {
     let signals = collect_provider_family_signals(repo_root, provider_crates)?;
-    let exempt: BTreeSet<(String, String, &str)> = ratchet
+    let exempt: BTreeSet<(&str, &str, &str)> = ratchet
         .iter()
-        .map(|row| (row.crate_name.to_owned(), row.module.to_owned(), row.token))
+        .map(|row| (row.crate_name, row.module, row.token))
         .collect();
     let mut violations = Vec::new();
 
     for signal in &signals {
-        if !exempt.contains(&(signal.crate_name.clone(), signal.module.clone(), signal.token)) {
+        if !exempt.contains(&(signal.crate_name.as_str(), signal.module.as_str(), signal.token)) {
 
             violations.push(render_provider_family_violation(signal));
         }
@@ -9040,11 +9035,11 @@ const COMMITTED_SCOPE: &[CommittedScopeEntry] = &[
 ];
 const COMMITTED_SCOPE_ARTIFACT_ROOTS: &[&str] = &["docs/reference", "packages/policy-inputs"];
 
-/// Fail when a workspace crate has no committed scope row ((an edit to a
+/// Fail when a workspace crate has no committed scope row (an edit to a
 /// crate no unit names),when a row names a crate the workspace no longer has,
 /// or when a declared artifact root has vanished. The committed scope is
 /// compared against the workspace rather than a diff: any crate present without
-/// a row is an edit outside the scope that happened, whiche is what a
+/// a row is an edit outside the scope that happened, which is what a
 /// committed scope gate can prove without a diff..
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn check_committed_scope(repo_root:&Path, members: &[WorkspaceMember]) -> Result<(), String> {
@@ -9557,7 +9552,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn check_fixture(root: &Path) -> Result<(), String> {
         let root = root.canonicalize().unwrap();
-        check_members(&root, manifest_workspace_members(&root)?)
+        check_members(&root, &manifest_workspace_members(&root)?)
     }
 
     impl Drop for Fixture {

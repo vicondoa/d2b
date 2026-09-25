@@ -33,6 +33,7 @@
 //! condition that flips while the registration message is still queued
 //! notifies exactly once. No database participates on this path.
 
+/// The module declared name, asserted by the crate smoke test.
 pub const MODULE_NAME: &str = "resource";
 
 use std::collections::HashMap;
@@ -674,17 +675,12 @@ impl ResourceActorState {
 /// Implements the plain [`ractor::Actor`] trait: U1 enabled ractor's default
 /// features only (no `actor-macros`), and the trait's RPITIT methods accept
 /// plain `async fn` implementations.
+#[derive(Default)]
 pub struct ResourceActor;
 
 impl ResourceActor {
     pub const fn new() -> Self {
         Self
-    }
-}
-
-impl Default for ResourceActor {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -702,7 +698,8 @@ impl Actor for ResourceActor {
         // provider fails the spawn AFTER the manager committed the row (F1
         // durability boundary) - the row stays durable and a restart or a
         // later Ensure recovers it.
-        let driver = args.providers.create_driver(&args.row.key).await.map_err(|error| {
+        let row = args.row;
+        let driver = args.providers.create_driver(&row.key).await.map_err(|error| {
             ActorProcessingErr::from(format!("driver creation failed: {error}"))
         })?;
         let timers = Arc::new(ActorTimers::new(myself.get_cell()));
@@ -711,7 +708,7 @@ impl Actor for ResourceActor {
         let (effect_tx, effect_rx) = mpsc::unbounded_channel();
         let (watch_tx, watch_rx) = mpsc::unbounded_channel();
         let ctx = ResourceContext::new(
-            args.row.clone(),
+            row.clone(),
             args.target,
             args.decoder.clone(),
             manager_endpoint.clone(),
@@ -729,9 +726,9 @@ impl Actor for ResourceActor {
             retry_backoff: args.backoff,
             owner_key: args.owner_key,
             timers,
-            row: args.row.clone(),
+            deleting: row.deleting,
             status: ResourceStatus::Pending,
-            deleting: args.row.deleting,
+            row,
             driver,
             ctx,
             watchers: HashMap::new(),

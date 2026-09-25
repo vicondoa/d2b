@@ -456,7 +456,6 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
     generated = generated.replace("#![allow(unsafe_code)]\n", "");
     generated = generated.replace("#![allow(unknown_lints)]\n", "");
     generated = generated.replace("#![allow(clippy::all)]\n", "");
-    generated = generated.replace("#![allow(clipto_camel_casepy)]\n", "");
     generated = generated.replace(
         "#![cfg_attr(rustfmt, rustfmt_skip)]\n",
         "#![cfg_attr(rustfmt, rustfmt::skip)]\n",
@@ -1541,6 +1540,11 @@ fn gen_release_notes(version: &str) -> Result<PathBuf, Box<dyn std::error::Error
     Ok(changelog_path)
 }
 
+/// Renders today's UTC date as an ISO-8601 calendar date.
+///
+/// The clock may legitimately sit before the Unix epoch; that case renders
+/// as 1970-01-01 (the fallback below discards the error and clamps
+/// to the epoch rather than failing generation).
 fn today_utc_iso8601() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -1552,6 +1556,10 @@ fn today_utc_iso8601() -> String {
     format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
+/// Converts a day count since the Unix epoch to a civil (year, month, day) date
+/// via the Howard Hinnant civil-calendar algorithm (719_468-day shift, 146_097-day
+/// eras, 36_524-day centuries, and 153-day five-month spans). The caller clamps
+/// sub-epoch clocks to the epoch.
 fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
