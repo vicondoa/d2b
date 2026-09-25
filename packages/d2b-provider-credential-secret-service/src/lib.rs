@@ -443,7 +443,7 @@ pub type SecretServiceFuture<'a, T> =
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecretServiceOwner {
     /// The authenticated user-domain process.
-    Userd,
+    User,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -520,6 +520,12 @@ pub struct SecretServiceConfig {
 impl SecretServiceConfig {
     /// Validate configuration. Collection aliases may contain spaces but not
     /// controls, quotes, or backslashes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretServiceProviderError::InvalidConfig`] when the alias
+    /// is empty, longer than the fixed bound, or contains a control, quote,
+    /// or backslash, or when the lease limit is outside `1..=MAX_LOCAL_LEASES`.
     pub fn new(
         collection_alias: impl Into<String>,
         max_leases: u32,
@@ -607,6 +613,13 @@ pub struct SecretServicePlacement {
 
 impl SecretServicePlacement {
     /// Validate user-agent placement on a Host or Guest execution context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretServiceProviderError::InvalidPlacement`] when the
+    /// binding is not user-agent and
+    /// [`SecretServiceProviderError::InvalidScope`] when the execution
+    /// reference is not a Host or Guest or the user reference is not a User.
     pub fn new(
         zone: ZoneId,
         binding: PlacementBinding,
@@ -629,6 +642,13 @@ impl SecretServicePlacement {
     }
 
     /// Validate dynamic user placement for a shared Provider controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretServiceProviderError::InvalidPlacement`] when the
+    /// binding is not user-agent and
+    /// [`SecretServiceProviderError::InvalidScope`] when the execution
+    /// reference is not a Host or Guest.
     pub fn new_dynamic(
         zone: ZoneId,
         binding: PlacementBinding,
@@ -1137,6 +1157,13 @@ pub struct SecretServiceCredentialProviderFactory {
 impl SecretServiceCredentialProviderFactory {
     /// Build a factory. A present consumer must be a Provider reference;
     /// absence selects this Provider's canonical reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretServiceProviderError::InvalidConsumer`] when the
+    /// consumer is not a Provider reference and
+    /// [`SecretServiceProviderError::InvalidScope`] when the initial
+    /// generation cannot be allocated.
     pub fn new(
         config: SecretServiceConfig,
         placement: SecretServicePlacement,
@@ -1168,6 +1195,11 @@ impl SecretServiceCredentialProviderFactory {
     }
 
     /// Construct the service Provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretServiceProviderError::AuthorityUnavailable`] when the
+    /// provider-owned session authority cannot allocate an identity.
     pub fn construct(self) -> Result<SecretServiceCredentialProvider, SecretServiceProviderError> {
         Ok(SecretServiceCredentialProvider {
             config: self.config,
@@ -1230,7 +1262,7 @@ pub struct SecretServiceCredentialProvider {
 impl SecretServiceCredentialProvider {
     /// Return the fixed owner classification.
     pub const fn owner(&self) -> SecretServiceOwner {
-        SecretServiceOwner::Userd
+        SecretServiceOwner::User
     }
 
     /// Borrow the exact consumer expected by authenticated admission.
