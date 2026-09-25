@@ -4054,9 +4054,9 @@ fn resource_ticket(
     let ticket = ticket
         .with_runtime_identity(zone_uid, launch.owner_ref().cloned(), runtime_scope)
         .map_err(|error| format!("provider-ticket:{}", error.code()))?;
-    let ticket = match context.owner_uid.clone() {
+    let ticket = match context.owner_uid.as_ref() {
         Some(owner_uid) if ticket.owner_uid().is_none() => ticket
-            .with_owner_uid(owner_uid)
+            .with_owner_uid(owner_uid.clone())
             .map_err(|error| format!("provider-ticket:{}", error.code()))?,
         _ => ticket,
     };
