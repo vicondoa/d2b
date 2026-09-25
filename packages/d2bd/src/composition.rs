@@ -4102,7 +4102,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         // tests can drive a single connection deterministically.
         if options.once {
             if let Err(error) = handle_connection(stream, &state, None) {
-                eprintln!("{}", error.message());
+                tracing::error!(
+                    error = %error.message(),
+                    "connection handler failed",
+                );
             }
             finalize_daemon_interactions(&state).await?;
             break;
@@ -4120,7 +4123,10 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                     ACCEPT_REFUSAL_WRITE_DEADLINE,
                 );
                 drain_rejected_peer_input(&stream);
-                eprintln!("{}", error.message());
+                tracing::error!(
+                    error = %error.message(),
+                    "public connection authorization refused",
+                );
                 continue;
             }
         };
@@ -4150,22 +4156,24 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             .spawn(move || {
                 // `permit` (and, for an exec session, ownership of it) is
                 // dropped when this handler returns.
+
+                let peer_uid = peer.uid;
                 if let Err(error) =
                     handle_connection_authorized(stream, &conn_state, peer, Some(permit))
                 {
-                    eprintln!("{}", error.message());
+                    tracing::error!(
+                        peer_uid,
+                        error = %error.message(),
+                        "connection handler failed",
+                    );
                 }
             })
         {
             // Spawn failure drops the moved closure (and its permit), so
             // the slot is released; log and keep serving.
-            eprintln!(
-                "{}",
-                TypedError::InternalIo {
-                    context: "spawn connection handler".to_owned(),
-                    detail: err.to_string(),
-                }
-                .message()
+            tracing::error!(
+                error = %err,
+                "connection handler thread spawn failed",
             );
         }
     }
@@ -4217,7 +4225,7 @@ pub struct GatewayGuestZoneLinkOptions {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GatewayGuestConfigFile {
     credential_path: PathBuf,
     seal_key_path: PathBuf,
@@ -4226,7 +4234,7 @@ struct GatewayGuestConfigFile {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GatewayGuestRelayConfigFile {
     namespace: Option<String>,
     entity: Option<String>,
@@ -4362,6 +4370,41 @@ async fn load_gateway_guest_zone_link_options(
         max_concurrent_sessions: 32,
         connect_timeout_seconds: 30,
     }))
+}
+
+#[cfg(test)]
+mod gateway_guest_config_tests {
+    use super::*;
+
+    /// A typo in the user-written Guest gateway config must be refused at
+    /// the deserialization boundary, not silently ignored until the Relay
+    /// namespace lookup later fails.
+
+    #[test]
+    fn gateway_guest_config_typo_is_refused_at_parse() {
+        let error = serde_json::from_slice::<GatewayGuestConfigFile>(
+            br#"{"credentialPath":"/run/gateway/cred","sealKeyPath":"/run/gateway/seed","relay":{"namespace":"ns","entity":"ent"},"typoKey":true}"#,
+        )
+        .expect_err("a typo'd gateway guest config key must be refused");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "the typo must surface as the serde unknown-field error: {error}"
+        );
+    }
+
+    /// The Relay sub-object refuses unknown keys at the same boundary.
+
+    #[test]
+    fn gateway_guest_relay_config_typo_is_refused_at_parse() {
+        let error = serde_json::from_slice::<GatewayGuestRelayConfigFile>(
+            br#"{"namespace":"ns","entity":"ent","typoKey":true}"#,
+        )
+        .expect_err("a typo'd relay config key must be refused");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "the typo must surface as the serde unknown-field error: {error}"
+        );
+    }
 }
 
 /// The journal-visible event every accepted Guest ComponentSession publishes.
@@ -4508,7 +4551,11 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     })
     .transpose()?;
     if gateway_zone_link.is_some() {
-        tracing::info!("Guest-local ZoneLink transport Provider composed");
+        tracing::info!(
+            zone = %identity.zone(),
+            guest_ref = %identity.guest_ref().name().as_str(),
+            "Guest-local ZoneLink transport Provider composed",
+        );
     }
     let local_private_path =
         options
@@ -4559,7 +4606,11 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             d2b_provider_guest::production_guest_target_effects(),
         ),
     );
-    tracing::info!("Guest target-control service composed");
+    tracing::info!(
+        zone = %identity.zone(),
+        guest_ref = %identity.guest_ref().name().as_str(),
+        "Guest target-control service composed",
+    );
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|_| TypedError::InternalIo {
             context: "install Guest SIGTERM handler".to_owned(),
@@ -5329,7 +5380,11 @@ async fn run_startup_autostart(state: &ServerState, kernel_module_degraded: &BTr
     };
     let plan = d2bd_runtime::autostart::build_autostart_plan(&resolver);
     if plan.vms.is_empty() {
-        tracing::info!("autostart: nothing to do (empty plan)");
+        tracing::info!(
+            net_vm_count = plan.net_vms().count(),
+            workload_count = plan.workload_vms().count(),
+            "autostart: nothing to do (empty plan)",
+        );
         return;
     }
     tracing::info!(
@@ -14810,7 +14865,10 @@ async fn compose_gateway_zone_links(
         .authority_bundle_generation()
         .map(|value| value.as_str().to_owned())
     else {
-        tracing::error!("Gateway Guest composition refused: root Zone generation unavailable");
+        tracing::error!(
+            zone = %topology.root,
+            "Gateway Guest composition refused: root Zone generation unavailable",
+        );
         return;
     };
     let authority_generation = root.current_revision().get().max(1);
@@ -15217,7 +15275,10 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                         .await?;
                     }
                     *state.resource_plane.lock().await = Some(Arc::new(plane));
-                    tracing::warn!("resource plane still has live request owners during shutdown");
+                    tracing::warn!(
+                        zones = ?zones,
+                        "resource plane still has live request owners during shutdown",
+                    );
                 }
                 Err(error) => {
                     for zone in &zones {
@@ -15243,7 +15304,10 @@ async fn shutdown_resource_plane(state: &ServerState) -> Result<(), std::io::Err
                     )
                     .await?;
                 }
-                tracing::warn!("resource plane still has live request owners during shutdown");
+                tracing::warn!(
+                    zones = ?zones,
+                    "resource plane still has live request owners during shutdown",
+                );
             }
         }
     }
