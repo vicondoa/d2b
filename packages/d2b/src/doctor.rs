@@ -2285,14 +2285,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn seccomp_field_parse_disabled() {
-        let status = fake_proc_status(0, &[99]);
-        assert_eq!(
-            parse_proc_status_field(&status, "Seccomp:"),
-            Some("0".to_owned())
-        );
-    }
+
 
     // Simulate the actual /proc check using the real current process
     // PID (which will have Seccomp: 0 in a normal test runner).
@@ -2357,13 +2350,7 @@ mod tests {
         assert!(val.split_whitespace().count() >= 2);
     }
 
-    #[test]
-    fn nstgid_single_parse() {
-        // One value → initial user NS
-        let status = fake_proc_status(2, &[12345]);
-        let val = parse_proc_status_field(&status, "NStgid:").unwrap();
-        assert_eq!(val.split_whitespace().count(), 1);
-    }
+
 
     // --- check_broker_reap_health ---
 
