@@ -38,6 +38,11 @@ ttrpc = { workspace = true, features = ["async", "sync"] }
 [features]
 test-support = []
 
+[dev-dependencies]
+# Async fs/net forms for the shutdown-seam test fixtures (the async-gate
+# property: no blocking call runs on the runtime worker).
+tokio = { workspace = true, features = ["fs", "net"] }
+
 [[test]]
 name = "registration"
 path = "tests/registration.rs"

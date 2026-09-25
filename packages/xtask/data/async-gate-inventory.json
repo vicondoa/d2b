@@ -798,62 +798,62 @@
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 729,
+      "line": 730,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 747,
+      "line": 740,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 768,
+      "line": 784,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 769,
+      "line": 785,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 775,
+      "line": 791,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 786,
+      "line": 802,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 790,
+      "line": 806,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 798,
+      "line": 814,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 803,
+      "line": 819,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 804,
+      "line": 820,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 829,
+      "line": 845,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-toolkit/src/testing/fakes.rs",
-      "line": 833,
+      "line": 849,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

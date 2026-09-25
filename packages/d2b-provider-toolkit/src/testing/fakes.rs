@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -40,7 +40,7 @@ use d2b_resource_runtime::context::{
 };
 use d2b_resource_runtime::error::ResourceError;
 use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
-use d2b_resource_runtime::manager::ResourceView;
+use d2b_resource_runtime::manager::{ResourceView, deterministic_uid};
 use d2b_resource_runtime::resource::ResourceStatus;
 use d2b_resource_runtime::spec_store::EnsureOutcome;
 use parking_lot::Mutex;
@@ -491,7 +491,10 @@ impl FakeEffectPort {
 /// `ensure_child` commits the child row (Created/Unchanged/Updated by spec
 /// comparison) and records `ensure:<type>/<name>` before the commit and
 /// `spawned:<type>/<name>` after it, so a test can pin commit-before-spawn
-/// (F1). `delete` records `delete:<type>/<name>` and removes the row;
+/// (F1). The committed identity mirrors the manager's contract: a child's
+/// uid is derived deterministically from its key, and a spec change keeps
+/// the committed uid while advancing the generation exactly once.
+/// `delete` records `delete:<type>/<name>` and removes the row;
 /// `register_watch` records `watch:<type>/<name>` and returns a
 /// monotonically increasing [`WatchId`]. While [`Self::set_fail_reads`] is
 /// on, every read (`get`, `view`, `list_owned`) answers `ManagerRpc`, so a
@@ -508,7 +511,6 @@ pub struct RecordingManagerEndpoint {
     rows: Arc<Mutex<Vec<StoredDesiredResource>>>,
     views: Arc<Mutex<Vec<(ResourceKey, ResourceView)>>>,
     watch_targets: Arc<Mutex<Vec<ResourceKey>>>,
-    next_uid: Arc<AtomicU64>,
     fail_reads: Arc<AtomicBool>,
     fail_ensures: Arc<AtomicBool>,
     fail_deletes: Arc<AtomicBool>,
@@ -526,7 +528,6 @@ impl RecordingManagerEndpoint {
             rows: Arc::new(Mutex::new(Vec::new())),
             views: Arc::new(Mutex::new(Vec::new())),
             watch_targets: Arc::new(Mutex::new(Vec::new())),
-            next_uid: Arc::new(AtomicU64::new(1)),
             fail_reads: Arc::new(AtomicBool::new(false)),
             fail_ensures: Arc::new(AtomicBool::new(false)),
             fail_deletes: Arc::new(AtomicBool::new(false)),
@@ -730,30 +731,44 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
         if self.fail_ensures.load(Ordering::SeqCst) {
             return Err(ResourceError::ManagerRpc("scripted ensure failure".into()));
         }
-        let next = self.next_uid.fetch_add(1, Ordering::SeqCst);
-        let mut uid = [0u8; 16];
-        uid[..8].copy_from_slice(&next.to_be_bytes());
-        let row = StoredDesiredResource {
-            key: ResourceKey::new(&self.zone, child.type_name.as_str(), &child.name),
-            uid,
-            generation: 1,
-            owner_uid: Some(self.owner_uid),
-            provenance: ResourceProvenance::Resource,
-            deleting: false,
-            spec: child.spec,
-            metadata: child.metadata,
-            created_at: 0,
-        };
+        // The committed identity mirrors the manager's contract: a child's
+        // uid is derived deterministically from its key (stable for the same
+        // key, distinct across keys), and an update keeps the committed uid
+        // while advancing the generation exactly once (spec_store's ensure
+        // contract).
+        let key = ResourceKey::new(&self.zone, child.type_name.as_str(), &child.name);
         let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-        let outcome = match rows.iter_mut().find(|existing| existing.key == row.key) {
-            Some(existing) if existing.spec == row.spec => EnsureOutcome::Unchanged(existing.clone()),
+        let outcome = match rows.iter_mut().find(|existing| existing.key == key) {
+            Some(existing) if existing.spec == child.spec => EnsureOutcome::Unchanged(existing.clone()),
             Some(existing) => {
+                let row = StoredDesiredResource {
+                    key: key.clone(),
+                    uid: existing.uid,
+                    generation: existing.generation + 1,
+                    owner_uid: Some(self.owner_uid),
+                    provenance: ResourceProvenance::Resource,
+                    deleting: false,
+                    spec: child.spec,
+                    metadata: child.metadata,
+                    created_at: existing.created_at,
+                };
                 *existing = row.clone();
-                EnsureOutcome::Updated(row.clone())
+                EnsureOutcome::Updated(row)
             }
             None => {
+                let row = StoredDesiredResource {
+                    key: key.clone(),
+                    uid: deterministic_uid(&key),
+                    generation: 1,
+                    owner_uid: Some(self.owner_uid),
+                    provenance: ResourceProvenance::Resource,
+                    deleting: false,
+                    spec: child.spec,
+                    metadata: child.metadata,
+                    created_at: 0,
+                };
                 rows.push(row.clone());
-                EnsureOutcome::Created(row.clone())
+                EnsureOutcome::Created(row)
             }
         };
         drop(rows);
@@ -765,10 +780,11 @@ impl ManagerEndpoint for RecordingManagerEndpoint {
             } else {
                 ResourceStatus::Pending
             };
-            self.views.lock().retain(|(view_key, _)| view_key != &row.key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            let committed = outcome.row().clone();
+            self.views.lock().retain(|(view_key, _)| view_key != &committed.key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             self.views.lock().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                row.key.clone(),
-                Self::project(&row, status),
+                committed.key.clone(),
+                Self::project(&committed, status),
             ));
         }
         // Spawn notification only after the commit (F1, AE1).

@@ -3038,11 +3038,6 @@ mod tests {
 
     // -- the fail-closed refusal paths of the family handlers -------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn null_device() -> std::fs::File {
-        std::fs::File::open("/dev/null").expect("null device")
-    }
-
     /// Every kernel-dependent handler refuses a direct invocation with no
     /// wired seam before any effect runs: `kernel-seam-unwired` is the
     /// closed refusal of a Zone whose composition point never wired a
@@ -3052,8 +3047,10 @@ mod tests {
         let zone = zone();
         let caller = caller();
         let operation = ResourceRef::parse("Operation/spawn-runner").expect("operation");
-        let socket = null_device();
-        let fds = [socket.as_raw_fd()];
+        // A pipe supplies one raw fd with no I/O at all: no blocking call
+        // runs on the runtime worker (the async-gate property).
+        let (reader, _writer) = std::io::pipe().expect("pipe");
+        let fds = [reader.as_raw_fd()];
 
         let ctx = test_ctx(&zone, &caller, &operation, &fds, None);
 

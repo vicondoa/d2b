@@ -167,7 +167,7 @@ impl GracefulVmShutdown for CloudHypervisorShutdown {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
 
@@ -200,35 +200,33 @@ mod tests {
     }
 
     /// Remove one test serving directory, ignoring absence.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn remove_serving_dir(dir: &std::path::Path) {
-        let _ = std::fs::remove_dir_all(dir);
+    async fn remove_serving_dir(dir: &std::path::Path) {
+        let _ = tokio::fs::remove_dir_all(dir).await;
     }
 
     /// Serve one `vm.info` HTTP-over-unix exchange for the given wire state,
     /// and return the socket path the poll reads, plus the serving dir the
     /// caller removes when the exchange is complete.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn serve_vm_info(state: &str) -> (PathBuf, PathBuf) {
+    async fn serve_vm_info(state: &str) -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "d2b-provider-guest-shutdown-{}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&dir).expect("temp dir");
+        tokio::fs::create_dir_all(&dir).await.expect("temp dir");
         let socket = dir.join(format!("vm-{state}.sock"));
-        let _ = std::fs::remove_file(&socket);
-        let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind");
+        let _ = tokio::fs::remove_file(&socket).await;
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
         let body = format!(r#"{{"state":"{state}"}}"#);
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
             let mut request = [0u8; 512];
-            let _ = stream.read(&mut request).expect("read request");
+            let _ = stream.read(&mut request).await.expect("read request");
             let response = format!(
                 "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}",
                 body.len(),
                 body
             );
-            stream.write_all(response.as_bytes()).expect("write response");
+            stream.write_all(response.as_bytes()).await.expect("write response");
         });
         (socket, dir)
     }
@@ -252,14 +250,14 @@ mod tests {
                 },
             ),
         ] {
-            let (socket, dir) = serve_vm_info(state);
+            let (socket, dir) = serve_vm_info(state).await;
             let target = ProviderShutdownTarget {
                 vm: "work".to_owned(),
                 kind: ProviderKind::CloudHypervisor,
                 api_socket: Some(socket.clone()),
             };
             assert_eq!(provider.poll_state(&target).await, expected, "state {state}");
-            remove_serving_dir(&dir);
+            remove_serving_dir(&dir).await;
         }
 
         // An unreachable socket is an error, and errors answer Unknown.
