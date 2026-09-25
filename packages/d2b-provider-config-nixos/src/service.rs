@@ -28,6 +28,11 @@ pub struct ConfigSyncRequest {
 
 impl ConfigSyncRequest {
     /// Construct and validate a closed request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the reference does not
+    /// name a Guest.
     pub fn new(guest_ref: ResourceRef) -> Result<Self, ConfigError> {
         if guest_ref.resource_type().as_str() != "Guest" {
             return Err(ConfigError::InvalidRequest);
@@ -67,6 +72,15 @@ impl ConfigSyncResponse {
     }
 
     /// Decode the response and reapply all document bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the identifier is not the
+    /// closed Guest-config identifier or the base64 exceeds the encoded bound,
+    /// [`ConfigError::EncodingFailed`] when the base64 does not decode, and
+    /// the document bounds errors ([`ConfigError::EmptyDocument`],
+    /// [`ConfigError::DocumentTooLarge`], [`ConfigError::InvalidUtf8`]) when
+    /// the decoded bytes fail validation.
     pub fn document(&self) -> Result<GuestConfigDocument, ConfigError> {
         if self.identifier != GUEST_CONFIG_IDENTIFIER
             || self.content_base64.len() > MAX_CONFIG_ENCODED_BYTES
@@ -107,6 +121,10 @@ pub struct ConfigStageRequest {
 
 impl ConfigStageRequest {
     /// Construct a stage request from one already validated document.
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the reference does not
+    /// name a Guest.
     pub fn new(
         guest_ref: ResourceRef,
         document: &GuestConfigDocument,
@@ -120,6 +138,15 @@ impl ConfigStageRequest {
     }
 
     /// Decode and validate the staged document.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the identifier is not the
+    /// closed Guest-config identifier, [`ConfigError::DocumentTooLarge`] when
+    /// the base64 exceeds the encoded bound, [`ConfigError::EncodingFailed`]
+    /// when the base64 does not decode, and the document bounds errors
+    /// ([`ConfigError::EmptyDocument`], [`ConfigError::DocumentTooLarge`],
+    /// [`ConfigError::InvalidUtf8`]) when the decoded bytes fail validation.
     pub fn document(&self) -> Result<GuestConfigDocument, ConfigError> {
         validate_identifier(&self.identifier)?;
         if self.content_base64.len() > MAX_CONFIG_ENCODED_BYTES {
@@ -163,6 +190,12 @@ pub struct ConfigDiffRequest {
 
 impl ConfigDiffRequest {
     /// Construct a diff request from a stable content-view digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the reference does not
+    /// name a Guest and [`ConfigError::InvalidView`] when the view identifier
+    /// is not a `sha256:` content commitment.
     pub fn new(guest_ref: ResourceRef, against: impl Into<String>) -> Result<Self, ConfigError> {
         validate_guest_ref(&guest_ref)?;
         let against = against.into();
@@ -199,6 +232,13 @@ pub struct ConfigApproveRequest {
 
 impl ConfigApproveRequest {
     /// Construct an approval request for one opaque host target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the reference does not
+    /// name a Guest and [`ConfigError::InvalidDestination`] when the
+    /// destination is empty, longer than 128 bytes, non-ASCII, or contains a
+    /// path separator or whitespace.
     pub fn new(
         guest_ref: ResourceRef,
         destination: impl Into<String>,
@@ -238,6 +278,11 @@ pub struct ConfigRejectRequest {
 
 impl ConfigRejectRequest {
     /// Construct a rejection request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the reference does not
+    /// name a Guest.
     pub fn new(guest_ref: ResourceRef) -> Result<Self, ConfigError> {
         validate_guest_ref(&guest_ref)?;
         Ok(Self {
@@ -269,6 +314,11 @@ pub struct ConfigStatusRequest {
 
 impl ConfigStatusRequest {
     /// Construct a status request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the reference does not
+    /// name a Guest.
     pub fn new(guest_ref: ResourceRef) -> Result<Self, ConfigError> {
         validate_guest_ref(&guest_ref)?;
         Ok(Self {
@@ -293,6 +343,12 @@ pub struct ConfigStatusResponse {
 }
 
 /// Convert one response into a validated document.
+///
+/// # Errors
+///
+/// Returns the same errors as [`ConfigSyncResponse::document`]:
+/// [`ConfigError::InvalidRequest`], [`ConfigError::EncodingFailed`], and the
+/// document bounds errors.
 pub fn decode_document(response: &ConfigSyncResponse) -> Result<GuestConfigDocument, ConfigError> {
     response.document()
 }
@@ -356,6 +412,14 @@ struct ApprovedConfig {
 
 impl ConfigStagingStore {
     /// Stage or replace one Guest document.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Unauthorized`] when the caller is not Admin,
+    /// [`ConfigError::InvalidRequest`] when the reference or identifier is
+    /// not the closed Guest-config pair, and the document bounds errors
+    /// ([`ConfigError::EmptyDocument`], [`ConfigError::DocumentTooLarge`],
+    /// [`ConfigError::InvalidUtf8`]).
     pub fn stage(
         &mut self,
         caller: ConfigCaller,
@@ -376,6 +440,13 @@ impl ConfigStagingStore {
     }
 
     /// Compare staged content to a stable local-view digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Unauthorized`] when the caller is not Admin,
+    /// [`ConfigError::InvalidRequest`] for a wrong reference or identifier,
+    /// [`ConfigError::InvalidView`] for a malformed view identifier, and
+    /// [`ConfigError::StagingMissing`] when nothing is staged for the Guest.
     pub fn diff(
         &self,
         caller: ConfigCaller,
@@ -399,6 +470,15 @@ impl ConfigStagingStore {
     /// Approval is idempotent so a caller can retry after the downstream
     /// host publish fails. The staged bytes are consumed into an internal
     /// approval receipt, and a matching retry returns the same response.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Unauthorized`] when the caller is not Admin,
+    /// [`ConfigError::InvalidRequest`] for a wrong reference or identifier,
+    /// [`ConfigError::InvalidDestination`] for a malformed destination,
+    /// [`ConfigError::StagingMissing`] when nothing is staged or approved for
+    /// the Guest, and [`ConfigError::ApprovalConflict`] when an approved
+    /// receipt exists for a different destination.
     pub fn approve(
         &mut self,
         caller: ConfigCaller,
@@ -444,6 +524,11 @@ impl ConfigStagingStore {
     }
 
     /// Reject staged content, returning whether anything was removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Unauthorized`] when the caller is not Admin and
+    /// [`ConfigError::InvalidRequest`] for a wrong reference or identifier.
     pub fn reject(
         &mut self,
         caller: ConfigCaller,
@@ -461,6 +546,11 @@ impl ConfigStagingStore {
     }
 
     /// Return bounded staging metadata without returning document bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Unauthorized`] when the caller is not Admin and
+    /// [`ConfigError::InvalidRequest`] for a wrong reference or identifier.
     pub fn status(
         &self,
         caller: ConfigCaller,
