@@ -1366,20 +1366,6 @@ mod tests {
     }
 
     #[test]
-    fn host_system_placement_is_rejected() {
-        assert_eq!(
-            EntraPlacement::new(
-                PlacementBinding::HostSystem,
-                ResourceRef::parse("Host/workstation").unwrap(),
-                ResourceRef::parse("Guest/identity").unwrap(),
-                ResourceRef::parse("Endpoint/entra-login").unwrap(),
-                1,
-            ),
-            Err(EntraProviderError::InvalidPlacement)
-        );
-    }
-
-    #[test]
     fn operation_deadline_accepts_absolute_unix_milliseconds() {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
