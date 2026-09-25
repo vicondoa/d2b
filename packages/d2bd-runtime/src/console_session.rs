@@ -52,10 +52,10 @@ const RING_CAPACITY: usize = 256 * 1024;
 /// Shared ring buffer state for one VM's console stream.
 #[derive(Debug)]
 pub struct ConsoleRing {
-    pub ring: RingBuffer,
+    ring: RingBuffer,
     /// Notified whenever new bytes are pushed or EOF is set, so waiters
     /// can wake without polling.
-    pub notify: Arc<tokio::sync::Notify>,
+    notify: Arc<tokio::sync::Notify>,
 }
 
 impl ConsoleRing {
@@ -64,6 +64,33 @@ impl ConsoleRing {
             ring: RingBuffer::new(RING_CAPACITY),
             notify: Arc::new(tokio::sync::Notify::new()),
         }
+    }
+
+    /// Push bytes into the ring and wake any waiters.
+    pub fn push_bytes(&mut self, bytes: &[u8]) {
+        self.ring.push_bytes(bytes);
+        self.notify.notify_waiters();
+    }
+
+    /// Mark the console stream as ended and wake any waiters.
+    pub fn set_eof(&mut self) {
+        self.ring.is_eof = true;
+        self.notify.notify_waiters();
+    }
+
+    /// Read up to `max_len` bytes from `offset`.
+    pub fn read_at(&self, offset: u64, max_len: u64) -> Option<d2b_core::console_ring::RingReadResult> {
+        self.ring.read_at(offset, max_len)
+    }
+
+    /// The ring's base offset (start of retained data).
+    pub fn base_offset(&self) -> u64 {
+        self.ring.base_offset()
+    }
+
+    /// The wake handle waiters park on.
+    pub fn notify(&self) -> &Arc<tokio::sync::Notify> {
+        &self.notify
     }
 }
 
@@ -76,13 +103,13 @@ impl Default for ConsoleRing {
 /// Per-VM console session.
 #[derive(Debug)]
 pub struct ConsoleSession {
-    pub provider_kind: ConsoleProviderKind,
-    pub ring: Arc<tokio::sync::Mutex<ConsoleRing>>,
+    provider_kind: ConsoleProviderKind,
+    ring: Arc<tokio::sync::Mutex<ConsoleRing>>,
     /// Handle for the drainer task; Some while the drainer is running.
-    pub drainer: Option<tokio::task::JoinHandle<()>>,
+    drainer: Option<tokio::task::JoinHandle<()>>,
     /// Optional stdin fd/sink for writing to the console (None for
     /// read-only backends like provider-relay).
-    pub stdin_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
+    stdin_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
 }
 
 impl ConsoleSession {
@@ -97,6 +124,29 @@ impl ConsoleSession {
             ring,
             drainer,
             stdin_tx,
+        }
+    }
+
+    /// The console provider backend for this session.
+    pub fn provider_kind(&self) -> ConsoleProviderKind {
+        self.provider_kind
+    }
+
+    /// Shared ring buffer for this session's console output.
+    pub fn ring(&self) -> &Arc<tokio::sync::Mutex<ConsoleRing>> {
+        &self.ring
+    }
+
+    /// Stdin sink for writing to the console, when the backend accepts
+    /// writes (`None` for read-only backends).
+    pub fn stdin_tx(&self) -> Option<&tokio::sync::mpsc::Sender<Vec<u8>>> {
+        self.stdin_tx.as_ref()
+    }
+
+    /// Abort the drainer task, if one is running.
+    pub fn abort_drainer(&mut self) {
+        if let Some(task) = self.drainer.take() {
+            task.abort();
         }
     }
 }
@@ -179,10 +229,8 @@ impl ConsoleSessionTable {
     /// drainer.  Replaces any existing session (e.g. after a VM restart).
     pub fn register_session(&mut self, vm: String, session: ConsoleSession) {
         // Abort any previous drainer for this VM.
-        if let Some(old) = self.sessions.remove(&vm) {
-            if let Some(task) = old.drainer {
-                task.abort();
-            }
+        if let Some(mut old) = self.sessions.remove(&vm) {
+            old.abort_drainer();
             // Remove all client handles for the old session.
             let to_remove: Vec<ConsoleClientHandle> = self
                 .clients
@@ -200,12 +248,10 @@ impl ConsoleSessionTable {
 
     /// Remove a VM console session and abort its long-lived drainer task.
     pub fn remove_session(&mut self, vm: &str) -> bool {
-        let Some(old) = self.sessions.remove(vm) else {
+        let Some(mut old) = self.sessions.remove(vm) else {
             return false;
         };
-        if let Some(task) = old.drainer {
-            task.abort();
-        }
+        old.abort_drainer();
         let to_remove: Vec<ConsoleClientHandle> = self
             .clients
             .iter()
@@ -242,15 +288,15 @@ impl ConsoleSessionTable {
             // only for sub-microsecond push/read critical sections, so a
             // collision is a fail-closed `None` (U4's sync-consumer pattern),
             // never a parked caller.
-            let Ok(guard) = session.ring.try_lock() else {
+            let Ok(guard) = session.ring().try_lock() else {
                 return Ok(None);
             };
-            guard.ring.base_offset()
+            guard.base_offset()
         };
         let handle = ConsoleClientHandle::new()?;
         self.clients.insert(handle.clone(), vm.to_owned());
         self.client_uids.insert(handle.clone(), peer_uid);
-        Ok(Some((handle, session.provider_kind, start_offset)))
+        Ok(Some((handle, session.provider_kind(), start_offset)))
     }
 
     /// Return the owner UID for a client handle, or `None` if the handle is
@@ -278,16 +324,16 @@ impl ConsoleSessionTable {
             .get(session_handle)?;
         let session = self.sessions.get(vm)?;
         let (result, notify) = {
-            let Ok(guard) = session.ring.try_lock() else {
+            let Ok(guard) = session.ring().try_lock() else {
                 return None;
             };
-            let snap = guard.ring.read_at(offset, max_len);
-            let notify = Arc::clone(&guard.notify);
+            let snap = guard.read_at(offset, max_len);
+            let notify = Arc::clone(guard.notify());
             (snap, notify)
         };
         Some(ConsoleReadOutput {
             vm: vm.clone(),
-            provider_kind: session.provider_kind,
+            provider_kind: session.provider_kind(),
             snap: result,
             notify,
         })
@@ -302,7 +348,7 @@ impl ConsoleSessionTable {
             .clients
             .get(session_handle)?;
         let session = self.sessions.get(vm)?;
-        let Some(ref tx) = session.stdin_tx else {
+        let Some(tx) = session.stdin_tx() else {
             return Some(false);
         };
         // Non-blocking send: drop on full rather than blocking the daemon.
@@ -327,10 +373,10 @@ impl ConsoleSessionTable {
             .clients
             .get(session_handle)?;
         let session = self.sessions.get(vm)?;
-        let Ok(guard) = session.ring.try_lock() else {
+        let Ok(guard) = session.ring().try_lock() else {
             return None;
         };
-        Some(Arc::clone(&guard.notify))
+        Some(Arc::clone(guard.notify()))
     }
 }
 
@@ -366,12 +412,8 @@ pub fn spawn_ch_serial_drainer(
                         match stream.read(&mut buf).await {
                             Ok(0) | Err(_) => break,
                             Ok(n) => {
-                                let notify = {
-                                    let mut guard = ring.lock().await;
-                                    guard.ring.push_bytes(&buf[..n]);
-                                    Arc::clone(&guard.notify)
-                                };
-                                notify.notify_waiters();
+                                let mut guard = ring.lock().await;
+                                guard.push_bytes(&buf[..n]);
                             }
                         }
                     }
@@ -401,22 +443,14 @@ pub fn spawn_fd_drainer(
         loop {
             match stream.read(&mut buf).await {
                 Ok(0) | Err(_) => {
-                    let notify = {
-                        let mut guard = ring.lock().await;
-                        guard.ring.is_eof = true;
-                        Arc::clone(&guard.notify)
-                    };
-                    notify.notify_waiters();
+                    let mut guard = ring.lock().await;
+                    guard.set_eof();
                     tracing::debug!(vm = %vm, "console fd drainer reached EOF");
                     break;
                 }
                 Ok(n) => {
-                    let notify = {
-                        let mut guard = ring.lock().await;
-                        guard.ring.push_bytes(&buf[..n]);
-                        Arc::clone(&guard.notify)
-                    };
-                    notify.notify_waiters();
+                    let mut guard = ring.lock().await;
+                    guard.push_bytes(&buf[..n]);
                 }
             }
         }
@@ -457,8 +491,7 @@ pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> Consol
             Err(e) => {
                 tracing::warn!(error = %e, "qemu console: failed to convert fd to tokio stream");
                 let mut g = ring_clone.lock().await;
-                g.ring.is_eof = true;
-                g.notify.notify_waiters();
+                g.set_eof();
                 return;
             }
         };
@@ -476,21 +509,13 @@ pub fn create_qemu_session(std_stream: std::os::unix::net::UnixStream) -> Consol
         loop {
             match reader.read(&mut buf).await {
                 Ok(0) | Err(_) => {
-                    let notify = {
-                        let mut g = ring_write.lock().await;
-                        g.ring.is_eof = true;
-                        Arc::clone(&g.notify)
-                    };
-                    notify.notify_waiters();
+                    let mut g = ring_write.lock().await;
+                    g.set_eof();
                     break;
                 }
                 Ok(n) => {
-                    let notify = {
-                        let mut g = ring_write.lock().await;
-                        g.ring.push_bytes(&buf[..n]);
-                        Arc::clone(&g.notify)
-                    };
-                    notify.notify_waiters();
+                    let mut g = ring_write.lock().await;
+                    g.push_bytes(&buf[..n]);
                 }
             }
         }
@@ -604,7 +629,7 @@ mod tests {
         let ring = Arc::new(tokio::sync::Mutex::new(ConsoleRing::new()));
         {
             let mut g = ring.blocking_lock();
-            g.ring.push_bytes(b"hello console");
+            g.push_bytes(b"hello console");
         }
         let session = ConsoleSession::new(
             ConsoleProviderKind::LocalHypervisor,
@@ -658,7 +683,7 @@ mod tests {
         {
             let mut g = ring.blocking_lock();
             for _ in 0..300 {
-                g.ring.push_bytes(&[b'X'; 1024]);
+                g.push_bytes(&[b'X'; 1024]);
             }
         }
         let out = table.read_output(handle.as_str(), 0, 64).unwrap();
