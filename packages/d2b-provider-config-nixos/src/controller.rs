@@ -43,6 +43,12 @@ pub struct GuestSessionEvidence {
 
 impl GuestSessionEvidence {
     /// Construct evidence after binding the Guest and reconnect generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::SessionMismatch`] when the reference does not
+    /// name a Guest, the name is empty, the reconnect generation is zero, or
+    /// the boot identity is empty or longer than 128 bytes.
     pub fn new(
         guest_ref: ResourceRef,
         boot_identity: impl Into<String>,
@@ -103,6 +109,12 @@ pub struct GuestConfigDocument {
 
 impl GuestConfigDocument {
     /// Validate and retain one bounded non-empty UTF-8 Nix document.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::EmptyDocument`] for empty bytes,
+    /// [`ConfigError::DocumentTooLarge`] above the fixed byte bound, and
+    /// [`ConfigError::InvalidUtf8`] when the bytes are not UTF-8.
     pub fn new(bytes: impl Into<Vec<u8>>) -> Result<Self, ConfigError> {
         let bytes = bytes.into();
         if bytes.is_empty() {
@@ -120,6 +132,11 @@ impl GuestConfigDocument {
     /// Borrow the validated document bytes.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Consume the validated document bytes.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
     }
 
     /// Return the document size.
@@ -261,6 +278,15 @@ pub struct ConfigService;
 
 impl ConfigService {
     /// Read one Guest document through current authenticated session evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Unauthorized`] when the caller cannot read,
+    /// [`ConfigError::SessionMismatch`] when the caller is not the Guest, the
+    /// request does not match the evidence, or the evidence is stale, and the
+    /// document bounds errors ([`ConfigError::EmptyDocument`],
+    /// [`ConfigError::DocumentTooLarge`], [`ConfigError::InvalidUtf8`]) when
+    /// the bytes fail validation.
     pub fn read_guest_config(
         &self,
         caller: ConfigCaller,
@@ -288,6 +314,14 @@ impl ConfigService {
     }
 
     /// Validate a typed operation payload against the closed service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::InvalidRequest`] when the payload does not
+    /// decode or names a wrong Guest or identifier, [`ConfigError::InvalidView`]
+    /// for a malformed diff view, [`ConfigError::InvalidDestination`] for a
+    /// malformed approval destination, and the document bounds errors for a
+    /// Stage payload.
     pub fn validate_operation(
         &self,
         operation: ConfigOperation,
