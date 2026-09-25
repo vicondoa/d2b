@@ -182,7 +182,7 @@ impl NotificationSink {
                 provider = "notification-desktop",
                 "delivery refused: source session not authenticated"
             );
-            crate::types::NotificationError::InvalidOpaqueKey
+            crate::types::NotificationError::Denied
         })?;
         if !self.observer_enabled {
             return Err(crate::types::NotificationError::ObserverDisabled);
@@ -192,14 +192,14 @@ impl NotificationSink {
                 provider = "notification-desktop",
                 "delivery refused: observer session not authenticated"
             );
-            crate::types::NotificationError::InvalidOpaqueKey
+            crate::types::NotificationError::Denied
         })?;
         if source_session.zone() != observer_session.zone() {
             debug!(
                 provider = "notification-desktop",
                 "delivery refused: source and observer zone mismatch"
             );
-            return Err(crate::types::NotificationError::InvalidOpaqueKey);
+            return Err(crate::types::NotificationError::Denied);
         }
         let observer_session = observer_session.session_key();
         self.nonces.gc(now_secs);
@@ -297,9 +297,9 @@ impl NotificationSink {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::types::NotificationError::InvalidOpaqueKey`] when the
-    /// Guest source rejects the session or request, and the delivery
-    /// validation errors (`FieldBounds`, `InvalidIcon`, `InvalidActions`,
+    /// Returns [`crate::types::NotificationError::Denied`] when the Guest
+    /// source rejects the session or request, and the delivery validation
+    /// errors (`FieldBounds`, `InvalidIcon`, `InvalidActions`,
     /// `InvalidTimeout`, `InvalidOpaqueKey`, `ObserverDisabled`) when the
     /// request or observer stream fails its bounded validation.
     pub fn deliver_from_guest_source<P: DesktopNotificationPort + ?Sized>(
@@ -313,7 +313,7 @@ impl NotificationSink {
     ) -> Result<NotificationResult, crate::types::NotificationError> {
         source
             .validate_authenticated(source_session, &request)
-            .map_err(|_| crate::types::NotificationError::InvalidOpaqueKey)?;
+            .map_err(|_| crate::types::NotificationError::Denied)?;
         self.deliver(port, source_session, observer_session, request, now_secs)
     }
 
@@ -584,7 +584,7 @@ mod tests {
         let source = test_source("guest");
         assert_eq!(
             sink.deliver(&mut port, &source, &source, request_with_action(), 100),
-            Err(crate::types::NotificationError::InvalidOpaqueKey)
+            Err(crate::types::NotificationError::Denied)
         );
 
         let observer = test_observer("alice");
@@ -623,7 +623,7 @@ mod tests {
                 request_with_action(),
                 100,
             ),
-            Err(crate::types::NotificationError::InvalidOpaqueKey)
+            Err(crate::types::NotificationError::Denied)
         );
     }
 

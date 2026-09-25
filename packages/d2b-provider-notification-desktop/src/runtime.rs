@@ -105,7 +105,7 @@ impl<E: NotificationProcessEffectPort> NotificationRuntime<E> {
             .guest_sources()
             .iter()
             .find(|configured| configured.source_ref() == source_session.subject_ref())
-            .ok_or(NotificationError::InvalidOpaqueKey)?;
+            .ok_or(NotificationError::Denied)?;
         let guest_source =
             GuestSource::from_config_at_generation(config, source_session.generation())
                 .map_err(|_| NotificationError::InvalidOpaqueKey)?;
