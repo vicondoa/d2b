@@ -3,6 +3,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use serde::Serialize;
+
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
 use d2b_contracts_resource::v3::{
@@ -102,7 +104,8 @@ pub fn runtime_scope_commitment(
 ///
 /// Every member is a digest of a plan the Provider never sees. The
 /// `fd_table` member digests the exact inherited FD table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledDigests {
     /// Digest of the compiled sandbox plan.
     pub sandbox: ConfigurationDigest,
@@ -1551,5 +1554,23 @@ mod tests {
         assert_eq!(ticket.runtime_scope(), Some(scope));
         assert!(ticket.validate().is_ok());
         assert_eq!(format!("{ticket:?}"), "LaunchTicket(<redacted>)");
+    }
+
+    #[test]
+    fn compiled_digests_serialize_under_the_v3_camel_case_names() {
+        let digests = fixtures::compiled_digests();
+        let value = serde_json::to_value(digests).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "sandbox": ConfigurationDigest::from_bytes([1; 32]).to_hex(),
+                "budget": ConfigurationDigest::from_bytes([2; 32]).to_hex(),
+                "mounts": ConfigurationDigest::from_bytes([3; 32]).to_hex(),
+                "devices": ConfigurationDigest::from_bytes([4; 32]).to_hex(),
+                "network": ConfigurationDigest::from_bytes([5; 32]).to_hex(),
+                "endpoints": ConfigurationDigest::from_bytes([6; 32]).to_hex(),
+                "fdTable": ConfigurationDigest::from_bytes([7; 32]).to_hex(),
+            })
+        );
     }
 }
