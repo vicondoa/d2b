@@ -491,7 +491,12 @@ async fn serve_enrolled<A: GuestAgent>(
                 if !attachments.is_empty() {
                     return Err(GuestError::SessionDisconnected);
                 }
+                let frame_bytes = bytes.len();
                 let Ok(frame) = GuestFrame::new(bytes) else {
+                    tracing::warn!(
+                        frame_bytes,
+                        "dropping malformed guest frame: the peer violated the frame contract"
+                    );
                     continue;
                 };
                 let Ok(replies) = agent.serve(frame).await else {
