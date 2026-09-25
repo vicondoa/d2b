@@ -275,4 +275,53 @@ mod tests {
                 || (platform.kernel_major == 5 && platform.kernel_minor >= 3)
         );
     }
+
+    /// The bounded-read boundary: a file over `limit` bytes or with
+    /// non-UTF-8 content is refused, and a bounded UTF-8 file reads clean.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn read_bounded_refuses_oversized_and_non_utf8_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "d2b-provider-host-probe-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+
+        let oversized = dir.join("oversized.txt");
+        std::fs::write(&oversized, vec![b'a'; 65]).expect("write oversized");
+        assert_eq!(
+            read_bounded(&oversized, 64)
+                .err()
+                .map(|error| error.kind()),
+            Some(std::io::ErrorKind::InvalidData),
+            "a file over the limit is refused"
+        );
+
+        let exact = dir.join("exact.txt");
+        std::fs::write(&exact, vec![b'a'; 64]).expect("write exact");
+        assert_eq!(
+            read_bounded(&exact, 64).expect("exact-limit read").len(),
+            64,
+            "a file at exactly the limit reads clean"
+        );
+
+        let non_utf8 = dir.join("non-utf8.bin");
+        std::fs::write(&non_utf8, [0xff, 0xfe, 0x00, 0x41]).expect("write non-utf8");
+        assert_eq!(
+            read_bounded(&non_utf8, 64)
+                .err()
+                .map(|error| error.kind()),
+            Some(std::io::ErrorKind::InvalidData),
+            "non-UTF-8 content is refused"
+        );
+
+        let bounded = dir.join("bounded.txt");
+        std::fs::write(&bounded, "hello").expect("write bounded");
+        assert_eq!(
+            read_bounded(&bounded, 64).expect("bounded read"),
+            "hello"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
