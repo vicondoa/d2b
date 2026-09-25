@@ -382,7 +382,7 @@ mod tests {
         BindingDigest, EvidenceClass, Locality, ReconnectGeneration, ServiceName, SessionBinding,
         SessionPurpose, TranscriptHash, TransportBinding,
     };
-    use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName, SchemaFingerprint, ZoneId};
+    use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName, SchemaFingerprint};
     use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
 
     fn zone() -> ZonePath {
@@ -514,7 +514,6 @@ mod tests {
         assert_eq!(table.len().unwrap(), 1);
         assert!(table.remove(&operation).unwrap());
         assert_eq!(table.len().unwrap(), 0);
-        let _ = ZoneId::parse("dev").unwrap();
     }
 
     #[test]
