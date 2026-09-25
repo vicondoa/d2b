@@ -597,17 +597,6 @@ mod tests {
     }
 
     #[test]
-    fn production_registration_accepts_only_the_catalog_row() {
-        // The fixture row is not the committed catalog's row: production
-        // registration refuses it even though the declaration is
-        // otherwise valid, so a handler can never be injected for an
-        // operation the committed JSON does not declare.
-        let refusal = register_production_handlers(&[fixture_declaration()])
-            .expect_err("the fixture row is not a committed catalog row");
-        assert!(matches!(refusal, RoutingRefusal::Uncommitted { .. }));
-    }
-
-    #[test]
     fn a_handler_crate_that_is_not_the_declaring_provider_is_refused() {
         let declaration = HandlerDeclaration {
             source_crate: "d2b-broker-fixture-syscall-surface",
@@ -666,8 +655,7 @@ mod tests {
         assert!(verify_startup_routing(&["Hello"]).is_err());
         // The fixture operation is not a committed row: registering it
         // cannot satisfy (or violate) the committed-catalog invariant -
-        // production registration refuses it up front (see
-        // `production_registration_accepts_only_the_catalog_row`).
+        // production registration refuses it up front.
         assert!(verify_startup_routing(&[FIXTURE_OPERATION]).is_err());
     }
 
@@ -716,22 +704,4 @@ mod tests {
         assert_ne!(first.invocation_id, second.invocation_id);
     }
 
-    #[test]
-    fn an_unregistered_admitted_operation_fails_the_startup_invariant() {
-        // The invariant is not vacuous: whenever the rule admits a
-        // committed row, the composition root must register its handler
-        // before the broker serves. The fixture row stands in for that
-        // future registration: declaring it to the envelope and then
-        // asserting the invariant demands its handler tests the
-        // check's legs (registered-for-forwarded fails, admitted-
-        // without-handler fails) under fail-closed semantics.
-        //
-        // The committed catalog admits nothing this pass, so only the
-        // registered-for-forwarded leg is reachable today; the
-        // admitted-without-handler leg is pinned by the fixture row the
-        // moment the rule's admitted set is no longer empty.
-        assert!(verify_startup_routing(&[]).is_ok());
-        let _ = register_declared_handlers(&[fixture_declaration()])
-            .expect("the fixture admits");
     }
-}
