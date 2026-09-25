@@ -69,7 +69,7 @@ use crate::error::Error;
 use crate::host::{
     ChNetHandoffMode, HostJson, HostsFileOwnership, ModuleRequirement, NetEnv,
     NetworkManagerUnmanaged, NftablesModel, OwnershipRule, QemuMediaSourceIntent, SitePolicy,
-    TapRole, UsbipBusidLock, VendorProductPair,
+    UsbipBusidLock, VendorProductPair,
 };
 use crate::host_w3::{ModuleRequirementW3, TapRoleW3};
 use crate::manifest_v04::ManifestV04;
@@ -1626,7 +1626,7 @@ impl BundleResolver {
         self.zone_resource_bundles
             .keys()
             .map(|zone| {
-                d2b_contracts_resource::v3::ZoneId::parse(zone.clone())
+                d2b_contracts_resource::v3::ZoneId::parse(zone.as_str())
                     .map_err(|_| "bundle Zone resource bundle index invalid")
             })
             .collect()
@@ -1781,7 +1781,7 @@ impl BundleResolver {
         {
             return None;
         }
-        let spec = self.find_network_spec(&parts)?;
+        self.find_network_spec(&parts)?;
         let uplink = derive_network_ifname(
             provenance.zone_uid(),
             provenance.network_uid(),
@@ -1802,7 +1802,6 @@ impl BundleResolver {
             "table inet d2b {{\n  chain \"{chain}\" {{ comment \"d2b managed: {marker}\";\n    ct state established,related accept comment \"d2b managed: {marker}\";\n    iifname \"{}\" ct state new accept comment \"d2b managed: {marker}\";\n  }}\n}}\n",
             uplink.as_str()
         );
-        let _ = spec;
         Some(ResolvedNftablesProjectionIntent {
             intent_id: id.to_owned(),
             scope_label: network_scope(provenance),
@@ -1889,7 +1888,7 @@ impl BundleResolver {
         {
             return None;
         }
-        let spec = self.find_network_spec(&parts)?;
+        self.find_network_spec(&parts)?;
         let role = match parts.variant.as_deref() {
             Some("lan") => NetworkIfRole::LanBridge,
             Some("uplink") => NetworkIfRole::UplinkBridge,
@@ -1908,7 +1907,6 @@ impl BundleResolver {
             provenance,
             &format!("sysctl:{key}"),
         );
-        let _ = spec;
         Some(ResolvedSysctlIntent {
             intent_id: id.to_owned(),
             key: format!(
@@ -1970,8 +1968,11 @@ impl BundleResolver {
                         .annotations()
                         .get("networkUid")
                         .is_none_or(|value| {
-                            d2b_contracts_resource::v3::ResourceUid::parse(value.clone()).ok()
-                                == Some(parts.network_uid.clone())
+                            d2b_contracts_resource::v3::ResourceUid::parse(value.as_str())
+                                .ok()
+                                .as_ref()
+                                .map(d2b_contracts_resource::v3::ResourceUid::as_str)
+                                == Some(parts.network_uid.as_str())
                         })
             })?;
             let mut value = serde_json::to_value(resource.spec()).ok()?;
@@ -2431,31 +2432,27 @@ impl BundleResolver {
         let Some(vm) = self.find_process_vm(vm_id) else {
             return Vec::new();
         };
-        let mut ops = Vec::new();
-        for node in &vm.nodes {
-            for plan_op in &node.plan_ops {
-                match plan_op {
-                    SpawnRunnerPlanOp::DiskInit {
-                        target_path,
-                        size_bytes,
-                        mode,
-                        owner_uid,
-                        owner_gid,
-                        if_absent,
-                    } => {
-                        ops.push(ResolvedDiskInitOp {
-                            target_path: target_path.clone(),
-                            size_bytes: *size_bytes,
-                            mode: *mode,
-                            owner_uid: *owner_uid,
-                            owner_gid: *owner_gid,
-                            if_absent: *if_absent,
-                        });
-                    }
-                }
-            }
-        }
-        ops
+        vm.nodes
+            .iter()
+            .flat_map(|node| &node.plan_ops)
+            .filter_map(|plan_op| match plan_op {
+                SpawnRunnerPlanOp::DiskInit {
+                    target_path,
+                    size_bytes,
+                    mode,
+                    owner_uid,
+                    owner_gid,
+                    if_absent,
+                } => Some(ResolvedDiskInitOp {
+                    target_path: target_path.clone(),
+                    size_bytes: *size_bytes,
+                    mode: *mode,
+                    owner_uid: *owner_uid,
+                    owner_gid: *owner_gid,
+                    if_absent: *if_absent,
+                }),
+            })
+            .collect()
     }
 
     pub fn resolve_vm_start_intent(
@@ -2914,11 +2911,13 @@ fn role_device_classes(
 // ---------------------------------------------------------------
 
 
+/// Build the store-view plan `BundleOpId` (`store-view:zone:<zone>:vm:<vm>`).
 pub fn intent_id_store_view(zone: &ZoneId, vm: &str) -> String {
     format!("store-view:zone:{}:vm:{vm}", zone.as_str())
 }
 
 
+/// Build the VM start `BundleOpId` (`vm-start:vm:<vm>:role:<role_id>`).
 pub fn intent_id_vm_start(vm: &str, role_id: &str) -> String {
     format!("vm-start:vm:{vm}:role:{role_id}")
 }
@@ -2928,14 +2927,17 @@ pub fn intent_id_vm_start(vm: &str, role_id: &str) -> String {
 // Intent ID format helpers (deterministic, public).
 // ---------------------------------------------------------------
 
+/// Build the whole-host nftables `BundleOpId` (`nft:host`).
 pub fn intent_id_nft_host() -> String {
     "nft:host".to_owned()
 }
 
+/// Build the per-environment nftables `BundleOpId` (`nft:env:<env>`).
 pub fn intent_id_nft_env(env: &str) -> String {
     format!("nft:env:{env}")
 }
 
+/// Build the network-projection nftables `BundleOpId` (`nft-projection:env:<env>`).
 pub fn intent_id_nft_projection_env(env: &str) -> String {
     format!("nft-projection:env:{env}")
 }
@@ -3103,34 +3105,42 @@ pub fn network_name_token(network_name: &str) -> String {
         .to_owned()
 }
 
+/// Build the ownership-marker `BundleOpId` (`ownership-marker:env:<env>`).
 pub fn intent_id_ownership_marker_env(env: &str) -> String {
     format!("ownership-marker:env:{env}")
 }
 
+/// Build the bridge `BundleOpId` (`bridge:env:<env>`).
 pub fn intent_id_bridge_env(env: &str) -> String {
     format!("bridge:env:{env}")
 }
 
+/// Build the route `BundleOpId` (`route:env:<env>:<idx>`).
 pub fn intent_id_route_env(env: &str, idx: usize) -> String {
     format!("route:env:{env}:{idx}")
 }
 
+/// Build the sysctl `BundleOpId` (`sysctl:env:<env>:if:<if_name>:<key>`).
 pub fn intent_id_sysctl(env: &str, if_name: &str, key: &str) -> String {
     format!("sysctl:env:{env}:if:{if_name}:{key}")
 }
 
+/// Build the whole-host hosts-file `BundleOpId` (`hosts:host`).
 pub fn intent_id_hosts_host() -> String {
     "hosts:host".to_owned()
 }
 
+/// Build the whole-host NM-unmanaged `BundleOpId` (`nm-unmanaged:host`).
 pub fn intent_id_nm_unmanaged_host() -> String {
     "nm-unmanaged:host".to_owned()
 }
 
+/// Build the USBIP firewall `BundleOpId` (`usbip-fw:env:<env>:bus:<bus_id>`).
 pub fn intent_id_usbip_firewall(env: &str, bus_id: &str) -> String {
     format!("usbip-fw:env:{env}:bus:{bus_id}")
 }
 
+/// Build the USBIP bind `BundleOpId` (`usbip-bind:env:<env>:vm:<vm>:bus:<bus_id>`).
 pub fn intent_id_usbip_bind(env: &str, vm: &str, bus_id: &str) -> String {
     format!("usbip-bind:env:{env}:vm:{vm}:bus:{bus_id}")
 }
@@ -3214,10 +3224,12 @@ fn network_firewall_chain_name(network_uid: &d2b_contracts_resource::v3::Resourc
     format!("forward-{}", &compact[..8])
 }
 
+/// Build the runner `BundleOpId` (`runner:zone:<zone>:vm:<vm>:role:<role_id>`).
 pub fn intent_id_runner(zone: &ZoneId, vm: &str, role_id: &str) -> String {
     format!("runner:zone:{}:vm:{vm}:role:{role_id}", zone.as_str())
 }
 
+/// Build the legacy compatibility runner `BundleOpId` (`runner:vm:<vm>:role:<role_id>`).
 pub fn intent_id_legacy_runner(vm: &str, role_id: &str) -> String {
     format!("runner:vm:{vm}:role:{role_id}")
 }
@@ -3351,7 +3363,7 @@ fn build_resource_network_intents(
                 .annotations()
                 .get("networkUid")
                 .and_then(|value| {
-                    d2b_contracts_resource::v3::ResourceUid::parse(value.clone()).ok()
+                    d2b_contracts_resource::v3::ResourceUid::parse(value.as_str()).ok()
                 })
             else {
                 continue;
@@ -5739,12 +5751,6 @@ fn manifest_parse_reason(err: &str) -> &'static str {
     }
 }
 
-// Silence the "TapRole imported but unused" warning - we only need
-// it transitively to refer to BridgePortFlags in the render
-// helpers, which already use the type via `flag.role`.
-#[allow(dead_code)]
-const _ASSERT_TAPROLE: Option<TapRole> = None;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6611,7 +6617,7 @@ mod tests {
                 net_vm_forward_blocklist: Vec::new(),
                 external_network: None,
                 bridge_port_flags: vec![BridgePortFlags {
-                    role: TapRole::Uplink,
+                    role: crate::host::TapRole::Uplink,
                     isolated: true,
                     neigh_suppress: true,
                     learning: Some(false),
@@ -7905,7 +7911,7 @@ mod tests {
         host.environments[0].host_uplink_ip = Some("192.0.2.1".to_owned());
         host.environments[0].net_uplink_ip = Some("192.0.2.2".to_owned());
         host.environments[0].bridge_port_flags = vec![BridgePortFlags {
-            role: TapRole::Uplink,
+            role: crate::host::TapRole::Uplink,
             isolated: true,
             neigh_suppress: true,
             learning: Some(false),
@@ -7955,7 +7961,7 @@ mod tests {
             vendor_product_allowlist: Vec::new(),
         }];
         host.environments[0].bridge_port_flags = vec![BridgePortFlags {
-            role: TapRole::Uplink,
+            role: crate::host::TapRole::Uplink,
             isolated: false,
             neigh_suppress: true,
             learning: Some(false),

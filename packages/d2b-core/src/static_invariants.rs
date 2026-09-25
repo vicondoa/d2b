@@ -11,6 +11,8 @@
 //! invariant holds), so callers (contract tests, and potentially the broker)
 //! can assert and report precisely.
 
+use std::borrow::Cow;
+
 use serde_json::Value;
 
 /// Linux capabilities considered "broad" - granting one to a long-lived
@@ -159,7 +161,7 @@ pub fn world_readable_field_leaks(manifest: &Value) -> Vec<String> {
     let mut leaks = Vec::new();
     for (path, _) in scalar_paths(manifest) {
         let Some(last) = path.last() else { continue };
-        if PUBLIC_MANIFEST_FIELDS.iter().any(|f| f == last) {
+        if PUBLIC_MANIFEST_FIELDS.contains(&last.as_str()) {
             continue;
         }
         let dotted = path.join(".");
@@ -198,8 +200,8 @@ pub fn path_bearing_key_violations(manifest: &Value) -> Vec<String> {
             continue;
         }
         let rendered = match value {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
+            Value::String(s) => Cow::Borrowed(s.as_str()),
+            other => Cow::Owned(other.to_string()),
         };
         if rendered.contains('/') {
             violations.push(format!("{}={}", path.join("."), rendered));
@@ -216,7 +218,7 @@ pub fn path_bearing_key_violations(manifest: &Value) -> Vec<String> {
 pub fn is_broad_cap_violation(caps: &[String], adr_carve_out: Option<&str>) -> bool {
     let requests_broad = caps
         .iter()
-        .any(|cap| BROAD_CAPABILITIES.iter().any(|broad| broad == cap));
+        .any(|cap| BROAD_CAPABILITIES.contains(&cap.as_str()));
     if !requests_broad {
         return false;
     }
