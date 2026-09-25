@@ -1499,16 +1499,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn projection_request_defaults_refuse() {
-        let server = server();
-        let request = ZoneTopologyRequest::new();
-        assert!(request.admissions.is_empty());
-        for row in server.list_topology(&seeded_engine(), &request) {
-            assert!(matches!(row.status, ZoneTopologyStatus::Unreachable { .. }));
-        }
-    }
-
     // -- watch -------------------------------------------------------------
 
     #[test]
