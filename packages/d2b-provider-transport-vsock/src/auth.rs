@@ -56,6 +56,12 @@ pub struct GuestIdentity {
 
 impl GuestIdentity {
     /// Construct one exact Guest identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionRejectReason::GuestMismatch`] when the reference
+    /// does not name a `Guest`, and [`SessionRejectReason::MalformedProof`]
+    /// when the boot id is empty or exceeds 128 bytes.
     pub fn new(
         guest: ResourceRef,
         zone: ZoneId,
@@ -218,9 +224,8 @@ impl ReadySession {
     }
 
     /// Consume the authority on disconnect.
-    pub fn disconnect(mut self) -> SessionState {
-        self.state = SessionState::Disconnected;
-        self.state
+    pub fn disconnect(self) -> SessionState {
+        SessionState::Disconnected
     }
 }
 
@@ -253,6 +258,18 @@ impl SessionAuthority {
     }
 
     /// Authenticate one proof and consume its nonce.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionRejectReason::CidMismatch`] when the observed or
+    /// proof CID is not the bound one, [`SessionRejectReason::GuestMismatch`]
+    /// or [`SessionRejectReason::ZoneMismatch`] when the proof names another
+    /// Guest or Zone, [`SessionRejectReason::StaleSignature`] when the boot
+    /// id or generation is stale, [`SessionRejectReason::Replay`] when the
+    /// nonce was already admitted, [`SessionRejectReason::AuthorityUnavailable`]
+    /// when the replay ledger is full, and
+    /// [`SessionRejectReason::SignatureInvalid`] when the tag does not
+    /// verify.
     pub fn authenticate(
         &mut self,
         observed_cid: PeerCid,

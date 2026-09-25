@@ -104,12 +104,22 @@ pub trait RelayEffectPort: Send + Sync + 'static {
     type RelayProcess: Send + 'static;
 
     /// Reserve the exact Host-global CID before any effect starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayEffectError::CidAuthorityConflict`] when another
+    /// relay owns the CID authority, or the error the effect port reports.
     async fn reserve_cid(
         &self,
         binding: &RelayBinding,
     ) -> Result<Self::CidReservation, RelayEffectError>;
 
     /// Bind the matching listener while retaining CID authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayEffectError::ListenerUnavailable`] when the listener
+    /// could not be acquired, or the error the effect port reports.
     async fn bind_listener(
         &self,
         binding: &RelayBinding,
@@ -117,6 +127,11 @@ pub trait RelayEffectPort: Send + Sync + 'static {
     ) -> Result<Self::Listener, RelayEffectError>;
 
     /// Start the native relay process.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayEffectError::ProcessUnavailable`] when the relay
+    /// process could not be started, or the error the effect port reports.
     async fn spawn_relay(
         &self,
         binding: &RelayBinding,
@@ -125,16 +140,37 @@ pub trait RelayEffectPort: Send + Sync + 'static {
     ) -> Result<Self::RelayProcess, RelayEffectError>;
 
     /// Close the relay process.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayEffectError::CloseUnconfirmed`] when closure was not
+    /// confirmed, or the error the effect port reports.
     async fn close_relay(&self, process: &Self::RelayProcess) -> Result<(), RelayEffectError>;
 
     /// Close the listener.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayEffectError::CloseUnconfirmed`] when closure was not
+    /// confirmed, or the error the effect port reports.
     async fn close_listener(&self, listener: &Self::Listener) -> Result<(), RelayEffectError>;
 
     /// Release CID authority after listener and relay closure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayEffectError::CloseUnconfirmed`] when the release was
+    /// not confirmed, or the error the effect port reports.
     async fn release_cid(&self, reservation: &Self::CidReservation)
     -> Result<(), RelayEffectError>;
 
     /// Find a matching listener and relay during restart adoption.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayEffectError::RestartMismatch`] when the observed
+    /// listener or process does not match the binding, or the error the
+    /// effect port reports.
     async fn observe(
         &self,
         binding: &RelayBinding,
@@ -198,6 +234,13 @@ where
     }
 
     /// Acquire CID authority, bind the listener, and start the native relay.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayEffectError::RestartMismatch`] when the session does
+    /// not match the relay binding, [`RelayEffectError::Transient`] when the
+    /// relay is not idle or closed, and otherwise the error the effect port
+    /// reports for the failing acquisition step.
     pub async fn start(&mut self, session: &ReadySession) -> Result<(), RelayEffectError> {
         if !session.matches(self.binding.guest()) {
             self.phase = RelayPhase::Degraded;
@@ -284,6 +327,13 @@ where
     }
 
     /// Adopt only the exact matching listener and relay after restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayEffectError::Transient`] when the relay is not idle
+    /// or closed, [`RelayEffectError::RestartMismatch`] when no matching
+    /// observation exists or its binding differs, and otherwise the error
+    /// the effect port reports.
     pub async fn adopt(&mut self, reservation: P::CidReservation) -> Result<(), RelayEffectError> {
         if !matches!(self.phase, RelayPhase::Idle | RelayPhase::Closed) {
             return Err(RelayEffectError::Transient);
@@ -311,6 +361,11 @@ where
     }
 
     /// Close the relay, then listener, then release CID authority.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error the effect port reports for the first failing
+    /// closure step; the remaining steps are not attempted.
     pub async fn finalize(&mut self) -> Result<(), RelayEffectError> {
         if self.phase == RelayPhase::Closed {
             return Ok(());
