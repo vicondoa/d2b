@@ -29,11 +29,11 @@ pub enum ComponentSessionTransportFailure {
     SocketNotUnixSocket,
     SocketHardLinked,
     UnsafeDirectory,
-    PeerCredentialIo { kind: String },
+    PeerCredentialIo { kind: ErrorKind },
     PeerCredentialMismatch,
-    ConnectIo { kind: String },
-    WriteIo { kind: String },
-    AckIo { kind: String },
+    ConnectIo { kind: ErrorKind },
+    WriteIo { kind: ErrorKind },
+    AckIo { kind: ErrorKind },
     AckTimeout,
     AckEof,
     AckTooLong,
@@ -147,7 +147,7 @@ fn connect_component_session_vsock_inner(
     let deadline = Instant::now() + setup_timeout;
     let mut socket = connect_unix_socket_with_timeout(socket_path, remaining_setup_time(deadline)?)
         .map_err(|error| ComponentSessionTransportFailure::ConnectIo {
-            kind: error.kind().to_string(),
+            kind: error.kind(),
         })?;
     validate_peer_credentials(&socket, peer_policy)?;
     let remaining = remaining_setup_time(deadline)?;
@@ -195,7 +195,7 @@ fn validate_peer_credentials(
 ) -> Result<(), ComponentSessionTransportFailure> {
     let peer = getsockopt(socket, PeerCredentials).map_err(|error| {
         ComponentSessionTransportFailure::PeerCredentialIo {
-            kind: error.to_string(),
+            kind: std::io::Error::from(error).kind(),
         }
     })?;
     let (expected_uid, expected_gid) = match peer_policy {
@@ -378,7 +378,7 @@ fn read_connect_ack(
             Err(error) if error.kind() == ErrorKind::Interrupted => continue,
             Err(error) => {
                 return Err(ComponentSessionTransportFailure::AckIo {
-                    kind: error.kind().to_string(),
+                    kind: error.kind(),
                 });
             }
         }
@@ -405,9 +405,9 @@ fn remaining_setup_time(deadline: Instant) -> Result<Duration, ComponentSessionT
 
 fn io_failure<F>(constructor: F) -> impl FnOnce(std::io::Error) -> ComponentSessionTransportFailure
 where
-    F: FnOnce(String) -> ComponentSessionTransportFailure,
+    F: FnOnce(ErrorKind) -> ComponentSessionTransportFailure,
 {
-    move |error| constructor(error.kind().to_string())
+    move |error| constructor(error.kind())
 }
 
 #[cfg(test)]
