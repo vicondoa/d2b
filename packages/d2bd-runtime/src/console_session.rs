@@ -123,12 +123,6 @@ impl std::borrow::Borrow<str> for ConsoleClientHandle {
     }
 }
 
-impl Default for ConsoleClientHandle {
-    fn default() -> Self {
-        Self::new().expect("console handle entropy unavailable")
-    }
-}
-
 /// In-daemon console session table.
 ///
 /// One entry per running VM that has an active drainer.  Multiple clients
