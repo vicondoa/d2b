@@ -129,6 +129,12 @@ impl ConsoleClientHandle {
     }
 }
 
+impl std::borrow::Borrow<str> for ConsoleClientHandle {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
 impl Default for ConsoleClientHandle {
     fn default() -> Self {
         Self::new().expect("console handle entropy unavailable")
@@ -140,6 +146,7 @@ impl Default for ConsoleClientHandle {
 /// One entry per running VM that has an active drainer.  Multiple clients
 /// share the same ring buffer for a given VM.
 #[derive(Debug)]
+#[derive(Default)]
 pub struct ConsoleSessionTable {
     /// VM-name → active session.
     sessions: HashMap<String, ConsoleSession>,
@@ -156,12 +163,6 @@ impl ConsoleSessionTable {
             clients: HashMap::new(),
             client_uids: HashMap::new(),
         }
-    }
-}
-
-impl Default for ConsoleSessionTable {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -247,7 +248,7 @@ impl ConsoleSessionTable {
     /// not known.
     pub fn client_owner_uid(&self, session_handle: &str) -> Option<u32> {
         self.client_uids
-            .get(&ConsoleClientHandle(session_handle.to_owned()))
+            .get(session_handle)
             .copied()
     }
 
@@ -265,7 +266,7 @@ impl ConsoleSessionTable {
     ) -> Option<ConsoleReadOutput> {
         let vm = self
             .clients
-            .get(&ConsoleClientHandle(session_handle.to_owned()))?;
+            .get(session_handle)?;
         let session = self.sessions.get(vm)?;
         let (result, notify) = {
             let Ok(guard) = session.ring.try_lock() else {
@@ -290,7 +291,7 @@ impl ConsoleSessionTable {
     pub fn write_stdin(&self, session_handle: &str, bytes: Vec<u8>) -> Option<bool> {
         let vm = self
             .clients
-            .get(&ConsoleClientHandle(session_handle.to_owned()))?;
+            .get(session_handle)?;
         let session = self.sessions.get(vm)?;
         let Some(ref tx) = session.stdin_tx else {
             return Some(false);
@@ -301,9 +302,8 @@ impl ConsoleSessionTable {
 
     /// Close (detach) a client session.  The VM's drainer keeps running.
     pub fn close(&mut self, session_handle: &str) -> bool {
-        let key = ConsoleClientHandle(session_handle.to_owned());
-        self.client_uids.remove(&key);
-        self.clients.remove(&key).is_some()
+        self.client_uids.remove(session_handle);
+        self.clients.remove(session_handle).is_some()
     }
 
     /// Whether a session exists for `vm`.
@@ -316,7 +316,7 @@ impl ConsoleSessionTable {
     pub fn ring_notify(&self, session_handle: &str) -> Option<Arc<tokio::sync::Notify>> {
         let vm = self
             .clients
-            .get(&ConsoleClientHandle(session_handle.to_owned()))?;
+            .get(session_handle)?;
         let session = self.sessions.get(vm)?;
         let Ok(guard) = session.ring.try_lock() else {
             return None;

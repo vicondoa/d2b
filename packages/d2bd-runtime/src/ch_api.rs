@@ -8,16 +8,29 @@ use std::time::Duration;
 
 use tokio::net::UnixStream;
 
+/// Default per-request timeout for Cloud Hypervisor HTTP control calls,
+/// mirroring the legacy `ch_http_timeout` exporter budget.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Cap on a Cloud Hypervisor HTTP response body: a control payload that
+/// large is malformed rather than tolerable (the unix API stays unbounded
+/// otherwise).
 pub const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChApiError {
+    /// The control socket is unreachable or the I/O failed, citing the
+    /// underlying error kind (not full paths或 payloads).
     Unavailable(String),
+    /// The control request exceeded its deadline.
     Timeout,
+    /// The response body exceeded `MAX_RESPONSE_BYTES`.
     ResponseTooLarge,
+    /// The response is not a well-formed HTTP control reply.
     MalformedResponse,
+    /// The API answered a non-2xx status code.
     Rejected(u16),
+    /// The `vm.info` payload did not deserialize into the expected shape.
     InvalidJson(String),
 }
 
@@ -33,17 +46,36 @@ impl ChApiError {
     }
 }
 
+/// The subset of the Cloud Hypervisor `vm.info` payload this crate
+/// consumes; fields absent from the reply stay `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChVmInfo {
+    /// The VM run state (e.g. `Running`, `Stopped`) as reported by CH.
     pub state: Option<String>,
+    /// The configured vCPU count, when the reply reports one.
     pub vcpu_count: Option<u64>,
+    /// The configured memory size in MiB, when the reply reports one.
     pub memory_mib: Option<u64>,
 }
 
+/// Fetch and parse the Cloud Hypervisor `vm.info` payload over the control
+/// socket.
+///
+/// # Errors
+///
+/// Returns `ChApiError` for socket failures, timeouts, oversized or
+/// malformed replies, and JSON that does not match the expected shape.
 pub async fn get_vm_info(socket: &Path, timeout: Duration) -> Result<ChVmInfo, ChApiError> {
     let body = request(socket, "GET", "/api/v1/vm.info", timeout).await?;
     parse_vm_info(&body)
 }
+
+/// Request an ACPI shutdown from the Cloud Hypervisor control socket.
+///
+/// # Errors
+///
+/// Returns `ChApiError` when the control request cannot be delivered or the
+/// API answers a non-2xx status.
 
 pub async fn shutdown_vm(socket: &Path, timeout: Duration) -> Result<(), ChApiError> {
     request(socket, "PUT", "/api/v1/vm.shutdown", timeout)

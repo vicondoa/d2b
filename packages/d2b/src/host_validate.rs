@@ -226,6 +226,7 @@ pub struct WaveReport {
 }
 
 #[derive(Debug, Clone)]
+/// Complete result of one `host validate` run, as per-wave evidence rows.
 pub struct ValidateReport {
     pub mode: ValidateMode,
     pub evidence_dir: PathBuf,
@@ -234,6 +235,7 @@ pub struct ValidateReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The mutation mode of a `host validate` run.
 pub enum ValidateMode {
     DryRun,
     Apply,
@@ -622,6 +624,7 @@ fn tally(waves: &[WaveReport]) -> serde_json::Map<String, Value> {
     m
 }
 
+/// Derive the process exit code from the validation report statuses.
 pub fn exit_code(report: &ValidateReport) -> i32 {
     // Apply mode: any write-failure is exit 1.
     // Any wave still `Missing` after apply is exit 78 (operator must

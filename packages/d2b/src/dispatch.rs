@@ -45,10 +45,17 @@ const PROJECTION_COMMANDS: &[&str] = &["audio", "clipboard", "display"];
 /// The parser is the sole authority for a built-in name; projection binding
 /// and completion read this list, so collision handling cannot drift from
 /// what `d2b` actually parses.
-static BUILTIN_COMMANDS: LazyLock<Vec<String>> = LazyLock::new(|| {
+/// The parser's own top-level subcommand names, in declaration order.
+fn modern_cli_subcommands() -> Vec<String> {
     ModernCli::command()
         .get_subcommands()
         .map(|subcommand| subcommand.get_name().to_owned())
+        .collect()
+}
+
+static BUILTIN_COMMANDS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    modern_cli_subcommands()
+        .into_iter()
         .filter(|name| !PROJECTION_COMMANDS.contains(&name.as_str()))
         .collect()
 });
@@ -294,22 +301,22 @@ pub(crate) struct HostErrorEnvelope {
 }
 
 pub(crate) fn host_error_envelope(
-    kind: &str,
-    code: &str,
+    kind: impl Into<String>,
+    code: impl Into<String>,
     exit_code: i32,
-    what_was_checked: &str,
-    observed_state: &str,
-    remediation: &str,
-    docs_anchor: &str,
+    what_was_checked: impl Into<String>,
+    observed_state: impl Into<String>,
+    remediation: impl Into<String>,
+    docs_anchor: impl Into<String>,
 ) -> HostErrorEnvelope {
     HostErrorEnvelope {
-        kind: kind.to_owned(),
-        code: code.to_owned(),
+        kind: kind.into(),
+        code: code.into(),
         exit_code,
-        what_was_checked: what_was_checked.to_owned(),
-        observed_state: observed_state.to_owned(),
-        remediation: remediation.to_owned(),
-        docs_anchor: docs_anchor.to_owned(),
+        what_was_checked: what_was_checked.into(),
+        observed_state: observed_state.into(),
+        remediation: remediation.into(),
+        docs_anchor: docs_anchor.into(),
     }
 }
 
@@ -344,7 +351,7 @@ pub(crate) fn emit_host_error(
 
 pub(crate) fn daemon_down_envelope(verb: &str) -> HostErrorEnvelope {
     host_error_envelope(
-        &format!("d2b {verb} requires d2bd"),
+        format!("d2b {verb} requires d2bd"),
         "daemon-down",
         1,
         "Daemon connectivity at /run/d2b/public.sock.",
@@ -356,10 +363,10 @@ pub(crate) fn daemon_down_envelope(verb: &str) -> HostErrorEnvelope {
 
 pub(crate) fn not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
     host_error_envelope(
-        &format!("d2b {verb} has no daemon-native handler yet"),
+        format!("d2b {verb} has no daemon-native handler yet"),
         "not-yet-implemented",
         78,
-        &format!("Native daemon dispatch for `d2b {verb}`"),
+        format!("Native daemon dispatch for `d2b {verb}`"),
         "The daemon-native handler has not landed yet; the typed envelope contract is the only operator path until the native handler ships.",
         "Track the surface schedule in CHANGELOG.md \"Unreleased\"; the typed envelope is the only operator path until the native handler ships.",
         "docs/reference/error-codes.md#not-yet-implemented",
@@ -368,12 +375,12 @@ pub(crate) fn not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
 
 pub(crate) fn missing_mutation_flag_envelope(verb: &str) -> HostErrorEnvelope {
     host_error_envelope(
-        &format!("{verb} requires either --dry-run or --apply"),
+        format!("{verb} requires either --dry-run or --apply"),
         "--apply-or-dry-run-required",
         78,
-        &format!("{verb} invocation flags."),
+        format!("{verb} invocation flags."),
         "Neither --dry-run nor --apply was provided.",
-        &format!("Re-run as `d2b {verb} --dry-run` to plan or `d2b {verb} --apply` to mutate."),
+        format!("Re-run as `d2b {verb} --dry-run` to plan or `d2b {verb} --apply` to mutate."),
         "docs/reference/error-codes.md#--apply-or-dry-run-required",
     )
 }
@@ -545,7 +552,7 @@ async fn audit_via_socket(
     let mut cursor = None;
     let mut lines = Vec::new();
     for _ in 0..1024 {
-        let request = daemon_audit_frame_with_cursor("audit", json_mode, cursor.clone())?;
+        let request = daemon_audit_frame_with_cursor("audit", json_mode, cursor)?;
         socket
             .send_frame(&request, budget)
             .await
@@ -686,33 +693,10 @@ pub(crate) fn parse_uid_env(name: &str) -> BTreeSet<u32> {
 }
 
 pub(crate) fn all_known_subcommands() -> Vec<String> {
-    [
-        "list",
-        "status",
-        "launch",
-        "audit",
-        "auth status",
-        "op inspect",
-        "realm list",
-        "realm inspect",
-        "realm enter",
-        "realm run",
-        "up",
-        "down",
-        "restart",
-        "boot",
-        "build",
-        "switch",
-        "test",
-        "rollback",
-        "generations",
-        "usb",
-        "console",
-        "audio",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect()
+    modern_cli_subcommands()
+        .into_iter()
+        .filter(|name| !PROJECTION_COMMANDS.contains(&name.as_str()))
+        .collect()
 }
 
 pub(crate) fn allowed_subcommands(role: AuthRoleV2) -> BTreeSet<String> {
@@ -815,22 +799,22 @@ pub(crate) fn runtime_dispatch(cli: &ModernCli, context: &ZoneContext) -> Result
         ModernCommand::Process(args) => guest::run_process(context, args, mode, deadline),
         ModernCommand::Exec(args) => exec::run(context, args, mode, deadline),
         ModernCommand::Shell(args) => shell::run(context, args, mode, deadline),
-        ModernCommand::Volume(args) => resource::typed_noun(context, "volume", args, mode, deadline),
-        ModernCommand::Network(args) => resource::typed_noun(context, "network", args, mode, deadline),
-        ModernCommand::Device(args) => resource::typed_noun(context, "device", args, mode, deadline),
+        ModernCommand::Volume(args) => resource::typed_noun(context, "volume", args.clone(), mode, deadline),
+        ModernCommand::Network(args) => resource::typed_noun(context, "network", args.clone(), mode, deadline),
+        ModernCommand::Device(args) => resource::typed_noun(context, "device", args.clone(), mode, deadline),
         ModernCommand::Endpoint(args) => endpoint::run(context, args, mode, deadline),
         ModernCommand::Export(args) => share::run_export(context, args, mode, deadline),
         ModernCommand::Import(args) => share::run_import(context, args, mode, deadline),
         ModernCommand::Resource(args) => resource::run_resource(context, args, mode, deadline),
-        ModernCommand::User(args) => resource::typed_noun(context, "user", args, mode, deadline),
+        ModernCommand::User(args) => resource::typed_noun(context, "user", args.clone(), mode, deadline),
         ModernCommand::Credential(args) => {
-            resource::typed_noun(context, "credential", args, mode, deadline)
+            resource::typed_noun(context, "credential", args.clone(), mode, deadline)
         }
         ModernCommand::Provider(args) => provider::run(context, args, mode, deadline),
         ModernCommand::Zone(args) => zone::run(context, args, mode, deadline),
-        ModernCommand::Quota(args) => resource::typed_noun(context, "quota", args, mode, deadline),
+        ModernCommand::Quota(args) => resource::typed_noun(context, "quota", args.clone(), mode, deadline),
         ModernCommand::EmergencyPolicy(args) => {
-            resource::typed_noun(context, "emergency-policy", args, mode, deadline)
+            resource::typed_noun(context, "emergency-policy", args.clone(), mode, deadline)
         }
         ModernCommand::Activation(args) => activation::run(context, args, mode, deadline),
         ModernCommand::Complete(args) => complete::run(args, Some(context), mode, deadline),
@@ -974,7 +958,7 @@ fn explicit_zone_argument(cli_zone: Option<&str>) -> Option<String> {
 }
 
 pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
-    let cli = match ModernCli::try_parse_from(raw_args.clone()) {
+    let cli = match ModernCli::try_parse_from(raw_args) {
         Ok(cli) => cli,
         Err(error) => {
             let code = error.exit_code();

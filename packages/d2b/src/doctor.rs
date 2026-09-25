@@ -88,6 +88,7 @@ pub struct DoctorCheck {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Ordered check list produced by one doctor run.
 pub struct DoctorReport {
     pub checks: Vec<DoctorCheck>,
 }
@@ -160,6 +161,7 @@ impl DoctorReport {
     }
 }
 
+/// Run every doctor probe against one CLI context and aggregate the results.
 pub fn run_doctor(context: &CliContext) -> DoctorReport {
     let mut report = DoctorReport::default();
     check_broker_socket(context, &mut report);
@@ -481,6 +483,15 @@ enum PidfdState {
     ParseError(String),
 }
 
+impl PidfdEntries {
+    fn state_detail(&self) -> String {
+        match &self.state {
+            PidfdState::ParseError(d) => d.clone(),
+            _ => "daemon state dir unreadable".to_owned(),
+        }
+    }
+}
+
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn load_pidfd_entries(daemon_state_dir: &Path) -> PidfdEntries {
     let path = daemon_state_dir.join("pidfd-table.json");
@@ -525,10 +536,7 @@ fn check_otel_host_bridge_runner(entries: &PidfdEntries, report: &mut DoctorRepo
             "daemon pidfd-table.json missing; cannot confirm OtelHostBridge runner".to_owned(),
         ),
         PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
-            let detail = match &entries.state {
-                PidfdState::ParseError(d) => d.clone(),
-                _ => "daemon state dir unreadable".to_owned(),
-            };
+            let detail = entries.state_detail();
             report.push(
                 "otel-host-bridge-runner",
                 DoctorStatus::Warn,
@@ -575,10 +583,7 @@ fn check_usbipd_runners(entries: &PidfdEntries, report: &mut DoctorReport) {
             "daemon pidfd-table.json missing; cannot enumerate per-env usbipd runners".to_owned(),
         ),
         PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
-            let detail = match &entries.state {
-                PidfdState::ParseError(d) => d.clone(),
-                _ => "daemon state dir unreadable".to_owned(),
-            };
+            let detail = entries.state_detail();
             report.push(
                 "usbipd-runners",
                 DoctorStatus::Warn,
@@ -1059,15 +1064,15 @@ fn check_storage_lifecycle_report(daemon_state_dir: &Path, report: &mut DoctorRe
     let legacy_only = parsed.has_only_legacy_contract_issue();
     let invalid_contract_summary = storage_lifecycle_invalid_contract_summary(&parsed.issues);
     let mut data = json!({
-        "schemaVersion": parsed.schema_version.clone(),
+        "schemaVersion": parsed.schema_version,
         "storageContractPresent": parsed.storage_contract_present,
         "syncContractPresent": parsed.sync_contract_present,
         "pathCount": parsed.path_count,
         "restartPolicyCount": parsed.restart_policy_count,
         "lockCount": parsed.lock_count,
         "issueCount": issue_count,
-        "issueKinds": issue_kinds.clone(),
-        "issues": parsed.issues.clone(),
+        "issueKinds": issue_kinds,
+        "issues": parsed.issues,
     });
 
     if legacy_only {
@@ -1226,10 +1231,7 @@ fn check_seccomp_bpf_loaded(entries: &PidfdEntries, report: &mut DoctorReport) {
             return;
         }
         PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
-            let detail = match &entries.state {
-                PidfdState::ParseError(d) => d.clone(),
-                _ => "daemon state dir unreadable".to_owned(),
-            };
+            let detail = entries.state_detail();
             report.push(
                 "seccomp-bpf-loaded",
                 DoctorStatus::Warn,
@@ -1339,10 +1341,7 @@ fn check_pre_ns_posture_with_reader<F>(
             return;
         }
         PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
-            let detail = match &entries.state {
-                PidfdState::ParseError(d) => d.clone(),
-                _ => "daemon state dir unreadable".to_owned(),
-            };
+            let detail = entries.state_detail();
             report.push(
                 "pre-ns-posture",
                 DoctorStatus::Warn,
@@ -1445,10 +1444,7 @@ fn check_broker_reap_health(entries: &PidfdEntries, report: &mut DoctorReport) {
             return;
         }
         PidfdState::UnreadableDir | PidfdState::ParseError(_) => {
-            let detail = match &entries.state {
-                PidfdState::ParseError(d) => d.clone(),
-                _ => "daemon state dir unreadable".to_owned(),
-            };
+            let detail = entries.state_detail();
             report.push(
                 "broker-reap-health",
                 DoctorStatus::Warn,
@@ -1697,6 +1693,7 @@ fn run_sysctl_n(key: &str) -> Result<String, String> {
 // Renderers
 // ---------------------------------------------------------------
 
+/// Render the doctor report as the structured JSON doctor output.
 pub fn render_summary(report: &DoctorReport) -> Value {
     let checks: Vec<Value> = report
         .checks
@@ -1746,6 +1743,7 @@ pub fn render_summary(report: &DoctorReport) -> Value {
     })
 }
 
+/// Render the doctor report as human-readable terminal text.
 pub fn render_human(report: &DoctorReport) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();

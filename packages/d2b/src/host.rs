@@ -369,8 +369,8 @@ fn validate(args: &HostValidateArgs, mode: OutputMode) -> Result<i32, CliFailure
                     "unknown-wave",
                     78,
                     "host validate --wave argument.",
-                    &format!("--wave {only_wave} is not in the readiness-wave catalog"),
-                    &format!(
+                    format!("--wave {only_wave} is not in the readiness-wave catalog"),
+                    format!(
                         "Re-run with one of: {}. The catalog mirrors readinessWaveSpecs in nixos-modules/options-daemon.nix.",
                         known_list.join(", ")
                     ),

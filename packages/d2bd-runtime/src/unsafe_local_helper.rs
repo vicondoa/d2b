@@ -1,3 +1,12 @@
+//! The unsafe-local helper registry.
+//!
+//! Owns the daemon side of the unsafe-local-helper wire protocol: a single
+//! `accept_loop` thread admits peer helpers, tracks per-UID generations
+//! and heartbeats, dispatches launch frames, and correlates async operation
+//! replies back to their callers.  All frames are validated against the
+//! protocol versionand redacted before they carry wire data onto other daemon
+//! surfaces.
+
 use d2b_contracts_control::unsafe_local_wire::{
     DaemonToUnsafeLocalHelper, HELPER_SOCKET_BUFFER_REQUEST_BYTES, HelperFailureCode,
     HelperHeartbeat, HelperHelloAccepted, HelperLaunchRequest, HelperOperationDisposition,
@@ -30,14 +39,23 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// How often a healthy helper must send a heartbeat to stay live.
 pub const HELPER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How long a helper may fall silent before it is treated as stale.
+
 pub const HELPER_STALE_AFTER: Duration = Duration::from_secs(15);
+
+/// How long a launched helper operation may run before the daemon gives up.
+
+
 pub const HELPER_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 const HELPER_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const HELPER_LOOP_TICK: Duration = Duration::from_millis(200);
 const HELPER_ACTIVE_OPERATION_RETENTION_SECS: u64 = 45;
 const LATE_RESPONSE_RETENTION: Duration = Duration::from_secs(30);
 
+/// Errors the daemon-side helper registry can surface to its internal callers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelperRegistryError {
     UnauthorizedPeer,
@@ -61,12 +79,17 @@ pub enum HelperRegistryError {
     Io,
 }
 
+/// Whether a peer helper can currently serve operations for a UID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelperAvailability {
     Ready,
     Unavailable,
     Stale,
 }
+
+/// The outcome of a launched helper operation: a successful result or a
+/// rejection with a wire failure code.  Correlated by request id at the
+/// pending-request table.
 
 pub enum HelperReply {
     Operation(HelperOperationResult),
@@ -187,6 +210,11 @@ struct RegistryState {
     last_failures: HashMap<(u32, String), HelperFailureCode>,
 }
 
+/// The daemon-side registry of unsafe-local helper peers for one socket.
+///
+/// Tracks per-UID helper generations, snapshots, and operation
+/// completions; all peer contact flows through [`Self::accept_loop`].
+
 pub struct HelperRegistry {
     daemon_uid: u32,
     allowed_uids: HashSet<u32>,
@@ -205,6 +233,9 @@ impl fmt::Debug for HelperRegistry {
 }
 
 impl HelperRegistry {
+    /// Create an empty registry admitting only `allowed_uids`, with the daemon's
+    /// own peer uid recorded for socket-credential checks.
+
     pub fn new(daemon_uid: u32, allowed_uids: impl IntoIterator<Item = u32>) -> Self {
         Self {
             daemon_uid,
@@ -213,6 +244,10 @@ impl HelperRegistry {
             operations: Mutex::new(OperationLedger::default()),
         }
     }
+
+    /// Blocking accept loop for the helper listener: each accepted socket
+    /// is handled on its own dedicated thread.  Runs forever and surfaces
+    /// accept errors to tracing only.
 
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn accept_loop(self: Arc<Self>, listener: Socket) {
@@ -247,6 +282,7 @@ impl HelperRegistry {
         }
     }
 
+    /// The generation of the live helper connection for `uid`, or `None`.
     pub fn active_generation(&self, uid: u32) -> Option<u64> {
         self.state
             .lock()
@@ -256,10 +292,12 @@ impl HelperRegistry {
             .map(|connection| connection.generation)
     }
 
+    /// The last helper snapshot the daemon saw for `uid`, if any.
     pub fn snapshot(&self, uid: u32) -> Option<HelperSnapshot> {
         self.state.lock().snapshots.get(&uid).cloned()
     }
 
+    /// Whether `uid` has a ready, unavailable, or stale helper connection.
     pub fn availability(&self, uid: u32) -> HelperAvailability {
         let state = self.state.lock();
         let Some(connection) = state.connections.get(&uid) else {
@@ -274,6 +312,9 @@ impl HelperRegistry {
         }
     }
 
+    /// The wire failure code of the most recent rejected operation for `target` by
+    /// `uid`, if any, used to surface stable operator diagnostics.
+
     pub fn last_failure(
         &self,
         uid: u32,
@@ -285,6 +326,17 @@ impl HelperRegistry {
             .get(&(uid, target.to_canonical()))
             .copied()
     }
+
+    /// Queue a helper launch for `requester_uid` and block until the helper
+    /// reply lands or the operation times out.
+    ///
+    /// The operation ledger deduplicates replays by operation id; a
+    /// replayed launch returns the already-committed result when possible.
+    ///
+    /// # Errors
+    ///
+    /// Returns the registry error for invalid launch shapes, unknown
+    /// helpers, stale connections, or queue backpressure.
 
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn dispatch_launch(
@@ -619,10 +671,10 @@ impl HelperRegistry {
             }
             UnsafeLocalHelperToDaemon::Operation(result) => {
                 reject_unexpected_fds(fds)?;
-                let completion = complete_pending(
+let completion = complete_pending(
                     connection,
                     result.request_id,
-                    result.operation_id.to_string(),
+                    result.operation_id.as_str(),
                     HelperReply::Operation(result.clone()),
                 )?;
                 if !completion.delivered {
@@ -638,10 +690,10 @@ impl HelperRegistry {
             }
             UnsafeLocalHelperToDaemon::Rejected(rejected) => {
                 reject_unexpected_fds(fds)?;
-                let completion = complete_pending(
+let completion = complete_pending(
                     connection,
                     rejected.request_id,
-                    rejected.operation_id.to_string(),
+                    rejected.operation_id.as_str(),
                     HelperReply::Rejected(rejected.clone()),
                 )?;
                 if !completion.delivered {
@@ -670,7 +722,7 @@ struct PendingCompletion {
 fn complete_pending(
     connection: &HelperConnection,
     request_id: u64,
-    operation_id: String,
+    operation_id: &str,
     reply: HelperReply,
 ) -> Result<PendingCompletion, HelperRegistryError> {
     let pending = connection.pending.lock().remove(&request_id);
@@ -786,15 +838,17 @@ fn receive_frame<T: serde::de::DeserializeOwned>(
         Err(_) => return Err(HelperRegistryError::Io),
     };
     let read = message.bytes;
-    let mut fds = Vec::new();
-    for control in message
+    let fds: Vec<ReceivedFd> = message
         .cmsgs()
         .map_err(|_| HelperRegistryError::InvalidFrame)?
-    {
-        if let ControlMessageOwned::ScmRights(rights) = control {
-            fds.extend(rights.into_iter().map(ReceivedFd));
-        }
-    }
+        .filter_map(|control| match control {
+            ControlMessageOwned::ScmRights(rights) => {
+                Some(rights.into_iter().map(ReceivedFd))
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect();
     if read == 0 {
         return Err(HelperRegistryError::Io);
     }

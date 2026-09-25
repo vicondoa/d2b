@@ -291,15 +291,18 @@ pub fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>
         detail: err.to_string(),
     })?;
     let read = message.bytes;
-    let mut received_fds = Vec::new();
-    for cmsg in message.cmsgs().map_err(|err| TypedError::InternalIo {
-        context: "recv seqpacket frame with fds".to_owned(),
-        detail: err.to_string(),
-    })? {
-        if let ControlMessageOwned::ScmRights(fds) = cmsg {
-            received_fds.extend(fds);
-        }
-    }
+    let received_fds: Vec<RawFd> = message
+        .cmsgs()
+        .map_err(|err| TypedError::InternalIo {
+            context: "recv seqpacket frame with fds".to_owned(),
+            detail: err.to_string(),
+        })?
+        .filter_map(|cmsg| match cmsg {
+            ControlMessageOwned::ScmRights(fds) => Some(fds),
+            _ => None,
+        })
+        .flatten()
+        .collect();
     if message
         .flags
         .intersects(MsgFlags::MSG_TRUNC | MsgFlags::MSG_CTRUNC)

@@ -6,11 +6,20 @@ const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 
 #[derive(Debug, Clone, Copy)]
 pub enum VmStartNodeMode {
+    /// The node is resolved for readiness only, never launched by VM boot.
+
     ReadinessOnly,
+    /// The node runs once during VM start, governed by the named runner role.
+
     OneShot(RunnerRole),
+    /// The node stays alive for the whole VM session, governed by the named
+    /// runner role.
+
     LongLived(RunnerRole),
 }
 
+/// Map a signed process role to the runner discipline (mode) that VM start
+/// applies to it.  Activation and non-boot roles resolve to `ReadinessOnly`.
 pub fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
     match role {
         ProcessRole::SwtpmPreStartFlush => VmStartNodeMode::OneShot(RunnerRole::SwtpmFlush),
@@ -41,6 +50,9 @@ pub fn vm_start_node_mode(role: &ProcessRole) -> VmStartNodeMode {
     }
 }
 
+/// The daemon-side role name tracked for `node`: the cloud-hypervisor
+/// runner normalizes to the shared `ch-runner` id, every other node keeps its
+/// node id.  This is the role the VM-start DAG reports for supervision polls.
 pub fn tracked_role_id(node: &ProcessNode) -> String {
     match node.role {
         ProcessRole::CloudHypervisorRunner => VM_RUNNER_ROLE_ID.to_owned(),
@@ -86,6 +98,13 @@ pub fn node_requires_disk_init_dispatch(node: &ProcessNode) -> bool {
         .any(|op| matches!(op, SpawnRunnerPlanOp::DiskInit { .. }))
 }
 
+/// Resolve the store-view intent the daemon must attach to `guest` boot.
+///
+/// # Errors
+///
+/// Returns "bundle-intent-missing:store-view" when the bundle carries no
+/// store-view intent for the guest, so the caller can refuse boot before
+/// any side effect lands.
 pub fn resolve_store_view_intent_for_guest<'a>(
     resolver: &'a BundleResolver,
     zone: &d2b_contracts_resource::v3::ZoneId,

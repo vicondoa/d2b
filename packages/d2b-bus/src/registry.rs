@@ -256,14 +256,17 @@ pub struct EndpointSessionFailure {
 }
 
 impl EndpointSessionFailure {
+    /// Borrow the endpoint failure class.
     pub const fn class(self) -> EndpointFailureClass {
         self.class
     }
 
+    /// Borrow the session error code.
     pub const fn code(self) -> SessionErrorCode {
         self.code
     }
 
+    /// Borrow the operator-facing remediation.
     pub const fn remediation(self) -> Remediation {
         self.remediation
     }
@@ -373,7 +376,12 @@ pub trait BusEndpoint: Send + Sync + 'static {
         Err(EndpointError::Unavailable)
     }
 
-    /// Deliver one already-authorized method invocation.
+    /// Deliver one already-authorized method invocation..
+    ///
+    /// # Errors
+    /// Returns the implementation's own `EndpointError` variant when the
+    /// endpoint cannot serve the invocation; the default implementation
+    /// rejects with `EndpointError::Unavailable`.
     async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError>;
 
     /// Send one response for a request received on the authenticated

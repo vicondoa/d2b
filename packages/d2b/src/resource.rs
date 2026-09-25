@@ -140,10 +140,111 @@ pub(crate) struct TypedReconcileArgs {
 
 #[derive(Debug, Args, Clone)]
 pub(crate) struct TypedVerifyArgs {
+
     pub(crate) name: String,
     #[arg(long)]
     pub(crate) repair: bool,
 }
+
+impl TypedListArgs {
+    fn into_generic(self, resource_type: &str) -> GenericListArgs {
+        GenericListArgs {
+            resource_type: resource_type.to_owned(),
+            execution_ref: self.execution_ref,
+            domain: self.domain,
+            phase: self.phase,
+            label_selector: self.label_selector,
+            updates: self.updates,
+            page_token: self.page_token,
+            limit: self.limit,
+        }
+    }
+}
+
+impl TypedWatchArgs {
+    fn into_generic(self, resource_type: &str) -> GenericWatchArgs {
+        GenericWatchArgs {
+            resource_type: resource_type.to_owned(),
+            since_revision: self.since_revision,
+            phase: self.phase,
+            label_selector: self.label_selector,
+        }
+    }
+}
+
+impl TypedCreateArgs {
+    fn into_generic(self, resource_type: &str) -> GenericCreateArgs {
+        GenericCreateArgs {
+            resource_type: resource_type.to_owned(),
+            spec_file: self.spec_file,
+            spec_stdin: self.spec_stdin,
+            wait_for_reconcile: self.wait_for_reconcile,
+            reconcile_deadline: self.reconcile_deadline,
+        }
+    }
+}
+
+impl TypedNameArgs {
+    fn into_generic(self, resource_type: &str) -> GenericGetArgs {
+        GenericGetArgs {
+            resource_ref: format!("{resource_type}/{}", self.name),
+        }
+    }
+}
+
+impl TypedUpdateSpecArgs {
+    fn into_generic(self, resource_type: &str) -> GenericUpdateSpecArgs {
+        GenericUpdateSpecArgs {
+            resource_ref: format!("{resource_type}/{}", self.name),
+            revision: self.revision,
+            spec_file: self.spec_file,
+            spec_stdin: self.spec_stdin,
+            wait_for_reconcile: self.wait_for_reconcile,
+            reconcile_deadline: self.reconcile_deadline,
+        }
+    }
+}
+
+impl TypedNameMutationArgs {
+    fn into_generic(self, resource_type: &str) -> GenericDeleteArgs {
+        GenericDeleteArgs {
+            resource_ref: format!("{resource_type}/{}", self.name),
+            revision: self.revision,
+            wait_for_reconcile: self.wait_for_reconcile,
+            reconcile_deadline: self.reconcile_deadline,
+        }
+    }
+}
+
+impl TypedStatusArgs {
+    fn into_generic(self, resource_type: &str) -> GenericStatusArgs {
+        GenericStatusArgs {
+            resource_ref: format!("{resource_type}/{}", self.name),
+            watch: self.watch,
+        }
+    }
+}
+
+impl TypedUpgradeArgs {
+    fn into_generic(self, resource_type: &str) -> GenericUpgradeArgs {
+        GenericUpgradeArgs {
+            resource_ref: format!("{resource_type}/{}", self.name),
+            recursive: self.recursive,
+            apply: self.apply,
+            reconcile_deadline: self.reconcile_deadline,
+        }
+    }
+}
+
+impl TypedReconcileArgs {
+    fn into_generic(self, resource_type: &str) -> GenericReconcileArgs {
+        GenericReconcileArgs {
+            resource_ref: format!("{resource_type}/{}", self.name),
+            reconcile_deadline: self.reconcile_deadline,
+        }
+    }
+}
+
 
 #[derive(Debug, Args, Clone)]
 pub(crate) struct DeviceUsbArgs {
@@ -505,7 +606,7 @@ pub(crate) fn reconcile(
 pub(crate) fn typed_noun(
     context: &ZoneContext,
     noun: &str,
-    args: &TypedResourceArgs,
+    args: TypedResourceArgs,
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
@@ -518,58 +619,29 @@ pub(crate) fn typed_noun(
 pub(crate) fn typed(
     context: &ZoneContext,
     resource_type: &str,
-    args: &TypedResourceArgs,
+    args: TypedResourceArgs,
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    match &args.command {
+    match args.command {
         TypedResourceCommand::Get(args) => {
-            let generic = GenericGetArgs {
-                resource_ref: format!("{resource_type}/{}", args.name),
-            };
+            let generic = args.into_generic(resource_type);
             get(context, &generic, mode, deadline)
         }
         TypedResourceCommand::List(args) => {
-            let generic = GenericListArgs {
-                resource_type: resource_type.to_owned(),
-                execution_ref: args.execution_ref.clone(),
-                domain: args.domain.clone(),
-                phase: args.phase.clone(),
-                label_selector: args.label_selector.clone(),
-                updates: args.updates,
-                page_token: args.page_token.clone(),
-                limit: args.limit,
-            };
+            let generic = args.into_generic(resource_type);
             list(context, &generic, mode, deadline)
         }
         TypedResourceCommand::Watch(args) => {
-            let generic = GenericWatchArgs {
-                resource_type: resource_type.to_owned(),
-                since_revision: args.since_revision.clone(),
-                phase: args.phase.clone(),
-                label_selector: args.label_selector.clone(),
-            };
+            let generic = args.into_generic(resource_type);
             watch(context, &generic, mode, deadline)
         }
         TypedResourceCommand::Create(args) => {
-            let generic = GenericCreateArgs {
-                resource_type: resource_type.to_owned(),
-                spec_file: args.spec_file.clone(),
-                spec_stdin: args.spec_stdin,
-                wait_for_reconcile: args.wait_for_reconcile,
-                reconcile_deadline: args.reconcile_deadline.clone(),
-            };
+            let generic = args.into_generic(resource_type);
             create(context, &generic, mode, deadline)
         }
         TypedResourceCommand::UpdateSpec(args) => {
-            let generic = GenericUpdateSpecArgs {
-                resource_ref: format!("{resource_type}/{}", args.name),
-                revision: args.revision.clone(),
-                spec_file: args.spec_file.clone(),
-                spec_stdin: args.spec_stdin,
-                wait_for_reconcile: args.wait_for_reconcile,
-                reconcile_deadline: args.reconcile_deadline.clone(),
-            };
+            let generic = args.into_generic(resource_type);
             if crate::generated::surface_catalog::is_controller_owned(resource_type) {
                 return Err(context.failure(
                     "authorization-denied",
@@ -589,35 +661,19 @@ pub(crate) fn typed(
                     1,
                 ));
             }
-            let generic = GenericDeleteArgs {
-                resource_ref: format!("{resource_type}/{}", args.name),
-                revision: args.revision.clone(),
-                wait_for_reconcile: args.wait_for_reconcile,
-                reconcile_deadline: args.reconcile_deadline.clone(),
-            };
+            let generic = args.into_generic(resource_type);
             delete(context, &generic, mode, deadline)
         }
         TypedResourceCommand::Status(args) => {
-            let generic = GenericStatusArgs {
-                resource_ref: format!("{resource_type}/{}", args.name),
-                watch: args.watch,
-            };
+            let generic = args.into_generic(resource_type);
             status(context, &generic, mode, deadline)
         }
         TypedResourceCommand::Upgrade(args) => {
-            let generic = GenericUpgradeArgs {
-                resource_ref: format!("{resource_type}/{}", args.name),
-                recursive: args.recursive,
-                apply: args.apply,
-                reconcile_deadline: args.reconcile_deadline.clone(),
-            };
+            let generic = args.into_generic(resource_type);
             upgrade(context, &generic, mode, deadline)
         }
         TypedResourceCommand::Reconcile(args) => {
-            let generic = GenericReconcileArgs {
-                resource_ref: format!("{resource_type}/{}", args.name),
-                reconcile_deadline: args.reconcile_deadline.clone(),
-            };
+            let generic = args.into_generic(resource_type);
             reconcile(context, &generic, mode, deadline)
         }
         TypedResourceCommand::Verify(args) => {
@@ -651,7 +707,7 @@ pub(crate) fn typed(
                     2,
                 ));
             }
-            device_usb(context, args, mode, deadline)
+            device_usb(context, &args, mode, deadline)
         }
         TypedResourceCommand::SecurityKey(args) => {
             if !crate::generated::surface_catalog::typed_verb_type("security-key").is_some_and(|owner| owner == resource_type) {
@@ -662,7 +718,7 @@ pub(crate) fn typed(
                     2,
                 ));
             }
-            device_security_key(context, args, mode, deadline)
+            device_security_key(context, &args, mode, deadline)
         }
     }
 }

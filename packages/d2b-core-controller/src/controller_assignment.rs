@@ -446,19 +446,29 @@ pub struct ScopedCommitTransport {
 }
 
 impl ScopedCommitTransport {
+    /// Validate one admitted assignment call's evidence without taking
+    /// ownership of the identity or mutation list.
+    pub fn validate(
+        assignment: &AssignmentIdentity,
+        mutations: &[ScopedResourceMutation],
+    ) -> Result<(), AssignmentTransportError> {
+        if mutations.is_empty()
+            || mutations.len() > 128
+            || mutations.iter().any(|mutation| {
+                mutation.assignment() != assignment || !transport_mutation_is_valid(mutation)
+            })
+        {
+            return Err(AssignmentTransportError::Malformed);
+        }
+        Ok(())
+    }
+
     /// Construct transport evidence from one admitted assignment call.
     pub fn new(
         assignment: AssignmentIdentity,
         mutations: Vec<ScopedResourceMutation>,
     ) -> Result<Self, AssignmentTransportError> {
-        if mutations.is_empty()
-            || mutations.len() > 128
-            || mutations.iter().any(|mutation| {
-                mutation.assignment() != &assignment || !transport_mutation_is_valid(mutation)
-            })
-        {
-            return Err(AssignmentTransportError::Malformed);
-        }
+        Self::validate(&assignment, &mutations)?;
         Ok(Self {
             assignment,
             mutations,

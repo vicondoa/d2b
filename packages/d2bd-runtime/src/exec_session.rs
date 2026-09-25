@@ -178,16 +178,24 @@ impl Default for ExecOpDeadlines {
 /// redacted so a stray `{:?}` can never leak argv / env keys+values / cwd.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ExecStartSpec {
+    /// The guest VM these args target.
     pub vm: String,
     /// Optional opaque idempotency key forwarded as guest request metadata.
     /// It is never argv and must not appear in Debug output.
     pub request_id: Option<String>,
+    /// Program plus arguments, forwarded verbatim to the guest exec.
     pub argv: Vec<String>,
+    /// Whether to allocate a PTY drunk on the guest side.
     pub tty: bool,
+    /// Whether the guest process must leave its session alive after stdin
+/// closes (non-tty detached spawn).
     pub detached: bool,
-    pub env: Vec<(String, String)>,
+    /// Environment overrides applied at launch (never rendered in Debug).
+    pub env: Vec<(String,String)>,
+    /// Working directory the guest runs in, or the guest default when `None`.
     pub cwd: Option<String>,
-    pub term_size: Option<(u32, u32)>,
+    /// PTY size requested at spawn, when the guest terminal reports one.
+    pub term_size: Option<(u32,u32)>,
 }
 
 impl std::fmt::Debug for ExecStartSpec {
@@ -208,8 +216,13 @@ impl std::fmt::Debug for ExecStartSpec {
 /// Session info reported back to the owner on a successful establish.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecSessionInfo {
+    /// Whether the session was established with a PTY.
     pub tty: bool,
+    /// Bytes already readable from the guest stdout stream, from the owner's
+    /// offset perspective (0-based at first read).
     pub stdout_offset: u64,
+    /// Bytes already readable from the guest stderr stream, from the owner's
+    /// offset perspective (0-based at first read).
     pub stderr_offset: u64,
 }
 
@@ -246,9 +259,16 @@ impl NegotiatedCaps {
 /// A freshly established session: the authenticated client, the info echoed to
 /// the owner, and the initial control sequence from `ExecCreate`.
 pub struct Established {
+    /// The authenticated guest exec channel for the session.
     pub client: Arc<dyn ExecGuestClient>,
+    /// Session metadata echoed to the owner at establish time.
     pub info: ExecSessionInfo,
+    /// The initial control sequence number the session starts at, used to
+    /// derive per-op sequence ids so a resequenced stream cannot replay
+    /// an older op.
     pub control_seq: u64,
+    /// The negotiated capability snapshot the guest advertised at establish,
+    /// shared by every op gate until the session closes.
     pub caps: NegotiatedCaps,
 }
 
@@ -879,10 +899,17 @@ impl TerminalReaper {
 
 /// Inputs to [`spawn_session_worker`].
 pub struct WorkerSpawn {
+    /// The authenticated guest channel factory the worker uses to establish.
     pub connector: Arc<dyn ExecGuestConnector>,
+    /// The validated launch spec the guest session starts with.
     pub spec: ExecStartSpec,
+    /// Per-op control/poll deadlines applied by the worker.
     pub deadlines: ExecOpDeadlines,
+    /// Sender for the establish outcome, consumed exactly once by the
+    /// worker when the guest session reports ready or fails.
     pub establish_tx: oneshot::Sender<EstablishReply>,
+    /// Inbound worker commands (resize, signal, read offsets) serviced
+    /// until the channel closes (owner disconnect).
     pub control_rx: mpsc::Receiver<WorkerCommand>,
     /// Terminal-cleanup grace before the reaper releases a stalled owner's slot.
     pub terminal_ttl: Duration,

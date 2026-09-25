@@ -8,7 +8,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock, Weak},
+    sync::{Arc, Weak},
     time::Instant,
 };
 
@@ -656,7 +656,7 @@ impl GuestRuntime {
                     ))
                     .map_err(|_| GuestModeError::SessionBindingMismatch)?,
                 ),
-                monotonic_tick(),
+                crate::runtime_util::monotonic_tick(),
             )
             .await
             .map_err(GuestModeError::Session)?;
@@ -844,17 +844,6 @@ fn authorize_guest_request(
         ));
     }
     Ok(previous)
-}
-
-fn monotonic_tick() -> u64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START
-        .get_or_init(Instant::now)
-        .elapsed()
-        .as_millis()
-        .try_into()
-        .unwrap_or(1)
-        .max(1)
 }
 
 /// Guest-mode failures are closed and identity-free.

@@ -76,7 +76,11 @@ impl ZoneBoundPolicyIdentity {
         self.provider_ref.as_ref()
     }
 
-    /// Render the stable digest used in local policy comparison.
+    /// Render the stable digest used in local policy comparison..
+    ///
+    /// # Errors
+    /// Returns the `BinaryError` from `EndpointPolicyIdentity::encode_canonical`
+    /// when the component-session wire shape cannot represent this policy.
     pub fn digest(
         &self,
     ) -> Result<String, d2b_contracts_zone_session::v3::component_session::BinaryError> {
