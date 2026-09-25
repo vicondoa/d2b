@@ -182,7 +182,11 @@ mod tests {
     #[test]
     fn wire_budget_bounds_sequence_for_u32_low_word() {
         // The U8 wire mapping packs (epoch_seconds << 32) | sequence(u32);
-        // the hub must therefore never exceed 2^32 sequences in one epoch.
-        assert_eq!(WIRE_SEQUENCE_BUDGET, 1 << 32);
+        // so the largest in-budget sequence must survive the low-32-bit
+        // truncation intact and the epoch must stay in the high word.
+        let max_sequence = WIRE_SEQUENCE_BUDGET - 1;
+        let wire = (1_u64 << 32) | max_sequence;
+        assert_eq!(wire as u32 as u64, max_sequence);
+        assert_eq!(wire >> 32, 1);
     }
 }

@@ -1386,16 +1386,16 @@ async fn reconcile_children(
     // Obsolete: owned, not deleting, not desired anymore.
     let desired_names: std::collections::HashSet<String> =
         desired.iter().map(|child| child.name.clone()).collect();
-    let owned: Vec<StoredDesiredResource> = state
+    let owned: Vec<ResourceKey> = state
         .rows
         .values()
         .filter(|row| row.owner_uid == Some(parent_row.uid) && !row.deleting)
-        .cloned()
+        .map(|row| row.key.clone())
         .collect();
     for child in owned {
-        if !desired_names.contains(&child.key.name) {
-            state.remove_internal(&subject, &child.key).await?;
-            diff.obsolete.push(child.key.clone());
+        if !desired_names.contains(&child.name) {
+            state.remove_internal(&subject, &child).await?;
+            diff.obsolete.push(child);
         }
     }
     Ok(diff)
