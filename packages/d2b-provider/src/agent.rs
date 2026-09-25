@@ -37,6 +37,11 @@ pub struct ProviderAgentRequest {
 
 impl ProviderAgentRequest {
     /// Construct a bounded request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderAgentError::InvalidTimeout`] when the timeout is
+    /// zero or exceeds the agent ceiling.
     pub fn new(
         service: ServiceName,
         method: SpecifiedProviderMethod,
@@ -267,6 +272,15 @@ where
     S: ProviderAgentService,
 {
     /// Dispatch one request with a bounded timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderAgentError::UnsupportedService`] when the request
+    /// names a service other than `d2b.provider.v3`,
+    /// [`ProviderAgentError::DispatchSaturated`] when the in-flight budget
+    /// is exhausted, [`ProviderAgentError::DispatchTimeout`] when the
+    /// request exceeds its timeout, and
+    /// [`ProviderAgentError::HandlerFailed`] when the handler refuses.
     pub async fn dispatch(
         &self,
         request: ProviderAgentRequest,
@@ -280,6 +294,7 @@ where
             .await;
             return Err(ProviderAgentError::UnsupportedService);
         }
+        let method = request.method;
         let permit = self
             .permits
             .clone()
@@ -287,7 +302,7 @@ where
             .map_err(|_| ProviderAgentError::DispatchSaturated)?;
         let result = timeout(
             Duration::from_millis(request.timeout_ms),
-            self.service.dispatch(request.clone()),
+            self.service.dispatch(request),
         )
         .await
         .map_err(|_| ProviderAgentError::DispatchTimeout)?
@@ -299,7 +314,7 @@ where
             } else {
                 ProviderAgentOutcome::Failed
             },
-            request.method,
+            method,
             self.provider_axis,
         ))
         .await;

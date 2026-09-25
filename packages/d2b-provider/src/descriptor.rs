@@ -52,6 +52,12 @@ pub enum RepairPolicy {
 
 impl RepairPolicy {
     /// Build a bounded repair policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryBuildError::InvalidDescriptor`] when a bound is
+    /// zero, the retry interval exceeds the window, or the window exceeds
+    /// the repair ceiling.
     pub const fn bounded(
         retry_after_ms: u32,
         max_elapsed_ms: u32,
@@ -106,6 +112,12 @@ impl RepairPolicy {
     }
 
     /// Validate this policy against the Provider family.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryBuildError::InvalidDescriptor`] when a bound is
+    /// zero or inverted, the window exceeds the ceiling, or the class
+    /// device bound is exceeded.
     pub const fn validate(self, class: ProviderClass) -> Result<(), RegistryBuildError> {
         match self {
             Self::Bounded {
@@ -192,6 +204,12 @@ pub struct ProviderDescriptor {
 
 impl ProviderDescriptor {
     /// Build a descriptor at the current Provider schema version.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`RegistryBuildError`] the invariant checks
+    /// report: an unsupported schema version, a non-Provider reference, an
+    /// invalid or empty capability set, or a repair-policy refusal.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         zone: ZonePath,
@@ -229,6 +247,14 @@ impl ProviderDescriptor {
     }
 
     /// Re-check every descriptor invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryBuildError::UnsupportedSchemaVersion`] when the
+    /// schema version is not current, [`RegistryBuildError::NotAProviderRef`]
+    /// when the reference does not name a Provider, and
+    /// [`RegistryBuildError::InvalidDescriptor`] for the remaining
+    /// invariant or bound refusals.
     pub fn validate(&self) -> Result<(), RegistryBuildError> {
         if self.schema_version != PROVIDER_SCHEMA_VERSION {
             return Err(RegistryBuildError::UnsupportedSchemaVersion);
