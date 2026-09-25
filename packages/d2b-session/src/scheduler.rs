@@ -69,6 +69,11 @@ impl OutboundFrame {
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    /// Consume the frame into its payload bytes without copying.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
 }
 
 impl fmt::Debug for OutboundFrame {

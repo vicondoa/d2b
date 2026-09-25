@@ -6,7 +6,7 @@
 
 use std::future::Future;
 use std::pin::pin;
-use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use d2b_contracts_resource::v3::ResourceRef;
@@ -19,7 +19,9 @@ use crate::user::{DiscoveredUser, UserBinding, UserDiscoveryEffectPort, UserIden
 ///
 /// The suite is hermetic and never waits on I/O or wall time, so a
 /// single-threaded driver is sufficient and keeps this crate free of an
-/// async runtime dependency.
+/// async runtime dependency. A future that returns `Poll::Pending`
+/// violates that invariant; the driver asserts instead of spinning
+/// forever on the noop waker.
 pub fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = pin!(future);
     let waker = Waker::noop();
@@ -27,7 +29,13 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
     loop {
         match future.as_mut().poll(&mut context) {
             Poll::Ready(value) => return value,
-            Poll::Pending => std::hint::spin_loop(),
+            Poll::Pending => {
+                debug_assert!(
+                    false,
+                    "block_on drives only never-pending futures; a yielding future would hang here"
+                );
+                std::hint::spin_loop()
+            }
         }
     }
 }
@@ -40,7 +48,7 @@ pub const SCRIPTED_IDENTITY: UserIdentityDigest = UserIdentityDigest::from_bytes
 pub struct ScriptedDiscoveryPort {
     result: Option<DiscoveredUser>,
     error: Option<SystemCoreError>,
-    calls: Mutex<u32>,
+    calls: AtomicU32,
 }
 
 impl ScriptedDiscoveryPort {
@@ -52,7 +60,7 @@ impl ScriptedDiscoveryPort {
                 observed: crate::user::UserObservation::from_verified(verified),
             }),
             error: None,
-            calls: Mutex::new(0),
+            calls: AtomicU32::new(0),
         }
     }
 
@@ -61,7 +69,7 @@ impl ScriptedDiscoveryPort {
         Self {
             result: None,
             error: None,
-            calls: Mutex::new(0),
+            calls: AtomicU32::new(0),
         }
     }
 
@@ -70,13 +78,13 @@ impl ScriptedDiscoveryPort {
         Self {
             result: None,
             error: Some(error),
-            calls: Mutex::new(0),
+            calls: AtomicU32::new(0),
         }
     }
 
     /// How many times discovery was called.
     pub fn call_count(&self) -> u32 {
-        self.calls.try_lock().ok().map(|calls| *calls).unwrap_or_default()
+        self.calls.load(Ordering::Relaxed)
     }
 }
 
@@ -87,8 +95,7 @@ impl UserDiscoveryEffectPort for ScriptedDiscoveryPort {
         _user_ref: &ResourceRef,
         _spec: &UserSpec,
     ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
-        let mut calls = self.calls.lock().await;
-        *calls += 1;
+        self.calls.fetch_add(1, Ordering::Relaxed);
         if let Some(error) = self.error {
             return Err(error);
         }

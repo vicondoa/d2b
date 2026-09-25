@@ -22,7 +22,8 @@ use crate::{
     AttemptDisposition, CallOptions, CancellationToken, ClientError, MethodProfile,
     ResourceClient, ServiceOwner, SystemClock, TargetInput, TargetResolver,
     TransportSelection, WallClock, ZoneClient, ZoneServiceKind, ZoneSessionConnector,
-    call::REQUEST_ID_BYTES, zone_client::ConnectedZoneSession,
+    call::REQUEST_ID_BYTES,
+    zone_client::{ConnectedZoneSession, STREAM_CLOSED, STREAM_CLOSING, STREAM_OPEN},
 };
 
 /// The maximum logical message accepted by one attach stream.
@@ -32,9 +33,6 @@ use crate::{
 pub const MAX_PROCESS_ATTACH_MESSAGE_BYTES: usize =
     d2b_contracts_zone_session::v3::component_session::MAX_LOGICAL_MESSAGE_BYTES as usize;
 
-const STREAM_OPEN: u8 = 0;
-const STREAM_CLOSING: u8 = 1;
-const STREAM_CLOSED: u8 = 2;
 const SHELL_SESSION_TYPE: &str = "shell-terminal.d2bus.org.ShellSession";
 /// The authenticated named stream used by Process and EphemeralProcess
 /// attachments.
@@ -809,6 +807,8 @@ mod tests {
         received: tokio::sync::Mutex<VecDeque<Vec<u8>>>,
         closes: AtomicUsize,
         cancels: AtomicUsize,
+        close_results: tokio::sync::Mutex<VecDeque<Result<(), ClientError>>>,
+        cancel_results: tokio::sync::Mutex<VecDeque<Result<(), ClientError>>>,
     }
 
     impl NamedStreamTransport for Arc<FakeStream> {
@@ -831,12 +831,24 @@ mod tests {
 
         fn close(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
             self.closes.fetch_add(1, Ordering::AcqRel);
-            core::future::ready(Ok(()))
+            let result = self
+                .close_results
+                .try_lock()
+                .expect("close results lock")
+                .pop_front()
+                .unwrap_or(Ok(()));
+            core::future::ready(result)
         }
 
         fn cancel(&self) -> impl Future<Output = Result<(), ClientError>> + Send {
             self.cancels.fetch_add(1, Ordering::AcqRel);
-            core::future::ready(Ok(()))
+            let result = self
+                .cancel_results
+                .try_lock()
+                .expect("cancel results lock")
+                .pop_front()
+                .unwrap_or(Ok(()));
+            core::future::ready(result)
         }
     }
 
@@ -995,6 +1007,84 @@ mod tests {
         attached.close().await.unwrap();
         attached.close().await.unwrap();
         assert_eq!(stream.closes.load(Ordering::Acquire), 1);
+        assert!(attached.is_closed());
+    }
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_close_rolls_back_to_open_and_a_second_close_retries() {
+        let stream = Arc::new(FakeStream {
+            close_results: tokio::sync::Mutex::new(VecDeque::from([
+                Err(ClientError::TransportFailed),
+                Ok(()),
+            ])),
+            ..Default::default()
+        });
+        let session = Arc::new(FakeSession::new(vec![Ok(Arc::clone(&stream))], None));
+        let client = client(FakeConnector {
+            session,
+            pin: pin(ZoneServiceKind::Zone),
+            requested_services: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        });
+        let attached = client
+            .attach(
+                target(),
+                ProcessAttachOptions::non_tty(false),
+                call_options(1),
+                TransportSelection::exact(TransportKind::LocalUnix),
+                &CancellationToken::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            attached.close().await.unwrap_err(),
+            ClientError::TransportFailed
+        );
+        // The failed close rolls the state back to open: the stream still
+        // accepts traffic and a second close retries the transport.
+        attached.send(b"again").await.unwrap();
+        attached.close().await.unwrap();
+        assert_eq!(stream.closes.load(Ordering::Acquire), 2);
+        assert!(attached.is_closed());
+    }
+
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_failed_cancel_rolls_back_to_open_and_a_second_cancel_retries() {
+        let stream = Arc::new(FakeStream {
+            cancel_results: tokio::sync::Mutex::new(VecDeque::from([
+                Err(ClientError::TransportFailed),
+                Ok(()),
+            ])),
+            ..Default::default()
+        });
+        let session = Arc::new(FakeSession::new(vec![Ok(Arc::clone(&stream))], None));
+        let client = client(FakeConnector {
+            session,
+            pin: pin(ZoneServiceKind::Zone),
+            requested_services: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        });
+        let attached = client
+            .attach(
+                target(),
+                ProcessAttachOptions::non_tty(false),
+                call_options(1),
+                TransportSelection::exact(TransportKind::LocalUnix),
+                &CancellationToken::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            attached.cancel().await.unwrap_err(),
+            ClientError::TransportFailed
+        );
+        // The failed cancel rolls the state back to open: the stream still
+        // accepts traffic and a second cancel retries the transport.
+        attached.send(b"again").await.unwrap();
+        attached.cancel().await.unwrap();
+        assert_eq!(stream.cancels.load(Ordering::Acquire), 2);
         assert!(attached.is_closed());
     }
 

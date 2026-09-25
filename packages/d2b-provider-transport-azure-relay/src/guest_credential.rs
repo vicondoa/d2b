@@ -599,7 +599,7 @@ fn read_policy_file(
     {
         return Err(CredentialError::BadOwner(meta.uid()));
     }
-    let mut bytes = Zeroizing::new(Vec::new());
+    let mut bytes = Zeroizing::new(Vec::with_capacity(meta.len() as usize));
     file.read_to_end(&mut bytes)
         .map_err(|_| CredentialError::Unreadable)?;
     Ok(bytes)

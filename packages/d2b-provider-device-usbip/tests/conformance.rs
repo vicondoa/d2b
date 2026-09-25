@@ -60,10 +60,6 @@ fn only_long_lived_workers_are_process_declarations() {
     assert_eq!(backend.placement(), "host");
     assert_eq!(proxy.placement(), "guest");
 
-    assert_eq!(
-        AttachmentCommand::Attach(AttachmentActivation::Declared),
-        AttachmentCommand::Attach(AttachmentActivation::Declared)
-    );
     assert_ne!(
         AttachmentCommand::Attach(AttachmentActivation::Explicit),
         AttachmentCommand::Detach

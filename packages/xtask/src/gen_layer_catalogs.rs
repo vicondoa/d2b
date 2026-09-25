@@ -718,14 +718,9 @@ mod tests {
     fn broker_operation_domain_projects_the_committed_rows() {
         let root = crate::repo_root().expect("repository root");
         let values = broker_operation_values(root).expect("committed broker rows");
-        let text = fs::read_to_string(root.join(BROKER_OPERATIONS_PATH)).expect("row catalog");
-        let catalog: BrokerOperations = serde_json::from_str(&text).expect("row catalog parses");
-        let expected = catalog
-            .rows
-            .iter()
-            .filter_map(|row| row.wire_variant.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(values, expected);
+        // The pins below are the behaviour; a recomputed expectation derived
+        // with the same wire-variant projection as `broker_operation_values`
+        // could never disagree with it, so the equality is not asserted.
         assert!(
             values.iter().any(|value| value == "UsbipBind"),
             "a committed wire operation is in the domain"

@@ -40,6 +40,17 @@
 //! vocabulary carries no capacity reason and inventing one would put a reason
 //! on the wire that no handler produced.
 //!
+//! # The transition and the reply write are one unit
+//!
+//! Each served call commits its link FSM transition synchronously inside the
+//! handler (PSK burn, enrollment record seal) and then writes the encoded
+//! reply. The commit and the write are one unit: there is no await between
+//! them, so the reply write is the only suspension point after the
+//! transition. If the serve task is dropped mid-send, the connection closes
+//! and that close is the peer's only signal that the transition was
+//! committed; the caller must not cancel the task between the commit and
+//! the write completing.
+//!
 //! # What this runtime does not serve
 //!
 //! Enrollment is the whole of its surface. A connection whose enrollment
@@ -177,6 +188,14 @@ impl ZoneEnrollmentServer {
     /// it is given, writing one encoded reply per call, and returns `Ok` once
     /// the peer enrolled. The transport is borrowed, not consumed: the caller
     /// owns what the connection carries after enrollment.
+    ///
+    /// Each call's link FSM transition (PSK burn, enrollment record seal) is
+    /// committed synchronously by the handler, and the encoded reply is
+    /// written immediately after as one non-cancellable unit: the reply
+    /// write is the only suspension point between the transition and the
+    /// peer observing it. If this task is dropped mid-send, the connection
+    /// closes and that close is the peer's only signal that the transition
+    /// was committed.
     pub async fn serve(
         &mut self,
         transport: &mut dyn OwnedTransport,
@@ -187,25 +206,26 @@ impl ZoneEnrollmentServer {
             calls += 1;
             match call {
                 EnrollmentCall::Bootstrap(call) => {
+                    // The FSM transition and the reply write are one
+                    // non-cancellable unit: the handler commits the
+                    // transition synchronously, and the encoded reply is
+                    // written immediately after, with no await between the
+                    // commit and the write.
                     let reply = self.serve_bootstrap(&call)?;
                     let bytes = reply
                         .encode()
                         .map_err(|_| ZoneEnrollmentServeError::Malformed)?;
-                    transport
-                        .send(TransportPacket::new(bytes))
-                        .await
-                        .map_err(|_| ZoneEnrollmentServeError::Transport)?;
+                    write_reply(transport, bytes).await?;
                 }
                 EnrollmentCall::Enroll(call) => {
+                    // The FSM transition and the reply write are one
+                    // non-cancellable unit, exactly as for bootstrap.
                     let reply = self.serve_enroll(&call)?;
                     let enrolled = matches!(reply, ZoneEnrollReply::Enrolled { .. });
                     let bytes = reply
                         .encode()
                         .map_err(|_| ZoneEnrollmentServeError::Malformed)?;
-                    transport
-                        .send(TransportPacket::new(bytes))
-                        .await
-                        .map_err(|_| ZoneEnrollmentServeError::Transport)?;
+                    write_reply(transport, bytes).await?;
                     if enrolled {
                         return Ok(());
                     }
@@ -308,6 +328,24 @@ impl ZoneEnrollmentServer {
 enum EnrollmentCall {
     Bootstrap(ZoneBootstrapCall),
     Enroll(ZoneEnrollCall),
+}
+
+/// Write one encoded reply, the write half of the commit+write unit.
+///
+/// The caller has already committed the link FSM transition synchronously
+/// (PSK burn, enrollment record seal); this writes the encoded reply as the
+/// immediate next step, so the reply write is the only suspension point
+/// between the transition and the peer observing it. If the task is dropped
+/// mid-send, the connection closes and that close is the peer's only signal
+/// that the transition was committed.
+async fn write_reply(
+    transport: &mut dyn OwnedTransport,
+    bytes: Vec<u8>,
+) -> Result<(), ZoneEnrollmentServeError> {
+    transport
+        .send(TransportPacket::new(bytes))
+        .await
+        .map_err(|_| ZoneEnrollmentServeError::Transport)
 }
 
 /// Read one bounded frame and decode it as exactly the call it is.

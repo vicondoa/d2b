@@ -952,7 +952,7 @@ impl SensitiveDeliveryRecord {
             ));
         }
         for (destination, source) in destination.iter_mut().zip(&self.bytes) {
-            *destination = source.load(Ordering::SeqCst);
+            *destination = source.load(Ordering::Relaxed);
         }
         Ok(())
     }
@@ -960,7 +960,7 @@ impl SensitiveDeliveryRecord {
     /// Erase the retained plaintext immediately.
     pub fn clear(&mut self) {
         for byte in &self.bytes {
-            byte.store(0, Ordering::SeqCst);
+            byte.store(0, Ordering::Relaxed);
         }
         self.cleared = true;
     }
@@ -974,7 +974,7 @@ impl SensitiveDeliveryRecord {
     pub fn is_zeroized(&self) -> bool {
         self.bytes
             .iter()
-            .all(|byte| byte.load(Ordering::SeqCst) == 0)
+            .all(|byte| byte.load(Ordering::Relaxed) == 0)
     }
 }
 
@@ -1463,4 +1463,471 @@ fn varint_len(mut value: u64) -> usize {
         length += 1;
     }
     length
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn digest() -> String {
+        format!("sha256:{}", "a".repeat(64))
+    }
+
+    fn credential_ref() -> ResourceRef {
+        ResourceRef::parse("Credential/root-token").unwrap()
+    }
+
+    fn consumer_ref() -> ResourceRef {
+        ResourceRef::parse("Provider/guest-agent").unwrap()
+    }
+
+    fn uid() -> ResourceUid {
+        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap()
+    }
+
+    fn generation() -> ResourceGeneration {
+        ResourceGeneration::new(1).unwrap()
+    }
+
+    fn audience() -> AudienceToken {
+        AudienceToken::parse("d2b-guest-agent").unwrap()
+    }
+
+    fn route_digest() -> DeliveryRouteDigest {
+        DeliveryRouteDigest::parse(digest()).unwrap()
+    }
+
+    fn lease_handle() -> CredentialLeaseHandle {
+        CredentialLeaseHandle::from_opaque_digest(digest()).unwrap()
+    }
+
+    fn source_version() -> CredentialSourceVersion {
+        CredentialSourceVersion::from_opaque_digest(digest()).unwrap()
+    }
+
+    fn metadata() -> CredentialMetadata {
+        CredentialMetadata {
+            lease_handle: lease_handle(),
+            rotation_generation: 1,
+            source_version: source_version(),
+            expires_at_unix_ms: 1_000,
+            state: CredentialLeaseState::Active,
+            outcome: CredentialOutcomeCode::Success,
+        }
+    }
+
+    fn request() -> CredentialRequest {
+        CredentialRequest::new(
+            credential_ref(),
+            "op-123",
+            "idem-1",
+            1_000,
+            500,
+        )
+        .unwrap()
+    }
+
+    fn delivery_params() -> DeliverySessionParams {
+        DeliverySessionParams::new(
+            credential_ref(),
+            uid(),
+            generation(),
+            consumer_ref(),
+            generation(),
+            audience(),
+            OperationClass::AcquireToken,
+            1_000,
+            500,
+            route_digest(),
+            4_096,
+            1,
+        )
+        .unwrap()
+    }
+
+    fn delivery_response() -> DeliveryResponse {
+        DeliveryResponse {
+            metadata: metadata(),
+            delivery_session_params: delivery_params(),
+        }
+    }
+
+    fn metadata_response() -> MetadataResponse {
+        MetadataResponse {
+            metadata: metadata(),
+        }
+    }
+
+    fn assert_round_trip<T: CredentialWire + PartialEq + core::fmt::Debug>(value: &T) {
+        let mut encoded = Vec::new();
+        value.encode_wire(&mut encoded);
+        let decoded = T::decode_wire(&encoded).expect("canonical encoding must decode");
+        assert_eq!(&decoded, value);
+    }
+
+    fn assert_every_truncation_rejected<T: CredentialWire>(encoded: &[u8]) {
+        for length in 0..encoded.len() {
+            assert!(
+                T::decode_wire(&encoded[..length]).is_err(),
+                "truncated prefix of {length} bytes must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn every_outer_dto_round_trips_the_strict_codec() {
+        assert_round_trip(&request());
+        assert_round_trip(&metadata());
+        assert_round_trip(&delivery_params());
+        assert_round_trip(&delivery_response());
+        assert_round_trip(&metadata_response());
+    }
+
+    #[test]
+    fn every_truncation_of_every_outer_dto_is_rejected() {
+        let mut request_bytes = Vec::new();
+        request().encode_wire(&mut request_bytes);
+        assert_every_truncation_rejected::<CredentialRequest>(&request_bytes);
+
+        let mut metadata_bytes = Vec::new();
+        metadata().encode_wire(&mut metadata_bytes);
+        assert_every_truncation_rejected::<CredentialMetadata>(&metadata_bytes);
+
+        let mut params_bytes = Vec::new();
+        delivery_params().encode_wire(&mut params_bytes);
+        assert_every_truncation_rejected::<DeliverySessionParams>(&params_bytes);
+
+        let mut response_bytes = Vec::new();
+        delivery_response().encode_wire(&mut response_bytes);
+        assert_every_truncation_rejected::<DeliveryResponse>(&response_bytes);
+
+        let mut metadata_response_bytes = Vec::new();
+        metadata_response().encode_wire(&mut metadata_response_bytes);
+        assert_every_truncation_rejected::<MetadataResponse>(&metadata_response_bytes);
+    }
+
+    #[test]
+    fn duplicate_fields_are_rejected() {
+        let mut request_bytes = Vec::new();
+        request().encode_wire(&mut request_bytes);
+        write_string(&mut request_bytes, 1, "Credential/root-token");
+        assert_eq!(
+            CredentialRequest::decode_wire(&request_bytes)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut metadata_bytes = Vec::new();
+        metadata().encode_wire(&mut metadata_bytes);
+        write_u64(&mut metadata_bytes, 5, 1);
+        assert_eq!(
+            CredentialMetadata::decode_wire(&metadata_bytes)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut params_bytes = Vec::new();
+        delivery_params().encode_wire(&mut params_bytes);
+        write_u64(&mut params_bytes, 13, 1);
+        assert_eq!(
+            DeliverySessionParams::decode_wire(&params_bytes)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut response_bytes = Vec::new();
+        delivery_response().encode_wire(&mut response_bytes);
+        write_message(&mut response_bytes, 1, &metadata());
+        assert_eq!(
+            DeliveryResponse::decode_wire(&response_bytes)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut metadata_response_bytes = Vec::new();
+        metadata_response().encode_wire(&mut metadata_response_bytes);
+        write_message(&mut metadata_response_bytes, 1, &metadata());
+        assert_eq!(
+            MetadataResponse::decode_wire(&metadata_response_bytes)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+    }
+
+    #[test]
+    fn unknown_fields_and_wrong_wire_types_are_rejected() {
+        let mut unknown_field = Vec::new();
+        request().encode_wire(&mut unknown_field);
+        write_u64(&mut unknown_field, 99, 1);
+        assert_eq!(
+            CredentialRequest::decode_wire(&unknown_field)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut wrong_wire_type = Vec::new();
+        write_u64(&mut wrong_wire_type, 1, 1);
+        write_string(&mut wrong_wire_type, 2, "op-123");
+        write_string(&mut wrong_wire_type, 3, "idem-1");
+        write_u64(&mut wrong_wire_type, 4, 1_000);
+        write_u64(&mut wrong_wire_type, 5, 500);
+        assert_eq!(
+            CredentialRequest::decode_wire(&wrong_wire_type)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut trailing = Vec::new();
+        metadata_response().encode_wire(&mut trailing);
+        write_u64(&mut trailing, 2, 1);
+        assert_eq!(
+            MetadataResponse::decode_wire(&trailing)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+    }
+
+    #[test]
+    fn out_of_range_field_values_are_rejected() {
+        let mut unknown_state = Vec::new();
+        write_string(&mut unknown_state, 1, &digest());
+        write_u64(&mut unknown_state, 2, 1);
+        write_string(&mut unknown_state, 3, &digest());
+        write_u64(&mut unknown_state, 4, 1_000);
+        write_u64(&mut unknown_state, 5, 9);
+        write_u64(&mut unknown_state, 6, 1);
+        assert_eq!(
+            CredentialMetadata::decode_wire(&unknown_state)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut zero_generation = Vec::new();
+        write_string(&mut zero_generation, 1, &digest());
+        write_u64(&mut zero_generation, 2, 0);
+        write_string(&mut zero_generation, 3, &digest());
+        write_u64(&mut zero_generation, 4, 1_000);
+        write_u64(&mut zero_generation, 5, 1);
+        write_u64(&mut zero_generation, 6, 1);
+        assert_eq!(
+            CredentialMetadata::decode_wire(&zero_generation)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut zero_expiry = Vec::new();
+        write_string(&mut zero_expiry, 1, &digest());
+        write_u64(&mut zero_expiry, 2, 1);
+        write_string(&mut zero_expiry, 3, &digest());
+        write_u64(&mut zero_expiry, 4, 0);
+        write_u64(&mut zero_expiry, 5, 1);
+        write_u64(&mut zero_expiry, 6, 1);
+        assert_eq!(
+            CredentialMetadata::decode_wire(&zero_expiry)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut deadline_after_expiry = Vec::new();
+        write_string(&mut deadline_after_expiry, 1, "Credential/root-token");
+        write_string(&mut deadline_after_expiry, 2, "op-123");
+        write_string(&mut deadline_after_expiry, 3, "idem-1");
+        write_u64(&mut deadline_after_expiry, 4, 500);
+        write_u64(&mut deadline_after_expiry, 5, 1_000);
+        assert_eq!(
+            CredentialRequest::decode_wire(&deadline_after_expiry)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut wrong_ref_type = Vec::new();
+        write_string(&mut wrong_ref_type, 1, "User/alice");
+        write_string(&mut wrong_ref_type, 2, "op-123");
+        write_string(&mut wrong_ref_type, 3, "idem-1");
+        write_u64(&mut wrong_ref_type, 4, 1_000);
+        write_u64(&mut wrong_ref_type, 5, 500);
+        assert_eq!(
+            CredentialRequest::decode_wire(&wrong_ref_type)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut empty_operation_id = Vec::new();
+        write_string(&mut empty_operation_id, 1, "Credential/root-token");
+        write_string(&mut empty_operation_id, 2, "");
+        write_string(&mut empty_operation_id, 3, "idem-1");
+        write_u64(&mut empty_operation_id, 4, 1_000);
+        write_u64(&mut empty_operation_id, 5, 500);
+        assert_eq!(
+            CredentialRequest::decode_wire(&empty_operation_id)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Malformed
+        );
+    }
+
+    fn write_params(
+        output: &mut Vec<u8>,
+        schema_version: u64,
+        operation: u64,
+        max_token_bytes: u64,
+        sequence: u64,
+        expiry_unix_ms: u64,
+        deadline_unix_ms: u64,
+    ) {
+        write_string(output, 1, "Credential/root-token");
+        write_string(output, 2, uid().as_str());
+        write_u64(output, 3, 1);
+        write_string(output, 4, "Provider/guest-agent");
+        write_u64(output, 5, 1);
+        write_string(output, 6, "d2b-guest-agent");
+        write_u64(output, 7, operation);
+        write_u64(output, 8, expiry_unix_ms);
+        write_u64(output, 9, deadline_unix_ms);
+        write_string(output, 10, &digest());
+        write_u64(output, 11, schema_version);
+        write_u64(output, 12, max_token_bytes);
+        write_u64(output, 13, sequence);
+    }
+
+    #[test]
+    fn delivery_params_reject_out_of_range_fields() {
+        let cases = [
+            (2, 1, 4_096, 1, 1_000, 500),
+            (1, 9, 4_096, 1, 1_000, 500),
+            (1, 1, 0, 1, 1_000, 500),
+            (1, 1, 4_096, 0, 1_000, 500),
+            (1, 1, 4_096, 1, 500, 1_000),
+            (1, 1, 4_096, 1, 0, 0),
+        ];
+        for (schema_version, operation, max_token_bytes, sequence, expiry, deadline) in cases {
+            let mut bytes = Vec::new();
+            write_params(
+                &mut bytes,
+                schema_version,
+                operation,
+                max_token_bytes,
+                sequence,
+                expiry,
+                deadline,
+            );
+            assert_eq!(
+                DeliverySessionParams::decode_wire(&bytes)
+                    .unwrap_err()
+                    .code(),
+                CredentialServiceErrorCode::Malformed,
+                "schema_version={schema_version} operation={operation} \
+                 max_token_bytes={max_token_bytes} sequence={sequence} \
+                 expiry={expiry} deadline={deadline}"
+            );
+        }
+    }
+
+    #[test]
+    fn wire_reader_rejects_non_canonical_and_truncated_primitives() {
+        assert_eq!(WireReader::new(&[]).key().unwrap(), None);
+        assert_eq!(WireReader::new(&[0xAC, 0x02]).varint().unwrap(), 300);
+
+        assert_eq!(
+            WireReader::new(&[0x80, 0x00]).key().unwrap_err().code(),
+            CredentialServiceErrorCode::Malformed
+        );
+        assert_eq!(
+            WireReader::new(&[0x00]).key().unwrap_err().code(),
+            CredentialServiceErrorCode::Malformed
+        );
+        assert_eq!(
+            WireReader::new(&[0x80]).key().unwrap_err().code(),
+            CredentialServiceErrorCode::Malformed
+        );
+        let mut overflow = [0xFF_u8; 10];
+        overflow[9] = 0x02;
+        assert_eq!(
+            WireReader::new(&overflow).key().unwrap_err().code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut reader = WireReader::new(&[0x0A, 0x80, 0x00]);
+        assert_eq!(reader.key().unwrap(), Some((1, 2)));
+        assert_eq!(
+            reader.bytes().unwrap_err().code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut reader = WireReader::new(&[0x0A, 0x05, b'a']);
+        assert_eq!(reader.key().unwrap(), Some((1, 2)));
+        assert_eq!(
+            reader.bytes().unwrap_err().code(),
+            CredentialServiceErrorCode::Malformed
+        );
+
+        let mut reader = WireReader::new(&[0x0A, 0x01, 0xFF]);
+        assert_eq!(reader.key().unwrap(), Some((1, 2)));
+        assert_eq!(
+            reader.string().unwrap_err().code(),
+            CredentialServiceErrorCode::Malformed
+        );
+    }
+
+    #[derive(Debug)]
+    struct OversizeProbe;
+
+    impl CredentialWire for OversizeProbe {
+        fn encode_wire(&self, output: &mut Vec<u8>) {
+            output.resize(MAX_CREDENTIAL_MESSAGE_BYTES + 1, 0);
+        }
+
+        fn decode_wire(_bytes: &[u8]) -> Result<Self, CredentialServiceError> {
+            Ok(Self)
+        }
+    }
+
+    #[test]
+    fn outer_ceilings_reject_oversize_messages() {
+        assert_eq!(
+            encode_outer(&OversizeProbe).unwrap_err().code(),
+            CredentialServiceErrorCode::Oversize
+        );
+        assert_eq!(
+            decode_outer::<OversizeProbe>(&vec![0; MAX_CREDENTIAL_MESSAGE_BYTES + 1])
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::Oversize
+        );
+        assert!(
+            decode_outer::<OversizeProbe>(&vec![0; MAX_CREDENTIAL_MESSAGE_BYTES]).is_ok()
+        );
+
+        let encoded = encode_outer(&request()).unwrap();
+        assert_eq!(decode_outer::<CredentialRequest>(&encoded).unwrap(), request());
+    }
+
+    #[test]
+    fn sensitive_delivery_record_copies_then_zeroizes() {
+        let mut record = SensitiveDeliveryRecord::new(vec![1, 2, 3], 8).unwrap();
+        let mut destination = [0_u8; 3];
+        record.copy_to(&mut destination).unwrap();
+        assert_eq!(destination, [1, 2, 3]);
+        assert!(!record.is_zeroized());
+        record.clear();
+        assert!(record.is_cleared());
+        assert!(record.is_zeroized());
+        assert_eq!(
+            record.copy_to(&mut destination).unwrap_err().code(),
+            CredentialServiceErrorCode::InvariantFailure
+        );
+    }
 }

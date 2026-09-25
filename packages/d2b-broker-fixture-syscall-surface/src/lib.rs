@@ -28,6 +28,8 @@ pub fn raw_syscall_close(fd: i32) -> i32 {
             "syscall",
             in("rdi") fd as i64,
             out("rax") status,
+            lateout("rcx") _,
+            lateout("r11") _,
             options(nostack),
         );
     }

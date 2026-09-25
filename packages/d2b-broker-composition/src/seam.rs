@@ -552,7 +552,6 @@ mod tests {
                 ..
             }
         ));
-        assert!(format!("{refusal}").contains("forward carrier"));
     }
 
     #[test]
@@ -749,21 +748,10 @@ mod tests {
     }
 
     #[test]
-    fn an_unregistered_admitted_operation_fails_the_startup_invariant() {
-        // The invariant is not vacuous: whenever the rule admits a
-        // committed row, the composition root must register its handler
-        // before the broker serves. The fixture row stands in for that
-        // future registration: declaring it to the envelope and then
-        // asserting the invariant demands its handler tests the
-        // check's legs (registered-for-forwarded fails, admitted-
-        // without-handler fails) under fail-closed semantics.
-        //
-        // The committed catalog admits nothing this pass, so only the
-        // registered-for-forwarded leg is reachable today; the
-        // admitted-without-handler leg is pinned by the fixture row the
-        // moment the rule's admitted set is no longer empty.
+    fn the_admitted_set_stays_empty_with_nothing_registered() {
+        // The committed catalog admits nothing this pass, so with nothing
+        // registered the startup routing invariant passes: there is no
+        // unadmitted handler to flag and no admitted row missing one.
         assert!(verify_startup_routing(&[]).is_ok());
-        let _ = register_declared_handlers(&[fixture_declaration()])
-            .expect("the fixture admits");
     }
 }

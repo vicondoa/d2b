@@ -398,6 +398,16 @@ fn key_order(key: &RuntimeResourceKey) -> (&str, &str, &str) {
 /// before digesting: echoing the same logical query with the sets reordered,
 /// or with a repeated value, resumes the sequence instead of being refused as
 /// a foreign cursor.
+/// Lowercase hex encoding of a byte slice, two characters per byte.
+fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(char::from_digit((byte >> 4) as u32, 16).expect("nibble"));
+        out.push(char::from_digit((byte & 0x0f) as u32, 16).expect("nibble"));
+    }
+    out
+}
+
 fn list_selector_digest(request: &StoreListRequest) -> String {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
@@ -445,14 +455,6 @@ fn list_selector_digest(request: &StoreListRequest) -> String {
             digest.update([0]);
         }
     }
-    let hex = |bytes: &[u8]| {
-        let mut out = String::with_capacity(bytes.len() * 2);
-        for byte in bytes {
-            out.push(char::from_digit((byte >> 4) as u32, 16).expect("nibble"));
-            out.push(char::from_digit((byte & 0x0f) as u32, 16).expect("nibble"));
-        }
-        out
-    };
     hex(&digest.finalize())
 }
 
@@ -492,8 +494,8 @@ fn encode_list_cursor(
         key.extend_from_slice(part.as_bytes());
         key.push(0);
     }
-    let hex = key.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
-    format!("v1.{revision}.{}.{hex}", list_selector_digest(request))
+    let key_hex = hex(&key);
+    format!("v1.{revision}.{}.{key_hex}", list_selector_digest(request))
 }
 
 /// Decode and validate a continuation cursor against the request it is
@@ -1014,12 +1016,25 @@ impl ManagerBackend {
                         &mutation.add_finalizers,
                         &mutation.remove_finalizers,
                     )?,
-                    _ => mutation.canonical_resource.clone().ok_or_else(envelope_invalid)?,
+                    _ => {
+                        let canonical = mutation
+                            .canonical_resource
+                            .as_deref()
+                            .ok_or_else(envelope_invalid)?;
+                        // A byte-identical desired envelope is a no-op: the
+                        // manager keeps the row and generation unchanged, so
+                        // the response is the same canonical wire view a read
+                        // of that row serves - never a second rendering of the
+                        // desired bytes alone. Compare before cloning so a
+                        // no-op update never pays for the full copy.
+                        if canonical == row.spec.as_slice() {
+                            return Ok(Some(self.committed(&key).await?));
+                        }
+                        canonical.to_vec()
+                    }
                 };
-                // A byte-identical desired envelope is a no-op: the manager
-                // keeps the row and generation unchanged, so the response is
-                // the same canonical wire view a read of that row serves -
-                // never a second rendering of the desired bytes alone.
+                // The finalizers path can also produce a byte-identical spec;
+                // that is the same no-op and returns the committed view too.
                 if next == row.spec {
                     return Ok(Some(self.committed(&key).await?));
                 }

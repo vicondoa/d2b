@@ -542,7 +542,7 @@ impl FdPermitPool {
 
     /// Return the number of currently retained descriptors.
     pub fn active(&self) -> usize {
-        self.active.load(Ordering::Acquire)
+        self.active.load(Ordering::Relaxed)
     }
 
     /// Reserve ownership for one accepted descriptor batch.
@@ -552,7 +552,7 @@ impl FdPermitPool {
     /// Returns [`FdSafetyError::ConcurrentLimitExceeded`] when the batch
     /// would push the retained descriptor count past the pool limit.
     pub fn acquire(&self, requested: usize) -> Result<FdPermit, FdSafetyError> {
-        let mut active = self.active.load(Ordering::Acquire);
+        let mut active = self.active.load(Ordering::Relaxed);
         loop {
             let next =
                 active
@@ -572,8 +572,8 @@ impl FdPermitPool {
             match self.active.compare_exchange_weak(
                 active,
                 next,
-                Ordering::AcqRel,
-                Ordering::Acquire,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
             ) {
                 Ok(_) => {
                     return Ok(FdPermit {
@@ -602,7 +602,7 @@ impl core::fmt::Debug for FdPermit {
 impl Drop for FdPermit {
     fn drop(&mut self) {
         if self.count != 0 {
-            self.pool.active.fetch_sub(self.count, Ordering::AcqRel);
+            self.pool.active.fetch_sub(self.count, Ordering::Relaxed);
         }
     }
 }

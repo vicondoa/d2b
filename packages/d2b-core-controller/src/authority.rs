@@ -2846,4 +2846,129 @@ fn authority_proof(value: &str, generation: u64) -> AuthorityOwnerProof {
         );
         assert!(index.authority_status(&request).is_none());
     }
+
+    fn operation_row(
+        operation_id: &str,
+        request: &AuthorityRequest,
+    ) -> (AuthorityStorageOperation, PreparedAuthorityOperation) {
+        let claim = AuthorityStorageClaim::Generic(request.durable_claim());
+        let claim_digest = claim_digest(&claim).unwrap();
+        let store_binding_digest = "sha256:".to_owned() + &"1".repeat(64);
+        let operation = AuthorityStorageOperation {
+            operation_id: operation_id.to_owned(),
+            claim,
+            state: AuthorityOperationState::Pending,
+            claim_digest,
+            store_binding_digest: store_binding_digest.clone(),
+        };
+        let prepared = PreparedAuthorityOperation::new(
+            operation_id.to_owned(),
+            store_binding_digest,
+            test_nonce_for_operation(operation_id),
+        )
+        .unwrap();
+        (operation, prepared)
+    }
+
+    #[test]
+    fn recovery_receipt_rejects_tampered_claim_digest() {
+        let request = AuthorityRequest::vsock_cid(
+            uid("a73e4567-e89b-42d3-a456-426614174080"),
+            79,
+            authority_proof("b73e4567-e89b-42d3-a456-426614174081", 1),
+        )
+        .unwrap();
+        let (mut operation, prepared) = operation_row("recovery-tampered-digest", &request);
+        let mut tampered: Vec<char> = operation.claim_digest.chars().collect();
+        tampered[63] = if tampered[63] == '0' { '1' } else { '0' };
+        operation.claim_digest = tampered.into_iter().collect();
+        assert!(matches!(
+            HostGlobalAuthorityIndex::recovery_receipt_from_operations_with_prepared_capabilities(
+                vec![operation],
+                None,
+                BTreeMap::from([("recovery-tampered-digest".to_owned(), prepared)]),
+            ),
+            Err(AuthorityError::InvalidAuthorityRequest)
+        ));
+    }
+
+    #[test]
+    fn recovery_receipt_rejects_prepared_set_missing_active_operation() {
+        let request = AuthorityRequest::vsock_cid(
+            uid("c73e4567-e89b-42d3-a456-426614174082"),
+            81,
+            authority_proof("d73e4567-e89b-42d3-a456-426614174083", 1),
+        )
+        .unwrap();
+        let (operation, _) = operation_row("recovery-missing-prepared", &request);
+        assert!(matches!(
+            HostGlobalAuthorityIndex::recovery_receipt_from_operations_with_prepared_capabilities(
+                vec![operation],
+                None,
+                BTreeMap::new(),
+            ),
+            Err(AuthorityError::InvalidAuthorityRequest)
+        ));
+    }
+
+    #[test]
+    fn recovery_receipt_rejects_duplicate_operation_id() {
+        let host = uid("e73e4567-e89b-42d3-a456-426614174084");
+        let first = AuthorityRequest::vsock_cid(
+            host.clone(),
+            83,
+            authority_proof("f73e4567-e89b-42d3-a456-426614174085", 1),
+        )
+        .unwrap();
+        let second = AuthorityRequest::vsock_cid(
+            host,
+            84,
+            authority_proof("a83e4567-e89b-42d3-a456-426614174086", 1),
+        )
+        .unwrap();
+        let (first_operation, _) = operation_row("recovery-duplicate-id", &first);
+        let (second_operation, _) = operation_row("recovery-duplicate-id", &second);
+        assert!(matches!(
+            HostGlobalAuthorityIndex::recovery_receipt_from_operations_with_prepared_capabilities(
+                vec![first_operation, second_operation],
+                None,
+                BTreeMap::new(),
+            ),
+            Err(AuthorityError::InvalidAuthorityRequest)
+        ));
+    }
+
+    #[test]
+    fn rehydrate_round_trip_admits_recovered_operation_and_reaches_readiness() {
+        let owner = authority_proof("c83e4567-e89b-42d3-a456-426614174088", 1);
+        let request = AuthorityRequest::vsock_cid(
+            uid("b83e4567-e89b-42d3-a456-426614174087"),
+            86,
+            owner.clone(),
+        )
+        .unwrap();
+        let (operation, prepared) = operation_row("recovery-round-trip", &request);
+        let receipt =
+            HostGlobalAuthorityIndex::recovery_receipt_from_operations_with_prepared_capabilities(
+                vec![operation],
+                None,
+                BTreeMap::from([("recovery-round-trip".to_owned(), prepared)]),
+            )
+            .unwrap();
+        let mut index = HostGlobalAuthorityIndex::rehydrate(receipt).unwrap();
+        assert!(index.is_rehydrated());
+        assert_eq!(index.authority_status(&request).unwrap().holder_count(), 1);
+        assert!(matches!(
+            index.adopt_authority(&request, core::slice::from_ref(&owner)),
+            AuthorityAdoption::Adopted(_)
+        ));
+        assert!(!index.is_ready_for_readiness());
+        index
+            .resolve_recovered_operation(
+                "recovery-round-trip",
+                AuthorityRecoveryResolution::ObservedAndAdopted,
+            )
+            .unwrap();
+        assert!(index.is_ready_for_readiness());
+    }
 }

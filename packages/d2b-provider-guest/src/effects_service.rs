@@ -980,12 +980,13 @@ impl GuestEffectsService {
     }
 
     fn framework_operation_id(prefix: &str, operation_id: &str) -> String {
+        use std::fmt::Write as _;
         let digest = Sha256::digest(format!("{prefix}:{operation_id}").as_bytes());
         let mut id = String::with_capacity(24);
         id.push_str("guest-");
         id.push_str(prefix);
         for byte in digest.iter().take(8) {
-            id.push_str(&format!("{byte:02x}"));
+            let _ = write!(id, "{byte:02x}");
         }
         id
     }

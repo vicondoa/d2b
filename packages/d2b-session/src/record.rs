@@ -1,4 +1,7 @@
-use std::{collections::VecDeque, fmt};
+use std::{
+    collections::{HashSet, VecDeque},
+    fmt,
+};
 
 use d2b_contracts_zone_session::v3::component_session::{
     LimitProfile, NOISE_TAG_BYTES, RECORD_HEADER_LEN, RECORD_LENGTH_BYTES, ReceiveSequence,
@@ -43,7 +46,12 @@ pub struct RecordProtector {
     generation: u64,
     send_sequence: SendSequence,
     receive_sequence: ReceiveSequence,
-    replay_digests: VecDeque<[u8; 32]>,
+    /// Reusable plaintext buffer, reallocated only when the limit grows.
+    plaintext_scratch: Vec<u8>,
+    /// O(1) membership check for ciphertext replay detection.
+    replay_digests: HashSet<[u8; 32]>,
+    /// FIFO eviction order for the bounded replay cache.
+    replay_order: VecDeque<[u8; 32]>,
 }
 
 impl RecordProtector {
@@ -55,7 +63,9 @@ impl RecordProtector {
             generation: handshake.generation,
             send_sequence: SendSequence::new(),
             receive_sequence: ReceiveSequence::new(),
-            replay_digests: VecDeque::with_capacity(REPLAY_CACHE_ENTRIES),
+            plaintext_scratch: Vec::new(),
+            replay_digests: HashSet::with_capacity(REPLAY_CACHE_ENTRIES),
+            replay_order: VecDeque::with_capacity(REPLAY_CACHE_ENTRIES),
         }
     }
 
@@ -145,29 +155,36 @@ impl RecordProtector {
         }
 
         let plaintext_limit = self.limits.protected_plaintext_bytes()? as usize;
-        let mut plaintext = vec![0_u8; plaintext_limit];
+        if self.plaintext_scratch.len() < plaintext_limit {
+            self.plaintext_scratch.resize(plaintext_limit, 0);
+        }
         let read = self
             .transport
-            .read_message(ciphertext, &mut plaintext)
+            .read_message(ciphertext, &mut self.plaintext_scratch)
             .map_err(|_| SessionError::new(SessionErrorCode::AuthenticationFailed))?;
-        plaintext.truncate(read);
-        if plaintext.len() < RECORD_HEADER_LEN {
+        self.plaintext_scratch.truncate(read);
+        if self.plaintext_scratch.len() < RECORD_HEADER_LEN {
             return Err(SessionError::new(SessionErrorCode::RecordMalformed));
         }
-        let header = RecordHeader::decode(&plaintext[..RECORD_HEADER_LEN], self.limits)?;
+        let header =
+            RecordHeader::decode(&self.plaintext_scratch[..RECORD_HEADER_LEN], self.limits)?;
         if header.reconnect_generation != self.generation {
             return Err(SessionError::new(SessionErrorCode::GenerationMismatch));
         }
-        let payload = &plaintext[RECORD_HEADER_LEN..];
-        if usize::try_from(header.payload_len).ok() != Some(payload.len()) {
+        if usize::try_from(header.payload_len).ok()
+            != Some(self.plaintext_scratch.len() - RECORD_HEADER_LEN)
+        {
             return Err(SessionError::new(SessionErrorCode::RecordMalformed));
         }
         self.receive_sequence.accept(header.sequence)?;
-        if self.replay_digests.len() == REPLAY_CACHE_ENTRIES {
-            self.replay_digests.pop_front();
+        if self.replay_order.len() == REPLAY_CACHE_ENTRIES {
+            if let Some(evicted) = self.replay_order.pop_front() {
+                self.replay_digests.remove(&evicted);
+            }
         }
-        self.replay_digests.push_back(digest);
-        Ok((header, payload.to_vec()))
+        self.replay_order.push_back(digest);
+        self.replay_digests.insert(digest);
+        Ok((header, self.plaintext_scratch.split_off(RECORD_HEADER_LEN)))
     }
 }
 

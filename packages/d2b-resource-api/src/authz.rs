@@ -433,8 +433,8 @@ pub fn compile_authorization_facts(
     controller_generation: ControllerGeneration,
     provider_generation: d2b_contracts_resource::v3::ResourceGeneration,
 ) -> Result<CompiledAuthorizationFacts, AuthorizationPolicyError> {
-    let mut roles = Vec::new();
-    let mut bindings = Vec::new();
+    let mut roles = Vec::with_capacity(rows.len());
+    let mut bindings = Vec::with_capacity(rows.len());
     let mut subject_uids: BTreeMap<ResourceRef, ResourceUid> = BTreeMap::new();
     let mut bootstrap_provider_uids = BTreeMap::new();
     for row in rows {

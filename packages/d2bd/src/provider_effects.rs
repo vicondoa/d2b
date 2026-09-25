@@ -1086,7 +1086,7 @@ impl ProviderLifecycleDispatch {
 
     fn allocate_desired_generation(&self) -> Result<u64, ProviderEffectError> {
         self.next_desired_generation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |generation| {
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
                 generation.checked_add(1)
             })
             .map(|previous| previous.saturating_add(1))

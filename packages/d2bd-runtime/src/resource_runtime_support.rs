@@ -155,27 +155,27 @@ impl NewPlaneReadinessState {
     }
 
     pub fn set_spec_store_ready(&self, value: bool) {
-        self.spec_store_ready.store(value, Ordering::SeqCst);
+        self.spec_store_ready.store(value, Ordering::Relaxed);
     }
 
     pub fn set_manager_started(&self, value: bool) {
-        self.manager_started.store(value, Ordering::SeqCst);
+        self.manager_started.store(value, Ordering::Relaxed);
     }
 
     pub fn set_providers_registered(&self, value: bool) {
-        self.providers_registered.store(value, Ordering::SeqCst);
+        self.providers_registered.store(value, Ordering::Relaxed);
     }
 
     pub fn set_initial_load_complete(&self, value: bool) {
-        self.initial_load_complete.store(value, Ordering::SeqCst);
+        self.initial_load_complete.store(value, Ordering::Relaxed);
     }
 
     pub fn snapshot(&self) -> NewPlaneReadiness {
         NewPlaneReadiness {
-            spec_store_ready: self.spec_store_ready.load(Ordering::SeqCst),
-            manager_started: self.manager_started.load(Ordering::SeqCst),
-            providers_registered: self.providers_registered.load(Ordering::SeqCst),
-            initial_load_complete: self.initial_load_complete.load(Ordering::SeqCst),
+            spec_store_ready: self.spec_store_ready.load(Ordering::Relaxed),
+            manager_started: self.manager_started.load(Ordering::Relaxed),
+            providers_registered: self.providers_registered.load(Ordering::Relaxed),
+            initial_load_complete: self.initial_load_complete.load(Ordering::Relaxed),
         }
     }
 }

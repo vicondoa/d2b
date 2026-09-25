@@ -163,8 +163,8 @@ impl<M: UserScopeManager> HelperClient<M> {
                         send_frame(&socket, &rejected)?;
                         continue;
                     }
-                    if active.fetch_add(1, Ordering::AcqRel) >= MAX_HELPER_QUEUE_DEPTH {
-                        active.fetch_sub(1, Ordering::AcqRel);
+                    if active.fetch_add(1, Ordering::Relaxed) >= MAX_HELPER_QUEUE_DEPTH {
+                        active.fetch_sub(1, Ordering::Relaxed);
                         let rejected = rejection(
                             request.request_id,
                             request.operation_id,
@@ -197,7 +197,7 @@ impl<M: UserScopeManager> HelperClient<M> {
                             if responses.send(response).is_ok() {
                                 let _ = wake_response_loop(&response_wakeup);
                             }
-                            active.fetch_sub(1, Ordering::AcqRel);
+                            active.fetch_sub(1, Ordering::Relaxed);
                         })
                         .map_err(|_| ProtocolError::RuntimeUnavailable)?;
                 }

@@ -245,7 +245,7 @@ impl ActorTimers {
 
 impl RequeueScheduler for ActorTimers {
     fn schedule(&self, _key: ResourceKey, after: Duration) -> RequeueId {
-        let id = RequeueId(self.next.fetch_add(1, Ordering::SeqCst));
+        let id = RequeueId(self.next.fetch_add(1, Ordering::Relaxed));
         let handle = ractor::time::send_after(after, self.cell.clone(), || ResourceMsg::Reconcile);
         // `tokio::sync::Mutex` (plan U4) reached from the sync trait
         // surface via the non-blocking `try_lock`. The actor is the single

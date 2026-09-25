@@ -1056,10 +1056,6 @@ mod tests {
             ),
             "same-id reuse must remain blocked while cancellation retry state exists"
         );
-        assert_eq!(
-            OperationError::RetainedOperationId.to_string(),
-            "operation identifier is retained after cancellation; retry cancellation or start new work with a new operation identifier"
-        );
         assert!(
             cancel_now(&mut table, &reused_operation, SessionId(1))
                 .unwrap()

@@ -276,7 +276,7 @@ impl StreamBridge {
         principal: &PrincipalId,
         source: SessionId,
         direction: BusDirection,
-        payload: Vec<u8>,
+        payload: &[u8],
     ) -> Result<(), StreamError> {
         if payload.is_empty() || payload.len() > self.limits.max_frame_bytes {
             self.metrics
@@ -327,7 +327,7 @@ impl StreamBridge {
             }
             let was_empty = stream.frames.is_empty();
             stream.credit -= frame_len;
-            stream.frames.push_back(payload);
+            stream.frames.push_back(payload.to_vec());
             was_empty
         };
         if was_empty {
@@ -634,7 +634,7 @@ impl OutgoingStream {
         &self.key.name
     }
 
-    pub(crate) fn send(&self, payload: Vec<u8>) -> Result<(), StreamError> {
+    pub(crate) fn send(&self, payload: &[u8]) -> Result<(), StreamError> {
         self.bridge.send(
             &self.key.name,
             &self.key.principal,
@@ -644,12 +644,12 @@ impl OutgoingStream {
         )
     }
 
-    pub(crate) async fn send_wait(&self, payload: Vec<u8>) -> Result<(), StreamError> {
+    pub(crate) async fn send_wait(&self, payload: &[u8]) -> Result<(), StreamError> {
         loop {
             let notified = self.bridge.notify.notified();
             let mut notified = std::pin::pin!(notified);
             notified.as_mut().enable();
-            match self.send(payload.clone()) {
+            match self.send(payload) {
                 Ok(()) => return Ok(()),
                 Err(
                     StreamError::CreditExceeded
@@ -663,7 +663,7 @@ impl OutgoingStream {
         }
     }
 
-    pub(crate) async fn send_and_wait_ack(&self, payload: Vec<u8>) -> Result<(), StreamError> {
+    pub(crate) async fn send_and_wait_ack(&self, payload: &[u8]) -> Result<(), StreamError> {
         let target = self
             .bridge
             .acknowledged_bytes(&self.key)?
@@ -886,7 +886,7 @@ mod tests {
                 8,
             )
             .unwrap();
-        explicit.send(vec![1, 2]).unwrap();
+        explicit.send(&[1, 2]).unwrap();
         explicit.close();
         drop(explicit_incoming);
 
@@ -898,7 +898,7 @@ mod tests {
                 8,
             )
             .unwrap();
-        dropped_outgoing.send(vec![3, 4]).unwrap();
+        dropped_outgoing.send(&[3, 4]).unwrap();
         drop(dropped_incoming);
         drop(dropped_outgoing);
 
@@ -910,7 +910,7 @@ mod tests {
                 8,
             )
             .unwrap();
-        session_outgoing.send(vec![5, 6]).unwrap();
+        session_outgoing.send(&[5, 6]).unwrap();
         bridge.cancel_session(SessionId(6));
         drop(session_incoming);
         drop(session_outgoing);
@@ -973,16 +973,16 @@ mod tests {
             ),
             Err(StreamError::AggregateBackpressure)
         ));
-        outgoing.send(vec![1; 5]).unwrap();
-        assert_eq!(outgoing.send(vec![2]), Err(StreamError::CreditExceeded));
+        outgoing.send(&[1; 5]).unwrap();
+        assert_eq!(outgoing.send(&[2]), Err(StreamError::CreditExceeded));
         incoming.grant(outgoing.name(), 1).await.unwrap();
         assert_eq!(
-            outgoing.send(vec![2; 2]),
+            outgoing.send(&[2; 2]),
             Err(StreamError::AggregateBackpressure)
         );
         let frame = incoming.receive_next().await.unwrap();
         assert_eq!(frame.payload(), &[1; 5]);
-        outgoing.send(vec![2]).unwrap();
+        outgoing.send(&[2]).unwrap();
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -1000,7 +1000,7 @@ mod tests {
         let outgoing = Arc::new(outgoing);
         let sender = {
             let outgoing = Arc::clone(&outgoing);
-            tokio::spawn(async move { outgoing.send_wait(vec![1, 2, 3, 4]).await })
+            tokio::spawn(async move { outgoing.send_wait(&[1, 2, 3, 4]).await })
         };
         tokio::task::yield_now().await;
         incoming.grant(outgoing.name(), 2).await.unwrap();
@@ -1052,9 +1052,9 @@ mod tests {
                 8,
             )
             .unwrap();
-        first_out.send(vec![1]).unwrap();
-        first_out.send(vec![2]).unwrap();
-        second_out.send(vec![3]).unwrap();
+        first_out.send(&[1]).unwrap();
+        first_out.send(&[2]).unwrap();
+        second_out.send(&[3]).unwrap();
 
         let observed = [
             first_in.receive_next().await.unwrap(),
@@ -1093,9 +1093,9 @@ mod tests {
                 8,
             )
             .unwrap();
-        first_out.send(vec![1]).unwrap();
-        first_out.send(vec![2]).unwrap();
-        second_out.send(vec![3]).unwrap();
+        first_out.send(&[1]).unwrap();
+        first_out.send(&[2]).unwrap();
+        second_out.send(&[3]).unwrap();
 
         let observed = [
             first_in.receive_next().await.unwrap(),
@@ -1173,7 +1173,7 @@ mod tests {
         let receive = incoming.receive_next();
         let send = async {
             tokio::task::yield_now().await;
-            outgoing.send(vec![1]).unwrap();
+            outgoing.send(&[1]).unwrap();
         };
         let (frame, ()) = tokio::join!(receive, send);
         assert_eq!(frame.unwrap().payload(), &[1]);
@@ -1200,7 +1200,7 @@ mod tests {
             )
             .unwrap();
         bridge.cancel_session(SessionId(2));
-        assert_eq!(outgoing.send(vec![1]), Err(StreamError::StreamClosed));
+        assert_eq!(outgoing.send(&[1]), Err(StreamError::StreamClosed));
         assert_eq!(
             incoming.receive_next().await,
             Err(StreamError::StreamClosed)
@@ -1291,7 +1291,7 @@ mod tests {
             let start = Arc::clone(&start);
             tasks.push(tokio::spawn(async move {
                 start.wait().await;
-                outgoing.send(vec![1])
+                outgoing.send(&[1])
             }));
         }
 

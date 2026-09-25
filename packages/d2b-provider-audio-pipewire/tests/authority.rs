@@ -32,3 +32,13 @@ fn speaker_mixer_keeps_grants_independent() {
     mixer.set_level(AudioLeaseId::new(2), 20).unwrap();
     assert_eq!(mixer.mix_level(), 100);
 }
+
+#[test]
+fn speaker_mixer_mix_level_is_capped_at_100() {
+    let mut mixer = SpeakerMixer::new(NonZeroUsize::new(3).unwrap());
+    mixer.set_level(AudioLeaseId::new(1), 80).unwrap();
+    mixer.set_level(AudioLeaseId::new(2), 80).unwrap();
+    assert_eq!(mixer.mix_level(), 100);
+    mixer.set_level(AudioLeaseId::new(3), 60).unwrap();
+    assert_eq!(mixer.mix_level(), 100);
+}

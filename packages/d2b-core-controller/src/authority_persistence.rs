@@ -333,3 +333,230 @@ async fn validated_recovery_receipt(
     )
     .map_err(|_| AuthorityPersistenceError::RowInvalid)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::authority::{AuthorityOwnerProof, AuthorityRequest, claim_digest};
+    use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
+
+    fn uid(value: &str) -> ResourceUid {
+        ResourceUid::parse(value).unwrap()
+    }
+
+    fn authority_proof(value: &str, generation: u64) -> AuthorityOwnerProof {
+        AuthorityOwnerProof::new(uid(value), ResourceGeneration::new(generation).unwrap())
+    }
+
+    fn recovery_row(
+        operation_id: &str,
+    ) -> (AuthorityStorageOperation, PreparedAuthorityOperation, AuthorityRequest) {
+        let request = AuthorityRequest::vsock_cid(
+            uid("d93e4567-e89b-42d3-a456-426614174089"),
+            87,
+            authority_proof("e93e4567-e89b-42d3-a456-426614174090", 1),
+        )
+        .unwrap();
+        let claim = AuthorityStorageClaim::Generic(request.durable_claim());
+        let claim_digest = claim_digest(&claim).unwrap();
+        let store_binding_digest = "sha256:".to_owned() + &"1".repeat(64);
+        let operation = AuthorityStorageOperation {
+            operation_id: operation_id.to_owned(),
+            claim,
+            state: AuthorityOperationState::Pending,
+            claim_digest,
+            store_binding_digest: store_binding_digest.clone(),
+        };
+        let prepared =
+            PreparedAuthorityOperation::new(operation_id.to_owned(), store_binding_digest, 7)
+                .unwrap();
+        (operation, prepared, request)
+    }
+
+    /// Provenance that accepts every recovered row; the coordinator tests
+    /// exercise the receipt and rollback machinery, not provenance policy.
+    struct AcceptingProvenance;
+
+    impl AuthorityRecoveryProvenance for AcceptingProvenance {
+        fn validate<'a>(
+            &'a self,
+            _operation: &'a AuthorityStorageOperation,
+        ) -> AuthorityFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// Recovery double whose close/release legs can fail on demand.
+    struct FailingRecoveryPersistence {
+        fail_close: bool,
+        fail_release: bool,
+        operations: Vec<AuthorityStorageOperation>,
+        prepared: BTreeMap<String, PreparedAuthorityOperation>,
+    }
+
+    impl AuthorityPersistence for FailingRecoveryPersistence {
+        fn prepare<'a>(
+            &'a self,
+            _operation_id: &'a str,
+            _claim: &'a AuthorityStorageClaim,
+        ) -> AuthorityFuture<'a, PreparedAuthorityOperation> {
+            Box::pin(async { Err(AuthorityPersistenceError::StoreUnavailable) })
+        }
+
+        fn record_effect<'a>(
+            &'a self,
+            _capability: &'a AuthorityOperationCapability,
+            _state: AuthorityOperationState,
+        ) -> AuthorityFuture<'a, ()> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn record_close<'a>(
+            &'a self,
+            _capability: &'a AuthorityOperationCapability,
+        ) -> AuthorityFuture<'a, ()> {
+            if self.fail_close {
+                Box::pin(async { Err(AuthorityPersistenceError::StoreUnavailable) })
+            } else {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        fn release<'a>(
+            &'a self,
+            _capability: &'a AuthorityOperationCapability,
+        ) -> AuthorityFuture<'a, ()> {
+            if self.fail_release {
+                Box::pin(async { Err(AuthorityPersistenceError::StoreUnavailable) })
+            } else {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        fn recover<'a>(&'a self) -> AuthorityFuture<'a, AuthorityRecoveryData> {
+            Box::pin(async {
+                Ok(AuthorityRecoveryData::new(
+                    self.operations.clone(),
+                    self.prepared.clone(),
+                ))
+            })
+        }
+    }
+
+    async fn failing_coordinator(
+        operation_id: &str,
+        fail_close: bool,
+        fail_release: bool,
+    ) -> AuthorityRecoveryCoordinator {
+        let (operation, prepared, _) = recovery_row(operation_id);
+        let persistence = Arc::new(FailingRecoveryPersistence {
+            fail_close,
+            fail_release,
+            operations: vec![operation],
+            prepared: BTreeMap::from([(operation_id.to_owned(), prepared)]),
+        });
+        AuthorityRecoveryCoordinator::recover_with_provenance(persistence, &AcceptingProvenance)
+            .await
+            .unwrap()
+    }
+
+    // R11 inventory note: tokio Mutex::lock().await resolves to the banned
+    // Runtime::block_on bridge in clippy 1.97; sanctioned "cfg(test) helper".
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn coordinator_restores_capability_and_quarantines_after_record_close_failure() {
+        let coordinator = failing_coordinator("recovery-close-failure", true, false).await;
+        assert_eq!(
+            coordinator
+                .resolve_observed_closed("recovery-close-failure")
+                .await
+                .unwrap_err(),
+            AuthorityPersistenceError::StoreUnavailable
+        );
+        assert!(
+            coordinator
+                .index()
+                .lock()
+                .await
+                .take_recovery_capability("recovery-close-failure")
+                .is_some(),
+            "failed close must restore the recovery capability"
+        );
+        coordinator
+            .resolve_observed_and_adopted("recovery-close-failure")
+            .await
+            .unwrap();
+        assert!(
+            !coordinator.is_ready_for_readiness().await,
+            "failed close must quarantine the operation"
+        );
+    }
+
+    // R11 inventory note: tokio Mutex::lock().await resolves to the banned
+    // Runtime::block_on bridge in clippy 1.97; sanctioned "cfg(test) helper".
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn coordinator_restores_capability_and_quarantines_after_release_failure() {
+        let coordinator = failing_coordinator("recovery-release-failure", false, true).await;
+        assert_eq!(
+            coordinator
+                .resolve_observed_closed("recovery-release-failure")
+                .await
+                .unwrap_err(),
+            AuthorityPersistenceError::StoreUnavailable
+        );
+        assert!(
+            coordinator
+                .index()
+                .lock()
+                .await
+                .take_recovery_capability("recovery-release-failure")
+                .is_some(),
+            "failed release must restore the recovery capability"
+        );
+        coordinator
+            .resolve_observed_and_adopted("recovery-release-failure")
+            .await
+            .unwrap();
+        assert!(
+            !coordinator.is_ready_for_readiness().await,
+            "failed release must quarantine the operation"
+        );
+    }
+
+    // R11 inventory note: tokio Mutex::lock().await resolves to the banned
+    // Runtime::block_on bridge in clippy 1.97; sanctioned "cfg(test) helper".
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn coordinator_resolve_observed_and_adopted_clears_unresolved_set() {
+        let coordinator = failing_coordinator("recovery-observed-adopted", false, false).await;
+        assert!(!coordinator.is_ready_for_readiness().await);
+        coordinator
+            .resolve_observed_and_adopted("recovery-observed-adopted")
+            .await
+            .unwrap();
+        assert!(coordinator.is_ready_for_readiness().await);
+    }
+
+    // R11 inventory note: tokio Mutex::lock().await resolves to the banned
+    // Runtime::block_on bridge in clippy 1.97; sanctioned "cfg(test) helper".
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn coordinator_consumes_capability_and_reaches_readiness_on_successful_close() {
+        let coordinator = failing_coordinator("recovery-close-success", false, false).await;
+        coordinator
+            .resolve_observed_closed("recovery-close-success")
+            .await
+            .unwrap();
+        assert!(
+            coordinator
+                .index()
+                .lock()
+                .await
+                .take_recovery_capability("recovery-close-success")
+                .is_none(),
+            "successful close must consume the recovery capability"
+        );
+        assert!(coordinator.is_ready_for_readiness().await);
+    }
+}

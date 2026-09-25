@@ -29,6 +29,7 @@ use d2b_core::host_w3::{CoexistencePolicy, FirewallManager};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256 as Sha256Hasher};
 use std::fmt;
+use std::fmt::Write as _;
 
 /// Hex-encoded SHA-256 digest. Returned by [`hash_inet_d2b_table`]
 /// and consumed by the broker as the `table_hash_before`/`_after`
@@ -43,7 +44,10 @@ impl Sha256 {
         let mut hasher = Sha256Hasher::new();
         hasher.update(bytes);
         let out = hasher.finalize();
-        let hex = out.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let mut hex = String::with_capacity(64);
+        for b in out.iter() {
+            write!(hex, "{b:02x}").expect("writing to a String is infallible");
+        }
         Self(hex)
     }
 

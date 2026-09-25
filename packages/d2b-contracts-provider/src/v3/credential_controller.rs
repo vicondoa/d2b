@@ -1927,4 +1927,289 @@ mod tests {
             Err(CredentialObservabilityError::ForbiddenTelemetryField)
         );
     }
+
+    fn observe_input(
+        lease_state: Option<CredentialLeaseState>,
+        provider_reachable: bool,
+    ) -> CredentialObserveInput {
+        CredentialObserveInput::new(
+            uid(),
+            lease_state,
+            1,
+            [OperationClass::InspectMetadata],
+            permission(CredentialMethod::InspectMetadata),
+            provider_reachable,
+            10,
+            20,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn observe_credential_matrix_is_closed() {
+        let cases = [
+            (Some(CredentialLeaseState::Active), true, CredentialControllerDisposition::Pending),
+            (Some(CredentialLeaseState::Expired), true, CredentialControllerDisposition::Pending),
+            (Some(CredentialLeaseState::Revoked), true, CredentialControllerDisposition::Pending),
+            (Some(CredentialLeaseState::Unknown), true, CredentialControllerDisposition::Pending),
+            (None, true, CredentialControllerDisposition::Converged),
+            (Some(CredentialLeaseState::Active), false, CredentialControllerDisposition::Degraded),
+            (None, false, CredentialControllerDisposition::Degraded),
+        ];
+        for (lease_state, provider_reachable, expected_disposition) in cases {
+            let decision = observe_credential(&observe_input(lease_state, provider_reachable))
+                .unwrap();
+            assert_eq!(
+                decision.disposition,
+                expected_disposition,
+                "lease_state={lease_state:?} provider_reachable={provider_reachable}"
+            );
+            assert_eq!(
+                decision.outcome,
+                if provider_reachable {
+                    CredentialControllerOutcome::Success
+                } else {
+                    CredentialControllerOutcome::ProviderUnavailable
+                }
+            );
+            assert_eq!(
+                decision.call.is_some(),
+                provider_reachable && lease_state.is_some()
+            );
+            assert_eq!(
+                decision.conditions.provider_unavailable,
+                !provider_reachable
+            );
+            assert_eq!(
+                decision.observe_after_ms,
+                Some(CREDENTIAL_OBSERVE_INTERVAL_MS)
+            );
+            if provider_reachable && lease_state.is_some() {
+                assert_eq!(
+                    decision.call.unwrap().method(),
+                    CredentialMethod::InspectMetadata
+                );
+            }
+        }
+    }
+
+    fn reconcile_input(
+        policy: RotationPolicyClass,
+        now_unix_ms: u64,
+        prior_rotation_failure: Option<CredentialRetryState>,
+    ) -> CredentialReconcileInput {
+        CredentialReconcileInput::new(
+            uid(),
+            rotation(policy),
+            Some(CredentialLeaseState::Active),
+            1,
+            1_000,
+            [OperationClass::AcquireToken],
+            permission(CredentialMethod::AcquireToken),
+            true,
+            1,
+            MAX_LOCAL_CREDENTIAL_LEASES,
+            now_unix_ms,
+            2_000,
+            prior_rotation_failure,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn reconcile_credential_rotation_retry_exhaustion_is_closed() {
+        let cases = [
+            (
+                RotationPolicyClass::Proactive,
+                950,
+                Some(CredentialRetryState::new(3, 3).unwrap()),
+                CredentialControllerDisposition::Failed,
+                CredentialControllerOutcome::RotationFailed,
+                false,
+            ),
+            (
+                RotationPolicyClass::Proactive,
+                950,
+                Some(CredentialRetryState::new(1, 3).unwrap()),
+                CredentialControllerDisposition::Pending,
+                CredentialControllerOutcome::Success,
+                true,
+            ),
+            (
+                RotationPolicyClass::Proactive,
+                950,
+                None,
+                CredentialControllerDisposition::Pending,
+                CredentialControllerOutcome::Success,
+                true,
+            ),
+            (
+                RotationPolicyClass::OnExpiry,
+                950,
+                Some(CredentialRetryState::new(3, 3).unwrap()),
+                CredentialControllerDisposition::Converged,
+                CredentialControllerOutcome::Success,
+                false,
+            ),
+        ];
+        for (policy, now, prior, expected_disposition, expected_outcome, expects_call) in cases {
+            let decision =
+                reconcile_credential(&reconcile_input(policy, now, prior)).unwrap();
+            assert_eq!(
+                decision.disposition,
+                expected_disposition,
+                "policy={policy:?} now={now} prior={prior:?}"
+            );
+            assert_eq!(decision.outcome, expected_outcome);
+            assert_eq!(decision.call.is_some(), expects_call);
+            assert_eq!(
+                decision.conditions.credential_ready,
+                !matches!(decision.disposition, CredentialControllerDisposition::Failed)
+            );
+        }
+    }
+
+    #[test]
+    fn lease_aggregate_counts_only_future_expiries_and_keeps_the_minimum() {
+        let cases = [
+            (1_000, vec![], 0, 0),
+            (1_000, vec![500, 999, 1_000], 0, 0),
+            (1_000, vec![1_001], 1, 0),
+            (1_000, vec![2_000, 4_000, 3_000], 3, 1),
+            (1_000, vec![1_000_000], 1, 999),
+        ];
+        for (now, expiries, active_leases, minimum_expiry_seconds) in cases {
+            let aggregate = CredentialLeaseAggregate::from_active_expiries(
+                CredentialProviderKind::Entra,
+                PlacementBinding::GuestAgent,
+                now,
+                expiries.clone(),
+            )
+            .unwrap();
+            assert_eq!(aggregate.provider, CredentialProviderKind::Entra);
+            assert_eq!(aggregate.placement, PlacementBinding::GuestAgent);
+            assert_eq!(
+                aggregate.active_leases,
+                active_leases,
+                "now={now} expiries={expiries:?}"
+            );
+            assert_eq!(aggregate.minimum_expiry_seconds, minimum_expiry_seconds);
+        }
+
+        let overflow: Vec<u64> = (1..=MAX_LOCAL_CREDENTIAL_LEASES + 1)
+            .map(|offset| 1_000 + u64::from(offset))
+            .collect();
+        assert_eq!(
+            CredentialLeaseAggregate::from_active_expiries(
+                CredentialProviderKind::Entra,
+                PlacementBinding::GuestAgent,
+                1_000,
+                overflow,
+            )
+            .unwrap_err(),
+            CredentialObservabilityError::ForbiddenTelemetryField
+        );
+    }
+
+    #[test]
+    fn health_derive_matrix_is_closed() {
+        let cases = [
+            (true, 0, 0, Ok(CredentialControllerHealthState::Ready)),
+            (true, 5, 0, Ok(CredentialControllerHealthState::Ready)),
+            (true, 0, 1, Ok(CredentialControllerHealthState::Degraded)),
+            (true, 5, 3, Ok(CredentialControllerHealthState::Degraded)),
+            (false, 0, 0, Ok(CredentialControllerHealthState::Unavailable)),
+            (false, 5, 3, Ok(CredentialControllerHealthState::Unavailable)),
+            (
+                true,
+                MAX_LOCAL_CREDENTIAL_LEASES + 1,
+                0,
+                Err(CredentialControllerError::InvalidInput),
+            ),
+        ];
+        for (reachable, active_leases, locked_count, expected) in cases {
+            let health = CredentialControllerHealth::derive(reachable, active_leases, locked_count);
+            match expected {
+                Ok(state) => {
+                    let health = health.unwrap();
+                    assert_eq!(health.state, state);
+                    assert_eq!(health.provider_process_reachable, reachable);
+                    assert_eq!(health.active_leases, active_leases);
+                    assert_eq!(health.locked_count, locked_count);
+                }
+                Err(error) => assert_eq!(health.unwrap_err(), error),
+            }
+        }
+    }
+
+    #[test]
+    fn controller_event_renders_bounded_records_without_subject_identity() {
+        let digest = CredentialAuditDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let record = CredentialAuditRecord::controller_event(
+            CredentialProviderKind::Entra,
+            "dev",
+            digest.clone(),
+            CredentialAuditOperation::Rotation,
+            CredentialAuditOutcome::RotationFailed,
+            3,
+            Some(2),
+            Some(digest.clone()),
+        )
+        .unwrap();
+        let wire = record.to_wire_record();
+        assert!(wire.contains("provider=credential-entra"), "{wire}");
+        assert!(wire.contains("zone=dev"), "{wire}");
+        assert!(wire.contains("operation=rotation"), "{wire}");
+        assert!(wire.contains("outcome=rotation-failed"), "{wire}");
+        assert!(wire.contains("rotation_generation=3"), "{wire}");
+        assert!(wire.contains("prior_rotation_generation=2"), "{wire}");
+        assert!(
+            wire.contains(&format!("idempotency_key_digest={}", digest.as_str())),
+            "{wire}"
+        );
+        assert!(!wire.contains("subject_digest="), "{wire}");
+
+        assert_eq!(
+            CredentialAuditRecord::controller_event(
+                CredentialProviderKind::Entra,
+                "dev",
+                digest.clone(),
+                CredentialAuditOperation::Rotation,
+                CredentialAuditOutcome::Success,
+                0,
+                None,
+                None,
+            )
+            .unwrap_err(),
+            CredentialObservabilityError::InvalidAuditRecord
+        );
+        assert_eq!(
+            CredentialAuditRecord::controller_event(
+                CredentialProviderKind::Entra,
+                "dev",
+                digest.clone(),
+                CredentialAuditOperation::Rotation,
+                CredentialAuditOutcome::Success,
+                2,
+                Some(0),
+                None,
+            )
+            .unwrap_err(),
+            CredentialObservabilityError::InvalidAuditRecord
+        );
+        assert_eq!(
+            CredentialAuditRecord::controller_event(
+                CredentialProviderKind::Entra,
+                "Zone/dev",
+                digest,
+                CredentialAuditOperation::Rotation,
+                CredentialAuditOutcome::Success,
+                1,
+                None,
+                None,
+            )
+            .unwrap_err(),
+            CredentialObservabilityError::ForbiddenTelemetryField
+        );
+    }
 }

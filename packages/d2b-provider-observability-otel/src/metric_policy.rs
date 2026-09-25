@@ -47,16 +47,28 @@ pub fn validate_resource_attributes(
     Ok(())
 }
 
+/// Case-insensitive ASCII substring scan over a value already bounded to
+/// [`MAX_RESOURCE_ATTRIBUTE_BYTES`].
+fn contains_ignore_ascii_case(value: &str, word: &str) -> bool {
+    let word = word.as_bytes();
+    value
+        .as_bytes()
+        .windows(word.len())
+        .any(|window| window.eq_ignore_ascii_case(word))
+}
+
 fn valid_resource_attribute_value(key: &str, value: &str) -> bool {
-    let lowered = value.to_ascii_lowercase();
-    if lowered.contains("secret")
-        || lowered.contains("credential")
-        || lowered.contains("token")
-        || lowered.contains("password")
-        || lowered.contains("privatekey")
-        || lowered.contains("bearer ")
-    {
-        return false;
+    for word in [
+        "secret",
+        "credential",
+        "token",
+        "password",
+        "privatekey",
+        "bearer ",
+    ] {
+        if contains_ignore_ascii_case(value, word) {
+            return false;
+        }
     }
     let identity_key = matches!(
         key,
@@ -150,16 +162,16 @@ mod tests {
             ("service.version".to_owned(), "0.0.0".to_owned()),
         ]);
         assert!(validate_resource_attributes(&attributes).is_ok());
-        assert!(
-            validate_resource_attributes(&BTreeMap::from([("zone".to_owned(), "work".to_owned())]))
-                .is_err()
+        assert_eq!(
+            validate_resource_attributes(&BTreeMap::from([("zone".to_owned(), "work".to_owned())])),
+            Err(ResourceAttributeError::NotAllowlisted)
         );
-        assert!(
+        assert_eq!(
             validate_resource_attributes(&BTreeMap::from([(
                 "source".to_owned(),
                 "credential-canary".to_owned()
-            )]))
-            .is_err()
+            )])),
+            Err(ResourceAttributeError::Invalid)
         );
     }
 }

@@ -95,6 +95,7 @@ use serde::Deserialize;
 use sha2::Digest as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fmt::Write as _;
 use std::io::Read as _;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -111,10 +112,10 @@ pub struct BundleResolver {
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
     /// Parsed zone-tagged v3 resource bundles keyed by canonical Zone id.
     parsed_zone_resources: BTreeMap<String, ResourceBundle>,
-    guest_setup_descriptors: BTreeMap<(String, String), Vec<u8>>,
-    guest_setup_descriptor_catalog_keys: BTreeMap<(String, String), String>,
-    guest_vmm_intents: BTreeMap<(String, String), ResolvedRunnerIntent>,
-    guest_vmm_zone_uids: BTreeMap<(String, String), ResourceUid>,
+    guest_setup_descriptors: BTreeMap<String, BTreeMap<String, Vec<u8>>>,
+    guest_setup_descriptor_catalog_keys: BTreeMap<String, BTreeMap<String, String>>,
+    guest_vmm_intents: BTreeMap<String, BTreeMap<String, ResolvedRunnerIntent>>,
+    guest_vmm_zone_uids: BTreeMap<String, BTreeMap<String, ResourceUid>>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
     pub storage: Option<StorageJson>,
     /// Trusted site-runtime contract (`site.json`); `None` for a bundle that
@@ -159,10 +160,10 @@ struct ParsedBundleArtifacts {
     host: HostJson,
     processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
-    guest_setup_descriptors: BTreeMap<(String, String), Vec<u8>>,
-    guest_setup_descriptor_catalog_keys: BTreeMap<(String, String), String>,
-    guest_vmm_intents: BTreeMap<(String, String), ResolvedRunnerIntent>,
-    guest_vmm_zone_uids: BTreeMap<(String, String), ResourceUid>,
+    guest_setup_descriptors: BTreeMap<String, BTreeMap<String, Vec<u8>>>,
+    guest_setup_descriptor_catalog_keys: BTreeMap<String, BTreeMap<String, String>>,
+    guest_vmm_intents: BTreeMap<String, BTreeMap<String, ResolvedRunnerIntent>>,
+    guest_vmm_zone_uids: BTreeMap<String, BTreeMap<String, ResourceUid>>,
     guest_store_view_intents: BTreeMap<String, ResolvedStoreViewIntent>,
     provider_controller_templates: Vec<ProcessTemplateBinding>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
@@ -1010,9 +1011,17 @@ fn secure_open_and_read(path: &Path, policy: &BundleVerifyPolicy) -> Result<Vec<
 
 /// Compute `"sha256:<64-char hex>"` over `data`.
 fn sha256_hex(data: &[u8]) -> String {
+    const HEX: [u8; 16] = *b"0123456789abcdef";
     let digest: [u8; 32] = sha2::Sha256::digest(data).into();
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("sha256:{hex}")
+    let mut hex = [0u8; 64];
+    for (i, byte) in digest.iter().enumerate() {
+        hex[i * 2] = HEX[usize::from(byte >> 4)];
+        hex[i * 2 + 1] = HEX[usize::from(byte & 0x0f)];
+    }
+    let mut out = String::with_capacity(71);
+    out.push_str("sha256:");
+    out.push_str(std::str::from_utf8(&hex).expect("hex digits are ASCII"));
+    out
 }
 
 /// Verify the SHA-256 of `bytes` against `artifact_hashes[key]`.
@@ -1558,6 +1567,7 @@ impl BundleResolver {
         runner_intents.extend(
             guest_vmm_intents
                 .values()
+                .flat_map(|guests| guests.values())
                 .cloned()
                 .map(|intent| (intent.intent_id.clone(), intent)),
         );
@@ -1622,7 +1632,8 @@ impl BundleResolver {
     /// of this projection.
     pub fn guest_setup_descriptor_bytes(&self, zone: &str, guest: &str) -> Option<&[u8]> {
         self.guest_setup_descriptors
-            .get(&(zone.to_owned(), guest.to_owned()))
+            .get(zone)
+            .and_then(|guests| guests.get(guest))
             .map(Vec::as_slice)
     }
 
@@ -1630,7 +1641,8 @@ impl BundleResolver {
     /// Guest setup descriptor in the verified artifact catalog.
     pub fn guest_setup_descriptor_catalog_key(&self, zone: &str, guest: &str) -> Option<&str> {
         self.guest_setup_descriptor_catalog_keys
-            .get(&(zone.to_owned(), guest.to_owned()))
+            .get(zone)
+            .and_then(|guests| guests.get(guest))
             .map(String::as_str)
     }
 
@@ -1649,21 +1661,16 @@ impl BundleResolver {
 
     /// Check that a supplied Zone UID is present in a verified private bundle.
     pub fn has_zone_uid(&self, zone_uid: &d2b_contracts_resource::v3::ResourceUid) -> bool {
-        self.zone_resource_bundles.values().any(|bytes| {
-            ResourceBundle::from_json(bytes)
-                .ok()
-                .and_then(|bundle| bundle.zone_uid)
-                .as_ref()
-                == Some(zone_uid)
-        })
+        self.parsed_zone_resources
+            .values()
+            .any(|bundle| bundle.zone_uid.as_ref() == Some(zone_uid))
     }
 
     /// Return the immutable UID bound into one verified Zone resource bundle.
     pub fn zone_uid(&self, zone: &ZoneId) -> Option<ResourceUid> {
-        self.zone_resource_bundles
+        self.parsed_zone_resources
             .get(zone.as_str())
-            .and_then(|bytes| ResourceBundle::from_json(bytes).ok())
-            .and_then(|bundle| bundle.zone_uid)
+            .and_then(|bundle| bundle.zone_uid.clone())
     }
 
     /// Return the verified broker-owned storage row for one Zone.
@@ -1970,8 +1977,7 @@ impl BundleResolver {
     }
 
     fn find_network_spec(&self, parts: &ParsedNetworkIntentRef) -> Option<NetworkSpec> {
-        self.zone_resource_bundles.values().find_map(|bytes| {
-            let bundle = ResourceBundle::from_json(bytes).ok()?;
+        self.parsed_zone_resources.values().find_map(|bundle| {
             if bundle.zone_uid.as_ref() != Some(&parts.zone_uid) {
                 return None;
             }
@@ -2082,7 +2088,8 @@ impl BundleResolver {
         }
         let descriptor = self
             .guest_setup_descriptors
-            .get(&(zone.to_owned(), guest_ref.name().as_str().to_owned()))?;
+            .get(zone)
+            .and_then(|guests| guests.get(guest_ref.name().as_str()))?;
         let catalog_key =
             self.guest_setup_descriptor_catalog_key(zone, guest_ref.name().as_str())?;
         let descriptor_value = serde_json::from_slice::<serde_json::Value>(descriptor).ok()?;
@@ -2101,7 +2108,8 @@ impl BundleResolver {
         let vm_name = guest_ref.name().as_str();
         let intent = self
             .guest_vmm_intents
-            .get(&(zone.to_owned(), vm_name.to_owned()))?;
+            .get(zone)
+            .and_then(|guests| guests.get(vm_name))?;
         (intent.role == ProcessRole::CloudHypervisorRunner
             && intent.vm_name == vm_name
             && intent.execution_ref == execution_ref
@@ -2125,8 +2133,17 @@ impl BundleResolver {
         let key = self
             .guest_vmm_zone_uids
             .iter()
-            .find_map(|(key, value)| (value == zone_uid && key.1 == guest).then_some(key))?;
-        let intent = self.guest_vmm_intents.get(key)?;
+            .find_map(|(zone, guests)| {
+                guests
+                    .iter()
+                    .find_map(|(guest_name, uid)| {
+                        (uid == zone_uid && guest_name == guest).then_some((zone, guest_name))
+                    })
+            })?;
+        let intent = self
+            .guest_vmm_intents
+            .get(key.0)
+            .and_then(|guests| guests.get(key.1))?;
         (intent.role == ProcessRole::CloudHypervisorRunner
             && intent.vm_name == guest
             && intent.execution_ref == execution_ref
@@ -3748,28 +3765,29 @@ fn render_host_nft_script(host: &HostJson) -> String {
     } else {
         format!(" comment \"d2b managed: {}\"", model.ownership_id)
     };
-    buf.push_str(&format!(
+    write!(
+        buf,
         "table {} {} {{\n",
         model.family.to_lowercase(),
         model.table
-    ));
+    )
+    .expect("writing to a String cannot fail");
     for chain in &model.chains {
-        buf.push_str(&format!("  chain {} {{\n", chain.name));
+        write!(buf, "  chain {} {{\n", chain.name).expect("writing to a String cannot fail");
         if let (Some(hook), Some(priority)) = (chain.hook.as_ref(), chain.priority) {
-            buf.push_str(&format!(
-                "    type filter hook {hook} priority {priority};\n"
-            ));
+            write!(buf, "    type filter hook {hook} priority {priority};\n")
+                .expect("writing to a String cannot fail");
         }
         if let Some(policy) = chain.policy.as_ref() {
-            buf.push_str(&format!("    policy {policy};\n"));
+            write!(buf, "    policy {policy};\n").expect("writing to a String cannot fail");
         }
         if !chain.purpose.is_empty() {
-            buf.push_str(&format!("    # purpose: {}\n", chain.purpose));
+            write!(buf, "    # purpose: {}\n", chain.purpose)
+                .expect("writing to a String cannot fail");
         }
         if !comment.is_empty() {
-            buf.push_str(&format!(
-                "    ct state established,related accept{comment};\n"
-            ));
+            write!(buf, "    ct state established,related accept{comment};\n")
+                .expect("writing to a String cannot fail");
         }
         // Per-env forward acceptance: workload traffic exits each env
         // via its `br-<env>-up` bridge (the host-side end of the net-VM
@@ -3781,10 +3799,12 @@ fn render_host_nft_script(host: &HostJson) -> String {
         // before the nixos chain runs.
         if chain.hook.as_deref() == Some("forward") {
             for env in &host.environments {
-                buf.push_str(&format!(
+                write!(
+                    buf,
                     "    iifname \"br-{}-up\" ct state new accept{comment};\n",
                     env.env
-                ));
+                )
+                .expect("writing to a String cannot fail");
             }
         }
         if chain.hook.as_deref() == Some("input") {
@@ -3802,12 +3822,16 @@ fn render_host_nft_script(host: &HostJson) -> String {
                     .map(u16::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
-                buf.push_str(&format!(
+                write!(
+                    buf,
                     "    iifname != \"lo\" meta l4proto tcp tcp dport {{ {backend_ports} }} drop{comment};\n"
-                ));
-                buf.push_str(&format!(
+                )
+                .expect("writing to a String cannot fail");
+                write!(
+                    buf,
                     "    iifname != \"lo\" meta l4proto tcp tcp dport 3240 drop{comment};\n"
-                ));
+                )
+                .expect("writing to a String cannot fail");
             }
         }
         buf.push_str("  }\n");
@@ -3824,16 +3848,22 @@ fn render_env_nft_subset(host: &HostJson, env: &NetEnv) -> String {
     let chain = format!("forward-{}", env.env);
     let bridge_ifname = format!("br-{}-up", env.env);
     let mut buf = String::new();
-    buf.push_str(&format!(
+    write!(
+        buf,
         "table inet d2b {{\n  chain \"{chain}\" {{ comment \"{marker}\";\n"
-    ));
-    buf.push_str(&format!(
+    )
+    .expect("writing to a String cannot fail");
+    write!(
+        buf,
         "    ct state established,related accept comment \"{marker}\";\n",
-    ));
-    buf.push_str(&format!(
+    )
+    .expect("writing to a String cannot fail");
+    write!(
+        buf,
         "    iifname \"{}\" ct state new accept comment \"{}\";\n",
         bridge_ifname, marker
-    ));
+    )
+    .expect("writing to a String cannot fail");
     buf.push_str("  }\n}\n");
     buf
 }
@@ -4017,12 +4047,14 @@ fn render_hosts_managed_block(host: &HostJson) -> String {
     buf.push('\n');
     buf.push_str("# managed by d2b broker - do not edit by hand\n");
     for env in &host.environments {
-        buf.push_str(&format!(
+        write!(
+            buf,
             "# env {} bridge {} mtu {}\n",
             env.env,
             env.bridge.as_str(),
             env.mtu
-        ));
+        )
+        .expect("writing to a String cannot fail");
     }
     buf.push_str(&host.hosts_file.end_marker);
     buf.push('\n');
@@ -4830,10 +4862,10 @@ fn load_zone_resource_bundles(
 /// descriptors, provenance strings, VMM runner intents plus their Zone UIDs,
 /// and store-view intents - see [`load_guest_setup_descriptors`].
 type LoadedGuestSetupDescriptors = (
-    BTreeMap<(String, String), Vec<u8>>,
-    BTreeMap<(String, String), String>,
-    BTreeMap<(String, String), ResolvedRunnerIntent>,
-    BTreeMap<(String, String), ResourceUid>,
+    BTreeMap<String, BTreeMap<String, Vec<u8>>>,
+    BTreeMap<String, BTreeMap<String, String>>,
+    BTreeMap<String, BTreeMap<String, ResolvedRunnerIntent>>,
+    BTreeMap<String, BTreeMap<String, ResourceUid>>,
     BTreeMap<String, ResolvedStoreViewIntent>,
 );
 
@@ -4916,8 +4948,8 @@ fn load_guest_setup_descriptors(
                 "Guest setup descriptor list is missing",
             )
         })?;
-    let mut result = BTreeMap::new();
-    let mut catalog_keys = BTreeMap::new();
+    let mut result: BTreeMap<String, BTreeMap<String, Vec<u8>>> = BTreeMap::new();
+    let mut catalog_keys: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     for row in descriptors {
         let zone = row
             .get("zone")
@@ -4970,10 +5002,15 @@ fn load_guest_setup_descriptors(
             )
         })?;
         let descriptor_bytes = descriptor_value.to_canonical_bytes();
-        let key = (zone.to_owned(), guest.to_owned());
-        if result.insert(key.clone(), descriptor_bytes).is_some()
+        if result
+            .entry(zone.to_owned())
+            .or_default()
+            .insert(guest.to_owned(), descriptor_bytes)
+            .is_some()
             || catalog_keys
-                .insert(key, provider_contract_digest.to_owned())
+                .entry(zone.to_owned())
+                .or_default()
+                .insert(guest.to_owned(), provider_contract_digest.to_owned())
                 .is_some()
         {
             return Err(Error::manifest_parse_error(
@@ -5112,13 +5149,13 @@ fn load_guest_store_view_intents(
 /// Per-Guest VMM runner intents plus the bound Zone UIDs, as produced by
 /// [`load_guest_vmm_intents`].
 type ResolvedGuestVmmIntents = (
-    BTreeMap<(String, String), ResolvedRunnerIntent>,
-    BTreeMap<(String, String), ResourceUid>,
+    BTreeMap<String, BTreeMap<String, ResolvedRunnerIntent>>,
+    BTreeMap<String, BTreeMap<String, ResourceUid>>,
 );
 
 fn load_guest_vmm_intents(
     catalog: &serde_json::Value,
-    descriptors: &BTreeMap<(String, String), Vec<u8>>,
+    descriptors: &BTreeMap<String, BTreeMap<String, Vec<u8>>>,
 ) -> Result<ResolvedGuestVmmIntents, Error> {
     let Some(rows) = catalog
         .get("guestClosures")
@@ -5126,8 +5163,8 @@ fn load_guest_vmm_intents(
     else {
         return Ok((BTreeMap::new(), BTreeMap::new()));
     };
-    let mut intents = BTreeMap::new();
-    let mut zone_uids = BTreeMap::new();
+    let mut intents: BTreeMap<String, BTreeMap<String, ResolvedRunnerIntent>> = BTreeMap::new();
+    let mut zone_uids: BTreeMap<String, BTreeMap<String, ResourceUid>> = BTreeMap::new();
     for row in rows {
         let zone = row
             .get("zone")
@@ -5173,7 +5210,8 @@ fn load_guest_vmm_intents(
                 )
             })?;
         let descriptor = descriptors
-            .get(&(zone.as_str().to_owned(), guest.to_owned()))
+            .get(zone.as_str())
+            .and_then(|guests| guests.get(guest))
             .ok_or_else(|| {
                 Error::manifest_parse_error(
                     "artifact-catalog.json",
@@ -5386,8 +5424,10 @@ fn load_guest_vmm_intents(
                 "Guest VMM intent does not carry a complete Cloud Hypervisor argv",
             ));
         }
-        let key = (zone.as_str().to_owned(), guest.to_owned());
-        if intents.contains_key(&key) {
+        if intents
+            .get(zone.as_str())
+            .is_some_and(|guests| guests.contains_key(guest))
+        {
             return Err(Error::manifest_parse_error(
                 "artifact-catalog.json",
                 "duplicate Guest VMM intent",
@@ -5440,8 +5480,16 @@ fn load_guest_vmm_intents(
             umask: Some(0o022),
             accepts_launch_args: false,
         };
-        if intents.insert(key.clone(), intent).is_some()
-            || zone_uids.insert(key, zone_uid).is_some()
+        if intents
+            .entry(zone.as_str().to_owned())
+            .or_default()
+            .insert(guest.to_owned(), intent)
+            .is_some()
+            || zone_uids
+                .entry(zone.as_str().to_owned())
+                .or_default()
+                .insert(guest.to_owned(), zone_uid)
+                .is_some()
         {
             return Err(Error::manifest_parse_error(
                 "artifact-catalog.json",
@@ -7694,16 +7742,20 @@ mod tests {
             .unwrap(),
         );
         let mut resolver = build_personal_dev_bundle(&root);
-        resolver.zone_resource_bundles.insert(
+        let bytes = network_resource_bundle_bytes(
+            "work",
+            &zone_uid,
+            &network_uid,
+            "work-net",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        resolver
+            .zone_resource_bundles
+            .insert("work".to_owned(), bytes.clone());
+        resolver.parsed_zone_resources.insert(
             "work".to_owned(),
-            network_resource_bundle_bytes(
-                "work",
-                &zone_uid,
-                &network_uid,
-                "work-net",
-                "10.20.0.0/24",
-                "192.0.2.0/30",
-            ),
+            ResourceBundle::from_json(&bytes).expect("zone bundle parses"),
         );
 
         let lan_id = intent_id_network_bridge_uids(&zone_uid, &network_uid, "work-net", false);
@@ -7830,16 +7882,20 @@ mod tests {
             .unwrap(),
         );
         let mut resolver = build_personal_dev_bundle(&root);
-        resolver.zone_resource_bundles.insert(
+        let bytes = network_resource_bundle_bytes(
+            "work",
+            &zone_uid,
+            &network_uid,
+            "work-net",
+            "10.20.0.0/24",
+            "192.0.2.0/30",
+        );
+        resolver
+            .zone_resource_bundles
+            .insert("work".to_owned(), bytes.clone());
+        resolver.parsed_zone_resources.insert(
             "work".to_owned(),
-            network_resource_bundle_bytes(
-                "work",
-                &zone_uid,
-                &network_uid,
-                "work-net",
-                "10.20.0.0/24",
-                "192.0.2.0/30",
-            ),
+            ResourceBundle::from_json(&bytes).expect("zone bundle parses"),
         );
 
         let bridge_id = intent_id_network_bridge_uids(&zone_uid, &network_uid, "work-net", false);
@@ -8206,12 +8262,15 @@ mod tests {
         let descriptor_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let descriptors = BTreeMap::from([(
-            ("work".to_owned(), "guest".to_owned()),
-            serde_json::to_vec(&serde_json::json!({
-                "descriptorDigest": descriptor_digest,
-                "systemArtifactId": "guest-system"
-            }))
-            .expect("descriptor"),
+            "work".to_owned(),
+            BTreeMap::from([(
+                "guest".to_owned(),
+                serde_json::to_vec(&serde_json::json!({
+                    "descriptorDigest": descriptor_digest,
+                    "systemArtifactId": "guest-system"
+                }))
+                .expect("descriptor"),
+            )]),
         )]);
         let catalog = serde_json::json!({
             "guestClosures": [{
@@ -8248,14 +8307,16 @@ mod tests {
         let (intents, zone_uids) =
             load_guest_vmm_intents(&catalog, &descriptors).expect("VMM intent");
         let intent = intents
-            .get(&("work".to_owned(), "guest".to_owned()))
+            .get("work")
+            .and_then(|guests| guests.get("guest"))
             .expect("zone-local intent");
         assert_eq!(intent.role, ProcessRole::CloudHypervisorRunner);
         assert_eq!(intent.vm_name, "guest");
         assert_eq!(intent.execution_ref, "Host/host-system");
         assert_eq!(
             zone_uids
-                .get(&("work".to_owned(), "guest".to_owned()))
+                .get("work")
+                .and_then(|guests| guests.get("guest"))
                 .map(ResourceUid::as_str),
             Some("123e4567-e89b-42d3-a456-426614174000")
         );
@@ -8288,20 +8349,26 @@ mod tests {
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let descriptors = BTreeMap::from([
             (
-                ("work".to_owned(), "desktop".to_owned()),
-                serde_json::to_vec(&serde_json::json!({
-                    "descriptorDigest": descriptor_digest,
-                    "systemArtifactId": "desktop-system"
-                }))
-                .expect("work descriptor"),
+                "work".to_owned(),
+                BTreeMap::from([(
+                    "desktop".to_owned(),
+                    serde_json::to_vec(&serde_json::json!({
+                        "descriptorDigest": descriptor_digest,
+                        "systemArtifactId": "desktop-system"
+                    }))
+                    .expect("work descriptor"),
+                )]),
             ),
             (
-                ("personal".to_owned(), "desktop".to_owned()),
-                serde_json::to_vec(&serde_json::json!({
-                    "descriptorDigest": descriptor_digest,
-                    "systemArtifactId": "desktop-system"
-                }))
-                .expect("personal descriptor"),
+                "personal".to_owned(),
+                BTreeMap::from([(
+                    "desktop".to_owned(),
+                    serde_json::to_vec(&serde_json::json!({
+                        "descriptorDigest": descriptor_digest,
+                        "systemArtifactId": "desktop-system"
+                    }))
+                    .expect("personal descriptor"),
+                )]),
             ),
         ]);
         let guest_closure = |zone: &str, zone_uid: &str| {
@@ -8362,11 +8429,13 @@ mod tests {
 
         let (runner_intents, zone_uids) =
             load_guest_vmm_intents(&catalog, &descriptors).expect("zone-qualified VMM intents");
-        let work_key = ("work".to_owned(), "desktop".to_owned());
-        let personal_key = ("personal".to_owned(), "desktop".to_owned());
-        let work_runner = runner_intents.get(&work_key).expect("work desktop runner");
+        let work_runner = runner_intents
+            .get("work")
+            .and_then(|guests| guests.get("desktop"))
+            .expect("work desktop runner");
         let personal_runner = runner_intents
-            .get(&personal_key)
+            .get("personal")
+            .and_then(|guests| guests.get("desktop"))
             .expect("personal desktop runner");
         assert_eq!(
             work_runner.intent_id,
@@ -8389,7 +8458,14 @@ mod tests {
             work_runner.cgroup_placement.subtree,
             personal_runner.cgroup_placement.subtree
         );
-        assert_ne!(zone_uids.get(&work_key), zone_uids.get(&personal_key));
+        assert_ne!(
+            zone_uids
+                .get("work")
+                .and_then(|guests| guests.get("desktop")),
+            zone_uids
+                .get("personal")
+                .and_then(|guests| guests.get("desktop"))
+        );
     }
 
     // v1.2 swtpm broker-pre-NS extension.

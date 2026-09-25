@@ -852,4 +852,27 @@ mod tests {
         assert_eq!(exec.calls, CANONICAL_STEPS.to_vec());
         assert!(report.failed.is_none());
     }
+
+    #[test]
+    fn claim_source_round_trips_a_declared_payload() {
+        let payload =
+            r#"{"source":"declared","firewall_ref":"usbip-fw-work-yk-1-2","bind_ref":"usbip-bind-work-yk-1-2"}"#;
+        let source: UsbipClaimSource = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            source,
+            UsbipClaimSource::Declared {
+                firewall_ref: "usbip-fw-work-yk-1-2".to_owned(),
+                bind_ref: "usbip-bind-work-yk-1-2".to_owned(),
+            }
+        );
+        assert_eq!(serde_json::to_string(&source).unwrap(), payload);
+    }
+
+    #[test]
+    fn claim_source_round_trips_an_explicit_payload() {
+        let payload = r#"{"source":"explicit"}"#;
+        let source: UsbipClaimSource = serde_json::from_str(payload).unwrap();
+        assert_eq!(source, UsbipClaimSource::Explicit);
+        assert_eq!(serde_json::to_string(&source).unwrap(), payload);
+    }
 }

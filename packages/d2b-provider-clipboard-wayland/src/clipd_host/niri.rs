@@ -144,20 +144,21 @@ pub fn read_bounded_ndjson_line<R: Read>(
     max_line_bytes: usize,
 ) -> Result<String, NiriIpcError> {
     let mut line = Vec::new();
-    let mut byte = [0_u8; 1];
+    let mut chunk = [0_u8; 4096];
     loop {
-        match reader.read(&mut byte) {
-            Ok(0) if line.is_empty() => return Err(NiriIpcError::Incomplete),
+        match reader.read(&mut chunk) {
             Ok(0) => return Err(NiriIpcError::Incomplete),
-            Ok(_) if byte[0] == b'\n' => {
-                return String::from_utf8(line).map_err(|_| NiriIpcError::InvalidUtf8);
-            }
-            Ok(_) => {
-                line.push(byte[0]);
-                if line.len() > max_line_bytes {
-                    return Err(NiriIpcError::FrameTooLong {
-                        max: max_line_bytes,
-                    });
+            Ok(n) => {
+                for &byte in &chunk[..n] {
+                    if byte == b'\n' {
+                        return String::from_utf8(line).map_err(|_| NiriIpcError::InvalidUtf8);
+                    }
+                    line.push(byte);
+                    if line.len() > max_line_bytes {
+                        return Err(NiriIpcError::FrameTooLong {
+                            max: max_line_bytes,
+                        });
+                    }
                 }
             }
             Err(err) => return Err(NiriIpcError::Io(err.to_string())),
@@ -594,6 +595,96 @@ mod tests {
         let focused = cache.focused_window().expect("focused window");
         assert_eq!(focused.app_id.as_deref(), Some("foot"));
         assert_eq!(focused.output_label.as_deref(), Some("DP-1"));
+    }
+
+    #[test]
+    fn cache_clears_focus_when_the_focused_window_closes() {
+        let mut cache = NiriStateCache::default();
+        cache.apply_event(NiriEvent::WindowsChanged {
+            windows: vec![
+                NiriWindow {
+                    id: Some(7),
+                    app_id: Some("foot".to_owned()),
+                    title: Some("shell".to_owned()),
+                    is_focused: Some(true),
+                    ..NiriWindow::default()
+                },
+                NiriWindow {
+                    id: Some(8),
+                    app_id: Some("firefox".to_owned()),
+                    title: Some("docs".to_owned()),
+                    is_focused: Some(false),
+                    ..NiriWindow::default()
+                },
+            ],
+        });
+        assert_eq!(cache.focused_window().map(|window| window.id), Some(Some(7)));
+
+        cache.apply_event(NiriEvent::WindowClosed { id: Some(7) });
+
+        assert!(cache.focused_window().is_none());
+        assert!(cache.is_stale());
+        cache.apply_event(NiriEvent::WindowChanged {
+            window: NiriWindow {
+                id: Some(7),
+                app_id: Some("foot".to_owned()),
+                title: Some("shell".to_owned()),
+                is_focused: Some(true),
+                ..NiriWindow::default()
+            },
+        });
+        assert_eq!(cache.focused_window().map(|window| window.id), Some(Some(7)));
+    }
+
+    #[test]
+    fn cache_ignores_closing_a_non_focused_window() {
+        let mut cache = NiriStateCache::default();
+        cache.apply_event(NiriEvent::WindowsChanged {
+            windows: vec![
+                NiriWindow {
+                    id: Some(7),
+                    app_id: Some("foot".to_owned()),
+                    title: Some("shell".to_owned()),
+                    is_focused: Some(true),
+                    ..NiriWindow::default()
+                },
+                NiriWindow {
+                    id: Some(8),
+                    app_id: Some("firefox".to_owned()),
+                    title: Some("docs".to_owned()),
+                    ..NiriWindow::default()
+                },
+            ],
+        });
+
+        cache.apply_event(NiriEvent::WindowClosed { id: Some(8) });
+
+        assert_eq!(cache.focused_window().map(|window| window.id), Some(Some(7)));
+        assert!(!cache.is_stale());
+        assert_eq!(cache.focused_window().map(|window| window.app_id), Some(Some("foot".to_owned())));
+    }
+
+    #[test]
+    fn cache_ignores_workspace_activation_events() {
+        let mut cache = NiriStateCache::default();
+        cache.apply_event(NiriEvent::WindowsChanged {
+            windows: vec![NiriWindow {
+                id: Some(7),
+                app_id: Some("foot".to_owned()),
+                title: Some("shell".to_owned()),
+                is_focused: Some(true),
+                ..NiriWindow::default()
+            }],
+        });
+
+        cache.apply_event(NiriEvent::WorkspaceActivated {
+            id: Some(3),
+            focused: true,
+        });
+
+        assert_eq!(cache.focused_window().map(|window| window.id), Some(Some(7)));
+        assert_eq!(cache.focused_window().map(|window| window.app_id), Some(Some("foot".to_owned())));
+        assert!(!cache.is_stale());
     }
 
     #[test]

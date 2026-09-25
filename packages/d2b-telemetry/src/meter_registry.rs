@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use crate::metric_label_policy::{
-    IdentityCanaries, MetricDescriptor, MetricPolicyError, validate_data_point,
+    IdentityCanaries, MetricDescriptor, MetricPolicyError, canonical_descriptor,
+    validate_data_point,
 };
 pub use d2b_contracts_provider::v3::telemetry_policy::label;
 
@@ -194,10 +195,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn target_buckets_are_present() {
-        assert!(CONTROLLER_HINT_BUCKETS_SECONDS.contains(&0.005));
-        assert!(PROCESS_LAUNCH_BUCKETS_SECONDS.contains(&0.020));
-        assert!(STORE_WRITE_BUCKETS_SECONDS.contains(&0.010));
+    fn controller_hint_buckets_accept_in_range_and_reject_out_of_range_values() {
+        let mut family = MetricFamily::new(
+            canonical_descriptor("d2b_controller_hint_to_handler_seconds").unwrap(),
+            MetricKind::Histogram,
+            CONTROLLER_HINT_BUCKETS_SECONDS.iter().copied(),
+        )
+        .unwrap();
+        let labels = BTreeMap::from([("handler".to_owned(), "configuration".to_owned())]);
+        let canaries = IdentityCanaries::default();
+
+        assert!(family
+            .record(&labels, MetricValue::Scalar(0.012), &canaries)
+            .is_ok());
+        assert_eq!(
+            family.record(&labels, MetricValue::Scalar(-0.001), &canaries),
+            Err(MetricPolicyError::DescriptorMalformed)
+        );
     }
 
     #[test]

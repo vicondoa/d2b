@@ -38,7 +38,6 @@ tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
 
 [dev-dependencies]
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
-tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util"] }
 protobuf = "3.7.2"
 ttrpc = { workspace = true, features = ["async"] }

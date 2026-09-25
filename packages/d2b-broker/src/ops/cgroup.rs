@@ -338,7 +338,8 @@ where
         };
 
     fields.path_class = Some(class);
-    fields.cgroup_id = Some(canonical_path.display().to_string());
+    let cgroup_id = canonical_path.display().to_string();
+    fields.cgroup_id = Some(cgroup_id.clone());
 
     if !is_under_slice(&canonical_path, context.slice_path()) {
         audit.record(
@@ -365,7 +366,7 @@ where
     audit.record("OpenCgroupDir", AuditDecision::Allowed, &fields, None);
     Ok(OpenCgroupDirOutcome {
         cgroup_path: canonical_path.clone(),
-        cgroup_id: canonical_path.display().to_string(),
+        cgroup_id,
         path_class: class,
     })
 }

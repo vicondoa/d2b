@@ -74,7 +74,7 @@ impl UserDriverEffects for RecordingEffects {
         _spec: &UserSpec,
     ) -> Result<UserStatusReport, String> {
         self.calls.lock().push("observe-user".to_owned()); // async-gate-allow: test-support recorder lock
-        if self.fail.load(Ordering::SeqCst) {
+        if self.fail.load(Ordering::Relaxed) {
             return Err("the scripted discovery refused".to_owned());
         }
         Ok(UserStatusReport {
@@ -132,12 +132,12 @@ impl ScriptedProbe {
 
     /// Script whether the next discovery resolves no local record.
     pub fn set_absent(&self, absent: bool) {
-        self.core.absent.store(absent, Ordering::SeqCst);
+        self.core.absent.store(absent, Ordering::Relaxed);
     }
 
     /// Script whether the next discovery refuses.
     pub fn set_failing(&self, failing: bool) {
-        self.core.failing.store(failing, Ordering::SeqCst);
+        self.core.failing.store(failing, Ordering::Relaxed);
     }
 }
 
@@ -149,10 +149,10 @@ impl UserDiscoveryEffectPort for ScriptedProbe {
         spec: &UserSpec,
     ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
         self.core.calls.lock().push(spec.os_username().clone()); // async-gate-allow: test-support recorder lock
-        if self.core.failing.load(Ordering::SeqCst) {
+        if self.core.failing.load(Ordering::Relaxed) {
             return Err(SystemCoreError::DiscoveryUnavailable);
         }
-        if self.core.absent.load(Ordering::SeqCst) {
+        if self.core.absent.load(Ordering::Relaxed) {
             return Ok(None);
         }
         Ok(Some(DiscoveredUser {

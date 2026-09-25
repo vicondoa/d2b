@@ -6,6 +6,7 @@ use crate::routes::RouteTuple;
 use d2b_contracts_resource::v3::network::Ipv4Cidr;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -253,9 +254,14 @@ impl From<HostNetworkObservationError> for NetworkEffectError {
 
 /// Observe current host links, routes, and IPv4 address occupancy.
 pub async fn observe_host_network() -> Result<HostNetworkOccupancy, HostNetworkObservationError> {
-    let links = run_ip(&["-j", "-d", "link", "show"]).await?;
-    let addresses = run_ip(&["-j", "-4", "addr", "show"]).await?;
-    let routes = run_ip(&["-j", "-4", "route", "show", "table", "all"]).await?;
+    let (links, addresses, routes) = tokio::join!(
+        run_ip(&["-j", "-d", "link", "show"]),
+        run_ip(&["-j", "-4", "addr", "show"]),
+        run_ip(&["-j", "-4", "route", "show", "table", "all"]),
+    );
+    let links = links?;
+    let addresses = addresses?;
+    let routes = routes?;
     parse_host_network_observation(&links, &addresses, &routes)
 }
 
@@ -284,6 +290,7 @@ pub fn parse_host_network_observation(
 
     let mut cidrs = Vec::new();
     let mut cidr_markers = BTreeMap::new();
+    let mut cidr_text = String::new();
     for value in parse_array(addresses)? {
         let Some(entries) = value.get("addr_info").and_then(Value::as_array) else {
             continue;
@@ -302,7 +309,9 @@ pub fn parse_host_network_observation(
             };
             let prefix =
                 u8::try_from(prefix).map_err(|_| HostNetworkObservationError::InvalidOutput)?;
-            if let Ok(cidr) = Ipv4Cidr::parse(format!("{local}/{prefix}")) {
+            cidr_text.clear();
+            write!(cidr_text, "{local}/{prefix}").expect("writing to String is infallible");
+            if let Ok(cidr) = Ipv4Cidr::parse(cidr_text.as_str()) {
                 if let Some(markers) = interface_marker {
                     for marker in markers {
                         insert_marker(&mut cidr_markers, cidr.clone(), marker.clone());

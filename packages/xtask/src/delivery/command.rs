@@ -1073,18 +1073,15 @@ mod tests {
             // Belt-and-suspenders guard over the macro-generated domain. Both
             // `WorkflowStatus::ALL` and the wire strings come from the single
             // `workflow_status!` declaration, so they cannot drift; this
-            // wildcard-free match adds a second checkpoint that still fails to
-            // compile if a variant is ever introduced outside that macro,
-            // keeping every variant present in `ALL`, which feeds every
-            // status-domain golden.
+            // wildcard-free match is the real guard - adding a variant is a
+            // compile error until an arm is added, keeping every variant
+            // present in `ALL`, which feeds every status-domain golden. (The
+            // former `ALL.contains` probe re-derived its expectation from the
+            // same `ALL` it iterated, so the assert could never fail.)
             for status in WorkflowStatus::ALL {
-                let listed = match status {
-                    WorkflowStatus::Ok => WorkflowStatus::ALL.contains(&WorkflowStatus::Ok),
-                };
-                assert!(
-                    listed,
-                    "every WorkflowStatus variant must be listed in WorkflowStatus::ALL"
-                );
+                match status {
+                    WorkflowStatus::Ok => {}
+                }
             }
         }
 
@@ -1092,29 +1089,20 @@ mod tests {
         fn wave_commands_enumerates_every_stage() {
             // The operation domain is `WAVE_COMMANDS`, a hand-maintained array.
             // This wildcard-free guard makes adding a `WaveCommand` variant a
-            // compile error until an arm is added, and the arm forces the new
-            // stage into `WAVE_COMMANDS`, so the operation-domain golden cannot
-            // silently omit a live stage.
+            // compile error until an arm is added, so the operation-domain
+            // golden cannot silently omit a live stage. (The former per-arm
+            // `WAVE_COMMANDS.contains` probe re-derived its expectation from
+            // the same array it iterated, so the assert could never fail.)
             fn assert_listed(command: WaveCommand) {
-                let listed = match command {
-                    WaveCommand::Help => WAVE_COMMANDS.contains(&WaveCommand::Help),
-                    WaveCommand::Snapshot => WAVE_COMMANDS.contains(&WaveCommand::Snapshot),
-                    WaveCommand::ValidateImport => {
-                        WAVE_COMMANDS.contains(&WaveCommand::ValidateImport)
-                    }
-                    WaveCommand::RecoveryImport => {
-                        WAVE_COMMANDS.contains(&WaveCommand::RecoveryImport)
-                    }
-                    WaveCommand::Seal => WAVE_COMMANDS.contains(&WaveCommand::Seal),
-                    WaveCommand::MergeTarget => WAVE_COMMANDS.contains(&WaveCommand::MergeTarget),
-                    WaveCommand::MergeEligibility => {
-                        WAVE_COMMANDS.contains(&WaveCommand::MergeEligibility)
-                    }
-                };
-                assert!(
-                    listed,
-                    "every WaveCommand variant must be listed in WAVE_COMMANDS"
-                );
+                match command {
+                    WaveCommand::Help => {}
+                    WaveCommand::Snapshot => {}
+                    WaveCommand::ValidateImport => {}
+                    WaveCommand::RecoveryImport => {}
+                    WaveCommand::Seal => {}
+                    WaveCommand::MergeTarget => {}
+                    WaveCommand::MergeEligibility => {}
+                }
             }
             for command in WAVE_COMMANDS {
                 assert_listed(command);

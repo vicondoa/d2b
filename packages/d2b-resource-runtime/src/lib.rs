@@ -65,20 +65,24 @@ pub use crate::target::{
 #[cfg(test)]
 mod smoke_tests {
     /// Scaffold smoke test: the crate compiles and its module tree resolves.
+    /// Compile-resolution only (audit A5): each module's `MODULE_NAME` const
+    /// must stay reachable, but its value is not pinned here.
     #[test]
     fn modules_resolve() {
-        assert_eq!(crate::manager::MODULE_NAME, "manager");
-        assert_eq!(crate::resource::MODULE_NAME, "resource");
-        assert_eq!(crate::driver::MODULE_NAME, "driver");
-        assert_eq!(crate::metadata::MODULE_NAME, "metadata");
-        assert_eq!(crate::context::MODULE_NAME, "context");
-        assert_eq!(crate::provider::MODULE_NAME, "provider");
-        assert_eq!(crate::target::MODULE_NAME, "target");
-        assert_eq!(crate::guest_target::MODULE_NAME, "guest_target");
-        assert_eq!(crate::watch::MODULE_NAME, "watch");
-        assert_eq!(crate::spec_store::MODULE_NAME, "spec_store");
-        assert_eq!(crate::identity::MODULE_NAME, "identity");
-        assert_eq!(crate::error::MODULE_NAME, "error");
-        assert_eq!(crate::revision::MODULE_NAME, "revision");
+        let _ = (
+            crate::manager::MODULE_NAME,
+            crate::resource::MODULE_NAME,
+            crate::driver::MODULE_NAME,
+            crate::metadata::MODULE_NAME,
+            crate::context::MODULE_NAME,
+            crate::provider::MODULE_NAME,
+            crate::target::MODULE_NAME,
+            crate::guest_target::MODULE_NAME,
+            crate::watch::MODULE_NAME,
+            crate::spec_store::MODULE_NAME,
+            crate::identity::MODULE_NAME,
+            crate::error::MODULE_NAME,
+            crate::revision::MODULE_NAME,
+        );
     }
 }

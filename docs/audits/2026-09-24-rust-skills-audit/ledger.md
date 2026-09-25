@@ -40,6 +40,7 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | U1 | `11bbfe41a` | pass | pass | pass (988 of 988 tests) | pass (11 of 11 vmChecks) | First attempt flaked on the load-sensitive `daemon_state_persistence` kill-during-startup race (passes standalone, not an audit row); the retry is green. The head carries the refreshed async-gate inventory for the broker line shifts. |
 | U2 | `76153aa44` | pass | pass | pass (988 of 988) | pass (11 of 11 vmChecks) | All 368 wave rows carry an outcome: 336 applied, 37 applied-variant with recorded deviations, 4 declined on compiler or API evidence, 1 skipped-stale that overrode a false audit premise, 1 escalated to U5, 1 policy-confirmed no-op. Seven gate attempts got here, each finding something real: the cross-slice signature change (the daemon runtime began consuming audit events while the daemon still borrowed them in nine places), the lint class `cargo check` cannot see (blank lines after doc blocks in default and feature-variant code, nested if-lets, a single-arm `filter_map`, redundant closures, needless borrows, a useless conversion, a too-complex callback type), a census ratchet move recorded with its context, the daemon API reference the scanner rewrite re-rendered, and one deliberate consumer-visible change: the operator's allowed-subcommand list now comes from the parser, so retired realm-era commands no longer appear, and both output goldens moved with it. Host-lane timeouts tracked the runs that did concurrent heavy work on this host and passed in every idle run. |
 | U3 | `b81222ba1` | pass | pass | pass (988 of 988) | pass (11 of 11 vmChecks) | All 286 wave rows carry an outcome: 240 applied, 25 applied-variant with recorded deviations, 14 needs-contract with anchors recorded, 4 already-fixed, 2 skipped-stale that overrode a false audit premise, 1 declined on compiler or API evidence. Six gate attempts got here, each finding something real: the cross-slice signature change (the azure ref moved to its contracts path while the guest effects service still resolved it through `aca_runtime`), the test-support feature gap (`host_reconciliation`'s unresolved `d2b_provider_system_core::testing` import), the ratchet reconciliation (`tier0_first_pass`, `check-async-gate`, `provider_crate_layout`, `d2bd_lib_test`, and `xtask_test` - the ascii-dash, async-gate inventory, and family-knowledge ratchet), the nix flake-eval runfile resolution (`flake-eval-x86-outputs` and the realized guest-static and provider-catalog evals), and the forward-rendezvous per-test thread bound plus the EPIPE refusal race. Two load-sensitive tests (`detached_exec_routing_tests` in `packages/d2bd/src/composition.rs` and an interaction_composition socket test in `packages/d2bd/src/interaction_composition.rs`) flaked only under an aggressive synthetic 12-core load generator, never in a gate run; they are recorded, not fixed. |
+| W3 | `24198fff7` | not run (Main gates) | not run (Main gates) | not run (Main gates) | not run (Main gates) | Wave 3 (perf/conc/async/unsafe/macro/test/supply lenses) closed on `phase-w3-integration`: 53 slices, all merged. 188 rows disposed: 146 applied, 9 applied-variant with recorded deviations, 2 declined (RS-0853, RS-0854 - residuals require design-level ownership change), 1 skipped-stale (RS-0857 - pre_exec is unsafe in tokio and std, compiler-proven), 2 already-fixed (RS-0893, RS-0902), 12 policy-confirmed rows recorded deferred citing their policy, 16 family/wide rows recorded deferred to waves 4-5. Slices W3-37 and W3-38 dispatched at base `b81222ba1` (the forward-rendezvous fix head) per the freeze/unfreeze directive; their rows RS-0802 and RS-0833 anchor `packages/d2bd/src/forward_rendezvous.rs` production symbols. Gates to be run by Main on merge onto `09f9c6ae1`. |
 
 ## Findings (965 rows)
 
@@ -812,201 +813,201 @@ Each wave closes on the same gate set, run on the wave's integrated head in the 
 | `RS-0754` | `docs` | `xtask` | low | actionable | leaf | applied | U2 | a18cc6eb1 | `packages/xtask/src/delivery/snapshot.rs` | One-line docs added to WaveSnapshot digests/program/wave, WaveCommand as_str/parse/required_options/optional_options, WorkflowOutput ok/with_digests, WorkflowCommandHelp, CliOptions accessors. |  |
 | `RS-0752` | `docs` | `xtask` | low | actionable | leaf | applied | U2 | 6668d84dd | `provider_crate_policy.rs` | four doubled parens and whiche typo fixed; the audit's trailing \. doc lines do not exist at HEAD (grep zero), so that component is stale |  |
 | `RS-0753` | `docs` | `xtask` | low | actionable | leaf | applied | U2 | bbd40b6fd | `main.rs` | doc comments above today_utc_iso8601 and civil_from_days naming the Hinnant algorithm, constants, and epoch fallback |  |
-| `RS-0771` | `perf` | `d2b` | medium | actionable | leaf |  |  |  | `context.rs:570, context.rs:538` |  |  |
-| `RS-0757` | `perf` | `d2b-audit` | low | actionable | leaf |  |  |  | `packages/d2b-audit/src/sink.rs:386, packages/d2b-audit/src/segment.rs:970` |  |  |
-| `RS-0762` | `perf` | `d2b-broker` | medium | actionable | wide |  |  |  | `packages/d2b-broker/src/protocol.rs:86, packages/d2b-broker/src/protocol.rs:125` |  |  |
-| `RS-0759` | `perf` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/nft.rs:784-790` |  |  |
-| `RS-0760` | `perf` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/cgroup.rs:341, packages/d2b-broker/src/ops/cgroup.rs:368` |  |  |
-| `RS-0758` | `perf` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/state_cells.rs:470, packages/d2b-broker/src/state_cells.rs:488, pa` |  |  |
-| `RS-0761` | `perf` | `d2b-broker` | low | actionable | leaf |  |  |  | `src/ops/store_view_posture.rs:194-271, src/ops/store_view_posture.rs:110-120, src/ops/stor` |  |  |
-| `RS-0763` | `perf` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/router.rs:4228-4235` |  |  |
-| `RS-0764` | `perf` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/streams.rs:642-658` |  |  |
-| `RS-0765` | `perf` | `d2b-contracts-resource` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-resource/src/v3/resource_status.rs:636, packages/d2b-contracts-reso` |  |  |
-| `RS-0766` | `perf` | `d2b-contracts-zone-session` | low | actionable | leaf |  |  |  | `resource_bundle.rs:382` |  |  |
-| `RS-0767` | `perf` | `d2b-core` | medium | actionable | leaf |  |  |  | `packages/d2b-core/src/bundle_resolver.rs:1636, packages/d2b-core/src/bundle_resolver.rs:16` |  |  |
-| `RS-0768` | `perf` | `d2b-core` | low | actionable | leaf |  |  |  | `packages/d2b-core/src/bundle_resolver.rs:3717, packages/d2b-core/src/bundle_resolver.rs:37` |  |  |
-| `RS-0769` | `perf` | `d2b-core` | low | actionable | leaf |  |  |  | `packages/d2b-core/src/bundle_resolver.rs:1609, packages/d2b-core/src/bundle_resolver.rs:16` |  |  |
-| `RS-0770` | `perf` | `d2b-host` | low | actionable | leaf |  |  |  | `packages/d2b-host/src/nftables.rs:46, packages/d2b-host/src/hardlink_farm.rs:628` |  |  |
-| `RS-0772` | `perf` | `d2b-provider-clipboard-wayland` | low | actionable | leaf |  |  |  | `src/bin/d2b-clipd.rs:757, src/bin/d2b-clipd.rs:1043, src/bin/d2b-clipd.rs:1833, src/bin/d2` |  |  |
-| `RS-0773` | `perf` | `d2b-provider-clipboard-wayland` | low | actionable | leaf |  |  |  | `packages/d2b-provider-clipboard-wayland/src/clipd_host/niri.rs:140-159` |  |  |
-| `RS-0774` | `perf` | `d2b-provider-config-nixos` | low | actionable | leaf |  |  |  | `packages/d2b-provider-config-nixos/src/controller.rs:298, packages/d2b-provider-config-nix` |  |  |
-| `RS-0775` | `perf` | `d2b-provider-display-wayland` | low | actionable | leaf |  |  |  | `src/session_children.rs:316, src/session_children.rs:317` |  |  |
-| `RS-0776` | `perf` | `d2b-provider-guest` | low | actionable | leaf |  |  |  | `packages/d2b-provider-guest/src/driver.rs:863, packages/d2b-provider-guest/src/driver.rs:8` |  |  |
-| `RS-0777` | `perf` | `d2b-provider-guest-cloud-hypervisor` | low | actionable | leaf |  |  |  | `shutdown.rs:505-513` |  |  |
-| `RS-0778` | `perf` | `d2b-provider-guest-qemu-media` | low | actionable | leaf |  |  |  | `packages/d2b-provider-guest-qemu-media/src/controller/process_builder.rs:239` |  |  |
-| `RS-0779` | `perf` | `d2b-provider-network-local` | low | actionable | leaf |  |  |  | `src/nftables.rs:266-268` |  |  |
-| `RS-0780` | `perf` | `d2b-provider-network-local` | low | actionable | leaf |  |  |  | `src/observe.rs:305` |  |  |
-| `RS-0781` | `perf` | `d2b-provider-notification-desktop` | low | actionable | leaf |  |  |  | `packages/d2b-provider-notification-desktop/src/host_sink.rs:265, packages/d2b-provider-not` |  |  |
-| `RS-0782` | `perf` | `d2b-provider-observability-otel` | low | actionable | leaf |  |  |  | `emitter_socket.rs:139` |  |  |
-| `RS-0783` | `perf` | `d2b-provider-observability-otel` | low | actionable | leaf |  |  |  | `ingress_policy.rs:203, ingress_policy.rs:368` |  |  |
-| `RS-0784` | `perf` | `d2b-provider-observability-otel` | low | actionable | leaf |  |  |  | `metric_policy.rs:44` |  |  |
-| `RS-0785` | `perf` | `d2b-provider-process-systemd` | low | actionable | leaf |  |  |  | `packages/d2b-provider-process-systemd/src/operations.rs:417, packages/d2b-provider-process` |  |  |
-| `RS-0786` | `perf` | `d2b-provider-toolkit` | medium | actionable | family |  |  |  | `packages/d2b-provider-toolkit/src/shared_provider.rs:944, packages/d2b-provider-toolkit/sr` |  |  |
-| `RS-0787` | `perf` | `d2b-provider-transport-azure-relay` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-transport-azure-relay/src/relay_transport.rs:706-714, packages/d2b-p` |  |  |
-| `RS-0788` | `perf` | `d2b-provider-transport-azure-relay` | low | actionable | leaf |  |  |  | `packages/d2b-provider-transport-azure-relay/src/guest_credential.rs:617-618` |  |  |
-| `RS-0789` | `perf` | `d2b-provider-volume` | low | actionable | leaf |  |  |  | `driver.rs:437-440, driver.rs:614-617` |  |  |
-| `RS-0791` | `perf` | `d2b-resource-api` | medium | actionable | leaf |  |  |  | `manager_backend.rs:1006` |  |  |
-| `RS-0792` | `perf` | `d2b-resource-api` | medium | actionable | family |  |  |  | `manager_backend.rs:1081-1103, manager_backend.rs:1090` |  |  |
-| `RS-0793` | `perf` | `d2b-resource-api` | low | actionable | leaf |  |  |  | `packages/d2b-resource-api/src/authz.rs:457, packages/d2b-resource-api/src/authz.rs:458` |  |  |
-| `RS-0790` | `perf` | `d2b-resource-api` | low | actionable | leaf |  |  |  | `manager_backend.rs:495, manager_backend.rs:449-455` |  |  |
-| `RS-0794` | `perf` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/manager.rs:1390` |  |  |
-| `RS-0795` | `perf` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/guest_target.rs:178, packages/d2b-resource-runtime/src/g` |  |  |
-| `RS-0796` | `perf` | `d2b-session` | low | actionable | leaf |  |  |  | `record.rs:125, record.rs:147` |  |  |
-| `RS-0797` | `perf` | `d2b-session` | low | actionable | leaf |  |  |  | `engine.rs:1354, engine.rs:1362, scheduler.rs:72` |  |  |
-| `RS-0798` | `perf` | `d2b-session` | low | actionable | leaf |  |  |  | `record.rs:120, record.rs:146` |  |  |
-| `RS-0799` | `perf` | `d2b-session-unix` | low | actionable | leaf |  |  |  | `packages/d2b-session-unix/src/socket.rs:256, packages/d2b-session-unix/src/socket.rs:306, ` |  |  |
-| `RS-0800` | `perf` | `d2bd` | medium | actionable | leaf |  |  |  | `packages/d2bd/src/resource_runtime.rs:2360, packages/d2bd/src/resource_runtime.rs:2489, pa` |  |  |
-| `RS-0801` | `perf` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/process_provider_runtime.rs:333` |  |  |
-| `RS-0802` | `perf` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/forward_rendezvous.rs:1356, packages/d2bd/src/forward_rendezvous.rs:1476` |  |  |
-| `RS-0803` | `perf` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/shared_provider_effects.rs:1014-1016, packages/d2bd/src/audio_dispatch.r` |  |  |
-| `RS-0804` | `perf` | `d2bd-runtime` | low | actionable | family |  |  |  | `public_read_model.rs:117-118` |  |  |
-| `RS-0808` | `perf` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/bazel_evidence.rs:397, packages/xtask/src/bazel_evidence.rs:399, packag` |  |  |
-| `RS-0805` | `perf` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/main.rs:431` |  |  |
-| `RS-0806` | `perf` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/main.rs:582` |  |  |
-| `RS-0807` | `perf` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/main.rs:972` |  |  |
-| `RS-0960` | `conc` | `X3-cross-crate-duplication` | medium | policy-confirmed | wide |  |  |  | `clippy.toml:82, packages/xtask/data/blocking-census-baseline.json:13, packages/d2b-provide` |  |  |
-| `RS-0809` | `conc` | `d2b-broker` | low | actionable | leaf |  |  |  | `src/envelope/mod.rs:1146, src/envelope/mod.rs:2144` |  |  |
+| `RS-0771` | `perf` | `d2b` | medium | actionable | leaf | applied-variant | W3 | 44cb49a0d | `context.rs:570, context.rs:538` |  |  |
+| `RS-0757` | `perf` | `d2b-audit` | low | actionable | leaf | applied | W3 | 10923b65e | `packages/d2b-audit/src/sink.rs:386, packages/d2b-audit/src/segment.rs:970` |  |  |
+| `RS-0762` | `perf` | `d2b-broker` | medium | actionable | wide | escalated | W3 |  | `packages/d2b-broker/src/protocol.rs:86, packages/d2b-broker/src/protocol.rs:125` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0759` | `perf` | `d2b-broker` | low | actionable | leaf | applied | W3 | 944012b14 | `packages/d2b-broker/src/ops/nft.rs:784-790` |  |  |
+| `RS-0760` | `perf` | `d2b-broker` | low | actionable | leaf | applied | W3 | 944012b14 | `packages/d2b-broker/src/ops/cgroup.rs:341, packages/d2b-broker/src/ops/cgroup.rs:368` |  |  |
+| `RS-0758` | `perf` | `d2b-broker` | low | actionable | leaf | applied | W3 | 944012b14 | `packages/d2b-broker/src/state_cells.rs:470, packages/d2b-broker/src/state_cells.rs:488, pa` |  |  |
+| `RS-0761` | `perf` | `d2b-broker` | low | actionable | leaf | applied | W3 | 944012b14 | `src/ops/store_view_posture.rs:194-271, src/ops/store_view_posture.rs:110-120, src/ops/stor` |  |  |
+| `RS-0763` | `perf` | `d2b-bus` | low | actionable | leaf | applied | W3 | 5f1fcd6f1 | `packages/d2b-bus/src/router.rs:4228-4235` |  |  |
+| `RS-0764` | `perf` | `d2b-bus` | low | actionable | leaf | applied | W3 | 5f1fcd6f1 | `packages/d2b-bus/src/streams.rs:642-658` |  |  |
+| `RS-0765` | `perf` | `d2b-contracts-resource` | low | actionable | leaf | applied | W3 | 395eba54d | `packages/d2b-contracts-resource/src/v3/resource_status.rs:636, packages/d2b-contracts-reso` |  |  |
+| `RS-0766` | `perf` | `d2b-contracts-zone-session` | low | actionable | leaf | applied | W3 | 5966950aa | `resource_bundle.rs:382` |  |  |
+| `RS-0767` | `perf` | `d2b-core` | medium | actionable | leaf | applied | W3 | 26538ea75 | `packages/d2b-core/src/bundle_resolver.rs:1636, packages/d2b-core/src/bundle_resolver.rs:16` |  |  |
+| `RS-0768` | `perf` | `d2b-core` | low | actionable | leaf | applied | W3 | 26538ea75 | `packages/d2b-core/src/bundle_resolver.rs:3717, packages/d2b-core/src/bundle_resolver.rs:37` |  |  |
+| `RS-0769` | `perf` | `d2b-core` | low | actionable | leaf | applied-variant | W3 | 26538ea75 | `packages/d2b-core/src/bundle_resolver.rs:1609, packages/d2b-core/src/bundle_resolver.rs:16` |  |  |
+| `RS-0770` | `perf` | `d2b-host` | low | actionable | leaf | applied | W3 | 1abe4f9b3 | `packages/d2b-host/src/nftables.rs:46, packages/d2b-host/src/hardlink_farm.rs:628` |  |  |
+| `RS-0772` | `perf` | `d2b-provider-clipboard-wayland` | low | actionable | leaf | applied | W3 | d5ab66ec5 | `src/bin/d2b-clipd.rs:757, src/bin/d2b-clipd.rs:1043, src/bin/d2b-clipd.rs:1833, src/bin/d2` |  |  |
+| `RS-0773` | `perf` | `d2b-provider-clipboard-wayland` | low | actionable | leaf | applied | W3 | d5ab66ec5 | `packages/d2b-provider-clipboard-wayland/src/clipd_host/niri.rs:140-159` |  |  |
+| `RS-0774` | `perf` | `d2b-provider-config-nixos` | low | actionable | leaf | applied-variant | W3 | 1da992306 | `packages/d2b-provider-config-nixos/src/controller.rs:298, packages/d2b-provider-config-nix` |  |  |
+| `RS-0775` | `perf` | `d2b-provider-display-wayland` | low | actionable | leaf | applied | W3 | a34843f8e | `src/session_children.rs:316, src/session_children.rs:317` |  |  |
+| `RS-0776` | `perf` | `d2b-provider-guest` | low | actionable | leaf | applied | W3 | 037e23533 | `packages/d2b-provider-guest/src/driver.rs:863, packages/d2b-provider-guest/src/driver.rs:8` |  |  |
+| `RS-0777` | `perf` | `d2b-provider-guest-cloud-hypervisor` | low | actionable | leaf | applied | W3 | 513edf50c | `shutdown.rs:505-513` |  |  |
+| `RS-0778` | `perf` | `d2b-provider-guest-qemu-media` | low | actionable | leaf | applied | W3 | e4cbd3054 | `packages/d2b-provider-guest-qemu-media/src/controller/process_builder.rs:239` |  |  |
+| `RS-0779` | `perf` | `d2b-provider-network-local` | low | actionable | leaf | applied | W3 | bacc017aa | `src/nftables.rs:266-268` |  |  |
+| `RS-0780` | `perf` | `d2b-provider-network-local` | low | actionable | leaf | applied-variant | W3 | bacc017aa | `src/observe.rs:305` |  |  |
+| `RS-0781` | `perf` | `d2b-provider-notification-desktop` | low | actionable | leaf | applied | W3 | 037e23533 | `packages/d2b-provider-notification-desktop/src/host_sink.rs:265, packages/d2b-provider-not` |  |  |
+| `RS-0782` | `perf` | `d2b-provider-observability-otel` | low | actionable | leaf | applied | W3 | 1200b480d | `emitter_socket.rs:139` |  |  |
+| `RS-0783` | `perf` | `d2b-provider-observability-otel` | low | actionable | leaf | applied | W3 | 1200b480d | `ingress_policy.rs:203, ingress_policy.rs:368` |  |  |
+| `RS-0784` | `perf` | `d2b-provider-observability-otel` | low | actionable | leaf | applied | W3 | 1200b480d | `metric_policy.rs:44` |  |  |
+| `RS-0785` | `perf` | `d2b-provider-process-systemd` | low | actionable | leaf | applied | W3 | 037e23533 | `packages/d2b-provider-process-systemd/src/operations.rs:417, packages/d2b-provider-process` |  |  |
+| `RS-0786` | `perf` | `d2b-provider-toolkit` | medium | actionable | family | escalated | W3 |  | `packages/d2b-provider-toolkit/src/shared_provider.rs:944, packages/d2b-provider-toolkit/sr` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0787` | `perf` | `d2b-provider-transport-azure-relay` | medium | actionable | leaf | applied | W3 | 652dc86a7 | `packages/d2b-provider-transport-azure-relay/src/relay_transport.rs:706-714, packages/d2b-p` |  |  |
+| `RS-0788` | `perf` | `d2b-provider-transport-azure-relay` | low | actionable | leaf | applied | W3 | 652dc86a7 | `packages/d2b-provider-transport-azure-relay/src/guest_credential.rs:617-618` |  |  |
+| `RS-0789` | `perf` | `d2b-provider-volume` | low | actionable | leaf | applied | W3 | 037e23533 | `driver.rs:437-440, driver.rs:614-617` |  |  |
+| `RS-0791` | `perf` | `d2b-resource-api` | medium | actionable | leaf | applied | W3 | 81b2ef867 | `manager_backend.rs:1006` |  |  |
+| `RS-0792` | `perf` | `d2b-resource-api` | medium | actionable | family | escalated | W3 |  | `manager_backend.rs:1081-1103, manager_backend.rs:1090` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0793` | `perf` | `d2b-resource-api` | low | actionable | leaf | applied | W3 | 81b2ef867 | `packages/d2b-resource-api/src/authz.rs:457, packages/d2b-resource-api/src/authz.rs:458` |  |  |
+| `RS-0790` | `perf` | `d2b-resource-api` | low | actionable | leaf | applied | W3 | 81b2ef867 | `manager_backend.rs:495, manager_backend.rs:449-455` |  |  |
+| `RS-0794` | `perf` | `d2b-resource-runtime` | low | actionable | leaf | applied | W3 | a8b710719 | `packages/d2b-resource-runtime/src/manager.rs:1390` |  |  |
+| `RS-0795` | `perf` | `d2b-resource-runtime` | low | actionable | leaf | applied | W3 | a8b710719 | `packages/d2b-resource-runtime/src/guest_target.rs:178, packages/d2b-resource-runtime/src/g` |  |  |
+| `RS-0796` | `perf` | `d2b-session` | low | actionable | leaf | applied | W3 | a11baf0f9 | `record.rs:125, record.rs:147` |  |  |
+| `RS-0797` | `perf` | `d2b-session` | low | actionable | leaf | applied | W3 | a11baf0f9 | `engine.rs:1354, engine.rs:1362, scheduler.rs:72` |  |  |
+| `RS-0798` | `perf` | `d2b-session` | low | actionable | leaf | applied | W3 | a11baf0f9 | `record.rs:120, record.rs:146` |  |  |
+| `RS-0799` | `perf` | `d2b-session-unix` | low | actionable | leaf | applied | W3 | 774c148eb | `packages/d2b-session-unix/src/socket.rs:256, packages/d2b-session-unix/src/socket.rs:306, ` |  |  |
+| `RS-0800` | `perf` | `d2bd` | medium | actionable | leaf | applied | W3 | 9a8caf31c | `packages/d2bd/src/resource_runtime.rs:2360, packages/d2bd/src/resource_runtime.rs:2489, pa` |  |  |
+| `RS-0801` | `perf` | `d2bd` | low | actionable | leaf | applied | W3 | 9a8caf31c | `packages/d2bd/src/process_provider_runtime.rs:333` |  |  |
+| `RS-0802` | `perf` | `d2bd` | low | actionable | leaf | applied | W3 | 9a8caf31c | `packages/d2bd/src/forward_rendezvous.rs:1356, packages/d2bd/src/forward_rendezvous.rs:1476` |  |  |
+| `RS-0803` | `perf` | `d2bd` | low | actionable | leaf | applied | W3 | 9a8caf31c | `packages/d2bd/src/shared_provider_effects.rs:1014-1016, packages/d2bd/src/audio_dispatch.r` |  |  |
+| `RS-0804` | `perf` | `d2bd-runtime` | low | actionable | family | escalated | W3 |  | `public_read_model.rs:117-118` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0808` | `perf` | `xtask` | low | actionable | leaf | applied | W3 | 4d6f66bbb | `packages/xtask/src/bazel_evidence.rs:397, packages/xtask/src/bazel_evidence.rs:399, packag` |  |  |
+| `RS-0805` | `perf` | `xtask` | low | actionable | leaf | applied | W3 | 4d6f66bbb | `packages/xtask/src/main.rs:431` |  |  |
+| `RS-0806` | `perf` | `xtask` | low | actionable | leaf | applied-variant | W3 | 4d6f66bbb | `packages/xtask/src/main.rs:582` |  |  |
+| `RS-0807` | `perf` | `xtask` | low | actionable | leaf | applied | W3 | 4d6f66bbb | `packages/xtask/src/main.rs:972` |  |  |
+| `RS-0960` | `conc` | `X3-cross-crate-duplication` | medium | policy-confirmed | wide | policy-confirmed | W3 |  | `clippy.toml:82, packages/xtask/data/blocking-census-baseline.json:13, packages/d2b-provide` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0809` | `conc` | `d2b-broker` | low | actionable | leaf | applied | W3 | 944012b14 | `src/envelope/mod.rs:1146, src/envelope/mod.rs:2144` |  |  |
 | `RS-0810` | `conc` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/registry.rs:522-523, packages/d2b-bus/src/registry.rs:573-582` |  |  |
-| `RS-0811` | `conc` | `d2b-contracts-provider` | low | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/credential/service.rs:955, packages/d2b-contracts-p` |  |  |
-| `RS-0812` | `conc` | `d2b-provider-clipboard-wayland` | low | actionable | leaf |  |  |  | `src/fd.rs:545, src/fd.rs:600, src/bin/d2b-clipd.rs:74, src/bin/d2b-clipd.rs:96` |  |  |
-| `RS-0813` | `conc` | `d2b-provider-credential` | medium | policy-confirmed | leaf |  |  |  | `packages/d2b-provider-credential/src/test_support.rs:18, packages/d2b-provider-credential/` |  |  |
-| `RS-0814` | `conc` | `d2b-provider-device-gpu` | medium | policy-confirmed | family |  |  |  | `packages/d2b-provider-device-gpu/src/effects_service.rs:79, packages/d2b-provider-device-g` |  |  |
-| `RS-0815` | `conc` | `d2b-provider-device-security-key` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-device-security-key/src/relay_service.rs:129, packages/d2b-provider-` |  |  |
-| `RS-0816` | `conc` | `d2b-provider-device-usbip` | low | policy-confirmed | leaf |  |  |  | `test_support.rs:25, test_support.rs:35, Cargo.toml:30` |  |  |
-| `RS-0817` | `conc` | `d2b-provider-guest` | medium | policy-confirmed | family |  |  |  | `packages/d2b-provider-guest/src/driver.rs:502, packages/d2b-provider-guest/Cargo.toml:29, ` |  |  |
-| `RS-0818` | `conc` | `d2b-provider-guest` | medium | policy-confirmed | leaf |  |  |  | `packages/d2b-provider-guest/src/test_support.rs:59, packages/d2b-provider-guest/src/test_s` |  |  |
-| `RS-0819` | `conc` | `d2b-provider-process` | medium | policy-confirmed | leaf |  |  |  | `packages/d2b-provider-process/src/driver.rs:680, packages/d2b-provider-process/src/driver.` |  |  |
-| `RS-0820` | `conc` | `d2b-provider-process` | low | actionable | leaf |  |  |  | `packages/d2b-provider-process/src/driver.rs:438, packages/d2b-provider-process/src/driver.` |  |  |
-| `RS-0821` | `conc` | `d2b-provider-system-core` | low | actionable | leaf |  |  |  | `src/testing.rs:43, src/testing.rs:79` |  |  |
-| `RS-0822` | `conc` | `d2b-provider-toolkit` | low | actionable | leaf |  |  |  | `packages/d2b-provider-toolkit/src/operations/envelope.rs:487` |  |  |
-| `RS-0823` | `conc` | `d2b-provider-transport-unix` | low | actionable | leaf |  |  |  | `packages/d2b-provider-transport-unix/src/portal.rs:18, packages/d2b-provider-transport-uni` |  |  |
-| `RS-0824` | `conc` | `d2b-provider-user` | medium | policy-confirmed | leaf |  |  |  | `packages/d2b-provider-user/src/test_support.rs:41-42, packages/d2b-provider-user/src/test_` |  |  |
-| `RS-0825` | `conc` | `d2b-provider-user` | low | actionable | leaf |  |  |  | `packages/d2b-provider-user/src/test_support.rs:77, packages/d2b-provider-user/src/test_sup` |  |  |
-| `RS-0826` | `conc` | `d2b-provider-volume-binding` | low | actionable | leaf |  |  |  | `packages/d2b-provider-volume-binding/Cargo.toml:29-31, packages/d2b-provider-volume-bindin` |  |  |
-| `RS-0827` | `conc` | `d2b-resource-client` | low | actionable | leaf |  |  |  | `packages/d2b-resource-client/src/zone_client.rs:510, packages/d2b-resource-client/src/zone` |  |  |
-| `RS-0828` | `conc` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/resource.rs:247` |  |  |
-| `RS-0829` | `conc` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/Cargo.toml:33, packages/d2b-resource-runtime/src/context.rs:` |  |  |
-| `RS-0830` | `conc` | `d2b-session` | low | actionable | leaf |  |  |  | `admission.rs:756, admission.rs:1666, driver.rs:33` |  |  |
-| `RS-0831` | `conc` | `d2b-unsafe-local-helper` | low | actionable | leaf |  |  |  | `packages/d2b-unsafe-local-helper/src/protocol.rs:166, packages/d2b-unsafe-local-helper/src` |  |  |
-| `RS-0832` | `conc` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/effect_service_actors.rs:174, packages/d2bd/src/effect_service_actors.rs` |  |  |
-| `RS-0833` | `conc` | `d2bd` | low | actionable | leaf |  |  |  | `packages/d2bd/src/forward_rendezvous.rs:332, packages/d2bd/src/forward_rendezvous.rs:414` |  |  |
-| `RS-0835` | `conc` | `d2bd-runtime` | medium | policy-confirmed | leaf |  |  |  | `packages/d2bd-runtime/src/unsafe_local_helper.rs:17, packages/d2bd-runtime/Cargo.toml:34` |  |  |
-| `RS-0836` | `conc` | `d2bd-runtime` | medium | policy-confirmed | leaf |  |  |  | `packages/d2bd-runtime/src/concurrency.rs:163, packages/d2bd-runtime/src/concurrency.rs:189` |  |  |
-| `RS-0834` | `conc` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `resource_runtime_support.rs:158, resource_runtime_support.rs:162, resource_runtime_support` |  |  |
+| `RS-0811` | `conc` | `d2b-contracts-provider` | low | actionable | leaf | applied | W3 | 3b2c1416b | `packages/d2b-contracts-provider/src/v3/credential/service.rs:955, packages/d2b-contracts-p` |  |  |
+| `RS-0812` | `conc` | `d2b-provider-clipboard-wayland` | low | actionable | leaf | applied | W3 | d5ab66ec5 | `src/fd.rs:545, src/fd.rs:600, src/bin/d2b-clipd.rs:74, src/bin/d2b-clipd.rs:96` |  |  |
+| `RS-0813` | `conc` | `d2b-provider-credential` | medium | policy-confirmed | leaf | policy-confirmed | W3 |  | `packages/d2b-provider-credential/src/test_support.rs:18, packages/d2b-provider-credential/` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0814` | `conc` | `d2b-provider-device-gpu` | medium | policy-confirmed | family | policy-confirmed | W3 |  | `packages/d2b-provider-device-gpu/src/effects_service.rs:79, packages/d2b-provider-device-g` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0815` | `conc` | `d2b-provider-device-security-key` | medium | actionable | leaf | applied | W3 | 06d6376af | `packages/d2b-provider-device-security-key/src/relay_service.rs:129, packages/d2b-provider-` |  |  |
+| `RS-0816` | `conc` | `d2b-provider-device-usbip` | low | policy-confirmed | leaf | policy-confirmed | W3 |  | `test_support.rs:25, test_support.rs:35, Cargo.toml:30` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0817` | `conc` | `d2b-provider-guest` | medium | policy-confirmed | family | policy-confirmed | W3 |  | `packages/d2b-provider-guest/src/driver.rs:502, packages/d2b-provider-guest/Cargo.toml:29, ` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0818` | `conc` | `d2b-provider-guest` | medium | policy-confirmed | leaf | policy-confirmed | W3 |  | `packages/d2b-provider-guest/src/test_support.rs:59, packages/d2b-provider-guest/src/test_s` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0819` | `conc` | `d2b-provider-process` | medium | policy-confirmed | leaf | policy-confirmed | W3 |  | `packages/d2b-provider-process/src/driver.rs:680, packages/d2b-provider-process/src/driver.` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0820` | `conc` | `d2b-provider-process` | low | actionable | leaf | applied | W3 | 06d6376af | `packages/d2b-provider-process/src/driver.rs:438, packages/d2b-provider-process/src/driver.` |  |  |
+| `RS-0821` | `conc` | `d2b-provider-system-core` | low | actionable | leaf | applied | W3 | e807e4596 | `src/testing.rs:43, src/testing.rs:79` |  |  |
+| `RS-0822` | `conc` | `d2b-provider-toolkit` | low | actionable | leaf | applied | W3 | 06d6376af | `packages/d2b-provider-toolkit/src/operations/envelope.rs:487` |  |  |
+| `RS-0823` | `conc` | `d2b-provider-transport-unix` | low | actionable | leaf | applied | W3 | 06d6376af | `packages/d2b-provider-transport-unix/src/portal.rs:18, packages/d2b-provider-transport-uni` |  |  |
+| `RS-0824` | `conc` | `d2b-provider-user` | medium | policy-confirmed | leaf | policy-confirmed | W3 |  | `packages/d2b-provider-user/src/test_support.rs:41-42, packages/d2b-provider-user/src/test_` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0825` | `conc` | `d2b-provider-user` | low | actionable | leaf | applied | W3 | 928b982ce | `packages/d2b-provider-user/src/test_support.rs:77, packages/d2b-provider-user/src/test_sup` |  |  |
+| `RS-0826` | `conc` | `d2b-provider-volume-binding` | low | actionable | leaf | applied | W3 | 06d6376af | `packages/d2b-provider-volume-binding/Cargo.toml:29-31, packages/d2b-provider-volume-bindin` |  |  |
+| `RS-0827` | `conc` | `d2b-resource-client` | low | actionable | leaf | applied | W3 | 5a334adb2 | `packages/d2b-resource-client/src/zone_client.rs:510, packages/d2b-resource-client/src/zone` |  |  |
+| `RS-0828` | `conc` | `d2b-resource-runtime` | low | actionable | leaf | applied | W3 | a8b710719 | `packages/d2b-resource-runtime/src/resource.rs:247` |  |  |
+| `RS-0829` | `conc` | `d2b-resource-runtime` | low | actionable | leaf | applied | W3 | a8b710719 | `packages/d2b-resource-runtime/Cargo.toml:33, packages/d2b-resource-runtime/src/context.rs:` |  |  |
+| `RS-0830` | `conc` | `d2b-session` | low | actionable | leaf | applied | W3 | a11baf0f9 | `admission.rs:756, admission.rs:1666, driver.rs:33` |  |  |
+| `RS-0831` | `conc` | `d2b-unsafe-local-helper` | low | actionable | leaf | applied | W3 | 840c1edbe | `packages/d2b-unsafe-local-helper/src/protocol.rs:166, packages/d2b-unsafe-local-helper/src` |  |  |
+| `RS-0832` | `conc` | `d2bd` | low | actionable | leaf | applied | W3 | f6b8e60e6 | `packages/d2bd/src/effect_service_actors.rs:174, packages/d2bd/src/effect_service_actors.rs` |  |  |
+| `RS-0833` | `conc` | `d2bd` | low | actionable | leaf | applied | W3 | f6b8e60e6 | `packages/d2bd/src/forward_rendezvous.rs:332, packages/d2bd/src/forward_rendezvous.rs:414` |  |  |
+| `RS-0835` | `conc` | `d2bd-runtime` | medium | policy-confirmed | leaf | policy-confirmed | W3 |  | `packages/d2bd-runtime/src/unsafe_local_helper.rs:17, packages/d2bd-runtime/Cargo.toml:34` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0836` | `conc` | `d2bd-runtime` | medium | policy-confirmed | leaf | policy-confirmed | W3 |  | `packages/d2bd-runtime/src/concurrency.rs:163, packages/d2bd-runtime/src/concurrency.rs:189` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0834` | `conc` | `d2bd-runtime` | low | actionable | leaf | applied | W3 | a9a44bfdd | `resource_runtime_support.rs:158, resource_runtime_support.rs:162, resource_runtime_support` |  |  |
 | `RS-0837` | `async` | `d2b-broker` | high | actionable | wide | applied | U1 | 9b64eaa27 | packages/d2b-broker/src/runtime.rs (reap fn; kernel_ops.rs callers) | bounded WNOHANG reap poll replaces the blocking waitid; orphaned helpers deleted |  |
 | `RS-0841` | `async` | `d2b-broker` | high | actionable | leaf | applied | U1 | 25dfa3aee | packages/d2b-broker/src/sys.rs, packages/d2b-broker/src/ops/swtpm_dir.rs | setfacl shellout moved behind an async wrapper on a bounded worker |  |
 | `RS-0842` | `async` | `d2b-broker` | high | actionable | wide | applied | U1 | a6d8fb022 | packages/d2b-broker/src/ops/media.rs | nss group lookup hoisted to a LazyLock, off the per-write path |  |
 | `RS-0840` | `async` | `d2b-broker` | high | actionable | leaf | applied | U1 | f4f09c74c | packages/d2b-broker/src/ops/host_generation_handoff.rs | flock wait moved to a bounded worker (sanctioned allow reason) |  |
-| `RS-0839` | `async` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/live_handlers.rs:1614, packages/d2b-broker/src/live_handlers.rs:18` |  |  |
-| `RS-0838` | `async` | `d2b-broker` | medium | policy-confirmed | wide |  |  |  | `packages/d2b-broker/src/runtime.rs:7729, packages/d2b-broker/src/runtime.rs:7654, packages` |  |  |
-| `RS-0843` | `async` | `d2b-process-conformance` | low | actionable | family |  |  |  | `packages/d2b-process-conformance/src/port.rs:99, packages/d2b-process-conformance/src/port` |  |  |
-| `RS-0844` | `async` | `d2b-provider` | medium | actionable | leaf |  |  |  | `packages/d2b-provider/src/agent.rs:316-324` |  |  |
-| `RS-0845` | `async` | `d2b-provider-credential-secret-service` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-credential-secret-service/src/lib.rs:1323, packages/d2b-provider-cre` |  |  |
-| `RS-0846` | `async` | `d2b-provider-device-tpm` | medium | actionable | family |  |  |  | `effects_service.rs:412, effects_service.rs:467, effects_service.rs:518, effects_service.rs` |  |  |
-| `RS-0847` | `async` | `d2b-provider-device-tpm` | low | actionable | leaf |  |  |  | `effects_service.rs:361, effects_service.rs:384, effects_service.rs:698` |  |  |
-| `RS-0848` | `async` | `d2b-provider-network-local` | low | actionable | leaf |  |  |  | `src/observe.rs:255-260` |  |  |
-| `RS-0849` | `async` | `d2b-provider-system-core` | low | actionable | leaf |  |  |  | `src/testing.rs:30, src/testing.rs:19` |  |  |
-| `RS-0850` | `async` | `d2b-provider-transport-azure-relay` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-transport-azure-relay/src/relay_transport.rs:823-833` |  |  |
+| `RS-0839` | `async` | `d2b-broker` | medium | actionable | leaf | applied | W3 | 944012b14 | `packages/d2b-broker/src/live_handlers.rs:1614, packages/d2b-broker/src/live_handlers.rs:18` |  |  |
+| `RS-0838` | `async` | `d2b-broker` | medium | policy-confirmed | wide | policy-confirmed | W3 |  | `packages/d2b-broker/src/runtime.rs:7729, packages/d2b-broker/src/runtime.rs:7654, packages` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0843` | `async` | `d2b-process-conformance` | low | actionable | family | escalated | W3 |  | `packages/d2b-process-conformance/src/port.rs:99, packages/d2b-process-conformance/src/port` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0844` | `async` | `d2b-provider` | medium | actionable | leaf | applied | W3 | 7de088b5d | `packages/d2b-provider/src/agent.rs:316-324` |  |  |
+| `RS-0845` | `async` | `d2b-provider-credential-secret-service` | medium | actionable | leaf | applied | W3 | 868fbdbf8 | `packages/d2b-provider-credential-secret-service/src/lib.rs:1323, packages/d2b-provider-cre` |  |  |
+| `RS-0846` | `async` | `d2b-provider-device-tpm` | medium | actionable | family | escalated | W3 |  | `effects_service.rs:412, effects_service.rs:467, effects_service.rs:518, effects_service.rs` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0847` | `async` | `d2b-provider-device-tpm` | low | actionable | leaf | applied | W3 | 7de088b5d | `effects_service.rs:361, effects_service.rs:384, effects_service.rs:698` |  |  |
+| `RS-0848` | `async` | `d2b-provider-network-local` | low | actionable | leaf | applied | W3 | bacc017aa | `src/observe.rs:255-260` |  |  |
+| `RS-0849` | `async` | `d2b-provider-system-core` | low | actionable | leaf | applied | W3 | e807e4596 | `src/testing.rs:30, src/testing.rs:19` |  |  |
+| `RS-0850` | `async` | `d2b-provider-transport-azure-relay` | medium | actionable | leaf | applied | W3 | 652dc86a7 | `packages/d2b-provider-transport-azure-relay/src/relay_transport.rs:823-833` |  |  |
 | `RS-0851` | `async` | `d2b-provider-user` | high | policy-confirmed | leaf | policy-confirmed | U1 |  | `packages/d2b-provider-user/src/probe.rs:48, packages/d2b-provider-user/src/probe.rs:63, pa` | recorded no-op (KTD8/R14): the deliberate bounded NSS probe is the crate's documented contract - packages/d2b-provider-user/README.md:50-55, src/probe.rs:1-5; audit cluster README.md:2806 |  |
-| `RS-0852` | `async` | `d2b-zone-routing` | medium | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/serving.rs:195, packages/d2b-zone-routing/src/serving.rs:207` |  |  |
-| `RS-0853` | `async` | `d2bd` | medium | actionable | leaf |  |  |  | `packages/d2bd/src/interaction_composition.rs:5518-5530` |  |  |
-| `RS-0854` | `async` | `d2bd` | medium | actionable | leaf |  |  |  | `packages/d2bd/src/shared_provider_effects.rs:316-324, packages/d2bd/src/shared_provider_ef` |  |  |
-| `RS-0855` | `async` | `d2bd-runtime` | low | actionable | family |  |  |  | `packages/d2bd-runtime/src/console_session.rs:33, packages/d2bd-runtime/src/console_session` |  |  |
-| `RS-0858` | `unsafe` | `d2b-broker` | medium | actionable | leaf |  |  |  | `packages/d2b-broker/src/sys.rs:593, packages/d2b-broker/src/sys.rs:615, packages/d2b-broke` |  |  |
-| `RS-0857` | `unsafe` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/src/ops/disk_init.rs:673, packages/d2b-broker/src/ops/disk_init.rs:661` |  |  |
-| `RS-0856` | `unsafe` | `d2b-broker-fixture-syscall-surface` | medium | actionable | leaf |  |  |  | `packages/d2b-broker-fixture-syscall-surface/src/lib.rs:25-32` |  |  |
-| `RS-0859` | `unsafe` | `d2b-host-activation-helper` | medium | actionable | leaf |  |  |  | `packages/d2b-host-activation-helper/src/main.rs:96, packages/d2b-host-activation-helper/sr` |  |  |
-| `RS-0860` | `macro` | `d2b-provider-display-wayland` | low | actionable | leaf |  |  |  | `packages/d2b-provider-display-wayland/src/wayland_proxy/policy.rs:420` |  |  |
-| `RS-0861` | `macro` | `d2b-resource-api` | low | actionable | leaf |  |  |  | `service.rs:2245-2267` |  |  |
-| `RS-0862` | `macro` | `d2b-session` | low | actionable | leaf |  |  |  | `admission.rs:625, admission.rs:641, admission.rs:642, admission.rs:643` |  |  |
-| `RS-0863` | `macro` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/changelog.rs:812, packages/xtask/src/changelog.rs:886, packages/xtask/s` |  |  |
-| `RS-0958` | `test` | `X3-cross-crate-duplication` | medium | actionable | family |  |  |  | `packages/d2b-provider-credential/src/test_support.rs:18, packages/d2b-provider-guest/src/t` |  |  |
-| `RS-0959` | `test` | `X3-cross-crate-duplication` | low | actionable | family |  |  |  | `packages/d2b-provider-quota/Cargo.toml:17, packages/d2b-provider-resource-export/Cargo.tom` |  |  |
-| `RS-0880` | `test` | `d2b` | medium | actionable | leaf |  |  |  | `packages/d2b/src/exec.rs:227-239` |  |  |
-| `RS-0881` | `test` | `d2b` | low | actionable | leaf |  |  |  | `packages/d2b/src/exec.rs:383-397` |  |  |
-| `RS-0866` | `test` | `d2b-broker` | low | actionable | leaf |  |  |  | `packages/d2b-broker/tests/pidfd_handoff_scm_rights.rs:90` |  |  |
-| `RS-0864` | `test` | `d2b-broker-composition` | low | actionable | leaf |  |  |  | `packages/d2b-broker-composition/src/seam.rs:523` |  |  |
-| `RS-0865` | `test` | `d2b-broker-composition` | low | actionable | leaf |  |  |  | `packages/d2b-broker-composition/src/seam.rs:731, packages/d2b-broker-composition/src/seam.` |  |  |
+| `RS-0852` | `async` | `d2b-zone-routing` | medium | actionable | leaf | applied | W3 | 113fdf93d | `packages/d2b-zone-routing/src/serving.rs:195, packages/d2b-zone-routing/src/serving.rs:207` |  |  |
+| `RS-0853` | `async` | `d2bd` | medium | actionable | leaf | declined | W3 | f6b8e60e6 | `packages/d2bd/src/interaction_composition.rs:5518-5530` |  |  |
+| `RS-0854` | `async` | `d2bd` | medium | actionable | leaf | declined | W3 | f6b8e60e6 | `packages/d2bd/src/shared_provider_effects.rs:316-324, packages/d2bd/src/shared_provider_ef` |  |  |
+| `RS-0855` | `async` | `d2bd-runtime` | low | actionable | family | escalated | W3 |  | `packages/d2bd-runtime/src/console_session.rs:33, packages/d2bd-runtime/src/console_session` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0858` | `unsafe` | `d2b-broker` | medium | actionable | leaf | applied | W3 | 406f13d98 | `packages/d2b-broker/src/sys.rs:593, packages/d2b-broker/src/sys.rs:615, packages/d2b-broke` |  |  |
+| `RS-0857` | `unsafe` | `d2b-broker` | low | actionable | leaf | skipped-stale | W3 | 406f13d98 | `packages/d2b-broker/src/ops/disk_init.rs:673, packages/d2b-broker/src/ops/disk_init.rs:661` |  |  |
+| `RS-0856` | `unsafe` | `d2b-broker-fixture-syscall-surface` | medium | actionable | leaf | applied | W3 | 3886cfd7b | `packages/d2b-broker-fixture-syscall-surface/src/lib.rs:25-32` |  |  |
+| `RS-0859` | `unsafe` | `d2b-host-activation-helper` | medium | actionable | leaf | applied | W3 | 3f4a63bc8 | `packages/d2b-host-activation-helper/src/main.rs:96, packages/d2b-host-activation-helper/sr` |  |  |
+| `RS-0860` | `macro` | `d2b-provider-display-wayland` | low | actionable | leaf | applied | W3 | a34843f8e | `packages/d2b-provider-display-wayland/src/wayland_proxy/policy.rs:420` |  |  |
+| `RS-0861` | `macro` | `d2b-resource-api` | low | actionable | leaf | applied-variant | W3 | 81b2ef867 | `service.rs:2245-2267` |  |  |
+| `RS-0862` | `macro` | `d2b-session` | low | actionable | leaf | applied | W3 | d38e32fc6 | `admission.rs:625, admission.rs:641, admission.rs:642, admission.rs:643` |  |  |
+| `RS-0863` | `macro` | `xtask` | low | actionable | leaf | applied-variant | W3 | 4d6f66bbb | `packages/xtask/src/changelog.rs:812, packages/xtask/src/changelog.rs:886, packages/xtask/s` |  |  |
+| `RS-0958` | `test` | `X3-cross-crate-duplication` | medium | actionable | family | escalated | W3 |  | `packages/d2b-provider-credential/src/test_support.rs:18, packages/d2b-provider-guest/src/t` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0959` | `test` | `X3-cross-crate-duplication` | low | actionable | family | escalated | W3 |  | `packages/d2b-provider-quota/Cargo.toml:17, packages/d2b-provider-resource-export/Cargo.tom` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0880` | `test` | `d2b` | medium | actionable | leaf | applied | W3 | 44cb49a0d | `packages/d2b/src/exec.rs:227-239` |  |  |
+| `RS-0881` | `test` | `d2b` | low | actionable | leaf | applied | W3 | 44cb49a0d | `packages/d2b/src/exec.rs:383-397` |  |  |
+| `RS-0866` | `test` | `d2b-broker` | low | actionable | leaf | applied | W3 | b80491dde | `packages/d2b-broker/tests/pidfd_handoff_scm_rights.rs:90` |  |  |
+| `RS-0864` | `test` | `d2b-broker-composition` | low | actionable | leaf | applied | W3 | fbcf5d1f5 | `packages/d2b-broker-composition/src/seam.rs:523` |  |  |
+| `RS-0865` | `test` | `d2b-broker-composition` | low | actionable | leaf | applied | W3 | fbcf5d1f5 | `packages/d2b-broker-composition/src/seam.rs:731, packages/d2b-broker-composition/src/seam.` |  |  |
 | `RS-0867` | `test` | `d2b-bus` | high | actionable | leaf | applied | U1 | 01e8edab3 | packages/d2b-bus/src/metrics.rs | test now drives BusMetrics::emit over every closed label domain; mutation-verified |  |
-| `RS-0868` | `test` | `d2b-bus` | medium | actionable | leaf |  |  |  | `packages/d2b-bus/src/session_seam_tests.rs:1623-1625, packages/d2b-bus/src/session_seam_te` |  |  |
-| `RS-0869` | `test` | `d2b-bus` | low | actionable | leaf |  |  |  | `packages/d2b-bus/src/operations.rs:1057-1060` |  |  |
-| `RS-0870` | `test` | `d2b-contracts-control` | medium | actionable | leaf |  |  |  | `public_wire.rs:167, public_wire.rs:175` |  |  |
-| `RS-0871` | `test` | `d2b-contracts-provider` | medium | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/credential/service.rs:1071, packages/d2b-contracts-` |  |  |
-| `RS-0872` | `test` | `d2b-contracts-provider` | medium | actionable | leaf |  |  |  | `packages/d2b-contracts-provider/src/v3/credential_controller.rs:691, packages/d2b-contract` |  |  |
-| `RS-0873` | `test` | `d2b-contracts-zone-session` | medium | actionable | leaf |  |  |  | `src/v3/component_session.rs:2445, src/v3/component_session.rs:1829, src/v3/component_sessi` |  |  |
-| `RS-0874` | `test` | `d2b-contracts-zone-session` | medium | actionable | leaf |  |  |  | `emergency_policy.rs:236, emergency_policy.rs:112` |  |  |
-| `RS-0877` | `test` | `d2b-core` | low | actionable | leaf |  |  |  | `packages/d2b-core/tests/bundle_resolver_tamper.rs:149` |  |  |
-| `RS-0875` | `test` | `d2b-core-controller` | medium | actionable | leaf |  |  |  | `authority.rs:1824, authority.rs:1968, authority.rs:1899` |  |  |
-| `RS-0876` | `test` | `d2b-core-controller` | medium | actionable | leaf |  |  |  | `authority_persistence.rs:246-320` |  |  |
-| `RS-0878` | `test` | `d2b-host` | medium | actionable | family |  |  |  | `packages/d2b-host/src/nftables.rs:245` |  |  |
-| `RS-0879` | `test` | `d2b-host` | low | actionable | leaf |  |  |  | `packages/d2b-host/src/bin/d2b-activation-helper.rs:792` |  |  |
-| `RS-0882` | `test` | `d2b-provider-activation-nixos` | low | actionable | leaf |  |  |  | `packages/d2b-provider-activation-nixos/tests/reconcile.rs:439, packages/d2b-provider-activ` |  |  |
-| `RS-0883` | `test` | `d2b-provider-audio-pipewire` | low | actionable | leaf |  |  |  | `tests/authority.rs:26-31, src/authority.rs:236-241` |  |  |
-| `RS-0884` | `test` | `d2b-provider-audio-pipewire` | low | actionable | leaf |  |  |  | `tests/mediator.rs:13-24` |  |  |
-| `RS-0885` | `test` | `d2b-provider-clipboard-wayland` | medium | actionable | leaf |  |  |  | `src/bin/d2b-clipd.rs:4021, src/bin/d2b-clipd.rs:3787` |  |  |
-| `RS-0886` | `test` | `d2b-provider-clipboard-wayland` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-clipboard-wayland/src/history.rs:150-172, packages/d2b-provider-clip` |  |  |
-| `RS-0887` | `test` | `d2b-provider-clipboard-wayland` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-clipboard-wayland/src/controller/mod.rs:85-141, packages/d2b-provide` |  |  |
-| `RS-0888` | `test` | `d2b-provider-clipboard-wayland` | low | actionable | leaf |  |  |  | `packages/d2b-provider-clipboard-wayland/src/clipd_host/fallback.rs:78-83, packages/d2b-pro` |  |  |
-| `RS-0889` | `test` | `d2b-provider-config-nixos` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-config-nixos/src/service.rs:70-90, packages/d2b-provider-config-nixo` |  |  |
-| `RS-0890` | `test` | `d2b-provider-config-nixos` | low | actionable | leaf |  |  |  | `packages/d2b-provider-config-nixos/src/service.rs:20-21, packages/d2b-provider-config-nixo` |  |  |
-| `RS-0891` | `test` | `d2b-provider-credential-entra` | low | actionable | leaf |  |  |  | `packages/d2b-provider-credential-entra/src/lib.rs:1361, packages/d2b-provider-credential-e` |  |  |
-| `RS-0892` | `test` | `d2b-provider-credential-managed-identity` | low | actionable | leaf |  |  |  | `tests/conformance.rs:77-82, tests/topology.rs:33-38, tests/topology.rs:68-76` |  |  |
-| `RS-0893` | `test` | `d2b-provider-credential-secret-service` | low | actionable | leaf |  |  |  | `packages/d2b-provider-credential-secret-service/tests/faults.rs:25, packages/d2b-provider-` |  |  |
-| `RS-0894` | `test` | `d2b-provider-device-gpu` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/src/authority.rs:168, packages/d2b-provider-device-gpu/te` |  |  |
-| `RS-0896` | `test` | `d2b-provider-device-usbip` | medium | actionable | leaf |  |  |  | `tests/arbitration_conflict.rs:8-19, src/arbitration.rs:81-84, src/arbitration.rs:113-115, ` |  |  |
-| `RS-0897` | `test` | `d2b-provider-device-usbip` | medium | actionable | leaf |  |  |  | `src/reconcile_state.rs:51-308, src/state_machine.rs:98-100` |  |  |
-| `RS-0895` | `test` | `d2b-provider-device-usbip` | low | actionable | leaf |  |  |  | `tests/conformance.rs:63-66` |  |  |
+| `RS-0868` | `test` | `d2b-bus` | medium | actionable | leaf | applied | W3 | 5f1fcd6f1 | `packages/d2b-bus/src/session_seam_tests.rs:1623-1625, packages/d2b-bus/src/session_seam_te` |  |  |
+| `RS-0869` | `test` | `d2b-bus` | low | actionable | leaf | applied | W3 | 5f1fcd6f1 | `packages/d2b-bus/src/operations.rs:1057-1060` |  |  |
+| `RS-0870` | `test` | `d2b-contracts-control` | medium | actionable | leaf | applied | W3 | 1ff8e6a8c | `public_wire.rs:167, public_wire.rs:175` |  |  |
+| `RS-0871` | `test` | `d2b-contracts-provider` | medium | actionable | leaf | applied | W3 | 3b2c1416b | `packages/d2b-contracts-provider/src/v3/credential/service.rs:1071, packages/d2b-contracts-` |  |  |
+| `RS-0872` | `test` | `d2b-contracts-provider` | medium | actionable | leaf | applied | W3 | 3b2c1416b | `packages/d2b-contracts-provider/src/v3/credential_controller.rs:691, packages/d2b-contract` |  |  |
+| `RS-0873` | `test` | `d2b-contracts-zone-session` | medium | actionable | leaf | applied | W3 | 5966950aa | `src/v3/component_session.rs:2445, src/v3/component_session.rs:1829, src/v3/component_sessi` |  |  |
+| `RS-0874` | `test` | `d2b-contracts-zone-session` | medium | actionable | leaf | applied | W3 | 5966950aa | `emergency_policy.rs:236, emergency_policy.rs:112` |  |  |
+| `RS-0877` | `test` | `d2b-core` | low | actionable | leaf | applied | W3 | 26538ea75 | `packages/d2b-core/tests/bundle_resolver_tamper.rs:149` |  |  |
+| `RS-0875` | `test` | `d2b-core-controller` | medium | actionable | leaf | applied | W3 | 716eaef89 | `authority.rs:1824, authority.rs:1968, authority.rs:1899` |  |  |
+| `RS-0876` | `test` | `d2b-core-controller` | medium | actionable | leaf | applied | W3 | 716eaef89 | `authority_persistence.rs:246-320` |  |  |
+| `RS-0878` | `test` | `d2b-host` | medium | actionable | family | escalated | W3 |  | `packages/d2b-host/src/nftables.rs:245` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0879` | `test` | `d2b-host` | low | actionable | leaf | applied | W3 | 1abe4f9b3 | `packages/d2b-host/src/bin/d2b-activation-helper.rs:792` |  |  |
+| `RS-0882` | `test` | `d2b-provider-activation-nixos` | low | actionable | leaf | applied | W3 | 563820766 | `packages/d2b-provider-activation-nixos/tests/reconcile.rs:439, packages/d2b-provider-activ` |  |  |
+| `RS-0883` | `test` | `d2b-provider-audio-pipewire` | low | actionable | leaf | applied | W3 | a4dd46ddc | `tests/authority.rs:26-31, src/authority.rs:236-241` |  |  |
+| `RS-0884` | `test` | `d2b-provider-audio-pipewire` | low | actionable | leaf | applied | W3 | a4dd46ddc | `tests/mediator.rs:13-24` |  |  |
+| `RS-0885` | `test` | `d2b-provider-clipboard-wayland` | medium | actionable | leaf | applied | W3 | d5ab66ec5 | `src/bin/d2b-clipd.rs:4021, src/bin/d2b-clipd.rs:3787` |  |  |
+| `RS-0886` | `test` | `d2b-provider-clipboard-wayland` | medium | actionable | leaf | applied | W3 | d5ab66ec5 | `packages/d2b-provider-clipboard-wayland/src/history.rs:150-172, packages/d2b-provider-clip` |  |  |
+| `RS-0887` | `test` | `d2b-provider-clipboard-wayland` | medium | actionable | leaf | applied-variant | W3 | d5ab66ec5 | `packages/d2b-provider-clipboard-wayland/src/controller/mod.rs:85-141, packages/d2b-provide` |  |  |
+| `RS-0888` | `test` | `d2b-provider-clipboard-wayland` | low | actionable | leaf | applied | W3 | d5ab66ec5 | `packages/d2b-provider-clipboard-wayland/src/clipd_host/fallback.rs:78-83, packages/d2b-pro` |  |  |
+| `RS-0889` | `test` | `d2b-provider-config-nixos` | medium | actionable | leaf | applied | W3 | 1da992306 | `packages/d2b-provider-config-nixos/src/service.rs:70-90, packages/d2b-provider-config-nixo` |  |  |
+| `RS-0890` | `test` | `d2b-provider-config-nixos` | low | actionable | leaf | applied | W3 | 1da992306 | `packages/d2b-provider-config-nixos/src/service.rs:20-21, packages/d2b-provider-config-nixo` |  |  |
+| `RS-0891` | `test` | `d2b-provider-credential-entra` | low | actionable | leaf | applied | W3 | 563820766 | `packages/d2b-provider-credential-entra/src/lib.rs:1361, packages/d2b-provider-credential-e` |  |  |
+| `RS-0892` | `test` | `d2b-provider-credential-managed-identity` | low | actionable | leaf | applied | W3 | a4dd46ddc | `tests/conformance.rs:77-82, tests/topology.rs:33-38, tests/topology.rs:68-76` |  |  |
+| `RS-0893` | `test` | `d2b-provider-credential-secret-service` | low | actionable | leaf | already-fixed | W3 | 868fbdbf8 | `packages/d2b-provider-credential-secret-service/tests/faults.rs:25, packages/d2b-provider-` |  |  |
+| `RS-0894` | `test` | `d2b-provider-device-gpu` | medium | actionable | leaf | applied | W3 | 563820766 | `packages/d2b-provider-device-gpu/src/authority.rs:168, packages/d2b-provider-device-gpu/te` |  |  |
+| `RS-0896` | `test` | `d2b-provider-device-usbip` | medium | actionable | leaf | applied | W3 | b373f7624 | `tests/arbitration_conflict.rs:8-19, src/arbitration.rs:81-84, src/arbitration.rs:113-115, ` |  |  |
+| `RS-0897` | `test` | `d2b-provider-device-usbip` | medium | actionable | leaf | applied | W3 | b373f7624 | `src/reconcile_state.rs:51-308, src/state_machine.rs:98-100` |  |  |
+| `RS-0895` | `test` | `d2b-provider-device-usbip` | low | actionable | leaf | applied | W3 | b373f7624 | `tests/conformance.rs:63-66` |  |  |
 | `RS-0898` | `test` | `d2b-provider-display-wayland` | high | actionable | leaf | applied | U1 | 3b964169f | packages/d2b-provider-display-wayland/src/wayland_proxy/filter.rs | registry-handler tests assert advertised-global outcomes; mutation-verified |  |
-| `RS-0900` | `test` | `d2b-provider-guest-azure-container-apps` | medium | actionable | leaf |  |  |  | `src/controller.rs:264-266, tests/provider_lifecycle.rs:210-225` |  |  |
-| `RS-0899` | `test` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf |  |  |  | `tests/provider_lifecycle.rs:536` |  |  |
-| `RS-0901` | `test` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf |  |  |  | `tests/error_redaction.rs:17` |  |  |
-| `RS-0902` | `test` | `d2b-provider-guest-cloud-hypervisor` | medium | actionable | leaf |  |  |  | `finalize_ordering_test.rs:286` |  |  |
-| `RS-0903` | `test` | `d2b-provider-guest-qemu-media` | low | actionable | leaf |  |  |  | `packages/d2b-provider-guest-qemu-media/tests/lifecycle.rs:132, packages/d2b-provider-guest` |  |  |
-| `RS-0904` | `test` | `d2b-provider-observability-otel` | medium | actionable | leaf |  |  |  | `metric_policy.rs:145, metric_policy.rs:150` |  |  |
-| `RS-0905` | `test` | `d2b-provider-provider` | medium | actionable | leaf |  |  |  | `src/providers.rs:206, src/driver.rs:1147` |  |  |
-| `RS-0906` | `test` | `d2b-provider-shell-terminal` | low | actionable | leaf |  |  |  | `tests/supervisor_runtime.rs:17, tests/supervisor_runtime.rs:81, tests/supervisor_runtime.r` |  |  |
-| `RS-0907` | `test` | `d2b-provider-supervisor` | low | policy-confirmed | leaf |  |  |  | `packages/d2b-provider-supervisor/src/broker.rs:2040-2043` |  |  |
-| `RS-0908` | `test` | `d2b-provider-system-core` | low | actionable | leaf |  |  |  | `tests/host_reconciliation.rs:204, tests/host_reconciliation.rs:230` |  |  |
-| `RS-0909` | `test` | `d2b-provider-transport-vsock` | low | actionable | leaf |  |  |  | `packages/d2b-provider-transport-vsock/tests/observe.rs:14-15` |  |  |
-| `RS-0910` | `test` | `d2b-provider-user` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-user/src/driver.rs:789-848, packages/d2b-provider-user/src/driver.rs` |  |  |
-| `RS-0911` | `test` | `d2b-provider-wayland-policy` | low | actionable | leaf |  |  |  | `packages/d2b-provider-wayland-policy/tests/registration.rs:93` |  |  |
-| `RS-0912` | `test` | `d2b-provider-zone-link` | low | actionable | leaf |  |  |  | `packages/d2b-provider-zone-link/src/zone_links.rs:2519, packages/d2b-provider-zone-link/sr` |  |  |
-| `RS-0914` | `test` | `d2b-resource-api` | medium | actionable | leaf |  |  |  | `packages/d2b-resource-api/src/manager_backend/tests.rs:1459, packages/d2b-resource-api/src` |  |  |
-| `RS-0913` | `test` | `d2b-resource-api` | low | actionable | leaf |  |  |  | `service.rs:3377` |  |  |
-| `RS-0915` | `test` | `d2b-resource-client` | low | actionable | leaf |  |  |  | `packages/d2b-resource-client/src/process_attach.rs:515, packages/d2b-resource-client/src/p` |  |  |
+| `RS-0900` | `test` | `d2b-provider-guest-azure-container-apps` | medium | actionable | leaf | applied | W3 | 52f5ef660 | `src/controller.rs:264-266, tests/provider_lifecycle.rs:210-225` |  |  |
+| `RS-0899` | `test` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf | applied | W3 | 52f5ef660 | `tests/provider_lifecycle.rs:536` |  |  |
+| `RS-0901` | `test` | `d2b-provider-guest-azure-virtual-machine` | low | actionable | leaf | applied | W3 | 563820766 | `tests/error_redaction.rs:17` |  |  |
+| `RS-0902` | `test` | `d2b-provider-guest-cloud-hypervisor` | medium | actionable | leaf | already-fixed | W3 | 513edf50c | `finalize_ordering_test.rs:286` |  |  |
+| `RS-0903` | `test` | `d2b-provider-guest-qemu-media` | low | actionable | leaf | applied | W3 | e4cbd3054 | `packages/d2b-provider-guest-qemu-media/tests/lifecycle.rs:132, packages/d2b-provider-guest` |  |  |
+| `RS-0904` | `test` | `d2b-provider-observability-otel` | medium | actionable | leaf | applied | W3 | 1200b480d | `metric_policy.rs:145, metric_policy.rs:150` |  |  |
+| `RS-0905` | `test` | `d2b-provider-provider` | medium | actionable | leaf | applied | W3 | 55b7d20a6 | `src/providers.rs:206, src/driver.rs:1147` |  |  |
+| `RS-0906` | `test` | `d2b-provider-shell-terminal` | low | actionable | leaf | applied-variant | W3 | 55b7d20a6 | `tests/supervisor_runtime.rs:17, tests/supervisor_runtime.rs:81, tests/supervisor_runtime.r` |  |  |
+| `RS-0907` | `test` | `d2b-provider-supervisor` | low | policy-confirmed | leaf | policy-confirmed | W3 |  | `packages/d2b-provider-supervisor/src/broker.rs:2040-2043` | deferred: policy-confirmed - recorded policy (clippy.toml disallowed-methods / blocking-census sanctioned sites, bounded-worker contracts); needs policy/ADR change first (KTD3) |  |
+| `RS-0908` | `test` | `d2b-provider-system-core` | low | actionable | leaf | applied | W3 | e807e4596 | `tests/host_reconciliation.rs:204, tests/host_reconciliation.rs:230` |  |  |
+| `RS-0909` | `test` | `d2b-provider-transport-vsock` | low | actionable | leaf | applied | W3 | 55b7d20a6 | `packages/d2b-provider-transport-vsock/tests/observe.rs:14-15` |  |  |
+| `RS-0910` | `test` | `d2b-provider-user` | medium | actionable | leaf | applied | W3 | 928b982ce | `packages/d2b-provider-user/src/driver.rs:789-848, packages/d2b-provider-user/src/driver.rs` |  |  |
+| `RS-0911` | `test` | `d2b-provider-wayland-policy` | low | actionable | leaf | applied | W3 | 55b7d20a6 | `packages/d2b-provider-wayland-policy/tests/registration.rs:93` |  |  |
+| `RS-0912` | `test` | `d2b-provider-zone-link` | low | actionable | leaf | applied | W3 | 55b7d20a6 | `packages/d2b-provider-zone-link/src/zone_links.rs:2519, packages/d2b-provider-zone-link/sr` |  |  |
+| `RS-0914` | `test` | `d2b-resource-api` | medium | actionable | leaf | applied | W3 | 81b2ef867 | `packages/d2b-resource-api/src/manager_backend/tests.rs:1459, packages/d2b-resource-api/src` |  |  |
+| `RS-0913` | `test` | `d2b-resource-api` | low | actionable | leaf | applied | W3 | 81b2ef867 | `service.rs:3377` |  |  |
+| `RS-0915` | `test` | `d2b-resource-client` | low | actionable | leaf | applied | W3 | 5a334adb2 | `packages/d2b-resource-client/src/process_attach.rs:515, packages/d2b-resource-client/src/p` |  |  |
 | `RS-0916` | `test` | `d2b-resource-runtime` | high | actionable | leaf | applied-variant | U1 | 8b191fe39 | packages/d2b-resource-runtime/src/revision.rs (display test) | claim corrected: the committed line was a tautological bare-epoch assertion (not an assertion that cannot pass); the audit's quoted literal is a tool-output redaction artifact, absent from the file and from git history; the row's own fix text applied by deleting the redundant assertion |  |
-| `RS-0917` | `test` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/revision.rs:182` |  |  |
-| `RS-0918` | `test` | `d2b-resource-runtime` | low | actionable | leaf |  |  |  | `packages/d2b-resource-runtime/src/lib.rs:66` |  |  |
-| `RS-0919` | `test` | `d2b-session` | low | actionable | leaf |  |  |  | `tests/admission.rs:78, tests/admission.rs:96, tests/admission.rs:139` |  |  |
-| `RS-0920` | `test` | `d2b-sk-frontend` | medium | actionable | leaf |  |  |  | `packages/d2b-sk-frontend/src/uhid.rs:175, packages/d2b-sk-frontend/src/uhid.rs:186` |  |  |
-| `RS-0921` | `test` | `d2b-telemetry` | low | actionable | leaf |  |  |  | `packages/d2b-telemetry/src/meter_registry.rs:176-180` |  |  |
-| `RS-0922` | `test` | `d2b-unsafe-local-helper` | low | actionable | leaf |  |  |  | `packages/d2b-unsafe-local-helper/src/runtime.rs:1566-1576, packages/d2b-unsafe-local-helpe` |  |  |
-| `RS-0923` | `test` | `d2b-zone-routing` | low | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/engine.rs:3333` |  |  |
-| `RS-0924` | `test` | `d2b-zone-routing` | low | actionable | leaf |  |  |  | `packages/d2b-zone-routing/src/router.rs:517` |  |  |
+| `RS-0917` | `test` | `d2b-resource-runtime` | low | actionable | leaf | applied | W3 | a8b710719 | `packages/d2b-resource-runtime/src/revision.rs:182` |  |  |
+| `RS-0918` | `test` | `d2b-resource-runtime` | low | actionable | leaf | applied | W3 | a8b710719 | `packages/d2b-resource-runtime/src/lib.rs:66` |  |  |
+| `RS-0919` | `test` | `d2b-session` | low | actionable | leaf | applied | W3 | d38e32fc6 | `tests/admission.rs:78, tests/admission.rs:96, tests/admission.rs:139` |  |  |
+| `RS-0920` | `test` | `d2b-sk-frontend` | medium | actionable | leaf | applied | W3 | a094121e5 | `packages/d2b-sk-frontend/src/uhid.rs:175, packages/d2b-sk-frontend/src/uhid.rs:186` |  |  |
+| `RS-0921` | `test` | `d2b-telemetry` | low | actionable | leaf | applied | W3 | c6480efc | `packages/d2b-telemetry/src/meter_registry.rs:176-180` |  |  |
+| `RS-0922` | `test` | `d2b-unsafe-local-helper` | low | actionable | leaf | applied | W3 | 840c1edbe | `packages/d2b-unsafe-local-helper/src/runtime.rs:1566-1576, packages/d2b-unsafe-local-helpe` |  |  |
+| `RS-0923` | `test` | `d2b-zone-routing` | low | actionable | leaf | applied | W3 | 113fdf93d | `packages/d2b-zone-routing/src/engine.rs:3333` |  |  |
+| `RS-0924` | `test` | `d2b-zone-routing` | low | actionable | leaf | applied | W3 | 113fdf93d | `packages/d2b-zone-routing/src/router.rs:517` |  |  |
 | `RS-0925` | `test` | `d2bd-runtime` | high | actionable | leaf | applied | U1 | bea8fa96d | packages/d2bd-runtime/src/runtime_process.rs | sd_notify tests assert observable tracing outcomes; two mutations verified |  |
-| `RS-0926` | `test` | `d2bd-runtime` | low | actionable | leaf |  |  |  | `packages/d2bd-runtime/src/daemon_audit.rs:2367` |  |  |
-| `RS-0928` | `test` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/delivery/command.rs:1059, packages/xtask/src/delivery/command.rs:1079` |  |  |
-| `RS-0927` | `test` | `xtask` | low | actionable | leaf |  |  |  | `packages/xtask/src/gen_layer_catalogs.rs:705` |  |  |
-| `RS-0933` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `packages/d2b-session/Cargo.toml:17, packages/d2b-session/BUILD.bazel:28` |  |  |
-| `RS-0934` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `packages/d2b-session/Cargo.toml:19, packages/d2b-session/BUILD.bazel:31` |  |  |
-| `RS-0935` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `packages/d2b-session/Cargo.toml:44` |  |  |
-| `RS-0936` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `packages/d2b-telemetry/Cargo.toml:14` |  |  |
-| `RS-0937` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-quota/Cargo.toml:24` |  |  |
-| `RS-0938` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `packages/d2b-bus/Cargo.toml:41` |  |  |
-| `RS-0939` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `dependencies` |  |  |
-| `RS-0940` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `dependencies` |  |  |
-| `RS-0941` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `dependencies` |  |  |
-| `RS-0942` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/Cargo.toml:20` |  |  |
-| `RS-0943` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/Cargo.toml:25, packages/d2b-provider-device-gpu/BUILD.baz` |  |  |
-| `RS-0944` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `packages/d2b/Cargo.toml:23, packages/d2b/BUILD.bazel:55` |  |  |
-| `RS-0946` | `supply` | `X1-supply-chain` | medium | actionable | wide |  |  |  | `deny.toml:2, packages/d2b-broker/Cargo.toml:53, packages/d2bd-runtime/Cargo.toml:33` |  |  |
-| `RS-0947` | `supply` | `X1-supply-chain` | medium | actionable | wide |  |  |  | `Cargo.toml:202, deny.toml:2` |  |  |
-| `RS-0948` | `supply` | `X1-supply-chain` | medium | actionable | leaf |  |  |  | `packages/d2b-provider-transport-azure-relay/Cargo.toml:34, packages/d2b-provider-transport` |  |  |
-| `RS-0950` | `supply` | `X1-supply-chain` | medium | actionable | wide |  |  |  | `packages/Cargo.guest.lock:1, flake.nix:389` |  |  |
-| `RS-0945` | `supply` | `X1-supply-chain` | low | actionable | wide |  |  |  | `Cargo.toml:184-229, packages/d2b-broker/Cargo.toml:60, packages/d2b-broker/Cargo.toml:63, ` |  |  |
-| `RS-0949` | `supply` | `X1-supply-chain` | low | actionable | wide |  |  |  | `deny.toml:2` |  |  |
-| `RS-0951` | `supply` | `X1-supply-chain` | low | actionable | wide |  |  |  | `deny.toml:21` |  |  |
-| `RS-0929` | `supply` | `d2b-provider-audio-pipewire` | low | actionable | leaf |  |  |  | `Cargo.toml:24, Cargo.toml:25` |  |  |
-| `RS-0930` | `supply` | `d2b-provider-device-gpu` | low | actionable | leaf |  |  |  | `packages/d2b-provider-device-gpu/Cargo.toml:20, packages/d2b-provider-device-gpu/Cargo.tom` |  |  |
-| `RS-0931` | `supply` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf |  |  |  | `Cargo.toml:21` |  |  |
-| `RS-0932` | `supply` | `d2b-provider-quota` | low | actionable | leaf |  |  |  | `dependencies` |  |  |
+| `RS-0926` | `test` | `d2bd-runtime` | low | actionable | leaf | applied | W3 | a9a44bfdd | `packages/d2bd-runtime/src/daemon_audit.rs:2367` |  |  |
+| `RS-0928` | `test` | `xtask` | low | actionable | leaf | applied | W3 | 4d6f66bbb | `packages/xtask/src/delivery/command.rs:1059, packages/xtask/src/delivery/command.rs:1079` |  |  |
+| `RS-0927` | `test` | `xtask` | low | actionable | leaf | applied | W3 | 4d6f66bbb | `packages/xtask/src/gen_layer_catalogs.rs:705` |  |  |
+| `RS-0933` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | 0b5f937fe | `packages/d2b-session/Cargo.toml:17, packages/d2b-session/BUILD.bazel:28` |  |  |
+| `RS-0934` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | 0b5f937fe | `packages/d2b-session/Cargo.toml:19, packages/d2b-session/BUILD.bazel:31` |  |  |
+| `RS-0935` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | 0b5f937fe | `packages/d2b-session/Cargo.toml:44` |  |  |
+| `RS-0936` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | aacd4defb | `packages/d2b-telemetry/Cargo.toml:14` |  |  |
+| `RS-0937` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | 9c20c2cdf | `packages/d2b-provider-quota/Cargo.toml:24` |  |  |
+| `RS-0938` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | aacd4defb | `packages/d2b-bus/Cargo.toml:41` |  |  |
+| `RS-0939` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | 1e9b43ee6 | `dependencies` |  |  |
+| `RS-0940` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | 1e9b43ee6 | `dependencies` |  |  |
+| `RS-0941` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | 1e9b43ee6 | `dependencies` |  |  |
+| `RS-0942` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | 9c20c2cdf | `packages/d2b-provider-device-gpu/Cargo.toml:20` |  |  |
+| `RS-0943` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | 9c20c2cdf | `packages/d2b-provider-device-gpu/Cargo.toml:25, packages/d2b-provider-device-gpu/BUILD.baz` |  |  |
+| `RS-0944` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | aacd4defb | `packages/d2b/Cargo.toml:23, packages/d2b/BUILD.bazel:55` |  |  |
+| `RS-0946` | `supply` | `X1-supply-chain` | medium | actionable | wide | escalated | W3 |  | `deny.toml:2, packages/d2b-broker/Cargo.toml:53, packages/d2bd-runtime/Cargo.toml:33` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0947` | `supply` | `X1-supply-chain` | medium | actionable | wide | escalated | W3 |  | `Cargo.toml:202, deny.toml:2` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0948` | `supply` | `X1-supply-chain` | medium | actionable | leaf | applied | W3 | 9c20c2cdf | `packages/d2b-provider-transport-azure-relay/Cargo.toml:34, packages/d2b-provider-transport` |  |  |
+| `RS-0950` | `supply` | `X1-supply-chain` | medium | actionable | wide | escalated | W3 |  | `packages/Cargo.guest.lock:1, flake.nix:389` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0945` | `supply` | `X1-supply-chain` | low | actionable | wide | escalated | W3 |  | `Cargo.toml:184-229, packages/d2b-broker/Cargo.toml:60, packages/d2b-broker/Cargo.toml:63, ` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0949` | `supply` | `X1-supply-chain` | low | actionable | wide | escalated | W3 |  | `deny.toml:2` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0951` | `supply` | `X1-supply-chain` | low | actionable | wide | escalated | W3 |  | `deny.toml:21` | deferred to waves 4-5: blast radius exceeds leaf (README.md remediation section 6 orders leaf first, family next, wide last) |  |
+| `RS-0929` | `supply` | `d2b-provider-audio-pipewire` | low | actionable | leaf | applied | W3 | 9c20c2cdf | `Cargo.toml:24, Cargo.toml:25` |  |  |
+| `RS-0930` | `supply` | `d2b-provider-device-gpu` | low | actionable | leaf | applied | W3 | 9c20c2cdf | `packages/d2b-provider-device-gpu/Cargo.toml:20, packages/d2b-provider-device-gpu/Cargo.tom` |  |  |
+| `RS-0931` | `supply` | `d2b-provider-guest-azure-container-apps` | low | actionable | leaf | applied | W3 | 9c20c2cdf | `Cargo.toml:21` |  |  |
+| `RS-0932` | `supply` | `d2b-provider-quota` | low | actionable | leaf | applied | W3 | 9c20c2cdf | `dependencies` |  |  |

@@ -9,27 +9,27 @@ fn controller() -> ShellTerminalController {
     ShellTerminalController::new(Arc::new(InMemoryShellAuthority::new()))
 }
 
+fn pool(name: &str, max_sessions: u32, max_attached: u32) -> ShellPool {
+    ShellPool::new(
+        name,
+        "dev",
+        PoolSpec::new(
+            ExecutionTarget::guest("work"),
+            "alice",
+            "artifact://shells/bash-login",
+            max_sessions,
+            max_attached,
+            4096,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
 #[test]
 fn supervisor_rejects_stale_generation_and_reused_capability() {
     let mut controller = controller();
-    controller
-        .insert_pool(
-            ShellPool::new(
-                "guest-alice",
-                "dev",
-                PoolSpec::new(
-                    ExecutionTarget::guest("work"),
-                    "alice",
-                    "artifact://shells/bash-login",
-                    1,
-                    1,
-                    4096,
-                )
-                .unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    controller.insert_pool(pool("guest-alice", 1, 1)).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ShellAdmin]);
     let opened = controller
         .open_session(
@@ -76,24 +76,7 @@ fn supervisor_rejects_stale_generation_and_reused_capability() {
 #[test]
 fn detach_releases_the_bounded_attachment_slot() {
     let mut controller = controller();
-    controller
-        .insert_pool(
-            ShellPool::new(
-                "guest-alice",
-                "dev",
-                PoolSpec::new(
-                    ExecutionTarget::guest("work"),
-                    "alice",
-                    "artifact://shells/bash-login",
-                    1,
-                    1,
-                    4096,
-                )
-                .unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    controller.insert_pool(pool("guest-alice", 1, 1)).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ShellAdmin]);
     let opened = controller
         .open_session(
@@ -137,24 +120,7 @@ fn detach_releases_the_bounded_attachment_slot() {
 fn capability_cannot_attach_a_different_session() {
     let mut controller = controller();
     for (name, session) in [("guest-alice", "main"), ("guest-bob", "other")] {
-        controller
-            .insert_pool(
-                ShellPool::new(
-                    name,
-                    "dev",
-                    PoolSpec::new(
-                        ExecutionTarget::guest("work"),
-                        "alice",
-                        "artifact://shells/bash-login",
-                        1,
-                        1,
-                        4096,
-                    )
-                    .unwrap(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
+        controller.insert_pool(pool(name, 1, 1)).unwrap();
         assert!(
             OpenSessionRequest::new(name, session, None).is_ok(),
             "fixture request must be valid"
@@ -188,24 +154,7 @@ fn capability_cannot_attach_a_different_session() {
 #[test]
 fn attachments_share_the_pool_limit_across_sessions() {
     let mut controller = controller();
-    controller
-        .insert_pool(
-            ShellPool::new(
-                "guest-alice",
-                "dev",
-                PoolSpec::new(
-                    ExecutionTarget::guest("work"),
-                    "alice",
-                    "artifact://shells/bash-login",
-                    2,
-                    1,
-                    4096,
-                )
-                .unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    controller.insert_pool(pool("guest-alice", 2, 1)).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ShellAdmin]);
     let first = controller
         .open_session(
@@ -250,24 +199,7 @@ fn attachments_share_the_pool_limit_across_sessions() {
 #[test]
 fn attachment_cannot_be_detached_by_a_different_session() {
     let mut controller = controller();
-    controller
-        .insert_pool(
-            ShellPool::new(
-                "guest-alice",
-                "dev",
-                PoolSpec::new(
-                    ExecutionTarget::guest("work"),
-                    "alice",
-                    "artifact://shells/bash-login",
-                    2,
-                    1,
-                    4096,
-                )
-                .unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    controller.insert_pool(pool("guest-alice", 2, 1)).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ShellAdmin]);
     let first = controller
         .open_session(
@@ -315,24 +247,7 @@ fn attachment_cannot_be_detached_by_a_different_session() {
 #[test]
 fn supervisor_replays_output_recorded_before_reconnect() {
     let mut controller = controller();
-    controller
-        .insert_pool(
-            ShellPool::new(
-                "guest-alice",
-                "dev",
-                PoolSpec::new(
-                    ExecutionTarget::guest("work"),
-                    "alice",
-                    "artifact://shells/bash-login",
-                    1,
-                    1,
-                    4096,
-                )
-                .unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    controller.insert_pool(pool("guest-alice", 1, 1)).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ShellAdmin]);
     let opened = controller
         .open_session(
@@ -362,24 +277,7 @@ fn supervisor_replays_output_recorded_before_reconnect() {
 #[test]
 fn capacity_denial_does_not_consume_the_one_shot_capability() {
     let mut controller = controller();
-    controller
-        .insert_pool(
-            ShellPool::new(
-                "guest-alice",
-                "dev",
-                PoolSpec::new(
-                    ExecutionTarget::guest("work"),
-                    "alice",
-                    "artifact://shells/bash-login",
-                    1,
-                    1,
-                    4096,
-                )
-                .unwrap(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    controller.insert_pool(pool("guest-alice", 1, 1)).unwrap();
     let admin = Subject::new("dev", CallerOrigin::Local, [Role::ShellAdmin]);
     let opened = controller
         .open_session(
