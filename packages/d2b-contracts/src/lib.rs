@@ -316,6 +316,25 @@ mod tests {
     }
 
     #[test]
+    fn decode_frame_rejects_short_frames_and_malformed_json() {
+        for short in [&[][..], &[0x00][..], &[0x00, 0x01][..], &[0x00, 0x01, 0x02][..]] {
+            let error = decode_frame::<crate::HelloOk>("HelloOk", short)
+                .expect_err("a frame shorter than its length prefix fails");
+            assert_eq!(error.kind().as_str(), "wire-malformed-json");
+            assert!(error.message().contains("frame-too-short"));
+        }
+        // A well-prefixed body that is not JSON fails as malformed json
+        // (opaque reason invalid-json), not as an unknown field.
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&4_u32.to_le_bytes());
+        frame.extend_from_slice(b"nope");
+        let error =
+            decode_frame::<crate::HelloOk>("HelloOk", &frame).expect_err("invalid json fails");
+        assert_eq!(error.kind().as_str(), "wire-malformed-json");
+        assert!(error.message().contains("invalid-json"));
+    }
+
+    #[test]
     fn retired_unsafe_local_shell_feature_is_not_negotiated() {
         let retired = FeatureFlag::new("unsafe-local-shell-v1").expect("valid feature");
         assert_eq!(retired.known(), None);
