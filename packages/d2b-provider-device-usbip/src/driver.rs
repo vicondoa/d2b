@@ -264,23 +264,19 @@ pub fn declared_dependency_refs(
     spec: &Value,
     _metadata: &Value,
 ) -> Vec<ResourceRef> {
-    let mut refs = Vec::new();
     match component {
-        UsbipComponent::Service => {
-            if let Ok(reference) = spec_ref(spec, "/spec/backingDeviceRef") {
-                refs.push(reference);
-            }
-        }
-        UsbipComponent::Binding => {
-            if let Ok(reference) = spec_ref(spec, "/spec/serviceRef") {
-                refs.push(reference);
-            }
-            if let Ok(reference) = spec_ref(spec, "/spec/guestRef") {
-                refs.push(reference);
-            }
-        }
+        UsbipComponent::Service => [spec_ref(spec, "/spec/backingDeviceRef").ok()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        UsbipComponent::Binding => [
+            spec_ref(spec, "/spec/serviceRef").ok(),
+            spec_ref(spec, "/spec/guestRef").ok(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
     }
-    refs
 }
 
 /// One reference field of a stored spec.
