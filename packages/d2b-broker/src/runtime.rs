@@ -2413,14 +2413,17 @@ impl DispatchAuditContext {
         }
         #[cfg(not(feature = "layer1-bootstrap"))]
         {
-            let join = request
-                .authoritative_audit_join()
-                .map(|(zone_id, operation_identity)| AuditJoinContext {
+            let join = match request.authoritative_audit_join() {
+                Some((zone_id, operation_identity)) => Some(AuditJoinContext {
                     zone_id: CanonicalAuditDigest::parse(zone_id)
-                        .expect("authoritative zone digest"),
+                        .map_err(|_| BrokerError::Protocol("audit zone identity invalid".to_owned()))?,
                     operation_identity: CanonicalAuditDigest::parse(operation_identity)
-                        .expect("authoritative operation digest"),
-                });
+                        .map_err(|_| {
+                            BrokerError::Protocol("audit operation identity invalid".to_owned())
+                        })?,
+                }),
+                None => None,
+            };
             Self::from_request_with_join(request, peer_pid, caller_role, join.as_ref())
         }
     }
@@ -17268,6 +17271,50 @@ mod tests {
         assert!(!export_record.fast_path);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A malformed authoritative audit join must yield the typed protocol
+    /// refusal, never a panic. The parse-failure leg cannot be driven at
+    /// HEAD: `authoritative_audit_join` computes canonical digests, so
+    /// `CanonicalAuditDigest::parse` always succeeds on its output (the
+    /// refusal was observed under a mutation that made the join return raw
+    /// strings - see the wave-0 report). This test pins the typed-refusal
+    /// surface of the converted call: a valid join builds the context
+    /// without panicking, and a supplied join that mismatches the request's
+    /// canonical join is refused with the typed Protocol error.
+    #[cfg(not(feature = "layer1-bootstrap"))]
+    #[test]
+    fn from_request_refuses_a_malformed_audit_join_with_a_typed_protocol_error() {
+        let request = store_sync_request(7);
+        let caller_role = CallerRole::AdminUid { uid: 1000 };
+
+        let context = DispatchAuditContext::from_request(&request, 4242, &caller_role)
+            .expect("valid audit join builds the dispatch context");
+        let (zone_id, operation_identity) = request
+            .authoritative_audit_join()
+            .expect("store sync carries an authoritative join");
+        let join = context.audit_join.as_ref().expect("join recorded");
+        assert_eq!(join.zone_id.as_str(), zone_id.as_str());
+        assert_eq!(join.operation_identity.as_str(), operation_identity.as_str());
+
+        let foreign_join = AuditJoinContext {
+            zone_id: CanonicalAuditDigest::parse(
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            )
+            .expect("fixed canonical digest"),
+            operation_identity: CanonicalAuditDigest::parse(
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            )
+            .expect("fixed canonical digest"),
+        };
+        let error = DispatchAuditContext::from_request_with_join(
+            &request,
+            4242,
+            &caller_role,
+            Some(&foreign_join),
+        )
+        .expect_err("a mismatched supplied join must be refused");
+        assert!(matches!(error, BrokerError::Protocol(_)));
     }
 
     /// A second sync of the same closure must take the fast path and still
