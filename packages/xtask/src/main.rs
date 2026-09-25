@@ -490,23 +490,24 @@ fn redact_generated_protobuf_formatting(path: &Path) -> Result<(), Box<dyn std::
 
     for message_name in &message_names {
         let raw_display = format!(
-            "impl ::std::fmt::Display for {message_name} {{\n\
-             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
-             \x20       ::protobuf::text_format::fmt(self, f)\n\
-             \x20   }}\n\
-             }}"
+            r##"impl ::std::fmt::Display for {message_name} {{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{
+        ::protobuf::text_format::fmt(self, f)
+    }}
+}}"##
         );
         let redacted_formatting = format!(
-            "impl ::std::fmt::Debug for {message_name} {{\n\
-             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
-             \x20       f.write_str(\"{message_name}(<redacted>)\")\n\
-             \x20   }}\n\
-             }}\n\n\
-             impl ::std::fmt::Display for {message_name} {{\n\
-             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
-             \x20       f.write_str(\"{message_name}(<redacted>)\")\n\
-             \x20   }}\n\
-             }}"
+            r##"impl ::std::fmt::Debug for {message_name} {{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{
+        f.write_str("{message_name}(<redacted>)")
+    }}
+}}
+
+impl ::std::fmt::Display for {message_name} {{
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{
+        f.write_str("{message_name}(<redacted>)")
+    }}
+}}"##
         );
         if !generated.contains(&raw_display) {
             return Err(format!(

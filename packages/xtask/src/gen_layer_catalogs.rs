@@ -364,64 +364,84 @@ fn surface_catalog_source() -> String {
         "The resource type a typed noun addresses.",
     ]));
     source.push_str(
-        "pub fn typed_noun_type(noun: &str) -> Option<&'static str> {\n    \
-         TYPED_NOUNS\n        .iter()\n        \
-         .find_map(|(name, resource_type)| (*name == noun).then_some(*resource_type))\n}\n",
+        r##"pub fn typed_noun_type(noun: &str) -> Option<&'static str> {
+    TYPED_NOUNS
+        .iter()
+        .find_map(|(name, resource_type)| (*name == noun).then_some(*resource_type))
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "The resource type a typed verb is available on.",
     ]));
     source.push_str(
-        "pub fn typed_verb_type(verb: &str) -> Option<&'static str> {\n    \
-         TYPED_VERB_TYPES\n        .iter()\n        \
-         .find_map(|(name, resource_type)| (*name == verb).then_some(*resource_type))\n}\n",
+        r##"pub fn typed_verb_type(verb: &str) -> Option<&'static str> {
+    TYPED_VERB_TYPES
+        .iter()
+        .find_map(|(name, resource_type)| (*name == verb).then_some(*resource_type))
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the resource type is in the registry.",
     ]));
     source.push_str(
-        "pub fn admits_resource_type(resource_type: &str) -> bool {\n    \
-         RESOURCE_TYPES.contains(&resource_type)\n}\n",
+        r##"pub fn admits_resource_type(resource_type: &str) -> bool {
+    RESOURCE_TYPES.contains(&resource_type)
+}
+"##,
     );
     source.push_str(&doc_lines(&["Whether the verb writes a resource row."]));
     source.push_str(
-        "pub fn admits_mutation_verb(verb: &str) -> bool {\n    \
-         MUTATION_VERBS.contains(&verb)\n}\n",
+        r##"pub fn admits_mutation_verb(verb: &str) -> bool {
+    MUTATION_VERBS.contains(&verb)
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the resource type is one the controller owns.",
     ]));
     source.push_str(
-        "pub fn is_controller_owned(resource_type: &str) -> bool {\n    \
-         CONTROLLER_OWNED_TYPES.contains(&resource_type)\n}\n",
+        r##"pub fn is_controller_owned(resource_type: &str) -> bool {
+    CONTROLLER_OWNED_TYPES.contains(&resource_type)
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the resource type serves as an execution target.",
     ]));
     source.push_str(
-        "pub fn is_execution_target(resource_type: &str) -> bool {\n    \
-         EXECUTION_TARGET_TYPES.contains(&resource_type)\n}\n",
+        r##"pub fn is_execution_target(resource_type: &str) -> bool {
+    EXECUTION_TARGET_TYPES.contains(&resource_type)
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the posture marks a row with no isolation boundary.",
     ]));
     source.push_str(
-        "pub fn is_no_isolation_posture(posture: &str) -> bool {\n    \
-         NO_ISOLATION_POSTURES.contains(&posture)\n}\n",
+        r##"pub fn is_no_isolation_posture(posture: &str) -> bool {
+    NO_ISOLATION_POSTURES.contains(&posture)
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the provider reference marks a no-isolation row.",
     ]));
     source.push_str(
-        "pub fn is_unsafe_local_provider(reference: &str) -> bool {\n    \
-         reference == UNSAFE_LOCAL_PROVIDER_REF\n}\n",
+        r##"pub fn is_unsafe_local_provider(reference: &str) -> bool {
+    reference == UNSAFE_LOCAL_PROVIDER_REF
+}
+"##,
     );
     source.push_str(&doc_lines(&[
         "Whether the provider kind marks a no-isolation row.",
     ]));
     source.push_str(
-        "pub fn is_unsafe_local_provider_kind(kind: &str) -> bool {\n    \
-         kind == UNSAFE_LOCAL_PROVIDER_KIND\n}\n",
+        r##"pub fn is_unsafe_local_provider_kind(kind: &str) -> bool {
+    kind == UNSAFE_LOCAL_PROVIDER_KIND
+}
+"##,
     );
     source.push_str(&string_slice(
         "NO_ISOLATION_TARGET_TYPES",
@@ -435,8 +455,10 @@ fn surface_catalog_source() -> String {
         "Whether the execution target runs without an isolation boundary.",
     ]));
     source.push_str(
-        "pub fn is_no_isolation_target(resource_type: &str) -> bool {\n    \
-         NO_ISOLATION_TARGET_TYPES.contains(&resource_type)\n}\n",
+        r##"pub fn is_no_isolation_target(resource_type: &str) -> bool {
+    NO_ISOLATION_TARGET_TYPES.contains(&resource_type)
+}
+"##,
     );
     source
 }
