@@ -211,11 +211,6 @@ pub struct ProviderDriverFactory {
 }
 
 impl ProviderDriverFactory {
-    /// Construct over the fail-closed effects default (unit fixtures).
-    pub fn new() -> Self {
-        Self::with_effects(Arc::new(FailClosedProviderDriverEffects))
-    }
-
     /// Construct over an injected port. The plane composition wires the live
     /// controller-session seam here.
     pub fn with_effects(effects: Arc<dyn ProviderDriverEffects>) -> Self {
@@ -223,12 +218,6 @@ impl ProviderDriverFactory {
             types: [ResourceTypeName::new(PROVIDER_TYPE_NAME)],
             effects,
         }
-    }
-}
-
-impl Default for ProviderDriverFactory {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
