@@ -382,11 +382,10 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
     ///
     /// # Errors
     ///
-    /// Returns ticket validation failures, thee effect port's observe
+    /// Returns ticket validation failures, the effect port's observe
     /// failures, non-`DeadlineExceeded` readiness failures, and
     /// pidfd-open failures. A `DeadlineExceeded` readiness probe
     /// instead quarantines the candidate as identity-ambiguous.
-
     async fn adopt(
         &self,
         ticket: &LaunchTicket,
