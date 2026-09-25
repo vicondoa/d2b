@@ -2,6 +2,8 @@
 
 use std::collections::VecDeque;
 
+use d2b_contracts_resource::v3::BoundedToken;
+
 /// A typed QMP command accepted by the Provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QmpCommand {
@@ -283,12 +285,7 @@ impl<T: QmpTransport> QmpSession<T> {
 }
 
 fn validate_object_id(value: &str) -> Result<(), QmpError> {
-    if value.is_empty()
-        || value.len() > 63
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    {
+    if BoundedToken::parse(value).is_err() {
         Err(QmpError::InvalidObjectId)
     } else {
         Ok(())

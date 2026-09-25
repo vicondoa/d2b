@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ProviderSpecExtension, ResourceRef, ResourceSpec, SchemaVersion,
+    BoundedToken, CanonicalJsonObject, ProviderSpecExtension, ResourceRef, ResourceSpec, SchemaVersion,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -112,7 +112,7 @@ impl RemovableVolumeRef {
             return Err(GuestSpecError::InvalidVolumeRef);
         }
         let view = view.into();
-        if !validate_token(&view) {
+        if BoundedToken::parse(view.as_str()).is_err() {
             return Err(GuestSpecError::InvalidView);
         }
         Ok(Self { volume_ref, view })
@@ -210,7 +210,7 @@ impl GuestProviderSpecSettings {
         {
             return Err(GuestSpecError::InvalidVolumeRef);
         }
-        if !validate_token(&self.boot_media_view) {
+        if BoundedToken::parse(self.boot_media_view.as_str()).is_err() {
             return Err(GuestSpecError::InvalidView);
         }
         if self.removable_volume_refs.len() > MAX_REMOVABLE_VOLUMES {
@@ -413,15 +413,7 @@ impl core::fmt::Display for GuestSpecError {
 
 impl std::error::Error for GuestSpecError {}
 
-/// Validate one lower-case bounded token.
-pub(crate) fn validate_token(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 63
-        && value.as_bytes()[0].is_ascii_lowercase()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
+
 
 const fn default_true() -> bool {
     true

@@ -1,10 +1,8 @@
 //! Bounded Provider configuration and controller-only projection.
 
-use d2b_contracts_resource::v3::ResourceRef;
+use d2b_contracts_resource::v3::{BoundedToken, ResourceRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
-
-use crate::types::validate_token;
 
 /// Default QMP greeting timeout in seconds.
 pub const DEFAULT_QMP_READY_TIMEOUT_SECONDS: u32 = 30;
@@ -139,7 +137,7 @@ impl ProviderConfig {
                 .display_provider_ref
                 .as_ref()
                 .is_some_and(|reference| reference.resource_type().as_str() != "Provider")
-            || !validate_token(&self.qemu_binary_artifact_id)
+            || BoundedToken::parse(self.qemu_binary_artifact_id.as_str()).is_err()
             || !(5..=300).contains(&self.qmp_ready_timeout_seconds)
             || !(5..=300).contains(&self.qmp_operation_timeout_seconds)
             || !(1024 * 1024..=256 * 1024 * 1024).contains(&self.runtime_tmpfs_quota_bytes)
