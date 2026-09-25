@@ -22804,9 +22804,8 @@ fn dispatch_audit(
                 Some("denied") => Ok(Some(
                     d2b_contracts_broker::broker_wire::BrokerAuditSeverity::Denied,
                 )),
-                Some(_) => Err(TypedError::InternalIo {
-                    context: "audit filter".to_owned(),
-                    detail: "severity-invalid".to_owned(),
+                Some(_) => Err(TypedError::WireInvalidFrame {
+                    detail: "audit filter has an invalid severity".to_owned(),
                 }),
             }?;
             Ok::<_, TypedError>(d2b_contracts_broker::broker_wire::BrokerAuditFilter {
