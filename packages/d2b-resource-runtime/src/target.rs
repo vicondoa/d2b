@@ -193,6 +193,7 @@ impl GuestTargetHandle {
         self.session_generation
     }
 
+    /// Whether a live session has ever been registered for this guest.
     pub const fn is_bound(&self) -> bool {
         self.session_generation.is_some()
     }
@@ -483,6 +484,8 @@ pub struct TargetBinding {
 }
 
 impl TargetBinding {
+    /// Bind one resource's recorded assignment to the directory it resolves
+    /// through.
     pub fn new(directory: Arc<TargetDirectory>, assignment: TargetAssignment) -> Self {
         Self { directory, assignment }
     }
@@ -573,15 +576,9 @@ struct DirectoryState {
 /// that decides *whose* authority they may use. It never changes a resource's
 /// Zone identity, never synthesizes a desired resource in a guest namespace,
 /// and never deletes desired state because a target went away.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TargetDirectory {
     inner: Arc<Mutex<DirectoryState>>,
-}
-
-impl Default for TargetDirectory {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl TargetDirectory {
