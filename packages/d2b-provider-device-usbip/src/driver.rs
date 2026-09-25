@@ -332,8 +332,7 @@ mod tests {
 
     use super::{
         PROVIDER_REF, USBIP_REGISTRATIONS, USB_BINDING_RESOURCE_TYPE, USB_SERVICE_RESOURCE_TYPE,
-        UsbipComponent, UsbipDriverArgs,
-        usbip_descriptors,
+        UsbipComponent, UsbipDriverArgs, ZoneId, usbip_descriptors,
     };
 
     fn descriptors() -> [d2b_resource_types::DriverDescriptor; 2] {

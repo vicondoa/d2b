@@ -540,7 +540,8 @@ mod tests {
 
     use super::{
         PROVIDER_REF, SECURITY_KEY_BINDING_RESOURCE_TYPE, SECURITY_KEY_REGISTRATIONS,
-        SECURITY_KEY_SERVICE_RESOURCE_TYPE, SecurityKeyDriverArgs, security_key_descriptors,
+        SECURITY_KEY_SERVICE_RESOURCE_TYPE, SecurityKeyDriverArgs, ZoneId,
+        security_key_descriptors,
     };
 
     fn descriptors() -> [d2b_resource_types::DriverDescriptor; 2] {
