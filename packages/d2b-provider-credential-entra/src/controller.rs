@@ -44,6 +44,13 @@ pub struct EntraEndpointPolicy {
 impl EntraEndpointPolicy {
     /// Require canonical provider visibility and exact provider, consumer,
     /// and Guest execution references.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OperationDenied` when the visibility is not `provider`,
+    /// the provider reference differs from the canonical one, the
+    /// consumer is not a `Provider`, or the execution reference is not a
+    /// `Guest`.
     pub fn new(
         visibility: &str,
         provider_ref: ResourceRef,

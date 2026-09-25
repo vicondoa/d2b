@@ -18,6 +18,11 @@ pub enum CreditError {
     Overflow,
 }
 
+/// A thread-safe bounded credit pool shared across session scopes.
+///
+/// Reservations are accounted atomically; dropping a reservation returns
+/// its credit.
+
 #[derive(Clone)]
 pub struct CreditPool {
     inner: Arc<CreditPoolInner>,
@@ -39,6 +44,11 @@ impl fmt::Debug for CreditPool {
 }
 
 impl CreditPool {
+    /// Construct a bounded pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CreditError::ZeroLimit` when the bound is zero.
     pub fn new(limit: usize) -> Result<Self, CreditError> {
         if limit == 0 {
             return Err(CreditError::ZeroLimit);

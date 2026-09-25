@@ -180,6 +180,11 @@ impl core::fmt::Debug for BoundedEmitter {
 
 impl BoundedEmitter {
     /// Construct an emitter for a private Unix datagram path.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EmitterError::SocketPathInvalid` for a non-absolute
+    /// path,and `StatePoisoned` for a zero byte capacity.
     pub fn new(path: impl Into<PathBuf>, capacity_bytes: usize) -> Result<Self, EmitterError> {
         Self::new_with_limits(
             path,
@@ -191,6 +196,11 @@ impl BoundedEmitter {
     }
 
     /// Construct an emitter with explicit count, age, and retry bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EmitterError::SocketPathInvalid` for a non-absolute
+    /// path,and `StatePoisoned` when any bound is zero.
     pub fn new_with_limits(
         path: impl Into<PathBuf>,
         capacity_bytes: usize,
@@ -225,6 +235,10 @@ impl BoundedEmitter {
     }
 
     /// Construct an emitter with the default ring capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same `EmitterError` conditions as [`BoundedEmitter::new`]。
     pub fn with_default_capacity(path: impl Into<PathBuf>) -> Result<Self, EmitterError> {
         Self::new(path, DEFAULT_RING_CAPACITY_BYTES)
     }
@@ -232,6 +246,12 @@ impl BoundedEmitter {
     /// Emit one bounded frame.
     // The emitter is a synchronous library surface (frozen public API, no
     // async form); the state lock is a short non-suspending critical section.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FrameTooLarge` beyond the frame bound, `FrameRedaction`
+    /// when the frame cannot be redaction-parsed or its signal does not
+    /// match, and the metric-policy failure for a malformed metric frame.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn emit(&self, signal: Signal, frame: &[u8]) -> Result<EmitOutcome, EmitterError> {
         if frame.len() > MAX_FRAME_BYTES {
@@ -313,6 +333,11 @@ impl BoundedEmitter {
     /// The descriptor and identity canaries are checked before serialization,
     /// queue admission, or socket I/O. This is the emitter-side defense in
     /// depth for callers that have a typed metric descriptor.
+    /// # Errors
+    ///
+    /// Returns the metric-policy failure when the descriptor, labels,
+    /// or canaries fail validation, plus the `EmitterError` conditions of
+    /// [`BoundedEmitter::emit`].
     pub fn emit_metric<T: serde::Serialize>(
         &self,
         descriptor: &MetricDescriptor,
@@ -336,6 +361,11 @@ impl BoundedEmitter {
     /// Try to reconnect and drain buffered frames in FIFO order.
     // Synchronous library surface (no async form); the state lock is a short
     // non-suspending critical section.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EmitterError::StatePoisoned` when the state lock is
+    /// poisoned.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn drain(&self) -> Result<usize, EmitterError> {
         let mut state = self.state.lock().map_err(|_| EmitterError::StatePoisoned)?;
@@ -380,7 +410,12 @@ impl BoundedEmitter {
     }
 
     /// Number of frames currently buffered.
-    // Synchronous library surface (no async form); short non-suspending lock.
+    // Synchronous library surface (no async form); short non-suspending lock..
+    ///
+    /// # Errors
+    ///
+    /// Returns `EmitterError::StatePoisoned` when the state lock is
+    /// poisoned.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn buffered_frames(&self) -> Result<usize, EmitterError> {
         self.state
@@ -390,7 +425,12 @@ impl BoundedEmitter {
     }
 
     /// Number of bytes currently retained in the ring.
-    // Synchronous library surface (no async form); short non-suspending lock.
+    // Synchronous library surface (no async form); short non-suspending lock..
+    ///
+    /// # Errors
+    ///
+    /// Returns `EmitterError::StatePoisoned` when the state lock is
+    /// poisoned.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn buffered_bytes(&self) -> Result<usize, EmitterError> {
         self.state

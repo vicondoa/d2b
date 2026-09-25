@@ -7,9 +7,11 @@
 //! driver of `d2b_resource_runtime::metadata`, so this crate cannot diverge
 //! from its siblings on it.
 //!
-//! `Role` is an authority role: the driver converges it as metadata once
-//! its desired state is admitted, and the crate carries the revision-bound
+//! `Role` is an authority role:ther driver converges it as metadata once
+//! its desired state is admitted,and the crate carries the revision-bound
 //! positive authorization decision cache (`rbac`).
+
+#![deny(missing_docs)]
 
 mod driver;
 

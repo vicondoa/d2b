@@ -304,6 +304,13 @@ pub trait BindingDriverEffects: Send + Sync + 'static {
         -> bool;
 
     /// Remove the endpoint realization (socket) - endpoint-first teardown.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the daemon-supplied removal adapter fails to
+    /// remove the realized socket endpoint. The removal is idempotent
+    /// under retry: a socket that was never realized, or whose file is
+    /// already gone, answers `Ok(())`.
     async fn remove_socket(
         &self,
         socket: &d2b_provider_volume_virtiofs::SocketIdentity,
@@ -322,6 +329,12 @@ pub trait BindingDriverEffects: Send + Sync + 'static {
     /// published state. A present mount therefore keeps the durable deleting
     /// mark and the owned children (the drain never force-clears a serve that
     /// is still mounted).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the daemon-supplied observation adapter cannot
+    /// complete the guest-mount observation; the observation itself fails
+    /// closed with `Ok(false)` as described above.
     async fn guest_mount_ready(
         &self,
         _key: &ResourceKey,

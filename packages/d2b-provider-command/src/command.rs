@@ -35,6 +35,11 @@ pub struct CommandExec(String);
 
 impl CommandExec {
     /// Parse an absolute path with no control characters.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidExec` when the value is not an absolute,
+    /// control-free path within the byte bound.
     pub fn parse(value: impl Into<String>) -> Result<Self, CommandContractError> {
         let value = value.into();
         if !value.starts_with('/') || value.len() > MAX_COMMAND_EXEC_BYTES {
@@ -86,6 +91,12 @@ pub struct CommandArgvSlot(String);
 
 impl CommandArgvSlot {
     /// Parse one slot. A slot carrying a brace must be a single placeholder.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidArgvSlot` when the slot is empty, over bound,
+    /// contains a NUL byte, or is a brace-carrying slot that is not a
+    /// single placeholder naming a valid parameter.
     pub fn parse(value: impl Into<String>) -> Result<Self, CommandContractError> {
         let value = value.into();
         if value.is_empty() || value.len() > MAX_COMMAND_ARGV_SLOT_BYTES {
@@ -189,6 +200,13 @@ pub struct CommandSpec {
 
 impl CommandSpec {
     /// Construct a command spec after validating slots against parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidArgvSlot` when the argument vector is empty or
+    /// over bound, `InvalidRoleRef` when the role reference does not name
+    /// a `Role`, and `UndefinedPlaceholder` when a placeholder slot names
+    /// a parameter the schema does not declare.
     pub fn new(
         exec: CommandExec,
         argv: Vec<CommandArgvSlot>,

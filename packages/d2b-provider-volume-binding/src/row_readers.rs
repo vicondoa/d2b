@@ -37,11 +37,13 @@ pub fn parsed_binding_spec(binding: &StoredResource) -> Option<VolumeBindingSpec
         .ok()?
         .get("spec")?
         .clone();
-    let object = spec.as_object_mut()?;
-    for field in ["providerRef", "updatePolicy", "provider"] {
-        object.remove(field);
+    {
+        let object = spec.as_object_mut()?;
+        for field in ["providerRef", "updatePolicy", "provider"] {
+            object.remove(field);
+        }
     }
-    serde_json::from_value::<VolumeBindingSpec>(serde_json::Value::Object(object.clone())).ok()
+    serde_json::from_value::<VolumeBindingSpec>(spec).ok()
 }
 
 #[cfg(test)]

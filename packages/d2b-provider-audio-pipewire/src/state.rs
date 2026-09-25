@@ -78,6 +78,11 @@ impl Drop for OfdLockGuard {
     }
 }
 
+/// One held open-file-description lock on the audio state file.
+///
+/// Holding the value keeps the OFD lock acquired by
+/// [`acquire_audio_state_lock`]; dropping it releases the lock and
+/// closes the file.
 pub struct AudioStateLock {
     _guard: OfdLockGuard,
     _file: File,

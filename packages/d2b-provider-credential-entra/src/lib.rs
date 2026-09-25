@@ -49,6 +49,11 @@ pub const MAX_LOCAL_LEASES: u32 = 256;
 pub const MAX_REFRESH_ATTEMPTS: u16 = 3;
 
 /// Reject ambient SDK credential-chain environment names.
+///
+/// # Errors
+///
+/// Returns `InvalidConfig` when any ambient credential-chain name is
+/// present.
 pub fn reject_ambient_credential_chain(
     keys: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> Result<(), EntraProviderError> {
@@ -57,6 +62,11 @@ pub fn reject_ambient_credential_chain(
 }
 
 /// Reject ambient SDK credential-chain variables in this process.
+///
+/// # Errors
+///
+/// Returns `InvalidConfig` when any ambient credential-chain variable
+/// is present in the process environment.
 pub fn reject_process_environment_credential_chain(
 ) -> Result<(), EntraProviderError> {
     d2b_provider_toolkit::credential::reject_process_environment_credential_chain()
@@ -499,6 +509,12 @@ pub struct EntraConfig {
 
 impl EntraConfig {
     /// Validate the inline tenant identifier and lease bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidConfig` when the tenant identifier is not a valid
+    /// Azure reference or the lease bound is outside
+    /// `1..=MAX_LOCAL_LEASES`.
     pub fn new(tenant_id: impl Into<String>, max_leases: u32) -> Result<Self, EntraProviderError> {
         let tenant_id = OpaqueAzureRef::parse(tenant_id.into())
             .map_err(|_| EntraProviderError::InvalidConfig)?;
@@ -571,6 +587,13 @@ pub struct EntraPlacement {
 
 impl EntraPlacement {
     /// Validate user-agent or guest-agent placement inside a Guest.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidPlacement` when the binding is not a user-agent or
+    /// guest-agent binding or the execution reference is not a `Guest`,
+    /// and `InvalidEndpoint` when the identity Guest or login Endpoint
+    /// reference is wrong or the endpoint generation is zero.
     pub fn new(
         binding: PlacementBinding,
         execution_ref: ResourceRef,
@@ -602,6 +625,12 @@ impl EntraPlacement {
     }
 
     /// Validate placement with an authoritative Zone binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidEndpoint` when the zone reference is not a `Zone`,
+    /// and the same `InvalidPlacement` or `InvalidEndpoint` conditions as
+    /// [`EntraPlacement::new`] for the remaining arguments.
     pub fn new_in_zone(
         zone_ref: ResourceRef,
         binding: PlacementBinding,
@@ -626,6 +655,13 @@ impl EntraPlacement {
 
     /// Bind a runtime controller to the exact Guest execution while leaving
     /// Endpoint resolution to the Guest-local typed client.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidEndpoint` when the zone reference is not a `Zone`,
+    /// the binding is not a user-agent or guest-agent binding, the
+    /// execution reference is not a `Guest`, or the endpoint generation
+    /// is zero.
     pub fn new_runtime_in_zone(
         zone_ref: ResourceRef,
         binding: PlacementBinding,
@@ -845,6 +881,12 @@ pub struct EntraCredentialProviderFactory {
 
 impl EntraCredentialProviderFactory {
     /// Validate and construct a factory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidConsumer` when the consumer reference is not a
+    /// `Provider`, and `InvalidEndpoint` when the placement carries no
+    /// Zone binding.
     pub fn new(
         config: EntraConfig,
         placement: EntraPlacement,
@@ -1043,6 +1085,12 @@ impl EntraCredentialProvider {
 
     /// Revoke all handles owned by one Credential before finalization clears
     /// its Provider finalizer.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Malformed` when the reference is not a `Credential`, and
+    /// `DeadlineExceeded` when the deadline is not a bounded future
+    /// absolute time.
     pub async fn revoke_owned_handles(
         &self,
         credential_ref: &ResourceRef,

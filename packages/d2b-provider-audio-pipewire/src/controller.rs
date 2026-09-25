@@ -18,7 +18,17 @@ use tracing::{debug, warn};
 const AUDIO_PROVIDER_REF: &str = "Provider/audio-pipewire";
 
 /// Default shared-Runner repair interval for audio resources.
+///
+/// 300 seconds (5 minutes) bounds how long a failed audio worker can
+/// stay unrepaired before the next resync re-runs the repair path,
+/// while keeping the resync cadence well below the daemon's
+/// operator-visible stall threshold.
 pub const AUDIO_REPAIR_INTERVAL_SECS: u64 = 300;
+
+/// The arbiter and mixer admission bound: how many pending microphone
+/// leases or speaker consumers one controller admits before refusing
+/// further admission.
+pub const AUDIO_QUEUE_BOUND: usize = 64;
 
 const AUDIO_BINDING_CHILD_REQUESTS: [BindingChildRequest; 4] = [
     BindingChildRequest::process(
@@ -206,10 +216,10 @@ impl<M: AudioMediator> AudioBindingController<M> {
     pub fn new(mediator: M) -> Self {
         Self {
             mediator,
-            microphone: crate::shared_microphone_arbiter(64),
+            microphone: crate::shared_microphone_arbiter(AUDIO_QUEUE_BOUND),
             activate_promoted: true,
             microphone_effect_applied: false,
-            speaker: SpeakerMixer::new(64),
+            speaker: SpeakerMixer::new(AUDIO_QUEUE_BOUND),
         }
     }
 
@@ -220,7 +230,7 @@ impl<M: AudioMediator> AudioBindingController<M> {
             microphone,
             activate_promoted: false,
             microphone_effect_applied: false,
-            speaker: SpeakerMixer::new(64),
+            speaker: SpeakerMixer::new(AUDIO_QUEUE_BOUND),
         }
     }
 

@@ -199,6 +199,13 @@ impl TransportPortal {
     /// The portal retains request binding, peer evidence, and a close-on-exec
     /// duplicate for observation. The original accepted descriptor has exactly
     /// one transfer destination.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AttachmentPolicyConflict`, `SocketKindMismatch`,
+    /// `Cloexec`, or `PeerCredentials` when the descriptor fails admission,
+    /// `HandleTableFull` when the per-service monitor table is full, and
+    /// `MonitorUnavailable` when the portal monitor lock is poisoned.
     pub fn open(
         &self,
         binding: TransportRequestBinding,
@@ -264,6 +271,12 @@ impl TransportPortal {
     }
 
     /// Close a monitored transport, refusing handles owned by another portal.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownHandle` when the handle is not owned by this
+    /// portal instance,and `MonitorUnavailable` when the portal monitor
+    /// lock is poisoned. A finalized handle closes idempotently.
     pub fn close(&self, handle: TransportHandle) -> Result<(), PortalError> {
         let mut state = self
             .state
@@ -284,6 +297,12 @@ impl TransportPortal {
     }
 
     /// Return the current socket-level monitor state for one portal-owned fd.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnknownHandle` when the handle is not owned by this
+    /// portal instance,and `MonitorUnavailable` when the portal monitor
+    /// lock is poisoned.
     pub fn observe(&self, handle: TransportHandle) -> Result<TransportObservation, PortalError> {
         let state = self
             .state

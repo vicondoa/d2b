@@ -242,6 +242,12 @@ impl NftBatch {
     /// Parse the limited d2b-managed `nft -f -` script dialect back
     /// into a structured batch so runtime checks can re-assert ordering
     /// invariants before touching the live table.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseNftScriptError` with a line-anchored detail when
+    /// the script does not match the limited dialect (a chain missing
+    /// its hook or priority declaration, or a malformed rule).
     pub fn parse(script: &str) -> Result<Self, ParseNftScriptError> {
         struct PendingChain {
             name: String,
@@ -609,6 +615,7 @@ impl NftBatch {
 pub struct BusId(pub String);
 
 impl BusId {
+    /// Wrap one USB busid string.
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }

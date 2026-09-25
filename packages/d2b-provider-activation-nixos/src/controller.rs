@@ -559,6 +559,14 @@ impl ActivationTrust {
     }
 
     /// Verify all trust, Ed25519, artifact, and activation-catalog fences.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TrustEpochMismatch`, `RevocationRefMismatch`,
+    /// `TrustDenied`, `PublisherRootMismatch`, `SignatureIdMismatch`,
+    /// `ArtifactCatalogDigestMismatch`, `ArtifactDigestMismatch`,
+    /// `InvalidEvidence`, or `SignatureInvalid` for the corresponding
+    /// failed fence.
     pub fn verify(
         &self,
         expected: &ActivationTrustExpectation,
@@ -708,6 +716,11 @@ impl ActivationController {
     }
 
     /// Gate activation/application on the complete signed artifact envelope.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same `ActivationVerificationError` variants as
+    /// [`ActivationTrust::verify`] for the corresponding failed fence.
     pub fn verify_application(
         &self,
         trust: &ActivationTrust,
@@ -723,6 +736,11 @@ impl ActivationController {
     /// The runner performs only the steps the family declares
     /// ([`crate::vocabulary::ACTIVATION_RUNNER_STEPS`]); an activation that
     /// requests another step is refused before any runner is planned.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidSpec` when `step` is not one of the declared
+    /// runner steps.
     pub fn refuse_undeclared_runner_step(&self, step: &str) -> Result<(), ActivationError> {
         if crate::vocabulary::is_declared_runner_step(step) {
             Ok(())
@@ -732,6 +750,15 @@ impl ActivationController {
     }
 
     /// Reconcile one desired generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unauthorized` or `TargetMismatch` when the caller is not
+    /// authorized for the spec's execution target, `InvalidSpec` when the
+    /// declared prior generation is missing from the observations, the
+    /// observed ordinal is zero, or the activation mode maps to no
+    /// declared runner step, and `AlreadyDeleted` when the observed
+    /// generation is already deleted.
     pub fn reconcile(
         &self,
         spec: &NixosGenerationSpec,
@@ -805,6 +832,13 @@ impl ActivationController {
 
     /// Apply a typed runner result while preserving the prior generation on
     /// every refusal or failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidSpec` when the source generation ordinal is zero,
+    /// `AlreadyDeleted` when the source generation is already deleted,
+    /// and `OutcomeMismatch` when the outcome does not match the spec's
+    /// activation mode.
     pub fn apply_runner_result(
         &self,
         spec: &NixosGenerationSpec,

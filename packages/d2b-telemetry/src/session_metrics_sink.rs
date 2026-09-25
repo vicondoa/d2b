@@ -45,6 +45,12 @@ impl SessionMetricsSink {
     }
 
     /// Record a session event with closed labels.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SessionMetricsError::Policy` when the event or labels
+    /// fail policy validation, and `SessionMetricsError::Emitter` when
+    /// the emitter rejects the frame.
     pub fn record(
         &self,
         event: SessionMetricEvent,

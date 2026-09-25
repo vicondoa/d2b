@@ -41,10 +41,13 @@ impl std::fmt::Display for SystemdActivationError {
 
 impl std::error::Error for SystemdActivationError {}
 
+/// One inherited systemd-activated seqpacket listener socket.
 pub struct ActivatedSeqpacketListener {
     io: AsyncFd<OwnedFd>,
 }
 
+/// The inherited systemd-activated seqpacket listener set, keyed by the
+/// socket unit name each descriptor was passed as.
 pub struct ActivatedSeqpacketListeners {
     listeners: BTreeMap<String, AsyncFd<OwnedFd>>,
 }

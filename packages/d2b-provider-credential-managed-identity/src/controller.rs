@@ -134,6 +134,11 @@ impl ManagedIdentityController {
 
     /// Create the agent projection only after admission and dependency
     /// readiness. The controller receives no client while doing so.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CredentialServiceError::InvariantFailure` when the
+    /// reference is not a `Credential`.
     pub fn plan_agent(
         &self,
         credential_ref: ResourceRef,
@@ -168,6 +173,11 @@ impl ManagedIdentityController {
     }
 
     /// Project bounded non-secret lease state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CredentialServiceError::InvariantFailure` when the
+    /// metadata cannot project into the lease or status shape.
     pub fn reconcile(
         &self,
         client_state: ManagedIdentityClientState,
@@ -199,6 +209,11 @@ impl ManagedIdentityController {
     }
 
     /// Build a caller-initiated audit record after the authorization decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CredentialObservabilityError::InvalidAuditRecord` when
+    /// the audit field set is malformed or sensitive.
     #[allow(clippy::too_many_arguments)]
     pub fn authorized_service_audit(
         &self,
@@ -224,6 +239,11 @@ impl ManagedIdentityController {
     }
 
     /// Build one complete closed Credential telemetry frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CredentialObservabilityError::ForbiddenTelemetryField`
+    /// when a telemetry key or value is not in the closed set.
     pub fn telemetry(
         &self,
         zone: &str,

@@ -5,6 +5,9 @@ use rustix::{
 };
 use std::{fmt, fs, os::fd::AsRawFd, sync::Arc};
 
+/// Verified pidfd identity evidence: the first-packet credentials, the
+/// executable digest,and the cgroup digest must all match the expected
+/// process.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PidfdEvidence {
     expected_pid: Pid,
@@ -20,6 +23,12 @@ impl fmt::Debug for PidfdEvidence {
 }
 
 impl PidfdEvidence {
+    /// Construct evidence after checking the identity fences.
+    ///
+    /// # Errors
+    ///
+    /// Returns `UnixSessionError::PidfdEvidenceUnavailable` when the
+    /// credentials do not match the expected pid or a digest is zero.
     pub fn new(
         expected_pid: Pid,
         first_packet_credentials: FirstPacketCredentials,
