@@ -20212,7 +20212,9 @@ impl ActivationLockGuard {
 impl Drop for ActivationLockGuard {
     fn drop(&mut self) {
         let mut coordinator = lock_sync(&self.coordinator);
-        let _ = coordinator.finish_activation(&self.zone);
+        if let Err(error) = coordinator.finish_activation(&self.zone) {
+            tracing::warn!(zone = %self.zone, error = %error, "activation finish refused by Zone coordinator");
+        }
     }
 }
 
