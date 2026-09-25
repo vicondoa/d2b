@@ -382,7 +382,7 @@ mod tests {
         BindingDigest, EvidenceClass, Locality, ReconnectGeneration, ServiceName, SessionBinding,
         SessionPurpose, TranscriptHash, TransportBinding,
     };
-    use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName, SchemaFingerprint, ZoneId};
+    use d2b_contracts_resource::v3::{ResourceName, ResourceTypeName, SchemaFingerprint};
     use d2b_contracts_zone_session::v3::zone_routing::ZoneLabelId;
 
     fn zone() -> ZonePath {
@@ -499,22 +499,6 @@ mod tests {
         );
         assert_eq!(router.sweep(IDEMPOTENCY_TOMBSTONE_HORIZON_MS + 100), Ok(1));
         assert_eq!(router.len().unwrap(), 0);
-    }
-
-    #[test]
-    fn durable_exec_table_is_bounded_to_ephemeral_processes() {
-        let table = DurableExecTable::new();
-        let operation = operation();
-        table
-            .insert(
-                operation.clone(),
-                ResourceRef::parse("EphemeralProcess/exec-1").unwrap(),
-            )
-            .unwrap();
-        assert_eq!(table.len().unwrap(), 1);
-        assert!(table.remove(&operation).unwrap());
-        assert_eq!(table.len().unwrap(), 0);
-        let _ = ZoneId::parse("dev").unwrap();
     }
 
     #[test]

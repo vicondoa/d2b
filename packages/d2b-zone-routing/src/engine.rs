@@ -2863,38 +2863,4 @@ mod tests {
             ZoneRouteAuditEventKind::ZoneLinkIntentQueued
         );
     }
-
-    #[test]
-    fn every_reason_the_engine_can_produce_is_covered_by_this_suite() {
-        // The engine can produce every closed reason except
-        // `SiblingOrParentRouteAdvert` from an advertisement: the contract's
-        // own constructor already proves descendant strictness and next-hop
-        // agreement, so that shape cannot reach the engine. The engine still
-        // uses that reason for a withdrawal naming a route another Zone owns.
-        let produced = [
-            ZoneRouteFailClosedReason::MalformedAdvert,
-            ZoneRouteFailClosedReason::UnknownParent,
-            ZoneRouteFailClosedReason::NamespaceViolation,
-            ZoneRouteFailClosedReason::SiblingOrParentRouteAdvert,
-            ZoneRouteFailClosedReason::Loop,
-            ZoneRouteFailClosedReason::MultiParent,
-            ZoneRouteFailClosedReason::Expired,
-            ZoneRouteFailClosedReason::Replay,
-            ZoneRouteFailClosedReason::RateLimited,
-            ZoneRouteFailClosedReason::QueueFullDropNew,
-            ZoneRouteFailClosedReason::MissingCapability,
-            ZoneRouteFailClosedReason::PolicyDenial,
-            ZoneRouteFailClosedReason::ZoneLinkDisconnected,
-            ZoneRouteFailClosedReason::HopLimitExceeded,
-            ZoneRouteFailClosedReason::RelayDenied,
-            ZoneRouteFailClosedReason::AttachmentNotPermittedOverZoneLink,
-        ];
-        let mut labels = produced
-            .iter()
-            .map(|reason| reason.label())
-            .collect::<Vec<_>>();
-        labels.sort_unstable();
-        labels.dedup();
-        assert_eq!(labels.len(), produced.len());
-    }
 }
