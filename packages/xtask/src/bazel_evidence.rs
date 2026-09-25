@@ -393,19 +393,31 @@ fn contains_any_marker(text: &str, markers: &[&str]) -> bool {
     markers.iter().any(|marker| text.contains(marker))
 }
 
-fn contains_quoted_field(lower: &str, field: &str) -> bool {
-    for quote in ['"', '\''] {
-        let quoted = format!("{quote}{field}{quote}");
+/// The credential field names framed with both quote styles, built once so
+/// the per-line redaction scan never allocates a framed literal.
+const QUOTED_CREDENTIAL_FIELDS: [&str; 8] = [
+    "\"authorization\"",
+    "'authorization'",
+    "\"api-key\"",
+    "'api-key'",
+    "\"api_key\"",
+    "'api_key'",
+    "\"x-buildbuddy-api-key\"",
+    "'x-buildbuddy-api-key'",
+];
+
+fn contains_quoted_field(lower: &str, framed_fields: &[&str]) -> bool {
+    framed_fields.iter().any(|&quoted| {
         let mut offset = 0;
-        while let Some(relative) = lower[offset..].find(&quoted) {
+        while let Some(relative) = lower[offset..].find(quoted) {
             let index = offset + relative;
             if lower[index + quoted.len()..].trim_start().starts_with(':') {
                 return true;
             }
             offset = index + quoted.len();
         }
-    }
-    false
+        false
+    })
 }
 
 fn contains_credential_field(lower: &str) -> bool {
@@ -416,10 +428,7 @@ fn contains_credential_field(lower: &str) -> bool {
         || lower.contains("api-key:")
         || lower.contains("api_key:")
         || lower.contains("bearer ")
-        || contains_quoted_field(lower, "authorization")
-        || contains_quoted_field(lower, "api-key")
-        || contains_quoted_field(lower, "api_key")
-        || contains_quoted_field(lower, "x-buildbuddy-api-key")
+        || contains_quoted_field(lower, &QUOTED_CREDENTIAL_FIELDS)
 }
 
 fn unescaped_quote_count(line: &str, quote: char) -> usize {

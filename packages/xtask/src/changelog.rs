@@ -794,6 +794,20 @@ fn recover_hooked(
     }
 }
 
+/// Crash-test hook guard shared by every fold path: a `#[cfg(test)]` hook
+/// returning `Crash` aborts the fold with the given message, leaving the
+/// transaction on disk for recovery to find. The hook is passed in because a
+/// module-scope `macro_rules!` body cannot see the calling function's
+/// parameter under macro hygiene.
+macro_rules! crash_if_hooked {
+    ($hook:expr, $stage:expr, $message:expr) => {
+        #[cfg(test)]
+        if let HookOutcome::Crash = $hook($stage) {
+            return Err(FoldError::single($message));
+        }
+    };
+}
+
 /// Discard a committed transaction: the promotion already happened, so only the
 /// consumed fragments and staging state remain to be cleared.
 ///
@@ -814,16 +828,8 @@ fn finish_forward(
     #[cfg(test)] hook: &mut dyn FnMut(RecoverStage) -> HookOutcome,
 ) -> Result<(), FoldError> {
     let txn = &tree.txn;
-    macro_rules! crash_if_hooked {
-        ($stage:expr) => {
-            #[cfg(test)]
-            if let HookOutcome::Crash = hook($stage) {
-                return Err(FoldError::single("simulated crash during forward recovery"));
-            }
-        };
-    }
 
-    crash_if_hooked!(RecoverStage::ForwardBeforeReserved);
+    crash_if_hooked!(hook, RecoverStage::ForwardBeforeReserved, "simulated crash during forward recovery");
     remove_dir_all_if_exists(&txn.join(TXN_RESERVED)).map_err(|err| {
         FoldError::single(format!(
             "{TXN_DIR}/{TXN_RESERVED}: cannot clear reserved fragments: {err}"
@@ -840,7 +846,11 @@ fn finish_forward(
         ))
     })?;
 
-    crash_if_hooked!(RecoverStage::ForwardBeforeBackup);
+    crash_if_hooked!(
+        hook,
+        RecoverStage::ForwardBeforeBackup,
+        "simulated crash during forward recovery"
+    );
     remove_file_if_exists(&txn.join(TXN_BACKUP)).map_err(|err| {
         FoldError::single(format!(
             "{TXN_DIR}/{TXN_BACKUP}: cannot clear backup: {err}"
@@ -852,7 +862,11 @@ fn finish_forward(
 
     // The journal is the last thing removed: until this returns, a crashed
     // re-run still sees COMMITTED and re-enters this idempotent forward path.
-    crash_if_hooked!(RecoverStage::ForwardBeforeJournal);
+    crash_if_hooked!(
+        hook,
+        RecoverStage::ForwardBeforeJournal,
+        "simulated crash during forward recovery"
+    );
     remove_file_if_exists(&txn.join(TXN_JOURNAL)).map_err(|err| {
         FoldError::single(format!(
             "{TXN_DIR}/{TXN_JOURNAL}: cannot clear journal: {err}"
@@ -864,7 +878,11 @@ fn finish_forward(
         ))
     })?;
 
-    crash_if_hooked!(RecoverStage::ForwardBeforeRmdir);
+    crash_if_hooked!(
+        hook,
+        RecoverStage::ForwardBeforeRmdir,
+        "simulated crash during forward recovery"
+    );
     remove_dir_all_if_exists(txn).map_err(|err| {
         FoldError::single(format!(
             "{TXN_DIR}: cannot finish committed fold recovery: {err}"
@@ -888,16 +906,6 @@ fn roll_back(
     #[cfg(test)] hook: &mut dyn FnMut(RecoverStage) -> HookOutcome,
 ) -> Result<(), FoldError> {
     let txn = &tree.txn;
-    macro_rules! crash_if_hooked {
-        ($stage:expr) => {
-            #[cfg(test)]
-            if let HookOutcome::Crash = hook($stage) {
-                return Err(FoldError::single(
-                    "simulated crash during rollback recovery",
-                ));
-            }
-        };
-    }
 
     let fragment_dir = &tree.fragment_dir;
     let reserved_dir = txn.join(TXN_RESERVED);
@@ -927,7 +935,11 @@ fn roll_back(
         })?;
     }
 
-    crash_if_hooked!(RecoverStage::RollbackBeforeBackup);
+    crash_if_hooked!(
+        hook,
+        RecoverStage::RollbackBeforeBackup,
+        "simulated crash during rollback recovery"
+    );
     let backup = txn.join(TXN_BACKUP);
     if backup.exists() {
         // Renaming the backup over the changelog is atomic and, by removing the
@@ -945,7 +957,11 @@ fn roll_back(
         })?;
     }
 
-    crash_if_hooked!(RecoverStage::RollbackBeforeRmdir);
+    crash_if_hooked!(
+        hook,
+        RecoverStage::RollbackBeforeRmdir,
+        "simulated crash during rollback recovery"
+    );
     remove_dir_all_if_exists(txn).map_err(|err| {
         FoldError::single(format!(
             "{TXN_DIR}: cannot remove rolled-back transaction: {err}"
@@ -1021,14 +1037,6 @@ fn apply_fold_hooked(
     // A crash simulated by a test hook returns this sentinel without running
     // rollback or cleanup, leaving the transaction on disk for recovery. A real
     // error (below) instead recovers inline before returning.
-    macro_rules! crash_if_hooked {
-        ($stage:expr) => {
-            #[cfg(test)]
-            if let HookOutcome::Crash = hook($stage) {
-                return Err(FoldError::single("simulated crash"));
-            }
-        };
-    }
     // `original` and (in non-test builds) the hook are consumed below; nothing
     // to silence.
 
@@ -1076,7 +1084,7 @@ fn apply_fold_hooked(
     if let Err(err) = prepare() {
         return Err(recover_and_chain(tree, err));
     }
-    crash_if_hooked!(FoldStage::AfterPrepare);
+    crash_if_hooked!(hook, FoldStage::AfterPrepare, "simulated crash");
 
     // --- Reserve -----------------------------------------------------------
     // The reservation index is only read by the test crash hook; keep
@@ -1097,9 +1105,9 @@ fn apply_fold_hooked(
             ));
             return Err(recover_and_chain(tree, err));
         }
-        crash_if_hooked!(FoldStage::AfterReserve(_index));
+        crash_if_hooked!(hook, FoldStage::AfterReserve(_index), "simulated crash");
     }
-    crash_if_hooked!(FoldStage::AfterReserveAll);
+    crash_if_hooked!(hook, FoldStage::AfterReserveAll, "simulated crash");
 
     // --- Commit ------------------------------------------------------------
     // The atomic rename is the only moment CHANGELOG.md changes; the fsynced
@@ -1115,7 +1123,7 @@ fn apply_fold_hooked(
     // A crash here - promotion durable, COMMITTED not yet written - must roll
     // back on recovery, undoing the visible promotion, because the journal
     // write below is the linearization point.
-    crash_if_hooked!(FoldStage::AfterPromoteBeforeCommit);
+    crash_if_hooked!(hook, FoldStage::AfterPromoteBeforeCommit, "simulated crash");
     if let Err(err) = write_journal(txn, STATE_COMMITTED) {
         // The promotion is already durable but the commit marker is not. Rather
         // than risk a rollback that would undo a visible changelog change,
@@ -1126,7 +1134,7 @@ fn apply_fold_hooked(
         ));
         return Err(recover_and_chain(tree, err));
     }
-    crash_if_hooked!(FoldStage::AfterCommit);
+    crash_if_hooked!(hook, FoldStage::AfterCommit, "simulated crash");
 
     // --- Cleanup -----------------------------------------------------------
     finish_forward(
