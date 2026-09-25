@@ -1902,6 +1902,50 @@ mod tests {
         assert_eq!(ctx.take_status_projection(), Some(projection));
     }
 
+    /// The azure-container-apps kind's authored child graph is committed to
+    /// the manager before the effect runs: exactly the sandbox-agent control
+    /// Endpoint, the same commit-before-effect order the qemu graph pins.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn reconcile_ensures_the_aca_sandbox_agent_endpoint() {
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
+        manager.add(
+            provider_row("runtime-azure-container-apps", aca_provider_spec()),
+            ResourceStatus::Ready,
+        );
+        manager.set_children_ready(true);
+        let effects = ScriptedEffects::new();
+        let projection = serde_json::json!({ "phase": "Ready", "runtimeReady": true });
+        effects.set_projection(Some(projection.clone()));
+        let mut ctx = context(
+            guest_row(
+                "work-vm",
+                serde_json::json!({ "providerRef": "Provider/runtime-azure-container-apps" }),
+            ),
+            Arc::clone(&manager),
+            RecordingRequeue::default(),
+        );
+        let mut driver = driver(Arc::clone(&effects));
+
+        let outcome = driver.reconcile(&mut ctx).await.expect("reconcile");
+        assert_eq!(outcome, ReconcileOutcome::Satisfied);
+        assert_eq!(
+            manager.ensure_order(),
+            vec!["ensure:Endpoint/work-vm-sandbox-agent".to_owned()],
+            "the ACA child graph is the sandbox-agent control Endpoint",
+        );
+        let observation = effects.observations().pop().expect("effect call");
+        assert_eq!(observation.kind, GuestKind::AzureContainerApps);
+        assert_eq!(
+            observation.children,
+            vec![("Endpoint".to_owned(), "work-vm-sandbox-agent".to_owned(), true)],
+        );
+        let status = guest_status(&ctx);
+        assert_eq!(status.phase, GuestEffectPhase::Ready);
+        assert_eq!(status.resource, Some(projection.clone()));
+        assert_eq!(ctx.take_status_projection(), Some(projection));
+    }
+
     /// The old effect gate: a Provider that reports Ready ahead of its own
     /// children keeps the Guest Pending until every desired child is live.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
