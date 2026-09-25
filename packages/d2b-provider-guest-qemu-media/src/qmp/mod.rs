@@ -127,6 +127,7 @@ pub trait QmpTransport {
 }
 
 /// Scripted transport used by hermetic tests and fake integration fixtures.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct ScriptedQmpTransport {
     greeting: Option<QmpGreeting>,
