@@ -84,25 +84,6 @@ impl<'de> Deserialize<'de> for ProviderConfig {
     }
 }
 
-impl Default for ProviderConfig {
-    fn default() -> Self {
-        Self {
-            controller_execution_ref: ResourceRef::parse("Guest/invalid").expect("valid reference"),
-            qemu_binary_artifact_id: default_qemu_artifact(),
-            qmp_ready_timeout_seconds: DEFAULT_QMP_READY_TIMEOUT_SECONDS,
-            qmp_operation_timeout_seconds: DEFAULT_QMP_OPERATION_TIMEOUT_SECONDS,
-            paused_at_boot_default: true,
-            display_provider_ref: None,
-            network_provider_ref: ResourceRef::parse("Provider/network-local")
-                .expect("valid reference"),
-            volume_provider_ref: ResourceRef::parse("Provider/volume-local")
-                .expect("valid reference"),
-            runtime_tmpfs_quota_bytes: DEFAULT_RUNTIME_TMPFS_QUOTA_BYTES,
-            runtime_tmpfs_quota_inodes: DEFAULT_RUNTIME_TMPFS_QUOTA_INODES,
-        }
-    }
-}
-
 impl ProviderConfig {
     /// Construct a Provider configuration with defaults for bounded values.
     pub fn new(
