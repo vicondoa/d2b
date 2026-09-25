@@ -72,6 +72,10 @@ impl PickerProcess for Child {
     }
 }
 
+// Grace period between sending SIGTERM to a terminating picker and
+// escalating to SIGKILL: long enough for a well-behaved picker to exit
+// after its IPC socket closes, short enough that a hung picker cannot
+// linger across the daemon's maintenance loop.
 const PICKER_TERMINATE_GRACE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Default)]
@@ -86,7 +90,7 @@ impl PickerSpawner for CommandPickerSpawner {
     // and a poll loop, never an executor.
 
     #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-    fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerError> {
+    fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerIpcError> {
         let mut command = Command::new(&launch.command.program);
         command.args(&launch.argv);
         command.env_clear();
@@ -96,21 +100,21 @@ impl PickerSpawner for CommandPickerSpawner {
                 parent_fd: launch.child_ipc_fd,
                 child_fd: launch.ipc_fd_number,
             }])
-            .map_err(|err| PickerError::FdFlags(err.to_string()))?;
+            .map_err(|err| PickerIpcError::FdFlags(err.to_string()))?;
         command
             .spawn()
-            .map_err(|err| PickerError::Spawn(err.to_string()))
+            .map_err(|err| PickerIpcError::Spawn(err.to_string()))
     }
 }
 
 pub trait PickerSpawner {
     type Process: PickerProcess;
 
-    fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerError>;
+    fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerIpcError>;
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
-pub enum PickerError {
+pub enum PickerIpcError {
     #[error("picker is not configured")]
     NotConfigured,
     #[error("picker is already active for request {request_id}")]
@@ -201,24 +205,26 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         self.active.as_ref().map(|active| &active.parent_socket)
     }
 
+    /// Spawn the picker subprocess and borrow its IPC socket; the borrow
+    /// stays valid until the picker is cancelled, reaped, or replaced.
     pub fn launch(
         &mut self,
         request_id: String,
         command: Option<PickerCommand>,
         ambient_env: &BTreeMap<OsString, OsString>,
         timeout: Duration,
-    ) -> Result<&UnixStream, PickerError> {
+    ) -> Result<&UnixStream, PickerIpcError> {
         if let Some(active) = &self.active {
-            return Err(PickerError::AlreadyActive {
+            return Err(PickerIpcError::AlreadyActive {
                 request_id: active.request_id.clone(),
             });
         }
-        let command = command.ok_or(PickerError::NotConfigured)?;
+        let command = command.ok_or(PickerIpcError::NotConfigured)?;
         let (parent_socket, child_socket) =
-            UnixStream::pair().map_err(|err| PickerError::Socketpair(err.to_string()))?;
+            UnixStream::pair().map_err(|err| PickerIpcError::Socketpair(err.to_string()))?;
         parent_socket
             .set_nonblocking(true)
-            .map_err(|err| PickerError::Socketpair(err.to_string()))?;
+            .map_err(|err| PickerIpcError::Socketpair(err.to_string()))?;
         let child_ipc_fd = OwnedFd::from(child_socket);
         let child_fd_number = PICKER_IPC_FD;
         let argv = picker_argv(&command, child_fd_number);
@@ -242,11 +248,12 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         Ok(&self.active.as_ref().expect("active").parent_socket)
     }
 
-    // Sync-by-construction nonblocking read:the daemon's poll loop marks the
-    // picker socket ready, then this drains frames without ever blocking
-    // (WouldBlock breaks the loop). Only the CLI daemon compiles clipd_host.
+    /// Nonblocking drain of picker IPC frames: the daemon's poll loop marks
+    /// the picker socket ready, then this reads until a complete frame or
+    /// `WouldBlock`, returning [`PickerPoll::Incomplete`] for partial data.
+    /// Only the CLI daemon compiles clipd_host.
     #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
-    pub fn poll_active(&mut self, max_frame_bytes: usize) -> Result<PickerPoll, PickerError> {
+    pub fn poll_active(&mut self, max_frame_bytes: usize) -> Result<PickerPoll, PickerIpcError> {
         let Some(active) = self.active.as_mut() else {
             return Ok(PickerPoll::Incomplete);
         };
@@ -258,7 +265,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
             match active.parent_socket.read(&mut buf) {
                 Ok(0) if active.read_buffer.is_empty() => return Ok(PickerPoll::Closed),
                 Ok(0) => {
-                    return Err(PickerError::Frame(
+                    return Err(PickerIpcError::Frame(
                         "picker closed with incomplete frame".to_owned(),
                     ));
                 }
@@ -267,7 +274,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
                     if let Some(newline) = active.read_buffer.iter().position(|byte| *byte == b'\n')
                     {
                         if newline > max_frame_bytes {
-                            return Err(PickerError::Frame(
+                            return Err(PickerIpcError::Frame(
                                 FramingError::FrameTooLong {
                                     max: max_frame_bytes,
                                 }
@@ -277,7 +284,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
                         break;
                     }
                     if active.read_buffer.len() > max_frame_bytes {
-                        return Err(PickerError::Frame(
+                        return Err(PickerIpcError::Frame(
                             FramingError::FrameTooLong {
                                 max: max_frame_bytes,
                             }
@@ -287,7 +294,7 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(PickerError::Frame(error.to_string())),
+                Err(error) => return Err(PickerIpcError::Frame(error.to_string())),
             }
         }
 
@@ -308,12 +315,12 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
     fn decode_next_picker_frame<P: PickerProcess>(
         active: &mut ActivePicker<P>,
         max_frame_bytes: usize,
-    ) -> Result<PickerPoll, PickerError> {
+    ) -> Result<PickerPoll, PickerIpcError> {
         let Some(newline) = active.read_buffer.iter().position(|byte| *byte == b'\n') else {
             return Ok(PickerPoll::Incomplete);
         };
         if newline > max_frame_bytes {
-            return Err(PickerError::Frame(
+            return Err(PickerIpcError::Frame(
                 FramingError::FrameTooLong {
                     max: max_frame_bytes,
                 }
@@ -322,10 +329,12 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         }
         let frame = active.read_buffer.drain(..=newline).collect::<Vec<_>>();
         let message = decode_frame::<PickerToDaemonMessage>(&frame, max_frame_bytes)
-            .map_err(|err| PickerError::Frame(err.to_string()))?;
+            .map_err(|err| PickerIpcError::Frame(err.to_string()))?;
         Ok(PickerPoll::Message(message))
     }
 
+    /// Terminate the active picker when its deadline has passed, returning
+    /// `PickerTimeout` and moving the process into the terminating set.
     pub fn reap_expired(&mut self, now: Instant) -> Option<ReasonCode> {
         let active = self.active.as_ref()?;
         if now >= active.deadline {
@@ -342,6 +351,9 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
         }
     }
 
+    /// Reap or escalate terminating pickers: reap exited children, SIGKILL
+    /// survivors past the grace period, and keep the rest for the next
+    /// maintenance pass.
     pub fn reap_terminated(&mut self, now: Instant) {
         let mut still_running = Vec::new();
         for mut picker in self.terminating.drain(..) {
@@ -418,7 +430,7 @@ mod tests {
     impl PickerSpawner for FakeSpawner {
         type Process = FakeProcess;
 
-        fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerError> {
+        fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerIpcError> {
             let flags = rustix::io::fcntl_getfd(&launch.child_ipc_fd).expect("child ipc fd flags");
             assert!(
                 flags.contains(rustix::io::FdFlags::CLOEXEC),
@@ -500,7 +512,7 @@ mod tests {
             .expect_err("single active");
         assert!(matches!(
             err,
-            PickerError::AlreadyActive {
+            PickerIpcError::AlreadyActive {
                 request_id
             } if request_id == "req-1"
         ));

@@ -927,6 +927,7 @@ pub struct ExecutionPolicyWire {
 }
 
 impl ExecutionPolicyWire {
+    /// Convert the wire mirror into a validated `ExecutionPolicy`.
     pub fn into_policy(self) -> Result<ExecutionPolicy, PrimitiveSpecError> {
         ExecutionPolicy::new(
             self.default_domain,
@@ -948,6 +949,8 @@ fn default_allowed_domains() -> Vec<ExecutionDomain> {
     vec![ExecutionDomain::System]
 }
 
+/// Build a bounded-string JSON schema; macro-support surface for the
+/// exported `string_schema!` expansion.
 pub fn string_schema_object(min: u32, max: u32) -> schemars::schema::Schema {
     let mut schema = schemars::schema::SchemaObject {
         instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(

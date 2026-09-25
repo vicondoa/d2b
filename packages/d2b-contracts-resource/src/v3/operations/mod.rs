@@ -375,6 +375,7 @@ pub struct PreparedStoreMutation {
 }
 
 impl PreparedStoreMutation {
+    /// Construct a backend-ready mutation with its final identity and digest.
     pub const fn new(
         mutation: StoreMutation,
         resource_uid: Option<ResourceUid>,
@@ -387,6 +388,7 @@ impl PreparedStoreMutation {
         }
     }
 
+    /// Borrow the prepared mutation.
     pub const fn mutation(&self) -> &StoreMutation {
         &self.mutation
     }

@@ -1128,48 +1128,49 @@ fn install_bridge_listeners(
     bridge_peers: &[BridgePeerConfig],
 ) -> Result<Vec<BridgeListener>, String> {
     let uid = rustix::process::getuid().as_raw();
-    let mut listeners = Vec::new();
-    for peer in bridge_peers {
-        let path = bridge_socket_path(root, uid, &peer.socket_component)?;
-        let parent = path
-            .parent()
-            .ok_or_else(|| format!("bridge socket has no parent: {}", path.display()))?;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o770)
-            .create(parent)
-            .map_err(|e| format!("create bridge socket dir {}: {e}", parent.display()))?;
-        if path.exists() {
-            let meta = std::fs::symlink_metadata(&path)
-                .map_err(|e| format!("stat bridge socket {}: {e}", path.display()))?;
-            if !meta.file_type().is_socket() {
-                return Err(format!("refusing to replace non-socket {}", path.display()));
+    Ok(bridge_peers
+        .into_iter()
+        .map(|peer| {
+            let path = bridge_socket_path(root, uid, &peer.socket_component)?;
+            let parent = path
+                .parent()
+                .ok_or_else(|| format!("bridge socket has no parent: {}", path.display()))?;
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o770)
+                .create(parent)
+                .map_err(|e| format!("create bridge socket dir {}: {e}", parent.display()))?;
+            if path.exists() {
+                let meta = std::fs::symlink_metadata(&path)
+                    .map_err(|e| format!("stat bridge socket {}: {e}", path.display()))?;
+                if !meta.file_type().is_socket() {
+                    return Err(format!("refusing to replace non-socket {}", path.display()));
+                }
+                std::fs::remove_file(&path)
+                    .map_err(|e| format!("remove stale bridge socket {}: {e}", path.display()))?;
             }
-            std::fs::remove_file(&path)
-                .map_err(|e| format!("remove stale bridge socket {}: {e}", path.display()))?;
-        }
-        // umask is process-wide: keep bridge listener installation in the
-        // single-threaded startup phase, before spawning background workers.
-        let old_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o111));
-        let listener = UnixListener::bind(&path)
-            .map_err(|e| format!("bind bridge socket {}: {e}", path.display()));
-        nix::sys::stat::umask(old_umask);
-        let listener = listener?;
-        let bound_meta = std::fs::symlink_metadata(&path)
-            .map_err(|e| format!("stat bound bridge socket {}: {e}", path.display()))?;
-        if !bound_meta.file_type().is_socket() {
-            return Err(format!("refusing bound non-socket {}", path.display()));
-        }
-        listener
-            .set_nonblocking(true)
-            .map_err(|e| format!("set bridge socket nonblocking {}: {e}", path.display()))?;
-        listeners.push(BridgeListener {
-            identity: peer.identity.clone(),
-            expected_uid: peer.expected_uid,
-            listener,
-        });
-    }
-    Ok(listeners)
+            // umask is process-wide: keep bridge listener installation in the
+            // single-threaded startup phase, before spawning background workers.
+            let old_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o111));
+            let listener = UnixListener::bind(&path)
+                .map_err(|e| format!("bind bridge socket {}: {e}", path.display()));
+            nix::sys::stat::umask(old_umask);
+            let listener = listener?;
+            let bound_meta = std::fs::symlink_metadata(&path)
+                .map_err(|e| format!("stat bound bridge socket {}: {e}", path.display()))?;
+            if !bound_meta.file_type().is_socket() {
+                return Err(format!("refusing bound non-socket {}", path.display()));
+            }
+            listener
+                .set_nonblocking(true)
+                .map_err(|e| format!("set bridge socket nonblocking {}: {e}", path.display()))?;
+            Ok(BridgeListener {
+                identity: peer.identity.clone(),
+                expected_uid: peer.expected_uid,
+                listener,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?)
 }
 
 fn bridge_socket_path(root: &Path, uid: u32, component: &str) -> Result<PathBuf, String> {
@@ -2809,14 +2810,9 @@ fn selected_entry_data_by_mime(
 
 fn preferred_mime_order(data_by_mime: &BTreeMap<String, Vec<u8>>) -> Vec<String> {
     let mut out = Vec::new();
-    for preferred in [
-        "text/plain;charset=utf-8",
-        "text/plain",
-        "text/html",
-        "image/png",
-    ] {
-        if data_by_mime.contains_key(preferred) {
-            out.push(preferred.to_owned());
+    for preferred in d2b_provider_clipboard_wayland::ALLOWED_MIME_TYPES {
+        if data_by_mime.contains_key(*preferred) {
+            out.push((*preferred).to_owned());
         }
     }
     for mime in data_by_mime.keys() {

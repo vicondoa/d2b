@@ -45,6 +45,7 @@ pub struct StoreSealIdentity {
 }
 
 impl StoreSealIdentity {
+    /// Construct a seal identity for a store at its first epoch.
     pub fn new(slot: StoreSlot, zone: ZoneId, store_uuid: ResourceUid) -> Self {
         Self {
             slot,
@@ -60,10 +61,12 @@ impl StoreSealIdentity {
         self
     }
 
+    /// Read the zone the store belongs to.
     pub const fn zone(&self) -> &ZoneId {
         &self.zone
     }
 
+    /// Read the store slot.
     pub const fn slot(&self) -> StoreSlot {
         self.slot
     }
@@ -118,10 +121,12 @@ pub struct OpenedMutation {
 }
 
 impl OpenedMutation {
+    /// Borrow the opened mutation payload.
     pub fn body(&self) -> &MutationSealBody {
         &self.body
     }
 
+    /// Consume the opened mutation and return its payload.
     pub fn into_body(self) -> MutationSealBody {
         self.body
     }
@@ -178,6 +183,7 @@ impl MutationSealAcceptor {
         diagnose_identity(&self.store, store)
     }
 
+    /// Read the store slot this acceptor was sealed for.
     pub const fn declared_slot(&self) -> StoreSlot {
         self.store.slot()
     }

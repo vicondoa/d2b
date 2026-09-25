@@ -109,7 +109,7 @@ impl ClipboardEntry {
         self.bytes.is_empty()
     }
 
-    /// Return a bounded copy for an already-authorized materialization.
+    /// Borrow the payload bytes for an already-authorized materialization.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }

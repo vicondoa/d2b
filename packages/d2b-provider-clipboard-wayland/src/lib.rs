@@ -28,7 +28,9 @@ pub use fd::{
 };
 pub use history::{ClipboardEntry, ClipboardHistory, HistoryError};
 pub use picker::{PickerAuthority, PickerError, PickerReceipt, PickerRequest, PickerResult};
-pub use policy::{ALLOWED_MIME_TYPES, ClipboardPolicyError, Policy, SECRET_HINT_MIME_TYPES};
+pub use policy::{
+    ALLOWED_MIME_TYPES, ClipboardPolicyError, Policy, SECRET_HINT_MIME_TYPES, normalize_mime,
+};
 pub use runtime::{
     ClipboardFinalizationReport, ClipboardProcessEffectPort, ClipboardRuntime,
     ClipboardRuntimeError,

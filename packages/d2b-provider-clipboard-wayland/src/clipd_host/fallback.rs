@@ -2,8 +2,9 @@ use std::time::{Duration, Instant};
 
 use crate::clipd_host::niri::FocusedWindowSnapshot;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum FallbackState {
+    #[default]
     Idle,
     PickerOpen {
         target: FocusedWindowSnapshot,
@@ -32,17 +33,9 @@ pub enum FallbackClearReason {
     PickerCancelled,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FallbackArming {
     state: FallbackState,
-}
-
-impl Default for FallbackArming {
-    fn default() -> Self {
-        Self {
-            state: FallbackState::Idle,
-        }
-    }
 }
 
 impl FallbackArming {
