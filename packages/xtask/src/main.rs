@@ -3,6 +3,7 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    sync::LazyLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -428,9 +429,10 @@ fn message_only_proto(
     let mut out = String::new();
     let mut skipping_service = false;
     let mut depth = 0_i32;
+    let service_marker = format!("service {service_name} ");
     for line in proto.lines() {
         let trimmed = line.trim_start();
-        if !skipping_service && trimmed.starts_with(&format!("service {service_name} ")) {
+        if !skipping_service && trimmed.starts_with(&service_marker) {
             skipping_service = true;
         }
         if skipping_service {
@@ -561,7 +563,7 @@ where
     }
 }
 
-fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
+static REPO_ROOT: LazyLock<Result<PathBuf, String>> = LazyLock::new(|| {
     let mut candidates = Vec::new();
     for variable in ["D2B_REPO_ROOT", "TEST_SRCDIR", "RUNFILES_DIR"] {
         if let Some(base) = std::env::var_os(variable).map(PathBuf::from) {
@@ -585,14 +587,20 @@ fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
                 && path.join("BUILD.bazel").is_file()
                 && path.join("flake.nix").is_file()
             {
-                return Ok(Box::leak(path.into_boxed_path()));
+                return Ok(path);
             }
             if !path.pop() {
                 break;
             }
         }
     }
-    Err("cannot locate repo root".into())
+    Err("cannot locate repo root".to_owned())
+});
+
+fn repo_root() -> Result<&'static Path, Box<dyn std::error::Error>> {
+    REPO_ROOT
+        .as_deref()
+        .map_err(|message| message.clone().into())
 }
 
 fn schema_documents() -> Vec<(&'static str, RootSchema)> {
@@ -651,7 +659,7 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .join(SCHEMA_VERSION);
     fs::create_dir_all(&out_dir)?;
     let schemas = schema_documents();
-    let mut written = write_schemas(&out_dir, &schemas)?;
+    let mut written = write_schemas(&out_dir, schemas)?;
     let delivery_dir = repo_root.join("docs/reference/schemas/delivery");
     fs::create_dir_all(&delivery_dir)?;
     written.push(write_recovery_schema(&delivery_dir)?);
@@ -766,7 +774,7 @@ fn gen_zone_storage_schema() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>>
     fs::create_dir_all(&out_dir)?;
     write_schemas(
         &out_dir,
-        &[(
+        vec![(
             "zone-storage.json",
             schemars::schema_for!(ZoneStoreStorageRow),
         )],
@@ -797,7 +805,7 @@ fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         ),
     ];
 
-    write_schemas(&out_dir, &schemas)
+    write_schemas(&out_dir, Vec::from(schemas))
 }
 
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
@@ -963,21 +971,20 @@ fn write_manpage(path: &Path, rendered: Vec<u8>) -> Result<(), Box<dyn std::erro
 #[allow(clippy::disallowed_methods, reason = "CLI-only path")]
 fn write_schemas(
     out_dir: &Path,
-    schemas: &[(&str, RootSchema)],
+    schemas: Vec<(&str, RootSchema)>,
 ) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let mut written = Vec::with_capacity(schemas.len());
-    for (file_name, schema) in schemas {
+    for (file_name, mut schema) in schemas {
         let path = out_dir.join(file_name);
-        fs::write(&path, render_schema(schema)?)?;
+        fs::write(&path, render_schema(&mut schema)?)?;
         written.push(path);
     }
     Ok(written)
 }
 
-fn render_schema(schema: &RootSchema) -> Result<String, serde_json::Error> {
-    let mut schema = schema.clone();
+fn render_schema(schema: &mut RootSchema) -> Result<String, serde_json::Error> {
     schema.meta_schema = Some("https://json-schema.org/draft/2020-12/schema".to_owned());
-    let mut data = serde_json::to_string_pretty(&schema)?;
+    let mut data = serde_json::to_string_pretty(schema)?;
     data.push('\n');
     Ok(data)
 }
@@ -1525,12 +1532,12 @@ mod schema_tests {
     #[test]
     fn schema_generation_is_reproducible() {
         let first = schema_documents()
-            .iter()
-            .map(|(name, schema)| ((*name).to_owned(), render_schema(schema).unwrap()))
+            .into_iter()
+            .map(|(name, mut schema)| (name.to_owned(), render_schema(&mut schema).unwrap()))
             .collect::<Vec<_>>();
         let second = schema_documents()
-            .iter()
-            .map(|(name, schema)| ((*name).to_owned(), render_schema(schema).unwrap()))
+            .into_iter()
+            .map(|(name, mut schema)| (name.to_owned(), render_schema(&mut schema).unwrap()))
             .collect::<Vec<_>>();
         assert_eq!(first, second);
     }
@@ -1539,7 +1546,7 @@ mod schema_tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn committed_schemas_match_the_generator() {
         let root = repo_root().expect("repository root");
-        for (name, schema) in schema_documents() {
+        for (name, mut schema) in schema_documents() {
             let path = root
                 .join("docs/reference/schemas")
                 .join(SCHEMA_VERSION)
@@ -1548,7 +1555,7 @@ mod schema_tests {
                 .unwrap_or_else(|error| panic!("{} is unreadable: {error}", path.display()));
             assert_eq!(
                 committed,
-                render_schema(&schema).unwrap(),
+                render_schema(&mut schema).unwrap(),
                 "{} drifted",
                 path.display()
             );
