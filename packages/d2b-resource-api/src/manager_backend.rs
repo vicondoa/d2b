@@ -747,8 +747,13 @@ fn render_envelope(
             .map_err(|_| envelope_invalid())?;
         return envelope.canonical_bytes().map_err(|_| envelope_invalid());
     }
-    let authored: serde_json::Value =
-        serde_json::from_slice(metadata).map_err(|_| envelope_invalid())?;
+    // An absent authored-metadata slice is the ordinary no-metadata row; only
+    // bytes that fail to parse are a defect.
+    let authored: serde_json::Value = if metadata.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(metadata).map_err(|_| envelope_invalid())?
+    };
     let field = |name: &str, fallback: serde_json::Value| {
         authored
             .get(name)
