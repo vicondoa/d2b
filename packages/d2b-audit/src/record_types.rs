@@ -794,12 +794,19 @@ impl Serialize for AuditRecord {
     }
 }
 
-impl<'de> Deserialize<'de> for AuditRecord {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = serde_json::Value::deserialize(deserializer)?;
+impl AuditRecord {
+    /// Parse one record line into its wire shape without re-verifying the
+    /// record hash.
+    ///
+    /// The [`Deserialize`] admission gate re-verifies the hash on every read;
+    /// this companion parse runs the same envelope and field checks so a
+    /// caller can tell a chain break from a malformed line before running
+    /// [`AuditRecord::verify`].
+    pub(crate) fn parse_unverified(line: &str) -> Result<Self, serde_json::Error> {
+        Self::from_wire_value(serde_json::from_str(line)?)
+    }
+
+    pub(crate) fn from_wire_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
         let object = value
             .as_object()
             .ok_or_else(|| serde::de::Error::custom("audit-record-not-object"))?;
@@ -913,6 +920,17 @@ impl<'de> Deserialize<'de> for AuditRecord {
             record_hash,
             fields,
         };
+        Ok(record)
+    }
+}
+
+impl<'de> Deserialize<'de> for AuditRecord {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let record = Self::from_wire_value(serde_json::Value::deserialize(deserializer)?)
+            .map_err(serde::de::Error::custom)?;
         if record
             .computed_record_hash()
             .map_err(serde::de::Error::custom)?

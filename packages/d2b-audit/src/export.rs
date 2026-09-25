@@ -189,7 +189,7 @@ pub fn export_segments_range(
                     continue;
                 }
             };
-            match serde_json::from_str::<AuditRecord>(&line) {
+            match AuditRecord::parse_unverified(&line) {
                 Ok(record) if chain_valid && record.verify(&previous).is_ok() => {
                     previous = record.record_hash().clone();
                     if in_range {
@@ -231,16 +231,11 @@ pub fn export_segments_range(
                         sequence = sequence.saturating_add(1);
                     }
                 }
-                Err(error) => {
+                Err(_) => {
                     if in_range {
                         let error = ExportLine::Error {
                             sequence,
-                            error_code: if error.to_string().contains("audit-record-hash-mismatch")
-                            {
-                                "hash-break"
-                            } else {
-                                "record-invalid"
-                            },
+                            error_code: "record-invalid",
                         };
                         let size = error.to_json().len().saturating_add(1);
                         if lines.len() >= MAX_EXPORT_RECORDS

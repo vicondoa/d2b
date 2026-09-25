@@ -132,9 +132,27 @@ impl AuthorityLedger {
     }
 }
 
+/// Handle to one zone's shared authority ledger.
+///
+/// The concrete synchronization primitive is an implementation detail:
+/// dispatchers and the daemon share this handle, never the lock type
+/// itself, so a lock change stays local to this crate.
+#[derive(Clone)]
+pub struct AuthorityLedgerHandle(Arc<tokio::sync::Mutex<AuthorityLedger>>);
+
+impl std::ops::Deref for AuthorityLedgerHandle {
+    type Target = tokio::sync::Mutex<AuthorityLedger>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Construct one zone's shared authority ledger.
-pub fn new_authority_ledger() -> Arc<tokio::sync::Mutex<AuthorityLedger>> {
-    Arc::new(tokio::sync::Mutex::new(AuthorityLedger::default()))
+pub fn new_authority_ledger() -> AuthorityLedgerHandle {
+    AuthorityLedgerHandle(Arc::new(tokio::sync::Mutex::new(
+        AuthorityLedger::default(),
+    )))
 }
 
 /// The provider-owned implementation of the Provider dispatcher (U12 usbip
@@ -144,7 +162,7 @@ pub fn new_authority_ledger() -> Arc<tokio::sync::Mutex<AuthorityLedger>> {
 pub struct KernelUsbipDispatcher<'a> {
     dispatch: &'a dyn UsbipBrokerDispatch,
     context: UsbipBindingContext,
-    ledger: Arc<tokio::sync::Mutex<AuthorityLedger>>,
+    ledger: AuthorityLedgerHandle,
     attach_identity: Option<AttachProcessIdentity>,
     attach_slot: Option<BindingSlotLease>,
     attach_proxy: Option<BindingProxyLease>,
@@ -159,7 +177,7 @@ impl<'a> KernelUsbipDispatcher<'a> {
     pub fn new(
         dispatch: &'a dyn UsbipBrokerDispatch,
         context: UsbipBindingContext,
-        ledger: Arc<tokio::sync::Mutex<AuthorityLedger>>,
+        ledger: AuthorityLedgerHandle,
     ) -> Self {
         Self {
             dispatch,

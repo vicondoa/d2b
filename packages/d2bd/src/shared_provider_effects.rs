@@ -213,7 +213,7 @@ pub(crate) struct ProductionSharedProviderEffects {
     gpu_facets: std::sync::OnceLock<d2b_provider_device_gpu::facets::GpuEffectFacets>,
     /// Zone-wide USBIP authority ledger (old `usbip_ledger`), shared by every
     /// USBIP Service and Binding dispatcher in the zone.
-    usbip_ledger: Arc<tokio::sync::Mutex<d2b_provider_device_usbip::broker::AuthorityLedger>>,
+    usbip_ledger: d2b_provider_device_usbip::broker::AuthorityLedgerHandle,
     /// Zone-wide activated USBIP services (old `usbip_services`).
     usbip_services: Arc<tokio::sync::Mutex<BTreeSet<ResourceUid>>>,
     /// Scripted host-network occupancy (test-support only): a test installs a
@@ -1310,7 +1310,7 @@ impl ProductionSharedProviderEffects {
         let port = d2b_provider_device_usbip::broker::KernelUsbipDispatcher::new(
             dispatch.as_ref(),
             binding_context,
-            Arc::clone(&self.usbip_ledger),
+            self.usbip_ledger.clone(),
         )
         .into_port();
         let opted_in = request.spec.pointer("/mode").and_then(Value::as_str) == Some("authority");

@@ -635,6 +635,35 @@ struct RetentionSegment {
     tail: AuditHash,
 }
 
+/// Typed failure class for a checkpoint the retention path may discard.
+///
+/// The scratch checkpoint is advisory: a malformed, oversized, or
+/// unverifiable staged file is thrown away on restart instead of failing
+/// retention. The class rides inside the `io::Error` payload so the
+/// discard decision matches the type, not the error text, while the
+/// stable code strings stay on the public boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckpointReadError {
+    /// The checkpoint file exceeded the size bound.
+    Limit,
+    /// The checkpoint payload did not parse.
+    Invalid,
+    /// The checkpoint did not verify against its chain.
+    Unverifiable,
+}
+
+impl std::fmt::Display for CheckpointReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Limit => "audit-retention-checkpoint-limit",
+            Self::Invalid => "audit-retention-checkpoint-invalid",
+            Self::Unverifiable => "audit-retention-checkpoint-unverifiable",
+        })
+    }
+}
+
+impl std::error::Error for CheckpointReadError {}
+
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 fn read_checkpoint_file(path: &Path) -> io::Result<Option<RetentionCheckpoint>> {
     let metadata = match fs::symlink_metadata(path) {
@@ -648,12 +677,12 @@ fn read_checkpoint_file(path: &Path) -> io::Result<Option<RetentionCheckpoint>> 
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
         .open(path)?;
     if file.metadata()?.len() > 1024 * 1024 {
-        return Err(io::Error::other("audit-retention-checkpoint-limit"));
+        return Err(io::Error::other(CheckpointReadError::Limit));
     }
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     let checkpoint = serde_json::from_slice(&bytes)
-        .map_err(|_| io::Error::other("audit-retention-checkpoint-invalid"))?;
+        .map_err(|_| io::Error::other(CheckpointReadError::Invalid))?;
     Ok(Some(checkpoint))
 }
 
@@ -718,12 +747,10 @@ fn read_checkpoint_with_directory(
 }
 
 fn is_discardable_checkpoint_scratch_error(error: &io::Error) -> bool {
-    matches!(
-        error.to_string().as_str(),
-        "audit-retention-checkpoint-invalid"
-            | "audit-retention-checkpoint-limit"
-            | "audit-retention-checkpoint-unverifiable"
-    )
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<CheckpointReadError>())
+        .is_some()
 }
 
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
@@ -748,18 +775,18 @@ fn validate_checkpoint(checkpoint: &RetentionCheckpoint) -> io::Result<()> {
             || !checkpoint.segments.is_empty()
             || checkpoint.phase.is_some()
         {
-            return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+            return Err(io::Error::other(CheckpointReadError::Unverifiable));
         }
         return Ok(());
     }
     let Some(start_anchor) = checkpoint.start_anchor.as_ref() else {
-        return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+        return Err(io::Error::other(CheckpointReadError::Unverifiable));
     };
     let Some(phase) = checkpoint.phase else {
-        return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+        return Err(io::Error::other(CheckpointReadError::Unverifiable));
     };
     if checkpoint.segments.is_empty() || checkpoint.segments.len() > MAX_SEGMENT_SCAN_ENTRIES {
-        return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+        return Err(io::Error::other(CheckpointReadError::Unverifiable));
     }
     let mut previous_name = None;
     let mut previous = start_anchor.clone();
@@ -768,13 +795,13 @@ fn validate_checkpoint(checkpoint: &RetentionCheckpoint) -> io::Result<()> {
             || previous_name.is_some_and(|name| name >= segment.name.as_str())
             || segment.previous != previous
         {
-            return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+            return Err(io::Error::other(CheckpointReadError::Unverifiable));
         }
         previous_name = Some(segment.name.as_str());
         previous = segment.tail.clone();
     }
     if checkpoint.anchor != previous {
-        return Err(io::Error::other("audit-retention-checkpoint-unverifiable"));
+        return Err(io::Error::other(CheckpointReadError::Unverifiable));
     }
     match phase {
         RetentionCheckpointPhase::Prepared | RetentionCheckpointPhase::Deleting => Ok(()),

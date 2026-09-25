@@ -16,12 +16,9 @@ use std::{
 };
 
 use d2b_contracts_resource::v3::{
-    CanonicalJsonObject, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
-    ResourceUid, SchemaFingerprint, ZoneId,
+    CanonicalJsonObject, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ZoneId,
 };
-use d2b_core_controller::controller_assignment::{
-    AssignmentError, ResourceClientLease, ScopedResourceFilter,
-};
+use d2b_core_controller::controller_assignment::ResourceClientLease;
 pub use d2b_core_controller::controller_assignment::{
     AssignmentIdentity, AssignmentVerb, OwnerChildScope, ScopedResourceMutation,
     ScopedResourceQuery, ScopedResourceScope,
@@ -77,14 +74,6 @@ impl ZonePeerIdentity {
             zone,
             static_key_fingerprint,
         }
-    }
-
-    /// Construct transport evidence from an enrolled peer key fingerprint.
-    pub const fn from_enrolled_peer(
-        zone: d2b_contracts_zone_session::v3::zone_routing::ZonePath,
-        static_key_fingerprint: [u8; 32],
-    ) -> Self {
-        Self::from_observed_static_key(zone, static_key_fingerprint)
     }
 
     /// Borrow the exact Zone route identity established by the adapter.
@@ -350,11 +339,6 @@ impl ZoneSocketConnector {
     /// Verify the peer portion of an authenticated session pin.
     pub fn verify_session_pin(&self, pin: &ZoneSessionPin) -> Result<(), ClientError> {
         self.verify_peer(pin.peer())
-    }
-
-    /// Return the endpoint identity pinned for the local Zone runtime.
-    pub fn local_daemon_endpoint_identity(&self) -> ZonePeerIdentity {
-        self.expected_peer.clone()
     }
 }
 
@@ -624,30 +608,6 @@ where
     R: TargetResolver,
     W: WallClock,
 {
-    /// Mint the controller-scoped collection query used by the existing
-    /// Resource API route. The lease supplies the non-widenable assignment
-    /// filter; callers can only narrow its ResourceType/name selectors.
-    pub fn scoped_query(
-        &self,
-        lease: &ResourceClientLease,
-        resource_types: Vec<ResourceTypeName>,
-        resource_names: Vec<ResourceName>,
-        filters: Vec<ScopedResourceFilter>,
-    ) -> Result<ScopedResourceQuery, AssignmentError> {
-        lease.query(resource_types, resource_names, filters)
-    }
-
-    /// Mint an owner-bound Process child query for the controller lease.
-    pub fn scoped_child_query(
-        &self,
-        lease: &ResourceClientLease,
-        resource_types: Vec<ResourceTypeName>,
-        resource_names: Vec<ResourceName>,
-        filters: Vec<ScopedResourceFilter>,
-    ) -> Result<ScopedResourceQuery, AssignmentError> {
-        lease.child_query(resource_types, resource_names, filters)
-    }
-
     /// Resolve a target and prepare one bounded Resource call.
     pub fn prepare_resource_call(
         &self,
@@ -694,38 +654,6 @@ where
             pin,
             session,
         })
-    }
-
-    /// Execute one Resource call over a caller-supplied authenticated session.
-    ///
-    /// New callers should prefer [`Self::connect`] plus
-    /// [`Self::call_connected`], which binds the session to the route pin.
-    /// This lower-level form remains useful to the bus adapter, which already
-    /// owns the authenticated session binding.
-    pub async fn call_resource<S>(
-        &self,
-        session: &S,
-        target: &TargetInput,
-        verb: ResourceVerb,
-        options: CallOptions,
-        selection: TransportSelection,
-        request: ResourceCallOptions<'_>,
-    ) -> Result<CanonicalJsonObject, ClientError>
-    where
-        S: ConnectedZoneSession,
-    {
-        let (resolved, _driver) =
-            self.prepare_resource_call(target, verb, options, selection, request.has_attachments)?;
-        execute_resource_call(
-            &self.resource,
-            session,
-            &resolved,
-            verb,
-            _driver,
-            request,
-            None,
-        )
-        .await
     }
 
     /// Execute a typed call over a handle whose authenticated route pin was
