@@ -279,7 +279,7 @@ struct ActiveRelayLease {
 pub struct GatewayGuestCredentialPort {
     credential: Arc<GatewayCredential>,
     active: Arc<Mutex<HashMap<u64, ActiveRelayLease>>>,
-    now_unix_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
+    now_unix_ms: Arc<dyn Fn() -> Result<u64, RelayCredentialError> + Send + Sync>,
 }
 
 impl GatewayGuestCredentialPort {
@@ -291,7 +291,7 @@ impl GatewayGuestCredentialPort {
     /// Build a Guest-local port with an injected clock for deterministic tests.
     pub fn with_clock(
         credential: Arc<GatewayCredential>,
-        now_unix_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
+        now_unix_ms: Arc<dyn Fn() -> Result<u64, RelayCredentialError> + Send + Sync>,
     ) -> Self {
         Self {
             credential,
@@ -394,7 +394,7 @@ impl RelayCredentialPort for GatewayGuestCredentialPort {
             );
             return Err(RelayCredentialError::Unavailable);
         }
-        let now = (self.now_unix_ms)();
+        let now = (self.now_unix_ms)()?;
         let requested_ttl = u64::from(deadline_ms).min(MAX_RELAY_LEASE_TTL_MS);
         let mut expires_at = now.saturating_add(requested_ttl).saturating_add(1_000);
         if let Some(not_after) = self
@@ -647,11 +647,11 @@ fn required_str(v: &Value, path: &[&str]) -> Result<String, CredentialError> {
         .ok_or(CredentialError::Malformed)
 }
 
-fn system_now_unix_ms() -> u64 {
+fn system_now_unix_ms() -> Result<u64, RelayCredentialError> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
+        .map_err(|_| RelayCredentialError::Clock)
 }
 
 fn valid_material_text(value: &str) -> bool {
@@ -913,7 +913,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| 1_000_000));
+        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| Ok(1_000_000)));
         assert!(matches!(
             port.acquire(RelayCredentialRole::Send, 1_000).await,
             Err(RelayCredentialError::BindingRequired)
@@ -949,7 +949,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| 1_000_000));
+        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| Ok(1_000_000)));
         let binding = RelayCredentialBinding::new("link-drop", "session-drop", 1).unwrap();
         let lease = port
             .acquire_bound(RelayCredentialRole::Listen, &binding, 1_000)
@@ -1014,7 +1014,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| 10_000));
+        let port = GatewayGuestCredentialPort::with_clock(credential, Arc::new(|| Ok(10_000)));
         let binding = RelayCredentialBinding::new("link", "session", 1).unwrap();
         assert!(matches!(
             port.acquire_bound(RelayCredentialRole::Listen, &binding, 1_000)

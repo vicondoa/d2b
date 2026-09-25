@@ -138,6 +138,12 @@ pub struct RelayCarriageRequest {
     pub deadline_ms: u32,
 }
 
+/// Non-secret marker data carried by a sealed credential open.
+struct SealedObservation {
+    generation: u64,
+    send_key_digest: [u8; 32],
+}
+
 /// Gateway Guest-local Azure Relay Provider and credential boundary.
 ///
 /// Credential custody is supplied either by the Guest-local sealed bootstrap
@@ -146,8 +152,7 @@ pub struct RelayCarriageRequest {
 /// carrying protected ComponentSession data.
 pub struct GatewayGuestZoneLinkRuntime {
     provider: AzureRelayTransportProvider<GatewayGuestCredentialSource, AzureRelaySocketConnector>,
-    credential_generation: Option<u64>,
-    credential_send_key_digest: Option<[u8; 32]>,
+    credential_observation: Option<SealedObservation>,
 }
 
 impl std::fmt::Debug for GatewayGuestZoneLinkRuntime {
@@ -176,8 +181,10 @@ impl GatewayGuestZoneLinkRuntime {
             policy,
             system_now_unix(),
         )?;
-        let credential_generation = credentials.credential_generation();
-        let credential_send_key_digest = credentials.safe_observation_digest();
+        let observation = SealedObservation {
+            generation: credentials.credential_generation(),
+            send_key_digest: credentials.safe_observation_digest(),
+        };
         let provider = AzureRelayTransportProvider::new(
             RelayTransportConfig {
                 execution_ref: config.execution_ref,
@@ -194,8 +201,7 @@ impl GatewayGuestZoneLinkRuntime {
         .map_err(|_| GatewayGuestZoneLinkError::TransportConfiguration)?;
         Ok(Self {
             provider,
-            credential_generation: Some(credential_generation),
-            credential_send_key_digest: Some(credential_send_key_digest),
+            credential_observation: Some(observation),
         })
     }
 
@@ -230,8 +236,7 @@ impl GatewayGuestZoneLinkRuntime {
         .map_err(|_| GatewayGuestZoneLinkError::TransportConfiguration)?;
         Ok(Self {
             provider,
-            credential_generation: None,
-            credential_send_key_digest: None,
+            credential_observation: None,
         })
     }
 
@@ -249,10 +254,7 @@ impl GatewayGuestZoneLinkRuntime {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<(), GatewayGuestZoneLinkError> {
-        let (Some(credential_generation), Some(credential_send_key_digest)) = (
-            self.credential_generation,
-            self.credential_send_key_digest,
-        ) else {
+        let Some(observation) = &self.credential_observation else {
             return Err(GatewayGuestZoneLinkError::ObservationUnavailable);
         };
         let path = path.as_ref();
@@ -268,8 +270,8 @@ impl GatewayGuestZoneLinkRuntime {
         let temporary = parent.join(format!(".{file_name}.{}", std::process::id()));
         let marker = format!(
             "schemaVersion=1\ngeneration={}\ndigest=sha256:{}\n",
-            credential_generation,
-            digest_hex(&credential_send_key_digest),
+            observation.generation,
+            digest_hex(&observation.send_key_digest),
         );
         let result = (|| {
             let mut file = OpenOptions::new()

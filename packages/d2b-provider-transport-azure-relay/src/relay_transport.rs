@@ -1090,7 +1090,8 @@ impl std::error::Error for RelayTransportError {}
 fn map_credential_error(error: crate::RelayCredentialError) -> RelayTransportError {
     match error {
         crate::RelayCredentialError::Unavailable => RelayTransportError::CredentialUnavailable,
-        crate::RelayCredentialError::Expired => RelayTransportError::CredentialExpired,
+        crate::RelayCredentialError::Expired
+        | crate::RelayCredentialError::Clock => RelayTransportError::CredentialExpired,
         crate::RelayCredentialError::RoleMismatch => RelayTransportError::CredentialRoleMismatch,
         crate::RelayCredentialError::InvalidBinding
         | crate::RelayCredentialError::BindingRequired
