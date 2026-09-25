@@ -30,12 +30,20 @@ fn admitted_ready_credentials_spawn_a_co_located_agent_without_egress() {
             )
             .unwrap()
             .unwrap();
-        assert_eq!(agent.binary(), AGENT_BINARY);
-        assert_eq!(agent.owner_ref().resource_type().as_str(), "Credential");
-        assert_eq!(agent.execution_ref().to_canonical_string(), execution);
-        assert_eq!(agent.placement(), binding);
-        assert!(!agent.allow_egress());
-        assert!(agent.requires_effect_port_client());
+        assert_eq!(agent.binary(), AGENT_BINARY, "binding: {binding:?}");
+        assert_eq!(
+            agent.owner_ref().resource_type().as_str(),
+            "Credential",
+            "binding: {binding:?}"
+        );
+        assert_eq!(
+            agent.execution_ref().to_canonical_string(),
+            execution,
+            "binding: {binding:?}"
+        );
+        assert_eq!(agent.placement(), binding, "binding: {binding:?}");
+        assert!(!agent.allow_egress(), "binding: {binding:?}");
+        assert!(agent.requires_effect_port_client(), "binding: {binding:?}");
     }
 }
 
@@ -67,7 +75,8 @@ fn live_methods_route_to_the_agent_and_stored_inspection_stays_secret_free() {
     ] {
         assert_eq!(
             ManagedIdentityController::route(method, true),
-            ManagedIdentityRoute::Agent
+            ManagedIdentityRoute::Agent,
+            "method: {method:?}"
         );
     }
     assert_eq!(
