@@ -1372,4 +1372,116 @@ mod tests {
             CredentialServiceErrorCode::DeadlineExceeded
         );
     }
+
+    #[test]
+    fn config_rejects_lease_bounds_outside_the_local_ceiling() {
+        assert_eq!(
+            EntraConfig::new("tenant-1234", 0).unwrap_err(),
+            EntraProviderError::InvalidConfig
+        );
+        assert_eq!(
+            EntraConfig::new("tenant-1234", MAX_LOCAL_LEASES + 1).unwrap_err(),
+            EntraProviderError::InvalidConfig
+        );
+        assert!(EntraConfig::new("tenant-1234", 1).is_ok());
+        assert!(EntraConfig::new("tenant-1234", MAX_LOCAL_LEASES).is_ok());
+    }
+
+    #[test]
+    fn placement_rejects_non_guest_identity_or_invalid_endpoint_bindings() {
+        let execution = ResourceRef::parse("Guest/runner").unwrap();
+        let identity = ResourceRef::parse("Guest/identity").unwrap();
+        let endpoint = ResourceRef::parse("Endpoint/login").unwrap();
+
+        assert_eq!(
+            EntraPlacement::new(
+                PlacementBinding::UserAgent,
+                execution.clone(),
+                ResourceRef::parse("User/alice").unwrap(),
+                endpoint.clone(),
+                1,
+            )
+            .unwrap_err(),
+            EntraProviderError::InvalidEndpoint
+        );
+        assert_eq!(
+            EntraPlacement::new(
+                PlacementBinding::UserAgent,
+                execution.clone(),
+                identity.clone(),
+                ResourceRef::parse("Provider/credential-entra").unwrap(),
+                1,
+            )
+            .unwrap_err(),
+            EntraProviderError::InvalidEndpoint
+        );
+        assert_eq!(
+            EntraPlacement::new(
+                PlacementBinding::UserAgent,
+                execution,
+                identity,
+                endpoint,
+                0,
+            )
+            .unwrap_err(),
+            EntraProviderError::InvalidEndpoint
+        );
+        assert!(EntraPlacement::new(
+            PlacementBinding::UserAgent,
+            ResourceRef::parse("Guest/runner").unwrap(),
+            ResourceRef::parse("Guest/identity").unwrap(),
+            ResourceRef::parse("Endpoint/login").unwrap(),
+            1,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn factory_rejects_a_non_provider_consumer() {
+        let config = EntraConfig::new("tenant-1234", 64).unwrap();
+        let placement = EntraPlacement::new_in_zone(
+            ResourceRef::parse("Zone/dev").unwrap(),
+            PlacementBinding::UserAgent,
+            ResourceRef::parse("Guest/runner").unwrap(),
+            ResourceRef::parse("Guest/identity").unwrap(),
+            ResourceRef::parse("Endpoint/login").unwrap(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            EntraCredentialProviderFactory::new(
+                config,
+                placement,
+                ResourceRef::parse("User/alice").unwrap(),
+                Arc::new(UnusedClient),
+            )
+            .unwrap_err(),
+            EntraProviderError::InvalidConsumer
+        );
+    }
+
+    /// Client never reached by the closed-construction tests.
+    struct UnusedClient;
+
+    impl EntraCredentialClient for UnusedClient {
+        fn state(&self) -> EntraFuture<'_, EntraClientState> {
+            Box::pin(async { panic!("unused client state") })
+        }
+
+        fn issue_lease(&self, _request: &EntraLeaseRequest) -> EntraFuture<'_, EntraLeaseGrant> {
+            Box::pin(async { panic!("unused client issue") })
+        }
+
+        fn inspect_lease(&self, _lease: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseInspection> {
+            Box::pin(async { panic!("unused client inspect") })
+        }
+
+        fn refresh_lease(&self, _lease: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRenewal> {
+            Box::pin(async { panic!("unused client refresh") })
+        }
+
+        fn revoke_lease(&self, _lease: &EntraLeaseRef) -> EntraFuture<'_, EntraLeaseRevocation> {
+            Box::pin(async { panic!("unused client revoke") })
+        }
+    }
 }
