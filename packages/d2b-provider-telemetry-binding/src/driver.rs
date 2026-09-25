@@ -72,12 +72,24 @@ pub const TELEMETRY_BINDING_PROCESS_PROVIDER: &str = "Provider/system-minijail";
 /// Binding is not converged instead of polling from a runner.
 pub const TELEMETRY_BINDING_RESYNC: Duration = Duration::from_secs(5);
 
-/// Provider phase spelling for a Binding whose child set is not current.
-pub const PHASE_PENDING: &str = "Pending";
+/// Closed lifecycle phase for one telemetry Binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelemetryBindingPhase {
+    /// The Binding's child set is not current.
+    Pending,
+    /// The Binding's route or children are not ready.
+    Degraded,
+}
 
-/// Provider phase spelling for a Binding whose route or children are not
-/// ready.
-pub const PHASE_DEGRADED: &str = "Degraded";
+impl TelemetryBindingPhase {
+    /// The provider phase spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "Pending",
+            Self::Degraded => "Degraded",
+        }
+    }
+}
 
 /// The collector/forwarder creation the Binding declares.
 ///
@@ -166,8 +178,8 @@ impl std::error::Error for TelemetryBindingDriverError {}
 /// API, now in-memory only (R11: runtime status is never persisted).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelemetryBindingStatus {
-    /// The projected provider phase spelling.
-    pub phase: &'static str,
+    /// The projected provider phase.
+    pub phase: TelemetryBindingPhase,
     /// The relationship is malformed or dangling (`fenced_owner`).
     pub fenced: bool,
     /// The owned child set is current: this pass made no child mutation.
@@ -398,7 +410,7 @@ impl TelemetryBindingDriver {
     /// dependency rows appear.
     fn fence_binding(&mut self, ctx: &mut ResourceContext) -> ReconcileOutcome {
         ctx.set_status(TelemetryBindingStatus {
-            phase: PHASE_DEGRADED,
+            phase: TelemetryBindingPhase::Degraded,
             fenced: true,
             converged: false,
             desired_children: Vec::new(),
@@ -475,9 +487,9 @@ impl TelemetryBindingDriver {
         // converged; the readiness term is unobservable here, so a converged
         // owner reports the fail-closed Degraded projection.
         let phase = if converged {
-            PHASE_DEGRADED
+            TelemetryBindingPhase::Degraded
         } else {
-            PHASE_PENDING
+            TelemetryBindingPhase::Pending
         };
         ctx.set_status(TelemetryBindingStatus {
             phase,
@@ -1032,7 +1044,11 @@ mod tests {
         let Some(status) = fixture.ctx.status::<TelemetryBindingStatus>() else {
             panic!("binding status");
         };
-        assert_eq!(status.phase, PHASE_PENDING, "first pass mutated the child set");
+        assert_eq!(
+            status.phase,
+            TelemetryBindingPhase::Pending,
+            "first pass mutated the child set"
+        );
         assert!(!status.fenced);
         assert!(!status.converged);
         assert_eq!(status.desired_children.len(), 2);
@@ -1054,7 +1070,7 @@ mod tests {
         assert!(status.converged, "second pass converged");
         // CONTRACT FLAG: the old `ready ? Ready : Degraded` phase reports the
         // fail-closed projection while readiness is unobservable.
-        assert_eq!(status.phase, PHASE_DEGRADED);
+        assert_eq!(status.phase, TelemetryBindingPhase::Degraded);
         assert_eq!(
             fixture.requeue.scheduled().await,
             vec![TELEMETRY_BINDING_RESYNC],
@@ -1080,7 +1096,7 @@ mod tests {
         };
         assert!(status.fenced);
         assert!(!status.converged);
-        assert_eq!(status.phase, PHASE_DEGRADED);
+        assert_eq!(status.phase, TelemetryBindingPhase::Degraded);
         assert_eq!(
             fixture.requeue.scheduled().await,
             vec![TELEMETRY_BINDING_RESYNC],

@@ -75,8 +75,6 @@ impl SessionMetricsSink {
 pub enum SessionMetricsError {
     /// Label policy rejected the frame.
     Policy(crate::metric_label_policy::MetricPolicyError),
-    /// Frame encoding failed.
-    Encode(std::io::Error),
     /// Emitter failed.
     Emitter(crate::emitter::EmitterError),
 }
@@ -85,7 +83,6 @@ impl core::fmt::Display for SessionMetricsError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
             Self::Policy(_) => "session-metric-policy-rejected",
-            Self::Encode(_) => "session-metric-encode-failed",
             Self::Emitter(_) => "session-metric-emitter-failed",
         })
     }
