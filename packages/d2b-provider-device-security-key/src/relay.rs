@@ -3,8 +3,6 @@
 //! Host file descriptors, socket binding, peer credentials, and relay task
 //! supervision remain in the daemon effect adapter.
 
-#![allow(missing_docs)]
-
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -51,24 +49,33 @@ pub type CtaphidReport = [u8; CTAPHID_REPORT_SIZE];
 /// Parsed CTAPHID initialization packet header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CtaphidInitPacket {
+    /// Channel identifier the packet is addressed to.
     pub cid: u32,
+    /// Command byte with the initialization bit set.
     pub cmd: u8,
+    /// Big-endian payload byte count.
     pub bcnt: u16,
+    /// Payload bytes carried after the header.
     pub data: Vec<u8>,
 }
 
 /// Parsed CTAPHID continuation packet header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CtaphidContPacket {
+    /// Channel identifier the packet is addressed to.
     pub cid: u32,
+    /// Continuation sequence number.
     pub seq: u8,
+    /// Payload bytes carried after the header.
     pub data: Vec<u8>,
 }
 
 /// Parsed CTAPHID packet (init or continuation).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CtaphidPacket {
+    /// An initialization packet starting a new channel.
     Init(CtaphidInitPacket),
+    /// A continuation packet of an in-progress message.
     Cont(CtaphidContPacket),
 }
 
@@ -141,6 +148,7 @@ pub struct CidTranslator {
 }
 
 impl CidTranslator {
+    /// Construct an empty translation table.
     pub fn new() -> Self {
         Self {
             next_host_cid: 1,
@@ -206,10 +214,12 @@ impl LeaseId {
         Self(COUNTER.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// Return the raw counter value.
     pub fn as_u64(self) -> u64 {
         self.0
     }
 
+    /// Construct a lease id from a raw counter value.
     pub const fn from_u64(value: u64) -> Self {
         Self(value)
     }
@@ -222,9 +232,13 @@ pub enum LeaseState {
     Available,
     /// A ceremony is in progress for the named VM.
     Leased {
+        /// VM holding the lease.
         vm_id: String,
+        /// Unique identifier of the held lease.
         lease_id: LeaseId,
+        /// When the ceremony started.
         started_at: Instant,
+        /// How long the ceremony may hold the key before expiry.
         timeout: Duration,
     },
 }
