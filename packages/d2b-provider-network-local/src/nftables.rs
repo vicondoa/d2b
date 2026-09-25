@@ -585,7 +585,11 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
         let mut words = [0u32; 64];
         for (index, word) in words[..16].iter_mut().enumerate() {
             let offset = index * 4;
-            *word = u32::from_be_bytes(chunk[offset..offset + 4].try_into().unwrap());
+            *word = u32::from_be_bytes(
+                chunk[offset..offset + 4]
+                    .try_into()
+                    .expect("64-byte chunk yields a 4-byte word slice"),
+            );
         }
         for index in 16..64 {
             let small0 = words[index - 15].rotate_right(7)
