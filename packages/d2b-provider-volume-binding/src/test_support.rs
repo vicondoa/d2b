@@ -3,11 +3,10 @@
 //! Gated behind the `test-support` Cargo feature so production
 //! consumers never pull this in.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use d2b_provider_volume_virtiofs::{SocketIdentity, StoredBinding};
 use d2b_resource_runtime::identity::ResourceKey;
-use parking_lot::Mutex;
 
 use crate::driver::BindingDriverEffects;
 
@@ -47,7 +46,8 @@ impl FakeServingEffects {
 
     /// The ordered serving-effect log, shared with any manager logger.
     pub fn call_order(&self) -> Vec<String> {
-        self.log.lock().clone()
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        self.log.lock().unwrap().clone()
     }
 
     /// The facet set the plane and this crate's tests build the driver and
@@ -69,7 +69,8 @@ struct ScriptedReady(Arc<FakeServingEffects>);
 #[async_trait::async_trait]
 impl crate::facets::SocketReadySource for ScriptedReady {
     async fn ready(&self, _socket: &SocketIdentity) -> bool {
-        self.0.log.lock().push("socket-ready".to_owned()); // async-gate-allow: test-support recorder lock
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        self.0.log.lock().unwrap().push("socket-ready".to_owned()); // async-gate-allow: test-support recorder lock
         self.0.ready.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
@@ -81,7 +82,8 @@ struct ScriptedRemove(Arc<FakeServingEffects>);
 #[async_trait::async_trait]
 impl crate::facets::SocketRemoveSource for ScriptedRemove {
     async fn remove(&self, _socket: &SocketIdentity) -> Result<(), String> {
-        self.0.log.lock().push("remove-socket".to_owned()); // async-gate-allow: test-support recorder lock
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        self.0.log.lock().unwrap().push("remove-socket".to_owned()); // async-gate-allow: test-support recorder lock
         Ok(())
     }
 }
@@ -93,7 +95,8 @@ struct ScriptedGuestMount(Arc<FakeServingEffects>);
 #[async_trait::async_trait]
 impl crate::facets::GuestMountSource for ScriptedGuestMount {
     async fn guest_mount_ready(&self, _key: &ResourceKey) -> Result<bool, String> {
-        self.0.log.lock().push("guest-mount".to_owned()); // async-gate-allow: test-support recorder lock
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        self.0.log.lock().unwrap().push("guest-mount".to_owned()); // async-gate-allow: test-support recorder lock
         Ok(self.0.mounted.load(std::sync::atomic::Ordering::SeqCst))
     }
 }
@@ -101,12 +104,14 @@ impl crate::facets::GuestMountSource for ScriptedGuestMount {
 #[async_trait::async_trait]
 impl BindingDriverEffects for FakeServingEffects {
     async fn socket_ready(&self, _socket: &SocketIdentity) -> bool {
-        self.log.lock().push("socket-ready".to_owned()); // async-gate-allow: test-support recorder lock
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        self.log.lock().unwrap().push("socket-ready".to_owned()); // async-gate-allow: test-support recorder lock
         self.ready.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     async fn remove_socket(&self, _socket: &SocketIdentity) -> Result<(), String> {
-        self.log.lock().push("remove-socket".to_owned()); // async-gate-allow: test-support recorder lock
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        self.log.lock().unwrap().push("remove-socket".to_owned()); // async-gate-allow: test-support recorder lock
         Ok(())
     }
 
@@ -115,7 +120,8 @@ impl BindingDriverEffects for FakeServingEffects {
         _key: &ResourceKey,
         _binding: &StoredBinding,
     ) -> Result<bool, String> {
-        self.log.lock().push("guest-mount".to_owned()); // async-gate-allow: test-support recorder lock
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        self.log.lock().unwrap().push("guest-mount".to_owned()); // async-gate-allow: test-support recorder lock
         Ok(self.mounted.load(std::sync::atomic::Ordering::SeqCst))
     }
 }

@@ -435,7 +435,7 @@ struct RestartBudget {
 
 impl RestartBudget {
     fn count(&self) -> u32 {
-        self.count.load(Ordering::SeqCst)
+        self.count.load(Ordering::Relaxed)
     }
 
     fn allows(&self, spec: &ProcessSpec) -> bool {
@@ -448,26 +448,26 @@ impl RestartBudget {
     /// policy backoff: the exit-driven path schedules its own backoff in the
     /// pass that observed the exit.
     fn consume_restart(&self) {
-        self.count.fetch_add(1, Ordering::SeqCst);
+        self.count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record one consumed restart; the next reconcile pass schedules the
     /// policy backoff exactly once.
     fn record_restart(&self) {
         self.consume_restart();
-        self.restart_scheduled.store(true, Ordering::SeqCst);
+        self.restart_scheduled.store(true, Ordering::Relaxed);
     }
 
     fn take_restart_scheduled(&self) -> bool {
-        self.restart_scheduled.swap(false, Ordering::SeqCst)
+        self.restart_scheduled.swap(false, Ordering::Relaxed)
     }
 
     fn mark_exhausted(&self) {
-        self.exhausted.store(true, Ordering::SeqCst);
+        self.exhausted.store(true, Ordering::Relaxed);
     }
 
     fn is_exhausted(&self) -> bool {
-        self.exhausted.load(Ordering::SeqCst)
+        self.exhausted.load(Ordering::Relaxed)
     }
 }
 
@@ -692,7 +692,7 @@ struct EphemeralCompletion {
 
 impl EphemeralRuntime {
     fn started(&self) -> bool {
-        self.started.load(Ordering::SeqCst)
+        self.started.load(Ordering::Relaxed)
     }
 
     fn mark_started(&self) {
@@ -700,7 +700,7 @@ impl EphemeralRuntime {
         if started_at.is_none() {
             *started_at = Some(tokio::time::Instant::now());
         }
-        self.started.store(true, Ordering::SeqCst);
+        self.started.store(true, Ordering::Relaxed);
     }
 
     fn started_at(&self) -> Option<tokio::time::Instant> {
@@ -729,7 +729,7 @@ impl EphemeralRuntime {
         if let Some(at) = started_at.as_mut() {
             *at -= elapsed;
         }
-        self.started.store(true, Ordering::SeqCst);
+        self.started.store(true, Ordering::Relaxed);
     }
 
     /// Test-only: backdate the retention TTL clock.
@@ -758,18 +758,18 @@ struct DurableRuntime {
 
 impl DurableRuntime {
     fn watching(&self) -> bool {
-        self.watching.load(Ordering::SeqCst)
+        self.watching.load(Ordering::Relaxed)
     }
 
     fn mark_watching(&self) {
-        self.watching.store(true, Ordering::SeqCst);
+        self.watching.store(true, Ordering::Relaxed);
     }
 
     /// The observed process is gone and the pass that saw the exit hands the
     /// relaunch back to the adoption path, so the next pass launches instead
     /// of probing an identity the provider has already released.
     fn mark_exited(&self) {
-        self.watching.store(false, Ordering::SeqCst);
+        self.watching.store(false, Ordering::Relaxed);
     }
 }
 
@@ -3009,7 +3009,7 @@ mod tests {
                 guest_ref: &ResourceRef,
             ) -> Option<ResourceUid> {
                 self.consulted
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 assert_eq!(zone.as_str(), "work");
                 assert_eq!(guest_ref.name().as_str(), "acceptance-guest");
                 Some(self.uid.clone())
@@ -3030,7 +3030,7 @@ mod tests {
             Some(guest_uid.clone())
         );
         assert_eq!(
-            source.consulted.load(std::sync::atomic::Ordering::SeqCst),
+            source.consulted.load(std::sync::atomic::Ordering::Relaxed),
             1
         );
 
@@ -3045,7 +3045,7 @@ mod tests {
             None
         );
         assert_eq!(
-            source.consulted.load(std::sync::atomic::Ordering::SeqCst),
+            source.consulted.load(std::sync::atomic::Ordering::Relaxed),
             1,
             "a linked owner uid never consults the Guest plane"
         );
@@ -3057,7 +3057,7 @@ mod tests {
             None
         );
         assert_eq!(
-            source.consulted.load(std::sync::atomic::Ordering::SeqCst),
+            source.consulted.load(std::sync::atomic::Ordering::Relaxed),
             1,
             "a non-Guest owner never consults the Guest plane"
         );
