@@ -218,6 +218,12 @@ pub struct LaunchTicket {
 
 impl LaunchTicket {
     /// Construct a ticket from already-authorized refs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProcessSpecError`] when the process spec fails validation,
+    /// when more than four media refs are named, when a media ref is not a
+    /// Volume, or when a media ref is duplicated.
     pub fn new(
         process: ProcessSpec,
         media_refs: impl IntoIterator<Item = ResourceRef>,

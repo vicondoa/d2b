@@ -335,6 +335,12 @@ impl<E> QemuMediaController<E> {
 
 impl<E: QemuMediaEffectPort> QemuMediaController<E> {
     /// Reconcile dependencies, process identity, and QMP readiness.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QemuMediaError::InvalidState`] when the controller is not
+    /// reconcilable, and the dependency, process identity, and QMP readiness
+    /// errors the phases surface.
     pub fn reconcile(
         &mut self,
         dependencies: &QemuMediaDependencies,
