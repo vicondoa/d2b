@@ -526,6 +526,7 @@ pub fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
 mod sd_notify_tests {
     use super::*;
     use std::os::unix::net::UnixDatagram;
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_abstract_name(label: &str) -> Vec<u8> {
@@ -540,9 +541,73 @@ mod sd_notify_tests {
         String::from_utf8(bytes.to_vec()).expect("sd_notify payload is utf8")
     }
 
+    /// Minimal in-test tracing subscriber that records `(level, message)`
+    /// for every event emitted on the calling thread.
+    #[derive(Clone, Default)]
+    struct CapturingSubscriber(Arc<Mutex<Vec<(tracing::Level, String)>>>);
+
+    impl CapturingSubscriber {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        fn events(&self) -> Vec<(tracing::Level, String)> {
+            self.0.lock().expect("capture buffer").clone()
+        }
+    }
+
+    /// Captures the `message` field of one event.
+    struct MessageCapture(Option<String>);
+
+    impl tracing::field::Visit for MessageCapture {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if field.name() == "message" {
+                self.0 = Some(value.to_owned());
+            }
+        }
+
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = Some(format!("{value:?}"));
+            }
+        }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    impl tracing::Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut capture = MessageCapture(None);
+            event.record(&mut capture);
+            let message = capture.0.unwrap_or_default();
+            self.0
+                .lock()
+                .expect("capture buffer")
+                .push((*event.metadata().level(), message));
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
     #[test]
     fn sd_notify_ready_noops_without_notify_socket() {
-        sd_notify_ready(None);
+        let subscriber = CapturingSubscriber::default();
+        tracing::subscriber::with_default(subscriber.clone(), || sd_notify_ready(None));
+        let events = subscriber.events();
+        assert!(
+            events.is_empty(),
+            "no notify socket must be a silent no-op, got events: {events:?}"
+        );
     }
 
     #[test]
@@ -590,7 +655,17 @@ mod sd_notify_tests {
     fn sd_notify_ready_errors_when_socket_is_unreachable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("missing").join("notify.sock");
-        sd_notify_ready(Some(path.as_os_str()));
+        let subscriber = CapturingSubscriber::default();
+        tracing::subscriber::with_default(subscriber.clone(), || {
+            sd_notify_ready(Some(path.as_os_str()));
+        });
+        let events = subscriber.events();
+        assert!(
+            events.iter().any(|(level, message)| {
+                *level == tracing::Level::WARN && message.contains("sendto failed")
+            }),
+            "unreachable notify socket must be reported, got events: {events:?}"
+        );
     }
 }
 
