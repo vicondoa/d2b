@@ -449,6 +449,53 @@ fn parse_array(bytes: &[u8]) -> Result<Vec<Value>, HostNetworkObservationError> 
 mod tests {
     use super::*;
 
+    fn current_observation() -> NetworkObservation {
+        NetworkObservation {
+            firewall_matches: true,
+            sysctls_match: true,
+            bridge_ports_match: true,
+            cidrs_conflict_free: true,
+            external_authority_ready: true,
+            dnsmasq_bound: true,
+            guest_firewall_applied: true,
+        }
+    }
+
+    /// The `evaluate_observation` decision state machine: an unready
+    /// external authority blocks (never requeues), a CIDR conflict is an
+    /// error, no drift is Current, and any drift requeues.
+    #[test]
+    fn evaluate_observation_decides_current_requeue_and_blocked() {
+        assert_eq!(
+            evaluate_observation(current_observation()),
+            Ok(ObserveDecision::Current)
+        );
+
+        let mut drifted = current_observation();
+        drifted.firewall_matches = false;
+        assert_eq!(
+            evaluate_observation(drifted),
+            Ok(ObserveDecision::Requeue),
+            "any drift requeues"
+        );
+
+        let mut blocked = current_observation();
+        blocked.external_authority_ready = false;
+        assert_eq!(
+            evaluate_observation(blocked),
+            Ok(ObserveDecision::Blocked),
+            "an unready external authority blocks instead of requeuing"
+        );
+
+        let mut conflicting = current_observation();
+        conflicting.cidrs_conflict_free = false;
+        assert_eq!(
+            evaluate_observation(conflicting),
+            Err(NetworkEffectError::CidrConflict),
+            "a CIDR conflict is an error, never a decision"
+        );
+    }
+
     #[test]
     fn foreign_and_uidless_objects_are_retained_as_occupancy() {
         let occupancy = parse_host_network_observation(
