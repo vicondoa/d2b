@@ -916,7 +916,8 @@ async fn spawn_process(
         &runner_id,
         duplicate(&outcome.pidfd).map_err(|error| errored(format!("spawn-process: {error}")))?,
     ) {
-        crate::runtime::cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd());
+        crate::runtime::cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd())
+            .await;
         let _ = crate::runtime::runner_pidfds().remove(invocation_id);
         return Err(errored(format!("spawn-process registry: {error:?}")));
     }
@@ -952,7 +953,8 @@ async fn spawn_process(
         // registration is a concurrent duplicate that slipped in between
         // the guard and the insert; roll the spawn back rather than
         // overwrite the live registration.
-        crate::runtime::cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd());
+        crate::runtime::cleanup_spawned_runner_after_failure(&runner_id, outcome.pidfd.as_fd())
+            .await;
         let _ = crate::runtime::runner_pidfds().remove(invocation_id);
         return Err(errored(format!(
             "spawn-process metadata registry: runner {runner_id} already registered"
