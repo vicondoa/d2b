@@ -1149,9 +1149,9 @@ mod tests {
     #[derive(Clone)]
     struct RecordingManager {
         zone: String,
-        log: Arc<parking_lot::Mutex<OrderLog>>,
-        rows: Arc<parking_lot::Mutex<Vec<StoredDesiredResource>>>,
-        watch_targets: Arc<parking_lot::Mutex<Vec<ResourceKey>>>,
+        log: Arc<std::sync::Mutex<OrderLog>>,
+        rows: Arc<std::sync::Mutex<Vec<StoredDesiredResource>>>,
+        watch_targets: Arc<std::sync::Mutex<Vec<ResourceKey>>>,
         next_uid: Arc<std::sync::atomic::AtomicU64>,
         fail_reads: Arc<std::sync::atomic::AtomicBool>,
     }
@@ -1160,9 +1160,9 @@ mod tests {
         fn new() -> Self {
             Self {
                 zone: "work".to_owned(),
-                log: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                rows: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                watch_targets: Arc::new(parking_lot::Mutex::new(Vec::new())),
+                log: Arc::new(std::sync::Mutex::new(Vec::new())),
+                rows: Arc::new(std::sync::Mutex::new(Vec::new())),
+                watch_targets: Arc::new(std::sync::Mutex::new(Vec::new())),
                 next_uid: Arc::new(std::sync::atomic::AtomicU64::new(1)),
                 fail_reads: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             }
@@ -1174,7 +1174,8 @@ mod tests {
         }
 
         fn with_parent(self, volume_uid: [u8; 16], spec: &[u8]) -> Self {
-            self.rows.lock().push(StoredDesiredResource {
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.rows.lock().unwrap().push(StoredDesiredResource {
                 key: ResourceKey::new("work", "Volume", "data"),
                 uid: volume_uid,
                 generation: 2,
@@ -1190,7 +1191,8 @@ mod tests {
 
         /// Seed one owned child row (drift the driver must retire).
         fn seed_owned(&self, key: ResourceKey) {
-            self.rows.lock().push(StoredDesiredResource {
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.rows.lock().unwrap().push(StoredDesiredResource {
                 key,
                 uid: [0x77; 16],
                 generation: 1,
@@ -1203,20 +1205,23 @@ mod tests {
             });
         }
 
-        fn log(&self) -> Arc<parking_lot::Mutex<OrderLog>> {
+        fn log(&self) -> Arc<std::sync::Mutex<OrderLog>> {
             Arc::clone(&self.log)
         }
 
         fn order(&self) -> Vec<String> {
-            self.log.lock().clone()
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.log.lock().unwrap().clone()
         }
 
         fn rows(&self) -> Vec<StoredDesiredResource> {
-            self.rows.lock().clone()
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.rows.lock().unwrap().clone()
         }
 
         fn watch_targets(&self) -> Vec<ResourceKey> {
-            self.watch_targets.lock().clone()
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.watch_targets.lock().unwrap().clone()
         }
     }
 
@@ -1228,7 +1233,8 @@ mod tests {
             child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
             let id = format!("{}/{}", child.type_name.as_str(), child.name);
-            self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.log.lock().unwrap().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             let next = self
                 .next_uid
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1245,7 +1251,8 @@ mod tests {
                 metadata: child.metadata,
                 created_at: 0,
             };
-            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            let mut rows = self.rows.lock().unwrap(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             let outcome = match rows.iter_mut().find(|row| row.key == row_key(&id, &self.zone)) {
                 Some(existing) => {
                     if existing.spec == row.spec {
@@ -1261,7 +1268,8 @@ mod tests {
                 }
             };
             // Spawn notification only after the commit (F1, AE1).
-            self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.log.lock().unwrap().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(outcome)
         }
 
@@ -1272,7 +1280,8 @@ mod tests {
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
-            Ok(self.rows.lock().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            Ok(self.rows.lock().unwrap().iter().find(|row| row.key == *key).cloned()) // async-gate-allow: synchronous lock acquisition, no await while the guard is held
         }
 
         async fn view(
@@ -1285,10 +1294,13 @@ mod tests {
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
             self.log
                 .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+                .unwrap()
                 .push(format!("delete:{}/{}", key.type_name, key.name));
-            self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.rows.lock().unwrap().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
         }
 
@@ -1296,9 +1308,11 @@ mod tests {
             &self,
             owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
             Ok(self
                 .rows
                 .lock()
+                .unwrap()
                 .iter()
                 .filter(|row| row.owner_uid.as_ref() == Some(&owner_uid))
                 .cloned()
@@ -1312,7 +1326,8 @@ mod tests {
         ) -> Result<WatchId, ResourceError> {
             // Manager rows always exist here; the actor-side handler is the
             // runtime's, so the fake only records the registration.
-            let mut targets = self.watch_targets.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            let mut targets = self.watch_targets.lock().unwrap(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             targets.push(registration.target.clone());
             Ok(WatchId(targets.len() as u64))
         }
@@ -1325,18 +1340,19 @@ mod tests {
     /// Recording requeue: the driver's resync schedules are observable.
     #[derive(Clone)]
     struct RecordingRequeue {
-        scheduled: Arc<parking_lot::Mutex<Vec<ResourceKey>>>,
+        scheduled: Arc<std::sync::Mutex<Vec<ResourceKey>>>,
     }
 
     impl RecordingRequeue {
         fn new() -> Self {
             Self {
-                scheduled: Arc::new(parking_lot::Mutex::new(Vec::new())),
+                scheduled: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
 
         fn scheduled(&self) -> Vec<ResourceKey> {
-            self.scheduled.lock().clone()
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.scheduled.lock().unwrap().clone()
         }
     }
 
@@ -1346,7 +1362,8 @@ mod tests {
             key: ResourceKey,
             _after: std::time::Duration,
         ) -> d2b_resource_runtime::context::RequeueId {
-            let mut scheduled = self.scheduled.lock();
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            let mut scheduled = self.scheduled.lock().unwrap();
             scheduled.push(key);
             d2b_resource_runtime::context::RequeueId(scheduled.len() as u64)
         }

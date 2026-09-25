@@ -484,7 +484,7 @@ impl OperationEnvelope {
     fn next_invocation_id(&self) -> String {
         format!(
             "invocation-{}",
-            self.invocations.fetch_add(1, Ordering::AcqRel)
+            self.invocations.fetch_add(1, Ordering::Relaxed)
         )
     }
 

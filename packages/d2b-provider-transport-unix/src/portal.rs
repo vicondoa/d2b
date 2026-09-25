@@ -14,8 +14,8 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error,
     fmt,
+    sync::Mutex,
 };
-use tokio::sync::Mutex;
 
 const MAX_OPEN_TRANSPORTS: usize = 256;
 
