@@ -241,3 +241,81 @@ pub fn undeclared_writable_paths<'a>(
     undeclared.dedup();
     undeclared
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn world_readable_field_leaks_reports_only_unallowlisted_scalars_outside_reserved_blocks() {
+        let manifest = serde_json::json!({
+            "name": "dev",
+            "secretField": "s3cr3t",
+            "_manifest": { "hostName": "hidden" },
+            "_observability": { "metricsToken": "opaque" },
+        });
+        let mut leaked = world_readable_field_leaks(&manifest);
+        leaked.sort();
+        assert_eq!(leaked, vec!["secretField".to_owned()]);
+    }
+
+    #[test]
+    fn world_readable_field_leaks_accepts_allowlisted_and_reserved_scalars() {
+        let manifest = serde_json::json!({
+            "name": "dev",
+            "state": "Ready",
+            "netVm": { "ip": "10.0.0.1", "mac": "aa:bb" },
+            "_manifest": { "generation": 3 },
+            "_observability": { "enabled": true },
+        });
+        assert!(world_readable_field_leaks(&manifest).is_empty());
+    }
+
+    #[test]
+    fn path_bearing_key_violations_names_only_path_shaped_values() {
+        let manifest = serde_json::json!({
+            "keyPath": "/run/keys/ed25519",
+            "tokenPath": "opaque-id-42",
+            "privateKeyPath": 7,
+            "credentialPath": "/etc/d2b/creds.json",
+            "display": { "tokenPath": "/var/lib/d2b/token" },
+        });
+        let mut violations = path_bearing_key_violations(&manifest);
+        violations.sort_unstable();
+        assert_eq!(
+            violations,
+            vec![
+                "credentialPath=/etc/d2b/creds.json".to_owned(),
+                "display.tokenPath=/var/lib/d2b/token".to_owned(),
+                "keyPath=/run/keys/ed25519".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn broad_cap_requires_a_nonempty_adr_carve_out() {
+        assert!(is_broad_cap_violation(
+            &["CAP_SYS_ADMIN".to_owned()],
+            None,
+        ));
+        assert!(is_broad_cap_violation(
+            &["CAP_NET_ADMIN".to_owned()],
+            Some("   "),
+        ));
+        assert!(!is_broad_cap_violation(
+            &["CAP_SYS_ADMIN".to_owned()],
+            Some("adr/2026-09-24/broad-caps"),
+        ));
+        assert!(!is_broad_cap_violation(&["CAP_CHOWN".to_owned()], None));
+    }
+
+    #[test]
+    fn undeclared_writable_paths_reports_missing_used_paths_sorted_and_deduped() {
+        let declared = ["/data", "/runtime"];
+        let used = ["/runtime", "/data", "/data", "/etc/passwd", "/tmp/x"];
+        assert_eq!(
+            undeclared_writable_paths(declared.iter().copied(), used.iter().copied()),
+            vec!["/etc/passwd".to_owned(), "/tmp/x".to_owned()]
+        );
+    }
+}
