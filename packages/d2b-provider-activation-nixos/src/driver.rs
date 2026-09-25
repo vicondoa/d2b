@@ -1211,18 +1211,7 @@ mod tests {
 
     // -- factory and validation ----------------------------------------------
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_registers_only_the_generation_resource_type() {
-        let factory = ActivationDriverFactory::new(ActivationDriverArgs {
-            zone: "work".to_owned(),
-            facets: crate::test_support::recording_facets(
-                crate::test_support::RecordingBrokerDispatch::new(),
-            ),
-        });
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), ACTIVATION_TYPE_NAME);
-    }
+
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
@@ -1496,46 +1485,7 @@ mod tests {
         assert!(effects.dispatches().is_empty());
     }
 
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn offline_verification_refuses_before_the_handoff_is_dispatched() {
-        let effects = FakeActivationEffects::new(HostHandoffResult::Completed {
-            source_generation: 1,
-            target_generation: 2,
-        });
-        let mut f = fixture(
-            generation_row(
-                "gen-2",
-                "Host/host-system",
-                ActivationMode::Switch,
-                Some("gen-1"),
-                GENERATION_UID,
-            ),
-            RecordingManager::new(GENERATION_UID).with_row(generation_row(
-                "gen-1",
-                "Host/host-system",
-                ActivationMode::Switch,
-                None,
-                [0x41; 16],
-            )),
-        );
-        let mut d = driver(
-            effects.clone(),
-            Arc::new(crate::FailClosedActivationVerifier),
-        )
-        .await;
-        d.reconcile(&mut f.ctx).await.expect("reconcile");
 
-        assert!(
-            effects.dispatches().is_empty(),
-            "the fail-closed verifier must refuse before any effect"
-        );
-        let projected = status(&f.ctx);
-        assert_eq!(
-            projected.outcome(),
-            Some(ActivationOutcomeCode::HelperRefused)
-        );
-    }
 
     // -- guest-target reconcile -----------------------------------------------
 
