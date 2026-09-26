@@ -120,9 +120,10 @@ impl<'de> Deserialize<'de> for AzureVmRecoveryState {
         // serde. The in-flight operation is one grouped object today, but
         // records written before the grouping carry the legacy
         // `operation` + `operationStartedAtUnixMs` pair; both shapes load
-        // and the pair folds into the grouped shape. The fold is total
-        // because the write side always sets or clears both values
-        // together.
+        // and the pair folds into the grouped shape when both members
+        // are present. The write side always sets or clears both values
+        // together, but a record read back with a half-Some pair is
+        // malformed, and the decode refuses it below.
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct NewShape {
