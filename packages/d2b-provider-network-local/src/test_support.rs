@@ -49,7 +49,7 @@ impl RecordingRuntime {
 
 #[async_trait]
 impl NetworkRuntime for RecordingRuntime {
-    fn bundle(&self) -> Arc<d2b_core::bundle_resolver::BundleResolver> {
+    async fn bundle(&self) -> Arc<d2b_core::bundle_resolver::BundleResolver> {
         Arc::new(FIXTURE_BUNDLE.clone())
     }
 

@@ -4937,22 +4937,21 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
     {
         listeners.stop().await;
     }
-    let interaction_error = {
-        let mut runtime = state.interaction_runtime.lock().await;
-        if let Some(runtime) = runtime.as_mut()
-            && let Err(error) = runtime
-                .finalize_async(d2b_provider_display_wayland::GraceState::Expired)
-                .await
-        {
+    let interaction_error = match interaction_composition::finalize_interaction_runtimes(
+        &state.interaction_runtime,
+        d2b_provider_display_wayland::GraceState::Expired,
+    )
+    .await
+    {
+        Some(error) => {
             tracing::error!(?error, "interaction Provider finalization failed");
             Some(TypedError::InternalIo {
                 context: "interaction Provider finalization".to_owned(),
                 detail: error.to_string(),
                 source: error_source(error),
             })
-        } else {
-            None
         }
+        None => None,
     };
     let runtime = state.interaction_runtime.lock().await.take();
     // The interaction composition retains the Resource API client used by
@@ -16142,15 +16141,18 @@ fn reconcile_display_before_vm_start(
     else {
         return Err("display-session-missing".to_owned());
     };
-    let result = {
-        let mut interactions = drive_sync(&state.runtime_handle, state.interaction_runtime.lock());
-        let runtime_set = interactions
-            .as_mut()
-            .ok_or_else(|| "display-interaction-runtime-unavailable".to_owned())?;
-        runtime_set
-            .reconcile_committed_display_for_vm_start(&zone, vm, &session_ref, &session_uid, &spec)
-            .map_err(|error| error.to_string())?
-    };
+    let result = drive_sync(&state.runtime_handle, async {
+        interaction_composition::reconcile_committed_display_for_vm_start(
+            &state.interaction_runtime,
+            &zone,
+            vm,
+            &session_ref,
+            &session_uid,
+            &spec,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    })?;
     if result.status.phase == d2b_provider_display_wayland::Phase::Failed {
         return Err("display-session-reconcile-failed".to_owned());
     }
