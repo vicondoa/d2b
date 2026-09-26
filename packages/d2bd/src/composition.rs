@@ -11671,7 +11671,7 @@ fn read_guest_config_typed(
         result.map_err(config_read_error_kind)
     })
     .map_err(|kind| TypedError::ConfigReadFailed { kind })?;
-    d2b_provider_config_nixos::decode_document(&response).map_err(|_| {
+    response.document().map_err(|_| {
         TypedError::ConfigReadFailed {
             kind: d2bd_runtime::typed_error::ConfigReadErrorKind::Protocol,
         }

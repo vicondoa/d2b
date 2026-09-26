@@ -340,17 +340,6 @@ pub struct ConfigStatusResponse {
     pub sha256: Option<String>,
 }
 
-/// Convert one response into a validated document.
-///
-/// # Errors
-///
-/// Returns the same errors as [`ConfigSyncResponse::document`]:
-/// [`ConfigError::InvalidRequest`], [`ConfigError::EncodingFailed`], and the
-/// document bounds errors.
-pub fn decode_document(response: &ConfigSyncResponse) -> Result<GuestConfigDocument, ConfigError> {
-    response.document()
-}
-
 pub(crate) fn validate_guest_ref(guest_ref: &ResourceRef) -> Result<(), ConfigError> {
     if guest_ref.resource_type().as_str() == "Guest" && !guest_ref.name().as_str().is_empty() {
         Ok(())
