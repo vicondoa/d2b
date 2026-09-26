@@ -31,4 +31,5 @@ tracing = "0.1"
 zbus = "5.16"
 
 [dev-dependencies]
+d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap", features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }

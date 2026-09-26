@@ -28,6 +28,7 @@ sha2 = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt"] }
 
 [dev-dependencies]
+d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-process-minijail = { path = "../d2b-provider-process-minijail", version = "0.0.0-bootstrap" }
 d2b-provider-process-systemd = { path = "../d2b-provider-process-systemd", version = "0.0.0-bootstrap" }
 tempfile = "3"

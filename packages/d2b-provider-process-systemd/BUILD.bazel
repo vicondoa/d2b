@@ -66,8 +66,8 @@ d2b_rust_test(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        ":d2b_provider_process_systemd",
-        "//packages/d2b-process-conformance:d2b_process_conformance",
+        ":d2b_provider_process_systemd_test_support",
+        "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -77,8 +77,8 @@ d2b_rust_test(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        ":d2b_provider_process_systemd",
-        "//packages/d2b-process-conformance:d2b_process_conformance",
+        ":d2b_provider_process_systemd_test_support",
+        "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -110,8 +110,8 @@ d2b_rust_test(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
-        "//packages/d2b-process-conformance:d2b_process_conformance",
-        ":d2b_provider_process_systemd",
+        "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
+        ":d2b_provider_process_systemd_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 

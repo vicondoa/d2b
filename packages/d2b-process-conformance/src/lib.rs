@@ -34,6 +34,7 @@ mod terminal;
 mod ticket;
 
 pub mod suite;
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
 pub use error::ProcessConformanceError;
