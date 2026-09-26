@@ -47,6 +47,14 @@ pub mod forwarding;
 #[cfg(not(feature = "layer1-bootstrap"))]
 pub mod kernel_ops;
 pub mod live_handlers;
+// Broker operation handlers. `ops::mod` declares 31 arms and only the
+// three the crate's own integration tests address by path stay `pub` -
+// `ops::network`, `ops::audit_op`, and `ops::pidfd` - because those
+// tests are separate crates and `pub(crate)` would hide the arms from
+// them. Every other arm is `pub(crate)`: no crate outside `d2b-broker`
+// imports `d2b_broker::ops`, so publishing them offered a surface with
+// no consumer. A new arm stays `pub(crate)` unless an out-of-crate
+// consumer appears, and then the integration tests are that consumer.
 pub mod ops;
 pub mod protocol;
 pub mod runtime;
