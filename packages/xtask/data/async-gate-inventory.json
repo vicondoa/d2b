@@ -123,22 +123,22 @@
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8255,
+      "line": 8298,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8322,
+      "line": 8365,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8539,
+      "line": 8582,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-broker/src/runtime.rs",
-      "line": 8616,
+      "line": 8659,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
