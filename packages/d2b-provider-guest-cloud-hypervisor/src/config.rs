@@ -2,9 +2,19 @@
 
 use std::fmt;
 
-use d2b_contracts_provider::v3::credential::OpaqueAzureRef;
 use d2b_contracts_resource::v3::ResourceRef;
 use serde::{Deserialize, Serialize};
+
+/// Machine type a Cloud Hypervisor VMM starts with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MachineType {
+    /// Modern Q35 chipset.
+    #[serde(rename = "q35")]
+    Q35,
+    /// Minimal MicroVM chipset.
+    Microvm,
+}
 
 /// Provider root configuration.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,7 +27,7 @@ pub struct CloudHypervisorConfig {
     /// Default memory in MiB.
     pub default_memory_mb: u32,
     /// Default machine type.
-    pub default_machine_type: OpaqueAzureRef,
+    pub default_machine_type: MachineType,
     /// Whether the VMM watchdog is enabled.
     pub watchdog: bool,
     /// Maximum adoption window in milliseconds.
@@ -50,7 +60,6 @@ impl CloudHypervisorConfig {
         if self.controller_execution_ref.resource_type().as_str() != "Host"
             || !(1..=1024).contains(&self.default_vcpus)
             || !(128..=524_288).contains(&self.default_memory_mb)
-            || !matches!(self.default_machine_type.as_str(), "q35" | "microvm")
             || !(1..=900_000).contains(&self.adoption_window_ms)
             || !(5_000..=300_000).contains(&self.health_check_interval_ms)
             || !(1_000..=60_000).contains(&self.health_check_timeout_ms)
@@ -81,5 +90,45 @@ impl fmt::Debug for CloudHypervisorConfig {
             )
             .field("startup_deadline_ms", &self.startup_deadline_ms)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ROOT_CONFIG: &str = r#"{
+        "controllerExecutionRef": "Host/host-system",
+        "defaultVcpus": 2,
+        "defaultMemoryMb": 512,
+        "defaultMachineType": "q35",
+        "watchdog": true,
+        "adoptionWindowMs": 30000,
+        "healthCheckIntervalMs": 30000,
+        "healthCheckTimeoutMs": 5000,
+        "healthCheckFailureThreshold": 3,
+        "startupDeadlineMs": 120000
+    }"#;
+
+    #[test]
+    fn machine_type_is_the_closed_q35_microvm_wire() {
+        let config: CloudHypervisorConfig =
+            serde_json::from_str(ROOT_CONFIG).expect("q35 root config decodes");
+        assert_eq!(config.default_machine_type, MachineType::Q35);
+        assert!(config.validate().is_ok());
+
+        let microvm: CloudHypervisorConfig =
+            serde_json::from_str(&ROOT_CONFIG.replace(r#""q35""#, r#""microvm""#))
+                .expect("microvm root config decodes");
+        assert_eq!(microvm.default_machine_type, MachineType::Microvm);
+        assert!(microvm.validate().is_ok());
+
+        let unknown = ROOT_CONFIG.replace(r#""q35""#, r#""guest-vm""#);
+        assert!(serde_json::from_str::<CloudHypervisorConfig>(&unknown).is_err());
+
+        let q35 = serde_json::to_string(&MachineType::Q35).expect("q35 wire");
+        let microvm_wire = serde_json::to_string(&MachineType::Microvm).expect("microvm wire");
+        assert_eq!(q35, r#""q35""#);
+        assert_eq!(microvm_wire, r#""microvm""#);
     }
 }

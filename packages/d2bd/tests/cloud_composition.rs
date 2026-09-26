@@ -4,10 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts_provider::v3::{
-    ArtifactDigest,
-    credential::{CredentialLeaseHandle, OpaqueAzureRef},
-};
+use d2b_contracts_provider::v3::{ArtifactDigest, credential::CredentialLeaseHandle};
 use d2b_contracts_resource::v3::{
     ArtifactId, DesiredLifecycle, ResourceGeneration, ResourcePhase, ResourceRef, ResourceUid,
     SchemaFingerprint, SchemaVersion, ZoneId, ZoneRevision,
@@ -30,7 +27,8 @@ use d2b_provider_guest_cloud_hypervisor::{
     CloudHypervisorResourceRequest, CloudHypervisorResourceResponse, CommittedChild,
     DescriptorSignature, GuestChildCommitResponse, GuestGenerationSet, GuestSeedContract,
     GuestSessionEvidence, GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot,
-    GuestStatusPhase, OwnedChildSnapshot, SignatureAlgorithm, health::GuestSessionEvidenceBinding,
+    GuestStatusPhase, MachineType, OwnedChildSnapshot, SignatureAlgorithm,
+    health::GuestSessionEvidenceBinding,
 };
 
 #[derive(Default)]
@@ -438,7 +436,7 @@ fn cloud_controller(
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
         default_memory_mb: 512,
-        default_machine_type: OpaqueAzureRef::parse("q35").unwrap(),
+        default_machine_type: MachineType::Q35,
         watchdog: true,
         adoption_window_ms: 30_000,
         health_check_interval_ms: 30_000,

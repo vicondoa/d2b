@@ -52,7 +52,8 @@ use d2b_provider_guest_cloud_hypervisor::{
     CloudHypervisorResourceRequest, CloudHypervisorResourceResponse, CommittedChild,
     DescriptorSignature, GuestChildCommitResponse, GuestGenerationSet, GuestSeedContract,
     GuestSessionEvidence, GuestSetupDescriptor, GuestSetupDescriptorVerifier, GuestSnapshot,
-    GuestStatusPhase, OwnedChildSnapshot, SignatureAlgorithm, health::GuestSessionEvidenceBinding,
+    GuestStatusPhase, MachineType, OwnedChildSnapshot, SignatureAlgorithm,
+    health::GuestSessionEvidenceBinding,
 };
 use d2b_provider_volume_local::{
     DriftClass, MarkerState, OwnerProof, QuotaCapability, VolumeLayoutEffectPort,
@@ -1352,8 +1353,7 @@ fn cloud_controller(session: Arc<RealCloudHypervisorResourceSession>) -> CloudCo
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
         default_memory_mb: 512,
-        default_machine_type: d2b_contracts_provider::v3::credential::OpaqueAzureRef::parse("q35")
-            .unwrap(),
+        default_machine_type: MachineType::Q35,
         watchdog: true,
         adoption_window_ms: 30_000,
         health_check_interval_ms: 30_000,

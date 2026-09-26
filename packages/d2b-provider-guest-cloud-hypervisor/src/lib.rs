@@ -24,7 +24,7 @@ pub use bootstrap_graph::{
     BootstrapGraph, BootstrapGraphError, DependencyReadiness, GuestChildGraphPlan,
     VmmLifecycleEligibility,
 };
-pub use config::{CloudHypervisorConfig, ConfigValidationError};
+pub use config::{CloudHypervisorConfig, ConfigValidationError, MachineType};
 pub use controller::{CLOUD_HYPERVISOR_REPAIR_INTERVAL_SECS, GUEST_CONTROLLER_FINALIZER};
 pub use controller::{
     AuthenticatedResourceApiAdapter, AuthenticatedResourceSession, ChildSpecUpdate,
