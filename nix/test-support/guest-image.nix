@@ -8,12 +8,20 @@
 # the same contract the legacy `D2B_HOST_TOOL_BUNDLE` handoff passes, and
 # the caller content-addresses them.
 #
-# Two guest shapes are declared here, and the shape is a declared input
-# rather than a second copy of the numbers: `daemon` is the node the current
-# `vmChecks` fixtures boot for the daemon/broker host checks, and
-# `writable-store` is the node the two nested-guest checks boot, which
-# replaces the root drive and boots through a bootloader. Per-check module
-# contributions arrive through `extraModules`.
+# `nodeShape` names the guest this image is, and it is a declared input
+# rather than a second copy of the numbers behind it. With no `extraModules`
+# the guest is one of the re-homed node's two shapes, named for what it is:
+# `daemon` is the node the daemon/broker host checks boot, and
+# `writable-store` is the node the nested-guest checks boot, which replaces
+# the root drive and boots through a bootloader.
+#
+# With `extraModules` the guest is a check's own. The entry is that check's
+# fixture file, and the node, the boot shape, the machine size, and the
+# assertions all come out of that one file - so "every check runs against a
+# guest built from its own node configuration" is a property of where the
+# numbers are read from rather than a discipline the lane has to maintain.
+# There is no list here of which check wants which guest, because there is
+# nowhere for such a list to disagree with a fixture.
 #
 # The output is one store path holding the guest's system closure, the root
 # disk in the shape's own format, and a manifest of what a launcher needs to
@@ -21,11 +29,26 @@
 # kernel command line resolved, the per-check device options, and the
 # activation contract the launcher waits for on the guest's serial console.
 # The manifest is the only record of the invocation shape: the launcher
-# renders it and never restates a number the re-homed node declared.
+# renders it and never restates a number the node declared. It carries the
+# two things the lane's pool needs that a boot cannot tell it - what one
+# member costs the host, and the bound the pool is sized against - and, for
+# a check's own guest, the check's evaluated assertions.
 { pkgs, self, bazelHostTools, rawBundle, extraModules ? [ ], nodeShape ? "daemon" }:
 
 let
   inherit (pkgs) lib;
+
+  # A workspace-relative path, as the Bazel action hands it over, resolved
+  # back inside this tree.
+  #
+  # The resolution is the whole trick. The action stages the declared sources
+  # into a directory and evaluates the flake from there, so `../..` is that
+  # staged tree and a fixture reached through it keeps resolving its own
+  # `./lib.nix` and `../../nix/test-support/...` inside it. An absolute path
+  # would not: `import` would copy the single fixture file into the store
+  # under a flat name, and its next relative import would land outside any
+  # tree at all.
+  fixturePath = declared: builtins.toPath "${toString ../..}/${declared}";
 
   # The lane's activation contract, in the repository's own field names:
   # `nixos-modules/lib.nix` describes every service capability with a
@@ -50,6 +73,11 @@ let
   # unchanged ordering state is console noise rather than evidence.
   activationStallSeconds = 90;
   activationStallRepeatSeconds = 600;
+
+  # Where a node declares the units its own activation is complete when. The
+  # re-homed daemon node writes it; a node that never wanted the daemon host
+  # does not, and that guest's activation falls back to `multi-user.target`.
+  acceptanceUnitsFile = "/etc/d2b/daemon-acceptance-units";
 
   # Refuse an incomplete handoff before a guest closure is evaluated. The
   # host-tool package repeats this check when it is built, but that is the
@@ -77,27 +105,165 @@ let
   # same pinned set the guest closure is realized from.
   testInstrumentation = pkgs.path + "/nixos/modules/testing/test-instrumentation.nix";
 
+  # One guest per check, built from that check's own node declaration.
+  #
+  # `extraModules` carries a check's fixture file - a path under this tree,
+  # written the way Bazel writes a workspace-relative path - rather than a
+  # module. A fixture is `pkgs.testers.runNixOSTest { nodes.machine = ...;
+  # testScript = ...; }`, and the lane needs both halves of that pair: the
+  # node is the guest, and the evaluated script is the check the lane runs
+  # against it. Reading them out of the fixture's own file is the only way
+  # "every check runs against a guest built from its own node configuration"
+  # can be true rather than approximately true, because there is then nowhere
+  # for a second copy of a check's node to drift.
+  #
+  # The read builds no driver. For this evaluation only, `runNixOSTest` is
+  # replaced by a function that hands back the test module it was given, so a
+  # check costs one guest evaluation rather than one test derivation and the
+  # Python driver under it.
+  #
+  # That substitution is load-bearing, not a convenience. The real
+  # `runNixOSTest` returns the *evaluated* test: its `nodes` are
+  # `config.nodesCompat`, and the nix test framework builds that by merging
+  # each node's evaluated `eval-config` result with `config = <the node
+  # itself>`. So `checkFixture.nodes.machine` is an attrset carrying `config`
+  # next to `appstream`, `boot`, `systemd`, `users` and the rest of the
+  # configuration namespace - an evaluated configuration, not a module. Lifting
+  # it into the guest system as a module is what the module system rejects
+  # with "Module `:anon-N:anon-M' has an unsupported attribute `appstream'",
+  # and dropping the offending keys would instead import a frozen
+  # configuration that never saw the guest's own QEMU VM module. The identity
+  # hands back the fixture's *declaration* - `{ name, nodes.machine,
+  # testScript; }` - which is the thing that was written down and the thing the
+  # guest has to be built from.
+  fixturePkgs =
+    pkgs // {
+      testers = pkgs.testers // {
+        runNixOSTest = testModule: testModule;
+      };
+    };
+  checkFixture =
+    if extraModules == [ ] then
+      null
+    else
+      let
+        loaded = import (fixturePath (builtins.head extraModules));
+      in
+      # A fixture is a module *function* of `{ pkgs, self }`, not a module.
+      # Reading it without calling it yields a function, and a function has
+      # neither `.nodes` nor `.testScript` - so an uncalled fixture looks
+      # exactly like one that declared no assertions.
+      if builtins.isFunction loaded then
+        loaded {
+          pkgs = fixturePkgs;
+          inherit self;
+        }
+      else
+        loaded;
+  # The fixture's own name for the check, which is the name the lane reports
+  # it under and the name a contributor filters it by: the `vmChecks`
+  # attribute name is the fixture's file stem, and that is what the make
+  # target's selection variables carry.
+  checkName =
+    if checkFixture == null then
+      null
+    else
+      lib.removeSuffix ".nix" (builtins.baseNameOf (builtins.head extraModules));
+  checkNodes = if checkFixture == null then [ ] else lib.attrValues (checkFixture.nodes or { });
+  checkScript =
+    if checkFixture == null then
+      null
+    else
+      let
+        declared = checkFixture.testScript or null;
+      in
+      if declared == null then
+        throw ''
+          d2b guest image: the fixture for check '${checkName}' declares no testScript,
+          so there is nothing for the lane to run against the guest it declares.
+        ''
+      else if builtins.isFunction declared then
+        # The driver calls a function-shaped script with the nodes it
+        # evaluated. This one is handed the fixture's own node declarations,
+        # which is what such a script interpolates.
+        declared { nodes = checkFixture.nodes; containers = { }; }
+      else
+        declared;
+
+  # The host budget the lane's pool is sized against, declared here rather
+  # than in the launcher: it is a property of the guests this file
+  # configures, so a check added tomorrow cannot silently change what the
+  # pool is allowed to hold. The launcher reads it out of the manifest and
+  # combines it with what the host actually has, which is the only half it
+  # could not know at build time.
+  poolBudget = {
+    # A contributor's machine is running a browser, an editor, and the rest
+    # of their day alongside the lane, so the lane takes a share of what is
+    # free rather than of what is installed.
+    memoryShareNumerator = 2;
+    memoryShareDenominator = 3;
+    # vCPU count is bounded the same way, and a pool member that cannot get
+    # its declared vCPUs runs a guest that starves the very handshakes the
+    # re-homed node raised its core count for.
+    coreShareNumerator = 3;
+    coreShareDenominator = 4;
+    # The working directory a member needs is the root disk its own node
+    # declared: the launcher copies that disk into the directory it owns.
+    workingDirectoryFollowsDisk = true;
+  };
+
   # `d2bDaemonNode` declares `virtualisation.*`, so the guest is evaluated
   # with the same QEMU VM module the runNixOSTest nodes carry. Evaluating
   # the node module directly, rather than through the test driver, is what
   # makes the result a bootable system closure the lane's own launcher can
   # use.
+  #
+  # With a check fixture in hand the node is the fixture's own: a plain node
+  # for a check that never wanted the d2b daemon host, the re-homed daemon
+  # node plus its per-check contributions for a check that did, and the
+  # writable-store node for a check that boots a nested guest. Reading it
+  # rather than rebuilding it here is what lets one lane carry checks that
+  # declared three different shapes of guest.
+  guestNode =
+    if checkNodes == [ ] then
+      # `d2bCloudHypervisorNode` is `d2bDaemonNode` with the writable store
+      # opted into, so the two shapes are one declaration read two ways and
+      # cannot drift apart.
+      d2bNode.d2bDaemonNode { writableStore = nodeShape == "writable-store"; }
+    else
+      builtins.head checkNodes;
+
+  # The node's own name inside the fixture - `nodes.machine`, in every
+  # fixture in the tree today - which the guest has to answer for.
+  #
+  # The nix test framework binds each node as a submodule of the `nodes`
+  # option, and the module system hands a submodule the `name` argument
+  # itself: "the sole exception to this is the argument `name` which is
+  # provided by parent modules to a submodule and contains the attribute
+  # name the submodule is bound to" (`lib/modules.nix`). The lane evaluates
+  # the node as a *top-level* module, so nothing provides `name`, and a node
+  # that imports a module asking for it by name - `nixos-modules/guest-broker.nix`
+  # does, to build its `--authority-id guest-<name>` - fails the evaluation
+  # with "attribute 'name' missing". The value supplied here is the one the
+  # framework would have supplied, so the guest's authority id is the one the
+  # fixture's own guest had rather than a lane-invented substitute. The two
+  # shape-only images have no fixture node and get no argument, which is why
+  # they are left exactly as they were.
+  checkNodeName =
+    if lib.length checkNodes == 1 then
+      builtins.head (lib.attrNames (checkFixture.nodes or { }))
+    else
+      null;
   evaluated = import (pkgs.path + "/nixos/lib/eval-config.nix") {
     system = pkgs.stdenv.hostPlatform.system;
     modules = [
       (pkgs.path + "/nixos/modules/virtualisation/qemu-vm.nix")
-      # `d2bCloudHypervisorNode` is `d2bDaemonNode` with the writable store
-      # opted into, so the two shapes are one declaration read two ways and
-      # cannot drift apart.
-      (d2bNode.d2bDaemonNode {
-        extra = { imports = extraModules; };
-        writableStore = nodeShape == "writable-store";
-      })
+      guestNode
       {
         virtualisation.host.pkgs = pkgs;
       }
       laneGuestModule
-    ];
+    ] ++ lib.optional (checkNodeName != null) { _module.args.name = checkNodeName; };
   };
   guest = evaluated.config;
   toplevel = guest.system.build.toplevel;
@@ -225,6 +391,40 @@ let
       cores = guest.virtualisation.cores;
       memorySizeMib = guest.virtualisation.memorySize;
     };
+    # The check this guest was built for, and the one thing about a guest
+    # that is not part of its invocation: which check it exists for, and
+    # whether that check boots a nested guest inside it. `null` on the two
+    # shape-only images, which carry no check.
+    check =
+      if checkName == null then
+        null
+      else
+        {
+          name = checkName;
+          # The fixture's own name for the check, kept because it is what
+          # appears in a `vmChecks` derivation and in a driver log line, and
+          # a reader comparing the two should not have to know they differ.
+          testName = checkFixture.name or checkName;
+          # `useBootLoader` is the writable-store shape: the root drive is a
+          # writable overlay on an installed system image, which is the
+          # shape the Cloud Hypervisor checks boot their nested guest on.
+          # Restoring a member that has run a nested guest is not something
+          # the lane will attempt, so the flag that keeps it from attempting
+          # one is read off the node rather than off a list of check names
+          # the lane maintains.
+          nestedGuest = useBootLoader;
+        };
+    # What one pool member costs the host, in the three currencies R8 names.
+    # Read off the node's own declared fields so the pool's bound cannot
+    # drift from the guests it is bounding: the memory and the vCPU count are
+    # the machine the launcher passes the emulator, and the working directory
+    # is the root disk the launcher copies into the directory it owns.
+    footprint = {
+      memorySizeMib = guest.virtualisation.memorySize;
+      cores = guest.virtualisation.cores;
+      workingDirectoryMib = diskSizeMib;
+    };
+    pool = poolBudget;
     boot = {
       method = if useBootLoader then "bootloader" else "direct";
       kernel = if useBootLoader then null else "kernel";
@@ -241,7 +441,7 @@ let
       contract = "d2b-daemon-acceptance";
       marker = activationMarker;
       inherit serialDevice;
-      acceptanceUnitsFile = "/etc/d2b/daemon-acceptance-units";
+      inherit acceptanceUnitsFile;
       shape = nodeShape;
     };
     init = "${toplevel}/init";
@@ -393,11 +593,26 @@ let
             } >/dev/${serialDevice} 2>&1 || true
             say "end ordering state"
           }
+          # The units the contract waits on. A node that declares its own
+          # - the re-homed daemon node lists the three units whose activation
+          # the d2b checks were written against - is waited on for those. A
+          # node that declares none is a check that boots a plain NixOS guest
+          # and never wanted the daemon host at all, and waiting on an empty
+          # list would report the guest ready before a single one of its own
+          # units had started. `multi-user.target` is the unit those checks'
+          # own assertions already wait for, so the guest's readiness means
+          # the same thing to the launcher as it does to the check.
           # Plain seconds. The systemd time span above carries an `s` because
           # that is a duration; shell arithmetic does not, and `1800s` is not
           # a number - it is a base the shell cannot read - so a deadline
           # written that way aborts this script on its first statement under
           # `set -e`, and the guest reports nothing at all.
+          units_file=/run/d2b-lane-acceptance-units
+          if [ -r ${acceptanceUnitsFile} ]; then
+            cat ${acceptanceUnitsFile} >"$units_file"
+          else
+            printf 'multi-user.target\n' >"$units_file"
+          fi
           deadline=$(( $(date +%s) + ${toString activationTimeoutSeconds} ))
           units=""
           while read -r unit; do
@@ -430,7 +645,7 @@ let
               sleep 1
             done
             say "$unit is active"
-          done </etc/d2b/daemon-acceptance-units
+          done <"$units_file"
           # A guest snapshotted before its random pool is initialised comes
           # back with a cold CRNG and a blocked getrandom(). The marker is
           # therefore also the snapshot precondition: it is written only
@@ -451,10 +666,20 @@ let
       };
     };
 in
-if !(lib.elem nodeShape [ "daemon" "writable-store" ]) then
+if !(builtins.match "[A-Za-z0-9][A-Za-z0-9._-]*" nodeShape != null) then
   throw ''
-    d2b guest image: unknown node shape '${nodeShape}'.
-      known shapes: daemon writable-store
+    d2b guest image: a guest image must name the guest it is.
+  ''
+else if extraModules != [ ] && lib.length extraModules != 1 then
+  throw ''
+    d2b guest image: one image is built from one check's fixture.
+      declared: ${lib.concatStringsSep " " extraModules}
+  ''
+else if checkNodes != [ ] && lib.length checkNodes != 1 then
+  throw ''
+    d2b guest image: the fixture for check '${checkName}' declares
+    ${toString (lib.length checkNodes)} nodes, and a guest is one node.
+      nodes: ${lib.concatStringsSep " " (lib.attrNames (checkFixture.nodes or { }))}
   ''
 else if missing != [ ] || unexpected != [ ] then
   throw ''
@@ -521,4 +746,15 @@ else
     JSON
     jq --sort-keys . "$out/manifest.json" >"$out/manifest.sorted"
     mv "$out/manifest.sorted" "$out/manifest.json"
+
+    # The check's own assertions, evaluated out of its fixture and carried
+    # beside the guest they run against. The lane runs this text through the
+    # guest-control surface it re-provides for unported checks, so a check
+    # that has not been ported yet executes the assertions it always did
+    # rather than a lane-authored paraphrase of them.
+    ${lib.optionalString (checkScript != null) ''
+      cat >"$out/check.py" <<'PY'
+      ${checkScript}
+      PY
+    ''}
   ''

@@ -16,10 +16,17 @@
 //! that is how the Bazel test target hands it the emulator from the pinned
 //! nix package set and the guest image from the guest-image action.
 
-use std::{env, fs, path::{Path, PathBuf}, process::ExitCode, time::Duration};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    thread,
+    time::{Duration, Instant},
+};
 
 use d2b_vm_harness::{
-    GuestSpec, HarnessError, boot, host, manifest::GuestManifest, report,
+    Footprint, GuestSpec, HarnessError, HostFacts, LegacyCheck, LegacyGuest, boot, host,
+    manifest::GuestManifest, report,
 };
 use serde_json::json;
 
@@ -51,18 +58,694 @@ const REFUSAL_DEVICE: &str = "lane-refusal";
 const REFUSAL_DEVICE_BYTES: u64 = 8 * 1024 * 1024;
 
 fn main() -> ExitCode {
-    match run() {
-        Ok(report) => {
+    let mut arguments = env::args().skip(1);
+    let outcome = match arguments.next().as_deref() {
+        Some("lane") => run_lane(arguments.collect()),
+        Some("self-check") | None => run().map(|report| {
             for line in report {
                 report_line(&line);
             }
-            ExitCode::SUCCESS
-        }
+        }),
+        Some(other) => Err(HarnessError::Configuration(format!(
+            "unknown subcommand {other:?}; the harness runs the lane or a guest self-check"
+        ))),
+    };
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             report_line(&format!("FAIL {error}"));
             ExitCode::FAILURE
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The lane.
+//
+// One image per check, one pool member per distinct emulator invocation, one
+// result per check. The shape of the run, and why each part is here:
+//
+//   * the images are read off the graph, each one built from its own check's
+//     fixture, and each one's manifest says what that check's guest is;
+//   * the checks are grouped by the invocation they declare, because that -
+//     not the closure - is what decides whether two guests can be booted
+//     side by side on one host and run one after another on one member;
+//   * the pool is sized from the distinct invocations against the budget the
+//     guest configurations declared and what this host has free, so the
+//     bound is a number the run measured rather than a constant somebody
+//     picked;
+//   * every member is proven snapshottable from its declaration before the
+//     first one boots, and again from the running guest's own block graph
+//     before its snapshot is taken;
+//   * a member that has run a nested guest is retired rather than restored;
+//   * every check runs against a snapshot-restored copy of its own guest,
+//     after a marker gate has compared that guest fresh against that guest
+//     restored.
+
+/// The image list the lane's target generated, one guest image per line.
+const IMAGES: &str = "D2B_VM_HARNESS_IMAGES";
+/// The checks a contributor selected, as the existing selection variables
+/// carry them: a whitespace- or comma-separated list of check names.
+const CHECKS: &str = "D2B_VM_CHECK";
+
+/// The snapshot tag one member is restored from. The emulator's tags live in
+/// the guest's own directory, so a member only ever has to name its own.
+const SNAPSHOT_TAG: &str = "lane-base";
+
+/// One check, its own guest, and what that guest costs.
+#[derive(Clone)]
+struct LaneGuest {
+    image_dir: PathBuf,
+    manifest: GuestManifest,
+    name: String,
+    nested_guest: bool,
+    footprint: Footprint,
+}
+
+/// A set of checks whose guests are booted the same way, and which therefore
+/// run one at a time rather than all at once.
+#[derive(Clone)]
+struct InvocationGroup {
+    key: String,
+    guests: Vec<LaneGuest>,
+}
+
+impl InvocationGroup {
+    /// What one member of this group costs: the most expensive guest the
+    /// group holds, because the group runs its members one after another and
+    /// the expensive one is the one that has to fit.
+    fn footprint(&self) -> Footprint {
+        self.guests
+            .iter()
+            .map(|guest| guest.footprint)
+            .max_by_key(|footprint| (footprint.memory_size_mib, footprint.cores))
+            .unwrap_or(Footprint {
+                memory_size_mib: 0,
+                cores: 0,
+                working_directory_mib: 0,
+            })
+    }
+
+    /// The checks in this group, by name.
+    fn names(&self) -> String {
+        self.guests
+            .iter()
+            .map(|guest| guest.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// What one check produced, and what a reader of the lane's output needs to
+/// act on it.
+struct CheckResult {
+    name: String,
+    group: String,
+    passed: bool,
+    seconds: f64,
+    detail: String,
+}
+
+/// The equivalence gate's marker: the guest-side facts a restored guest has
+/// to reproduce for the restore to be indistinguishable from the fresh boot
+/// the checks were written against.
+///
+/// It is a marker rather than a checksum on purpose. A checksum of the guest
+/// would differ between the two by everything the boot legitimately changed
+/// between the two moments - the uptime, the boot id, whatever a periodic
+/// job wrote - and a gate that reports that difference has told the reader
+/// nothing about whether the restore worked. What it compares instead is the
+/// set of conditions each check's own assertions were written against: the
+/// guest's declared activation units are active, the d2b host-tool set the
+/// closure was built with is installed, the state disk the node mounted is
+/// mounted where it mounted it, and the guest's random pool is out of its
+/// initialising state. A restore that drops any of those is a restore that
+/// would break a check, and that is the failure worth catching.
+const EQUIVALENCE_MARKER: &str = r#"
+import subprocess
+import sys
+
+start_all()
+
+def report(label, command):
+    status, output = machine.execute(command, timeout=60)
+    print("d2b-lane-marker {}={} {}".format(label, status, output.strip()))
+
+units_file = "/etc/d2b/daemon-acceptance-units"
+try:
+    with open(units_file) as handle:
+        units = [line.strip() for line in handle if line.strip()]
+except OSError:
+    units = ["multi-user.target"]
+
+for unit in units:
+    status, output = machine.execute(
+        "systemctl show {} --property=ActiveState --property=SubState --property=Result"
+        " --no-pager".format(unit),
+        timeout=60,
+    )
+    print("d2b-lane-marker unit {}= {} {}".format(unit, status, output.strip().replace("\n", " ")))
+
+report("acceptanceUnitsFile", "cat {}".format(units_file))
+report("stateDisk", "findmnt -n -o TARGET,SOURCE,FSTYPE /var/lib/d2b || true")
+report("hostTools", "ls /run/d2b-host-tools 2>/dev/null || ls /nix/var/nix/profiles/default/bin 2>/dev/null | head -n 0; echo inventory")
+report("activation", "systemctl show d2b-lane-activation --property=ActiveState --property=Result --no-pager")
+report("crng", "journalctl -b --no-pager -o cat | grep -c 'crng init done' || true")
+report("backdoor", "systemctl is-active backdoor.service")
+print("d2b-lane-marker complete")
+"#;
+
+/// Run the lane: read the images, size the pool, run the checks, report.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn run_lane(arguments: Vec<String>) -> Result<(), HarnessError> {
+    let emulator = required_path(EMULATOR)?;
+    let work_root = work_root(env::current_dir().map_err(|error| {
+        HarnessError::io("reading the lane's working directory", error)
+    })?)?;
+    fs::create_dir_all(&work_root)
+        .map_err(|error| HarnessError::io(format!("creating {}", work_root.display()), error))?;
+
+    // The host preconditions gate everything after them, and they are asked
+    // before a single guest image is read: a host that cannot run the lane
+    // should learn so in a second, not after eleven closures.
+    host::require_this_host()?;
+
+    let selected = selection(&arguments);
+    let guests = read_guests(&selected)?;
+    if guests.is_empty() {
+        return Err(HarnessError::Configuration(
+            "no guest image carried a check the lane could select".to_owned(),
+        ));
+    }
+
+    // A device that cannot carry an internal snapshot fails the lane here,
+    // before the pool is built and before any guest boots. The running
+    // guest's own block graph is asked again once it is up, but a pool that
+    // boots five members and then refuses the sixth has spent the run.
+    for guest in &guests {
+        let refused = guest.manifest.unsnapshottable_drives();
+        if !refused.is_empty() {
+            return Err(HarnessError::Configuration(format!(
+                "the guest image for check '{}' attaches a writable device that cannot carry an \
+                 internal snapshot, and the lane will not run without restore: {}",
+                guest.name,
+                refused.join("; ")
+            )));
+        }
+    }
+
+    let groups = group_by_invocation(guests);
+    let admitted = admit(&groups, &work_root)?;
+    for group in &admitted {
+        report_line(&format!(
+            "pool: {} ({} vCPU, {} MiB, {} MiB of working directory) <- {}",
+            group.names(),
+            group.footprint().cores,
+            group.footprint().memory_size_mib,
+            group.footprint().working_directory_mib,
+            group.key,
+        ));
+    }
+
+    let outcomes: Vec<std::result::Result<CheckResult, (String, HarnessError)>> =
+        thread::scope(|scope| {
+            let emulator = emulator.as_path();
+            let work_root = work_root.as_path();
+            let handles: Vec<_> = admitted
+                .iter()
+                .map(|group| scope.spawn(move || run_group(group, emulator, work_root)))
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| panic!("a pool group thread panicked"))
+                })
+                .collect()
+        });
+
+/// One invocation group's checks, in the order they were selected.
+///
+/// Sequential on purpose: a group is a set of checks whose guests are booted
+/// the same way, and the pool restores a member between them rather than
+/// booting a second member of the same shape beside it. The concurrency is
+/// across groups, which is where the memory and the vCPUs differ.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn run_group(
+    group: &InvocationGroup,
+    emulator: &Path,
+    work_root: &Path,
+) -> Vec<std::result::Result<CheckResult, (String, HarnessError)>> {
+    group
+        .guests
+        .iter()
+        .map(|guest| run_check(guest, emulator, work_root))
+        .collect()
+}
+
+    let mut results: Vec<CheckResult> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            Ok(result) => {
+                report_line(&format!(
+                    "{}: {} in {:.1}s",
+                    if result.passed { "PASS" } else { "FAIL" },
+                    result.name,
+                    result.seconds,
+                ));
+                if !result.passed {
+                    failures.push(result.name.clone());
+                }
+                results.push(result);
+            }
+            Err((name, error)) => {
+                report_line(&format!("FAIL {name}: {error}"));
+                failures.push(name.clone());
+                results.push(CheckResult {
+                    name,
+                    group: String::new(),
+                    passed: false,
+                    seconds: 0.0,
+                    detail: error.to_string(),
+                });
+            }
+        }
+    }
+
+    write_junit(&results)?;
+    if failures.is_empty() {
+        report_line(&format!("lane: {} checks, all green", results.len()));
+        Ok(())
+    } else {
+        Err(HarnessError::Configuration(format!(
+            "{} of {} checks failed: {}",
+            failures.len(),
+            results.len(),
+            failures.join(", ")
+        )))
+    }
+}
+
+/// The checks this run was asked for, from the target's own argument or from
+/// the environment variable contributors already use.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn selection(arguments: &[String]) -> Vec<String> {
+    let from_arguments: Vec<String> = arguments
+        .iter()
+        .skip_while(|argument| *argument != "--check")
+        .skip(1)
+        .flat_map(|argument| argument.split([',', ' ']))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if !from_arguments.is_empty() {
+        return from_arguments;
+    }
+    env::var(CHECKS)
+        .unwrap_or_default()
+        .split([',', ' ', '\n', '\t'])
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Every check the lane can run, read off the images the target declared.
+///
+/// A name is matched against both the check's own name and the name its
+/// fixture gave it, because a contributor filtering the lane has whichever
+/// of the two they have read.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn read_guests(selected: &[String]) -> Result<Vec<LaneGuest>, HarnessError> {
+    let listing = fs::read_to_string(required_path(IMAGES)?).map_err(|error| {
+        HarnessError::io("reading the lane's image list", error)
+    })?;
+    let mut guests = Vec::new();
+    for line in listing.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let image_dir = resolve_runfile(PathBuf::from(line));
+        let manifest = GuestManifest::load(&image_dir)?;
+        let Some(check) = &manifest.check else {
+            continue;
+        };
+        if !selected.is_empty()
+            && !selected.iter().any(|name| name == &check.name || name == &check.test_name)
+        {
+            continue;
+        }
+        guests.push(LaneGuest {
+            image_dir,
+            footprint: manifest.footprint,
+            name: check.name.clone(),
+            nested_guest: check.nested_guest,
+            manifest,
+        });
+    }
+    guests.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(guests)
+}
+
+/// A path out of the lane's image listing, resolved the way the rest of the
+/// harness resolves a runfile.
+///
+/// The listing is generated by the test target from `$(rlocationpath)`, so
+/// every line is relative to the *runfiles root* - `_main/...` - while a
+/// test's own working directory is the `_main` directory inside that tree.
+/// Taking a line as written would look for `_main/_main/...`. An absolute path
+/// is left alone, and with no runfiles tree declared the path is the caller's
+/// own, which is what a contributor running the harness by hand means.
+fn resolve_runfile(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    let root = [env::var_os("RUNFILES_DIR"), env::var_os("TEST_SRCDIR")]
+        .into_iter()
+        .flatten()
+        .next();
+    match root {
+        Some(root) => PathBuf::from(root).join(&path),
+        None => path,
+    }
+}
+
+/// Group the checks by the invocation their guests declare.
+///
+/// The order is the group's cheapest member first and the group name after
+/// it, so the pool admits the smallest groups first and the admission is
+/// reproducible rather than dependent on which label the graph happened to
+/// list.
+fn group_by_invocation(guests: Vec<LaneGuest>) -> Vec<InvocationGroup> {
+    let mut groups: Vec<InvocationGroup> = Vec::new();
+    for guest in guests {
+        let key = guest.manifest.invocation_key();
+        match groups.iter_mut().find(|group| group.key == key) {
+            Some(group) => group.guests.push(guest),
+            None => groups.push(InvocationGroup {
+                key,
+                guests: vec![guest],
+            }),
+        }
+    }
+    groups.sort_by(|left, right| {
+        let left_cost = left.footprint();
+        let right_cost = right.footprint();
+        (left_cost.memory_size_mib, left_cost.cores, left.key.clone())
+            .cmp(&(right_cost.memory_size_mib, right_cost.cores, right.key.clone()))
+    });
+    groups
+}
+
+/// How many of the groups this host can hold at once, and which.
+///
+/// The pool's size is the number of distinct invocations, bounded by what the
+/// host has: the budget the guest configurations declared, applied to the
+/// memory and the vCPUs this host has free, and the working directory the
+/// admitted members will copy their root disks into. A group that does not
+/// fit is not an error - it waits for a member to finish - and a host that
+/// cannot hold even the cheapest group is a host that cannot run the lane at
+/// all, which is worth saying plainly rather than booting a guest that
+/// cannot get the memory its node declared.
+fn admit(
+    groups: &[InvocationGroup],
+    work_root: &Path,
+) -> Result<Vec<InvocationGroup>, HarnessError> {
+    let first = groups
+        .first()
+        .ok_or_else(|| HarnessError::Configuration("the lane has no checks to run".to_owned()))?;
+    let budget = first.guests[0].manifest.pool;
+    let available_memory = HostFacts::available_memory_mib().ok_or_else(|| {
+        HarnessError::Configuration(
+            "this host does not report how much memory it has free, so the pool cannot be sized \
+             against a budget rather than a guess"
+                .to_owned(),
+        )
+    })?;
+    let available_cores = HostFacts::available_cores();
+    // Multiply first, then divide, the way the core budget below does.
+    // Written as `available * numerator.checked_div(denominator)` the
+    // method call binds to the numerator alone, so the share is taken of `2`
+    // rather than of what this host has, and a two-in-three budget is a
+    // truncation to zero - a pool that admits nothing, reported as a
+    // configuration the guest never got to say anything about.
+    let memory_budget = available_memory
+        .checked_mul(budget.memory_share_numerator)
+        .map(|scaled| scaled / budget.memory_share_denominator.max(1))
+        .filter(|share| *share > 0)
+        .ok_or_else(|| {
+            HarnessError::Configuration(
+                "the declared memory budget is not a share of anything".to_owned(),
+            )
+        })?;
+    let core_budget = (available_cores * budget.core_share_numerator
+        / budget.core_share_denominator.max(1))
+        .max(1);
+    report_line(&format!(
+        "budget: {} MiB of the {} MiB this host has free, and {} of its {} vCPUs",
+        memory_budget,
+        available_memory,
+        core_budget,
+        available_cores,
+    ));
+
+    let free_directory = HostFacts::free_working_directory_mib(work_root);
+    let mut memory_used: u64 = 0;
+    let mut cores_used: u64 = 0;
+    let mut directory_used: u64 = 0;
+    let mut admitted = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        let cost = group.footprint();
+        let fits_memory = memory_used + cost.memory_size_mib <= memory_budget;
+        let fits_cores = cores_used + u64::from(cost.cores) <= core_budget;
+        let fits_directory = free_directory.is_none_or(|free| {
+            directory_used + cost.working_directory_mib <= free
+        });
+        if index == 0 && !(fits_memory && fits_cores) {
+            return Err(HarnessError::Configuration(format!(
+                "this host cannot hold even the cheapest pool member: the smallest invocation \
+                 needs {} MiB and {} vCPUs, and the budget is {} MiB and {} vCPUs out of {} MiB \
+                 and {} vCPUs free",
+                cost.memory_size_mib,
+                cost.cores,
+                memory_budget,
+                core_budget,
+                available_memory,
+                available_cores
+            )));
+        }
+        if !(fits_memory && fits_cores && fits_directory) {
+            report_line(&format!(
+                "pool: {} does not fit the budget and will run after a member finishes",
+                group.names()
+            ));
+            continue;
+        }
+        memory_used += cost.memory_size_mib;
+        cores_used += u64::from(cost.cores);
+        directory_used += cost.working_directory_mib;
+        admitted.push(group.clone());
+    }
+    if let Some(free) = free_directory {
+        report_line(&format!(
+            "working directory: {} MiB needed for the admitted pool, {} MiB free at {}",
+            directory_used,
+            free,
+            work_root.display()
+        ));
+    } else {
+        report_line(&format!(
+            "working directory: {} MiB needed for the admitted pool; free space at {} could not \
+             be measured, so the declared bound is enforced by each member's own copy",
+            directory_used,
+            work_root.display()
+        ));
+    }
+    Ok(admitted)
+}
+/// Boot one check's own guest, prove the restore against it, and run the
+/// check on a restored copy of it.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn run_check(
+    guest: &LaneGuest,
+    emulator: &Path,
+    work_root: &Path,
+) -> std::result::Result<CheckResult, (String, HarnessError)> {
+    let name = guest.name.clone();
+    let started = Instant::now();
+    let outcome = run_check_inner(guest, emulator, work_root, started);
+    match outcome {
+        Ok(result) => Ok(result),
+        Err(error) => Err((name, error)),
+    }
+}
+
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn run_check_inner(
+    guest: &LaneGuest,
+    emulator: &Path,
+    work_root: &Path,
+    started: Instant,
+) -> Result<CheckResult, HarnessError> {
+    let mut spec = GuestSpec::new(
+        guest.manifest.clone(),
+        &guest.image_dir,
+        emulator,
+        work_root,
+        &guest.name,
+    );
+    spec.activation_timeout = Duration::from_secs(
+        optional_u64(ACTIVATION_TIMEOUT, 1800)?,
+    );
+    let mut active = boot(&spec)?;
+    // The declared pass said this guest can be snapshotted; the running
+    // guest's own block graph is the authority, and it is asked before the
+    // snapshot rather than at the first restore.
+    active.require_snapshottable()?;
+
+    let mut surface = LegacyGuest::attach(&mut active)?;
+    let marker = surface
+        .run(&LegacyCheck::new(format!("{}-marker", guest.name), EQUIVALENCE_MARKER))
+        .map_err(|error| {
+            HarnessError::Configuration(format!(
+                "the equivalence marker could not be read from the fresh guest: {error}"
+            ))
+        })?;
+    if !marker.passed {
+        return Err(HarnessError::Configuration(format!(
+            "the equivalence marker failed against a freshly booted guest, so it cannot say \
+             anything about a restored one:\n{}",
+            marker.detail
+        )));
+    }
+    active.save_snapshot(SNAPSHOT_TAG)?;
+    active.restore(SNAPSHOT_TAG)?;
+    let restored = surface
+        .run(&LegacyCheck::new(format!("{}-marker", guest.name), EQUIVALENCE_MARKER))
+        .map_err(|error| {
+            HarnessError::Configuration(format!(
+                "the equivalence marker could not be read from the restored guest: {error}"
+            ))
+        })?;
+    if !restored.passed {
+        return Err(HarnessError::Configuration(format!(
+            "the equivalence marker failed against a restored guest:\n{}",
+            restored.detail
+        )));
+    }
+    let fresh_text = marker_text(&marker.detail);
+    let restored_text = marker_text(&restored.detail);
+    if fresh_text != restored_text {
+        return Err(HarnessError::Configuration(format!(
+            "a restored guest is not the fresh boot its check was written against\n--- fresh boot\n{}\n--- restored\n{}",
+            fresh_text, restored_text
+        )));
+    }
+    report_line(&format!(
+        "{}: the restored guest matches the fresh boot on every marker ({} bytes)",
+        guest.name,
+        fresh_text.len()
+    ));
+
+    // The check runs on a restored guest: the marker gate above left the
+    // member where its snapshot was taken, and the gate is not part of what
+    // the check is being handed.
+    active.restore(SNAPSHOT_TAG)?;
+    let script = fs::read_to_string(guest.image_dir.join("check.py")).map_err(|error| {
+        HarnessError::io(
+            format!("reading the assertions of check '{}'", guest.name),
+            error,
+        )
+    })?;
+    let outcome = surface.run(&LegacyCheck::new(&guest.name, script))?;
+    let seconds = started.elapsed().as_secs_f64();
+    report_line(&format!(
+        "{}: {} after the restore ({seconds:.1}s total on this member)",
+        guest.name,
+        if guest.nested_guest {
+            "ran a nested guest; this member is retired rather than restored"
+        } else {
+            "restored from the pool's snapshot"
+        },
+    ));
+    if guest.nested_guest {
+        // Retired, not restored. A guest with a live guest inside it has no
+        // defined restored state, and a member that has run a nested guest
+        // is torn down here rather than handed to the next check.
+        let _ = active.discard_snapshot(SNAPSHOT_TAG);
+    }
+    active.shutdown()?;
+    Ok(CheckResult {
+        name: guest.name.clone(),
+        group: guest.manifest.invocation_key(),
+        passed: outcome.passed,
+        seconds,
+        detail: outcome.detail,
+    })
+}
+
+/// The marker lines out of a check's own output, with the lane's own log
+/// lines around them dropped: the surface's log describes what it did, and
+/// two runs of the same gate legitimately log different durations.
+fn marker_text(detail: &str) -> String {
+    detail
+        .lines()
+        .filter(|line| line.trim_start().starts_with("d2b-lane-marker"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Write the lane's JUnit document: one testcase per check, carrying that
+/// check's own diagnostics.
+///
+/// Bazel names the file through `XML_OUTPUT_FILE` when it runs a test under
+/// its XML wrapper, which is the default; the fallback keeps the document
+/// findable when the harness is run by hand.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn write_junit(results: &[CheckResult]) -> Result<(), HarnessError> {
+    let path = env::var_os("XML_OUTPUT_FILE").map(PathBuf::from).unwrap_or_else(|| {
+        let directory = env::var_os("TEST_SRCDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let target = env::var("TEST_TARGET").unwrap_or_else(|_| "host_integration_lane".to_owned());
+        directory.join(format!("{}.test.xml", target.replace(['/', ':'], "_")))
+    });
+    let mut document = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites>\n");
+    for result in results {
+        document.push_str(&format!(
+            "  <testsuite name=\"{}\" tests=\"1\" failures=\"{}\">\n    <testcase classname=\"d2b.host-integration.{}\" name=\"{}\" time=\"{seconds:.3}\">\n",
+            escape(&result.group),
+            u8::from(!result.passed),
+            escape(&result.group),
+            escape(&result.name),
+            seconds = result.seconds,
+        ));
+        if result.passed {
+            document.push_str("    </testcase>\n");
+        } else {
+            document.push_str(&format!(
+                "      <failure message=\"check {} did not pass\">{}</failure>\n    </testcase>\n",
+                escape(&result.name),
+                escape(&result.detail),
+            ));
+        }
+        document.push_str("  </testsuite>\n");
+    }
+    document.push_str("</testsuites>\n");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| HarnessError::io(format!("creating {}", parent.display()), error))?;
+    }
+    fs::write(&path, document)
+        .map_err(|error| HarnessError::io(format!("writing {}", path.display()), error))
+}
+
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 /// The lane's working directory, resolved against the caller's own directory

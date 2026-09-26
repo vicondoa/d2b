@@ -151,6 +151,68 @@ impl HostFacts {
             .and_then(|(_, value)| value.as_deref())
             .map(is_enabled)
     }
+
+    /// The memory this host has free, in MiB, or `None` when it will not
+    /// say.
+    ///
+    /// `MemAvailable` and not `MemFree`: the lane runs on a contributor's own
+    /// machine, where the memory a guest can have is the memory the kernel
+    /// says is reclaimable, not the memory nothing happens to be using.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn available_memory_mib() -> Option<u64> {
+        meminfo_field("/proc/meminfo", "MemAvailable")
+    }
+
+    /// The vCPUs this host will schedule, which is the ceiling the pool's
+    /// core share is a fraction of.
+    pub fn available_cores() -> u64 {
+        std::thread::available_parallelism()
+            .map(|cores| cores.get() as u64)
+            .unwrap_or(1)
+    }
+
+    /// The free space on the filesystem the lane's working directory is on,
+    /// in MiB, or `None` when it cannot be read.
+    ///
+    /// Read with `df` rather than from a syscall the crate has no binding
+    /// for. A lane that cannot measure the space its own members copy their
+    /// root disks into would find out from `ENOSPC` halfway through a run,
+    /// which is the failure this exists to turn into a decision made before
+    /// the first guest boots.
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
+    pub fn free_working_directory_mib(path: &Path) -> Option<u64> {
+        let output = std::process::Command::new("df")
+            .args(["-P", "--block-size=1", "--output=avail"])
+            .arg(path)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8(output.stdout).ok()?;
+        text.lines()
+            .nth(1)?
+            .split_whitespace()
+            .next()?
+            .parse::<u64>()
+            .ok()
+            .map(|bytes| bytes / (1024 * 1024))
+    }
+}
+
+/// One `key: value kB` field out of `/proc/meminfo`, in MiB.
+#[allow(clippy::disallowed_methods, reason = "synchronous path")]
+fn meminfo_field(path: &str, key: &str) -> Option<u64> {
+    let text = fs::read_to_string(path).ok()?;
+    let line = text
+        .lines()
+        .find(|line| line.starts_with(key) && line.as_bytes().get(key.len()) == Some(&b':'))?;
+    line[key.len() + 1..]
+        .split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()
+        .map(|kib| kib / 1024)
 }
 
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]

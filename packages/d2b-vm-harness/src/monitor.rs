@@ -112,6 +112,84 @@ impl Monitor {
         Ok(parse_block_devices(&report))
     }
 
+    /// Save the guest's whole state - every device, plus the machine state -
+    /// under a tag.
+    ///
+    /// `savevm` is the human-monitor spelling of it rather than the QMP
+    /// `snapshot-save` command, and the difference matters: `snapshot-save`
+    /// takes the list of devices to capture, and a list that is wrong in
+    /// either direction produces a snapshot that restores a guest missing
+    /// state or a guest whose extra state was never captured, both of which
+    /// look like a healthy restore. `savevm` captures what the guest has, and
+    /// refuses the whole save if any single device refuses - which is the
+    /// property the lane depends on, since one raw attached device would
+    /// otherwise be the one thing a later `loadvm` cannot undo.
+    pub fn save_snapshot(&mut self, tag: &str) -> Result<()> {
+        self.human(&format!("savevm {}", Self::quote(tag)))
+            .map(|_| ())
+    }
+
+    /// Restore the guest from a snapshot it saved itself.
+    pub fn load_snapshot(&mut self, tag: &str) -> Result<()> {
+        self.human(&format!("loadvm {}", Self::quote(tag)))
+            .map(|_| ())
+    }
+
+    /// Remove a snapshot, which is what retiring a member frees.
+    pub fn delete_snapshot(&mut self, tag: &str) -> Result<()> {
+        self.human(&format!("delvm {}", Self::quote(tag)))
+            .map(|_| ())
+    }
+
+    /// The tags this guest currently holds a snapshot under.
+    pub fn snapshot_tags(&mut self) -> Result<Vec<String>> {
+        let report = self.execute("snapshot-list")?;
+        Ok(report
+            .get("snapshots")
+            .and_then(|snapshots| snapshots.as_array())
+            .map(|snapshots| {
+                snapshots
+                    .iter()
+                    .filter_map(|snapshot| {
+                        snapshot
+                            .get("tag")
+                            .and_then(|tag| tag.as_str())
+                            .map(str::to_owned)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Run one human-monitor command, treating anything the monitor printed
+    /// on stderr as a refusal.
+    ///
+    /// The human monitor reports a failure in the text it returns rather than
+    /// in the QMP envelope, so an empty return would turn a refused
+    /// `loadvm` into a silent success - and a lane that believed it had
+    /// restored a guest, onto a guest still in whatever state the last check
+    /// left it in, is the failure this whole layer exists to prevent.
+    fn human(&mut self, command: &str) -> Result<String> {
+        let output = self.execute_with(
+            "human-monitor-command",
+            json!({ "command-line": command }),
+        )?;
+        let text = output.as_str().unwrap_or_default().trim().to_owned();
+        if text.is_empty() {
+            Ok(text)
+        } else {
+            Err(HarnessError::Monitor {
+                command: command.to_owned(),
+                detail: text,
+            })
+        }
+    }
+
+    /// A snapshot tag, quoted for the human monitor's own parser.
+    fn quote(tag: &str) -> String {
+        format!("'{}'", tag.replace('\'', "'\\''"))
+    }
+
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn read_message(&mut self) -> Result<Value> {
         let mut line = String::new();

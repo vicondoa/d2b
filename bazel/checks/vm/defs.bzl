@@ -45,7 +45,8 @@ out="$4"
 source_manifest="$5"
 substituters="$6"
 controller="$7"
-shift 7
+check="$8"
+shift 8
 
 # Bazel hands over execroot-relative paths. Nix resolves its configuration
 # against the working directory, so the output tree is anchored here.
@@ -92,6 +93,15 @@ done < "$source_manifest"
 root="$(CDPATH= cd -- "$source" && pwd -P)"
 [ -f "$source/$flake" ] || fail "the declared flake ($flake) is not among the copied sources"
 [ -f "$source/$lock" ] || fail "the declared flake lock ($lock) is not among the copied sources"
+# The check's fixture is staged with everything else and reaches the
+# evaluation as a path relative to this tree, which is how the guest finds
+# its own `./lib.nix` and its node module again: a change to the fixture is a
+# change to the image, not a number the image already recorded.
+check_argument="[ ]"
+if [ -n "$check" ]; then
+  [ -f "$source/$check" ] || fail "the declared check fixture ($check) is not among the copied sources"
+  check_argument="[ \\"$check\\" ]"
+fi
 
 # The d2b host binaries, staged by output name into the bundle the guest
 # closure reads. The guest-side package refuses any other inventory, so a
@@ -126,7 +136,7 @@ done
 [ "$reachable" -eq 1 ] || fail "none of the declared substituters ($substituters) is reachable"
 
 system="$("$nix_bin" eval --raw --impure --expr builtins.currentSystem)" || fail "could not read the nix system"
-expr="(builtins.getFlake \\"path:$root\\").guestImage.\\"$system\\" { rawBundle = \\"$bundle\\"; rawCloudHypervisorController = $controller_argument; nodeShape = \\"$node_shape\\"; }"
+expr="(builtins.getFlake \\"path:$root\\").guestImage.\\"$system\\" { rawBundle = \\"$bundle\\"; rawCloudHypervisorController = $controller_argument; extraModules = $check_argument; nodeShape = \\"$node_shape\\"; }"
 echo "guest-image $label: realizing the guest from declared inputs" >&2
 image="$(nix_run "$nix_bin" build \\
   --option store "local?store=$store_dir" \\
@@ -150,6 +160,20 @@ cp -a "$image/." "$out/"
 def _guest_image_impl(ctx):
     output = ctx.actions.declare_directory(ctx.label.name)
     source_manifest = ctx.actions.declare_file(ctx.label.name + ".sources")
+    check = ctx.attr.check
+
+    # The check's fixture is a declared source like every other input, and it
+    # reaches the evaluation as a path relative to the tree the action copies
+    # rather than as a path into the execroot: an absolute path would make
+    # `import` copy that one file into the store under a flat name, and its
+    # own `./lib.nix` would then resolve outside any tree at all. Naming it
+    # as a path rather than as a label is also what lets the fixtures stay
+    # outside a Bazel package - a package boundary there would make the root
+    # package's own reference to one of them an invalid label.
+    if check:
+        staged = [source.short_path for source in ctx.files.srcs]
+        if check not in staged:
+            fail("guest_image %s: the check fixture %s is not among srcs" % (ctx.label, check))
     ctx.actions.write(
         output = source_manifest,
         content = "\n".join([source.path for source in ctx.files.srcs]) + "\n",
@@ -170,6 +194,7 @@ def _guest_image_impl(ctx):
             source_manifest.path,
             ctx.attr.substituters,
             controller.path if controller else "",
+            check,
         ] + [tool.path for tool in ctx.files.host_tools],
         command = _GUEST_IMAGE_COMMAND % (
             str(ctx.label),
@@ -195,15 +220,23 @@ guest_image = rule(
             allow_single_file = True,
             mandatory = True,
         ),
-        # Which of the re-homed node's two guest shapes this image evaluates:
-        # `daemon` for the daemon/broker host checks, `writable-store` for
-        # the checks that boot a nested guest, which replaces the root drive
-        # and boots through a bootloader. It is a declared attribute rather
-        # than a lane constant, so the shape a guest is built from is part of
-        # the action's key rather than an ambient fact.
+        # The check this guest belongs to, as a declared label on that check's
+        # own fixture file. The guest's node, its machine size, its drive
+        # layout and its assertions are all read out of that file during the
+        # evaluation, so the lane carries no list of which check wants which
+        # guest: the only place a check's guest is declared is the check.
+        "check": attr.string(),
+        # The name this guest reports on its console. With a `check` it is
+        # the check's own name, which is what makes a launcher that booted
+        # the wrong image say so in one line. Without one it names the shape
+        # of the re-homed node the image evaluates: `daemon` for the
+        # daemon/broker host shape, `writable-store` for the shape that
+        # replaces the root drive and boots through a bootloader. It is a
+        # declared attribute rather than a lane constant, so the guest a
+        # target builds is part of the action's key rather than an ambient
+        # fact.
         "node_shape": attr.string(
             default = "daemon",
-            values = ["daemon", "writable-store"],
         ),
         # The guest's own binaries, taken in the target configuration: the
         # guest runs the binaries this build produces, not a second copy
@@ -240,17 +273,16 @@ set -eu
 # assumed - a wrong guess here is a guest that never boots, with a path error
 # instead of a boot error.
 runfiles="$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd -P)"
-
 export D2B_VM_HARNESS_CYCLES="{cycles}"
-export D2B_VM_HARNESS_EMULATOR="$runfiles/{emulator}"
-export D2B_VM_HARNESS_IMAGE="$runfiles/{image}"
+export D2B_VM_HARNESS_EMULATOR="$runfiles/__EMULATOR__"
+export D2B_VM_HARNESS_IMAGE="$runfiles/__IMAGE__"
 # A lane-scoped working directory that outlives each individual guest, and is
 # this test's own rather than the sandboxed temporary directory the current
 # Bazel release does not expose to a sandboxed action. The harness resolves a
 # relative one against its own working directory.
 export D2B_VM_HARNESS_WORK_ROOT="{work_root}"
 
-exec "$runfiles/{harness}" "$@"
+exec "$runfiles/__HARNESS__" "$@"
 """
 
 _LANE_TAGS = [
@@ -281,54 +313,145 @@ def guest_boot_test(name, image, emulator, harness, timeout = "eternal"):
     remote execution and out of any aggregate that would replay a guest's
     verdict.
     """
-    runner = name + "_runner.sh"
-    script = _LANE_RUNNER_SCRIPT.format(
-        cycles = "2",
-        emulator = "$(rlocationpath %s)" % emulator,
-        harness = "$(rlocationpath %s)" % harness,
-        image = "$(rlocationpath %s)" % image,
-        work_root = "d2b-vm-lane-work/%s" % name,
+    _write_runner(
+        name = name,
+        script = _LANE_RUNNER_SCRIPT.format(
+            cycles = "2",
+            work_root = "d2b-vm-lane-work/%s" % name,
+        ),
+        runfiles = {
+            "__HARNESS__": harness,
+            "__EMULATOR__": emulator,
+            "__IMAGE__": image,
+        },
+        srcs = [emulator, harness, image],
+        tags = _LANE_TAGS,
+        timeout = timeout,
     )
 
-    # The runner is written through a genrule rather than handed to the test
-    # rule's `env`, following `nix_native_test`: a runfile location is
-    # expanded only where a rule expands it, and a binary cannot resolve its
-    # own runfiles. Each location becomes a placeholder first so the `$`
-    # escaping genrule's own expansion needs does not touch the shell script
-    # around it.
-    make_vars = {
-        "$(rlocationpath %s)" % harness: "__HARNESS__",
-        "$(rlocationpath %s)" % emulator: "__EMULATOR__",
-        "$(rlocationpath %s)" % image: "__IMAGE__",
-    }
-    for make_var, placeholder in make_vars.items():
-        script = script.replace(make_var, placeholder)
-    script = script.replace("$", "$$")
-    for make_var, placeholder in make_vars.items():
-        script = script.replace(placeholder, make_var)
+def _write_runner(name, script, runfiles, srcs, tags, timeout):
+    """Write a generated shell runner and register the test that runs it.
 
+    The runner is written through a genrule rather than handed to the test
+    rule's `env`, following `nix_native_test`: a runfile location is expanded
+    only where a rule expands it, and the harness is a binary, not a shell
+    script that could resolve its own runfiles. Each location becomes a
+    placeholder first so the `$` escaping genrule's own expansion needs does
+    not touch the shell script around it.
+    """
+    locations = list(runfiles.items())
+    for index, (placeholder, _) in enumerate(locations):
+        script = script.replace(placeholder, "@LANE_RUNFILE_%d@" % index)
+    script = script.replace("$", "$$")
+    for index, (_, label) in enumerate(locations):
+        script = script.replace("@LANE_RUNFILE_%d@" % index, "$(rlocationpath %s)" % label)
     native.genrule(
-        name = runner,
-        srcs = [
-            emulator,
-            harness,
-            image,
-        ],
+        name = name + "_runner.sh",
+        srcs = srcs,
         outs = [name + "_runner"],
         cmd = "\"$(execpath @python3//:bin/python3)\" -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_text(sys.stdin.read()); p.chmod(0o755)' \"$(OUTS)\" <<'EOF'\n%s\nEOF" % script,
-        tags = _LANE_TAGS,
+        tags = tags,
         tools = ["@python3//:bin/python3"],
     )
     native_test(
         name = name,
+        # The genrule's output file, not the genrule target: `src` names a
+        # file the test rule reads, and a label that resolves to a rule
+        # rather than to an output leaves it with no file to run.
         src = ":" + name + "_runner",
-        data = [
-            ":" + name + "_runner",
-            harness,
-            image,
-            emulator,
-        ],
+        data = srcs,
         size = "large",
+        tags = tags,
+        timeout = timeout,
+    )
+
+_LANE_SUITE_RUNNER_SCRIPT = """\
+#!/bin/sh
+set -eu
+
+# A test runs with its working directory inside the runfiles tree, not at its
+# root, so the root is derived from this script's own location rather than
+# assumed - a wrong guess here is a guest that never boots, with a path error
+# instead of a boot error.
+runfiles="$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd -P)"
+
+export D2B_VM_HARNESS_EMULATOR="$runfiles/__EMULATOR__"
+export D2B_VM_HARNESS_IMAGES="$runfiles/__IMAGES__"
+# A check that has not been ported yet is a Python script, and the
+# interpreter it runs under is part of what the lane is. Left to itself the
+# surface resolves whatever `python3` a developer's shell happens to find, so
+# the interpreter is a declared runfile from the same pinned nix package set
+# as the guest it drives.
+export D2B_VM_HARNESS_PYTHON="$runfiles/__PYTHON__"
+# A lane-scoped working directory that outlives each individual guest, and is
+# this test's own rather than the sandboxed temporary directory the current
+# Bazel release does not expose to a sandboxed action. The harness resolves a
+# relative one against its own working directory.
+export D2B_VM_HARNESS_WORK_ROOT="d2b-vm-lane-work/{name}"
+
+# The harness is asked for the `lane` subcommand rather than being left to its
+# own default. With no argument it runs the single-guest self-check, which is
+# the other target's job and which asks for `D2B_VM_HARNESS_IMAGE` - a variable
+# the lane has no reason to set, because the lane reads the whole image list
+# instead. Anything a contributor passes on the command line reaches the
+# lane's own selection, which reads `--check`.
+exec "$runfiles/__HARNESS__" lane "$@"
+"""
+
+def lane_test(name, images, emulator, harness, python, timeout = "eternal"):
+    """The lane: one guest per check's own configuration, pooled and run.
+
+    The images are the graph outputs of one `guest_image` per check, so each
+    check's guest is built from that check's own fixture. The pool the
+    harness builds from them is sized from the distinct emulator invocations
+    among them, not from a count chosen here: adding a check to the lane adds
+    a check here, and the pool follows.
+
+    The target's result is never cacheable. A guest's verdict depends on
+    what the host did while it ran, so a second invocation re-runs every
+    selected check rather than replaying what the first one concluded, and
+    `no-cache` is what says that to the Bazel graph.
+
+    The pool runs concurrently inside this one action, so the lane does not
+    depend on Bazel scheduling several targets to overlap them, and live test
+    output cannot serialize it either way. Each check reports under its own
+    name in the JUnit document the action writes, which is what makes one
+    failed check identifiable from the lane's own output.
+    """
+    listing = name + "_images.txt"
+    native.genrule(
+        name = name + "_images",
+        srcs = images,
+        outs = [listing],
+        # A single `%s`, not `%%s`: this fragment is a plain string literal
+        # that nothing `%`-formats, so the escape would reach the shell
+        # doubled and `printf` would write a literal `%s` as the only line of
+        # the listing. The `$(rlocationpath ...)` parts are expanded by Bazel
+        # before the shell sees them, which is why the paths arrive intact.
+        cmd = "printf '%s\\n' " + " ".join(["$(rlocationpath %s)" % image for image in images]) + " > $@",
         tags = _LANE_TAGS,
+    )
+    _write_runner(
+        name = name,
+        script = _LANE_SUITE_RUNNER_SCRIPT.format(name = name),
+        runfiles = {
+            "__HARNESS__": harness,
+            "__EMULATOR__": emulator,
+            "__IMAGES__": ":" + listing,
+            "__PYTHON__": python,
+        },
+        # The images are the test's own data, not only the listing genrule's
+        # inputs. A `$(rlocationpath)` line names a runfile of the *action*
+        # that produced it, so without the images here the test's runfiles
+        # tree carries the listing and nothing it points at, and the lane
+        # fails on the first manifest it tries to read.
+        srcs = [
+            ":" + listing,
+        ] + images + [
+            emulator,
+            harness,
+            python,
+        ],
+        tags = _LANE_TAGS + ["no-cache"],
         timeout = timeout,
     )

@@ -14,7 +14,14 @@ load(
 package(default_visibility = ["//bazel/checks:__pkg__", "//bazel/checks/vm:__pkg__"])
 
 exports_files(
-    ["BUILD.bazel", "Cargo.toml"],
+    [
+        "BUILD.bazel",
+        "Cargo.toml",
+        # The nix lane's fixtures interpolate this same text into their
+        # evaluated assertions, and they read it out of the tree by path, so
+        # the guest-image action has to be able to stage it.
+        "src/diagnostics.py",
+    ],
     visibility = ["//visibility:public"],
 )
 

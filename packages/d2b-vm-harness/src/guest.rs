@@ -551,6 +551,48 @@ impl ActiveGuest {
         }
     }
 
+    /// Take the pool's snapshot of this guest, under a tag of the lane's
+    /// choosing.
+    ///
+    /// This is the point the pool snapshots at: after activation has
+    /// completed, after every attached writable device has been proven to
+    /// carry a snapshot, and before any check has touched the guest. A
+    /// snapshot taken later would be a snapshot of whatever the last check
+    /// left behind.
+    pub fn save_snapshot(&mut self, tag: &str) -> Result<()> {
+        self.monitor_mut()?.save_snapshot(tag)
+    }
+
+    /// Restore this guest from a snapshot it took itself.
+    ///
+    /// The guest's command channel survives the restore. An internal
+    /// snapshot captures the guest's memory and its devices, not the host
+    /// socket at the far end of the guest's console, and the emulator is the
+    /// same process across the restore - so the connection the launcher
+    /// accepted before the boot is still the connection the guest's root
+    /// shell is reading from afterwards. That is also why the snapshot is
+    /// taken with the channel idle: bytes already in the console are not
+    /// part of what a restore rolls back.
+    pub fn restore(&mut self, tag: &str) -> Result<()> {
+        self.monitor_mut()?.load_snapshot(tag)
+    }
+
+    /// Whether this guest currently holds a snapshot under a tag.
+    pub fn holds_snapshot(&mut self, tag: &str) -> Result<bool> {
+        Ok(self.monitor_mut()?.snapshot_tags()?.iter().any(|held| held == tag))
+    }
+
+    /// Drop a snapshot, which is what retiring a member frees.
+    pub fn discard_snapshot(&mut self, tag: &str) -> Result<()> {
+        self.monitor_mut()?.delete_snapshot(tag)
+    }
+
+    fn monitor_mut(&mut self) -> Result<&mut Monitor> {
+        self.monitor.as_mut().ok_or_else(|| {
+            HarnessError::Configuration("the guest has no monitor".to_owned())
+        })
+    }
+
     /// Ask the emulator to stop, wait for the process to go, and remove the
     /// working directory.
     pub fn shutdown(mut self) -> Result<()> {
@@ -916,7 +958,7 @@ pub fn report(line: &str) {
 mod tests {
     use super::*;
     use crate::manifest::{
-        Activation, Boot, Drive, ImageFiles, Machine, SharedDirectory,
+        Activation, Boot, Drive, Footprint, ImageFiles, Machine, PoolBudget, SharedDirectory,
     };
 
     fn manifest(cores: u32, memory: u32, extra: &[&str]) -> GuestManifest {
@@ -933,6 +975,19 @@ mod tests {
             machine: Machine {
                 cores,
                 memory_size_mib: memory,
+            },
+            check: None,
+            footprint: Footprint {
+                memory_size_mib: u64::from(memory),
+                cores,
+                working_directory_mib: 8192,
+            },
+            pool: PoolBudget {
+                memory_share_numerator: 2,
+                memory_share_denominator: 3,
+                core_share_numerator: 3,
+                core_share_denominator: 4,
+                working_directory_follows_disk: true,
             },
             boot: Boot {
                 method: "direct".to_owned(),
