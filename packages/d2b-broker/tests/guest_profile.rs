@@ -34,7 +34,10 @@ fn guest_profile_admits_only_local_process_effects() {
             "guest profile should admit declared local effect {operation}"
         );
         assert!(
-            BrokerProfile::Guest.operations().contains(&operation),
+            BrokerProfile::Guest
+                .operations()
+                .iter()
+                .any(|item| item.as_str() == operation),
             "guest profile lost the committed local effect {operation}"
         );
     }

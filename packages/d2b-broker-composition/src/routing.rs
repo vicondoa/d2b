@@ -14,9 +14,7 @@
 //! registers its handler through [`crate::seam`]; this module is the
 //! single place the admission predicate lives.
 
-use d2b_broker::catalog::{
-    BrokerOperationRow, OperationOwner, PayloadProvenance, SecretAccess,
-};
+use d2b_broker::catalog::{BrokerOperationRow, OperationOwner, PayloadProvenance, SecretAccess};
 
 /// Why one operation was refused admission to the in-broker table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,7 +121,7 @@ pub fn catalog_admitted_operations() -> Vec<&'static str> {
     d2b_broker::catalog::BROKER_OPERATION_CATALOG
         .iter()
         .filter(|row| route_row(row) == RoutingVerdict::InBroker)
-        .map(|row| row.operation)
+        .map(|row| row.operation.as_str())
         .collect()
 }
 
@@ -132,14 +130,15 @@ mod tests {
     use super::*;
     use d2b_broker::catalog::{
         AuditMode, BrokerAuthzFacets, BrokerProfileId, BrokerRequirement, CellDurability,
-        OperationOwner, PayloadProvenance,
+        Disposition, OperationOwner, PayloadProvenance,
     };
+    use d2b_contracts_broker::broker_wire::BrokerOperationName;
 
     /// A minimal pure, generic, provider-declared row (the shape a future
     /// pure transform will take; the fixture suite uses it as its happy
     /// path).
     const PURE_ROW: BrokerOperationRow = BrokerOperationRow {
-        operation: "d2b.fixture.pure.echo",
+        operation: BrokerOperationName::Hello,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -148,7 +147,7 @@ mod tests {
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "fixture",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -171,7 +170,7 @@ mod tests {
         deadline_tier: d2b_broker::catalog::DeadlineTier::Standard,
     };
 
-    fn family_row(operation: &'static str) -> BrokerOperationRow {
+    fn family_row(operation: BrokerOperationName) -> BrokerOperationRow {
         let mut row = PURE_ROW;
         row.operation = operation;
         row.justification = None;
@@ -201,7 +200,7 @@ mod tests {
         // A census row is representative: an OpenVhostNet-class
         // operation is family-owned, so the rule must refuse it regardless
         // of any other facet.
-        let row = family_row("d2b.fixture.family.effect");
+        let row = family_row(BrokerOperationName::OpenVhostNet);
         assert_eq!(
             route_row(&row),
             RoutingVerdict::Forward(RefusalClass::FamilyOwned)
@@ -218,7 +217,7 @@ mod tests {
                     route_row(row),
                     RoutingVerdict::Forward(RefusalClass::NotProviderDeclared),
                     "broker-generic row {} must be refused",
-                    row.operation
+                    row.operation.as_str()
                 );
             }
         }

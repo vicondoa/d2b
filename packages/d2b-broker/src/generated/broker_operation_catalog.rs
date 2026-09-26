@@ -5,7 +5,7 @@
 /// Every committed broker operation row, in declared order.
 pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
     BrokerOperationRow {
-        operation: "Hello",
+        operation: BrokerOperationName::Hello,
         wire_variant: Some("Hello"),
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -14,7 +14,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: true,
-        disposition: "callable-read-only",
+        disposition: Disposition::CallableReadOnly,
         stub_target: None,
         audit_fields: &["Hello"],
         authz: BrokerAuthzFacets {
@@ -37,7 +37,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "PublishTrustedContext",
+        operation: BrokerOperationName::PublishTrustedContext,
         wire_variant: Some("PublishTrustedContext"),
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -46,7 +46,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["PublishTrustedContext"],
         authz: BrokerAuthzFacets {
@@ -69,7 +69,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ExportBrokerAudit",
+        operation: BrokerOperationName::ExportBrokerAudit,
         wire_variant: Some("ExportBrokerAudit"),
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -78,7 +78,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: true,
-        disposition: "callable-read-only",
+        disposition: Disposition::CallableReadOnly,
         stub_target: None,
         audit_fields: &["ExportBrokerAudit"],
         authz: BrokerAuthzFacets {
@@ -101,7 +101,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ApplyHostGenerationHandoff",
+        operation: BrokerOperationName::ApplyHostGenerationHandoff,
         wire_variant: Some("ApplyHostGenerationHandoff"),
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -110,7 +110,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["ApplyHostGenerationHandoff"],
         authz: BrokerAuthzFacets {
@@ -133,7 +133,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "CreateOrReconcileUsersGroups",
+        operation: BrokerOperationName::CreateOrReconcileUsersGroups,
         wire_variant: Some("CreateOrReconcileUsersGroups"),
         owner: OperationOwner::Family,
         family: Some("user"),
@@ -142,7 +142,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: true,
-        disposition: "stubbed-unimplemented",
+        disposition: Disposition::StubbedUnimplemented,
         stub_target: Some(StubTarget::BootstrapOnly),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -165,7 +165,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "DelegateCgroupV2",
+        operation: BrokerOperationName::DelegateCgroupV2,
         wire_variant: Some("DelegateCgroupV2"),
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -174,7 +174,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["DelegateCgroupV2"],
         authz: BrokerAuthzFacets {
@@ -197,7 +197,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "InjectSecretById",
+        operation: BrokerOperationName::InjectSecretById,
         wire_variant: Some("InjectSecretById"),
         owner: OperationOwner::Family,
         family: Some("credential"),
@@ -206,7 +206,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: true,
-        disposition: "stubbed-unimplemented",
+        disposition: Disposition::StubbedUnimplemented,
         stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -229,7 +229,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "LaunchMinijailChild",
+        operation: BrokerOperationName::LaunchMinijailChild,
         wire_variant: Some("LaunchMinijailChild"),
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -238,7 +238,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: true,
-        disposition: "stubbed-unimplemented",
+        disposition: Disposition::StubbedUnimplemented,
         stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -261,7 +261,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ModprobeIfAllowed",
+        operation: BrokerOperationName::ModprobeIfAllowed,
         wire_variant: Some("ModprobeIfAllowed"),
         owner: OperationOwner::Family,
         family: Some("device"),
@@ -270,7 +270,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["ModprobeIfAllowed"],
         authz: BrokerAuthzFacets {
@@ -293,7 +293,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "OpenCgroupDir",
+        operation: BrokerOperationName::OpenCgroupDir,
         wire_variant: Some("OpenCgroupDir"),
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -302,7 +302,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["OpenCgroupDir"],
         authz: BrokerAuthzFacets {
@@ -325,7 +325,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "OpenDevice",
+        operation: BrokerOperationName::OpenDevice,
         wire_variant: Some("OpenDevice"),
         owner: OperationOwner::Family,
         family: Some("device"),
@@ -334,7 +334,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["OpenDevice"],
         authz: BrokerAuthzFacets {
@@ -357,7 +357,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "OpenFuse",
+        operation: BrokerOperationName::OpenFuse,
         wire_variant: Some("OpenFuse"),
         owner: OperationOwner::Family,
         family: Some("device"),
@@ -366,7 +366,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["OpenFuse"],
         authz: BrokerAuthzFacets {
@@ -389,7 +389,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "OpenHidrawSecurityKey",
+        operation: BrokerOperationName::OpenHidrawSecurityKey,
         wire_variant: Some("OpenHidrawSecurityKey"),
         owner: OperationOwner::Family,
         family: Some("device-security-key"),
@@ -398,7 +398,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["OpenHidrawSecurityKey"],
         authz: BrokerAuthzFacets {
@@ -421,7 +421,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "OpenKvm",
+        operation: BrokerOperationName::OpenKvm,
         wire_variant: Some("OpenKvm"),
         owner: OperationOwner::Family,
         family: Some("device"),
@@ -430,7 +430,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["OpenKvm"],
         authz: BrokerAuthzFacets {
@@ -453,7 +453,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "QemuMediaEnroll",
+        operation: BrokerOperationName::QemuMediaEnroll,
         wire_variant: Some("QemuMediaEnroll"),
         owner: OperationOwner::Family,
         family: Some("guest"),
@@ -462,7 +462,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["QemuMediaEnroll"],
         authz: BrokerAuthzFacets {
@@ -485,7 +485,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "QemuMediaRefreshRegistry",
+        operation: BrokerOperationName::QemuMediaRefreshRegistry,
         wire_variant: Some("QemuMediaRefreshRegistry"),
         owner: OperationOwner::Family,
         family: Some("guest"),
@@ -494,7 +494,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["QemuMediaRefreshRegistry"],
         authz: BrokerAuthzFacets {
@@ -517,7 +517,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "QemuMediaBoot",
+        operation: BrokerOperationName::QemuMediaBoot,
         wire_variant: Some("QemuMediaBoot"),
         owner: OperationOwner::Family,
         family: Some("guest"),
@@ -526,7 +526,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["QemuMediaBoot"],
         authz: BrokerAuthzFacets {
@@ -549,7 +549,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "QemuMediaSystemPowerdown",
+        operation: BrokerOperationName::QemuMediaSystemPowerdown,
         wire_variant: Some("QemuMediaSystemPowerdown"),
         owner: OperationOwner::Family,
         family: Some("guest"),
@@ -558,7 +558,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["QemuMediaSystemPowerdown"],
         authz: BrokerAuthzFacets {
@@ -581,7 +581,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "QemuMediaQueryStatus",
+        operation: BrokerOperationName::QemuMediaQueryStatus,
         wire_variant: Some("QemuMediaQueryStatus"),
         owner: OperationOwner::Family,
         family: Some("guest"),
@@ -590,7 +590,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -613,7 +613,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "QemuMediaQuit",
+        operation: BrokerOperationName::QemuMediaQuit,
         wire_variant: Some("QemuMediaQuit"),
         owner: OperationOwner::Family,
         family: Some("guest"),
@@ -622,7 +622,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["QemuMediaQuit"],
         authz: BrokerAuthzFacets {
@@ -645,7 +645,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "QemuMediaAttach",
+        operation: BrokerOperationName::QemuMediaAttach,
         wire_variant: Some("QemuMediaAttach"),
         owner: OperationOwner::Family,
         family: Some("guest"),
@@ -654,7 +654,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["QemuMediaAttach"],
         authz: BrokerAuthzFacets {
@@ -677,7 +677,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "QemuMediaDetach",
+        operation: BrokerOperationName::QemuMediaDetach,
         wire_variant: Some("QemuMediaDetach"),
         owner: OperationOwner::Family,
         family: Some("guest"),
@@ -686,7 +686,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["QemuMediaDetach"],
         authz: BrokerAuthzFacets {
@@ -709,7 +709,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "PipeWireAudio",
+        operation: BrokerOperationName::PipeWireAudio,
         wire_variant: Some("PipeWireAudio"),
         owner: OperationOwner::Family,
         family: Some("audio"),
@@ -718,7 +718,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["PipeWireAudio"],
         authz: BrokerAuthzFacets {
@@ -741,7 +741,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "OpenVhostNet",
+        operation: BrokerOperationName::OpenVhostNet,
         wire_variant: Some("OpenVhostNet"),
         owner: OperationOwner::Family,
         family: Some("device"),
@@ -750,7 +750,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["OpenVhostNet"],
         authz: BrokerAuthzFacets {
@@ -773,7 +773,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ReconcileStorageScope",
+        operation: BrokerOperationName::ReconcileStorageScope,
         wire_variant: Some("ReconcileStorageScope"),
         owner: OperationOwner::Family,
         family: Some("volume-binding"),
@@ -782,7 +782,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["ReconcileStorageScope"],
         authz: BrokerAuthzFacets {
@@ -805,7 +805,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ValidateLockSpec",
+        operation: BrokerOperationName::ValidateLockSpec,
         wire_variant: Some("ValidateLockSpec"),
         owner: OperationOwner::Family,
         family: Some("volume-binding"),
@@ -814,7 +814,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["ValidateLockSpec"],
         authz: BrokerAuthzFacets {
@@ -837,7 +837,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "StoreSync",
+        operation: BrokerOperationName::StoreSync,
         wire_variant: Some("StoreSync"),
         owner: OperationOwner::Family,
         family: Some("volume"),
@@ -846,7 +846,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["StoreSync"],
         authz: BrokerAuthzFacets {
@@ -869,7 +869,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ReadSecretById",
+        operation: BrokerOperationName::ReadSecretById,
         wire_variant: Some("ReadSecretById"),
         owner: OperationOwner::Family,
         family: Some("credential"),
@@ -878,7 +878,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: true,
-        disposition: "stubbed-unimplemented",
+        disposition: Disposition::StubbedUnimplemented,
         stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -901,7 +901,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "RotateSecretById",
+        operation: BrokerOperationName::RotateSecretById,
         wire_variant: Some("RotateSecretById"),
         owner: OperationOwner::Family,
         family: Some("credential"),
@@ -910,7 +910,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: true,
-        disposition: "stubbed-unimplemented",
+        disposition: Disposition::StubbedUnimplemented,
         stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -933,7 +933,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "UsbipBind",
+        operation: BrokerOperationName::UsbipBind,
         wire_variant: Some("UsbipBind"),
         owner: OperationOwner::Family,
         family: Some("device-usbip"),
@@ -942,7 +942,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["UsbipBind", "UsbSerialCorrelationKeyRotate"],
         authz: BrokerAuthzFacets {
@@ -965,7 +965,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "UsbipBindFirewallRule",
+        operation: BrokerOperationName::UsbipBindFirewallRule,
         wire_variant: Some("UsbipBindFirewallRule"),
         owner: OperationOwner::Family,
         family: Some("device-usbip"),
@@ -974,7 +974,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["UsbipBindFirewallRule"],
         authz: BrokerAuthzFacets {
@@ -997,7 +997,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "UsbipProxyReconcile",
+        operation: BrokerOperationName::UsbipProxyReconcile,
         wire_variant: Some("UsbipProxyReconcile"),
         owner: OperationOwner::Family,
         family: Some("device-usbip"),
@@ -1006,7 +1006,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["UsbipProxyReconcile"],
         authz: BrokerAuthzFacets {
@@ -1029,7 +1029,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "UsbipUnbind",
+        operation: BrokerOperationName::UsbipUnbind,
         wire_variant: Some("UsbipUnbind"),
         owner: OperationOwner::Family,
         family: Some("device-usbip"),
@@ -1038,7 +1038,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["UsbipUnbind"],
         authz: BrokerAuthzFacets {
@@ -1061,7 +1061,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "UsbipExplicitBind",
+        operation: BrokerOperationName::UsbipExplicitBind,
         wire_variant: Some("UsbipExplicitBind"),
         owner: OperationOwner::Family,
         family: Some("device-usbip"),
@@ -1070,7 +1070,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["UsbipExplicitBind", "UsbSerialCorrelationKeyRotate"],
         authz: BrokerAuthzFacets {
@@ -1093,7 +1093,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "UsbipExplicitFirewallRule",
+        operation: BrokerOperationName::UsbipExplicitFirewallRule,
         wire_variant: Some("UsbipExplicitFirewallRule"),
         owner: OperationOwner::Family,
         family: Some("device-usbip"),
@@ -1102,7 +1102,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["UsbipExplicitFirewallRule"],
         authz: BrokerAuthzFacets {
@@ -1125,7 +1125,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "OwnershipMatrixCheck",
+        operation: BrokerOperationName::OwnershipMatrixCheck,
         wire_variant: Some("OwnershipMatrixCheck"),
         owner: OperationOwner::Family,
         family: Some("volume"),
@@ -1134,7 +1134,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1157,7 +1157,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "SshHostKeyPreflight",
+        operation: BrokerOperationName::SshHostKeyPreflight,
         wire_variant: Some("SshHostKeyPreflight"),
         owner: OperationOwner::Family,
         family: Some("device-security-key"),
@@ -1166,7 +1166,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "stubbed-unimplemented",
+        disposition: Disposition::StubbedUnimplemented,
         stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1189,7 +1189,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "DiskInit",
+        operation: BrokerOperationName::DiskInit,
         wire_variant: Some("DiskInit"),
         owner: OperationOwner::Family,
         family: Some("volume"),
@@ -1198,7 +1198,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["DiskInit"],
         authz: BrokerAuthzFacets {
@@ -1221,7 +1221,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "SecurityKeyOpenDevice",
+        operation: BrokerOperationName::SecurityKeyOpenDevice,
         wire_variant: Some("SecurityKeyOpenDevice"),
         owner: OperationOwner::Family,
         family: Some("device-security-key"),
@@ -1230,7 +1230,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "stubbed-unimplemented",
+        disposition: Disposition::StubbedUnimplemented,
         stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1253,7 +1253,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "SecurityKeyApplyUdevRules",
+        operation: BrokerOperationName::SecurityKeyApplyUdevRules,
         wire_variant: Some("SecurityKeyApplyUdevRules"),
         owner: OperationOwner::Family,
         family: Some("device-security-key"),
@@ -1262,7 +1262,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "stubbed-unimplemented",
+        disposition: Disposition::StubbedUnimplemented,
         stub_target: Some(StubTarget::FutureWork),
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1285,7 +1285,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "PrepareSwtpmDir",
+        operation: BrokerOperationName::PrepareSwtpmDir,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1294,7 +1294,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "compile-time-only",
+        disposition: Disposition::CompileTimeOnly,
         stub_target: None,
         audit_fields: &["PrepareSwtpmDir"],
         authz: BrokerAuthzFacets {
@@ -1317,7 +1317,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "EnvelopeInvoke",
+        operation: BrokerOperationName::EnvelopeInvoke,
         wire_variant: Some("EnvelopeInvoke"),
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1326,7 +1326,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1349,7 +1349,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "open-pidfd",
+        operation: BrokerOperationName::open_pidfd,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1358,7 +1358,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1381,7 +1381,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "open-peer-pidfd-from-accepted-socket",
+        operation: BrokerOperationName::open_peer_pidfd_from_accepted_socket,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1390,7 +1390,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1413,7 +1413,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "poll-child-reaped",
+        operation: BrokerOperationName::poll_child_reaped,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1422,7 +1422,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1445,7 +1445,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "prepare-directory",
+        operation: BrokerOperationName::prepare_directory,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1454,7 +1454,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1477,7 +1477,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "kill-cgroup",
+        operation: BrokerOperationName::kill_cgroup,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1486,7 +1486,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1509,7 +1509,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "signal-pidfd",
+        operation: BrokerOperationName::signal_pidfd,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1518,7 +1518,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1541,7 +1541,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "deregister-pidfd",
+        operation: BrokerOperationName::deregister_pidfd,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1550,7 +1550,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1573,7 +1573,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "spawn-process",
+        operation: BrokerOperationName::spawn_process,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1582,7 +1582,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1605,7 +1605,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Extended,
     },
     BrokerOperationRow {
-        operation: "delegate-cgroup-v2",
+        operation: BrokerOperationName::delegate_cgroup_v2,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1614,7 +1614,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1637,7 +1637,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "open-cgroup-dir",
+        operation: BrokerOperationName::open_cgroup_dir,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1646,7 +1646,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1669,7 +1669,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "take-controller-bootstrap",
+        operation: BrokerOperationName::take_controller_bootstrap,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1678,7 +1678,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1701,7 +1701,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "observe-process",
+        operation: BrokerOperationName::observe_process,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1710,7 +1710,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1733,7 +1733,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "consume-cell",
+        operation: BrokerOperationName::consume_cell,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1742,7 +1742,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1765,7 +1765,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "complete-cell",
+        operation: BrokerOperationName::complete_cell,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1774,7 +1774,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1797,7 +1797,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "apply-nftables",
+        operation: BrokerOperationName::apply_nftables,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1806,7 +1806,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1829,7 +1829,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "apply-nftables-projection",
+        operation: BrokerOperationName::apply_nftables_projection,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1838,7 +1838,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1861,7 +1861,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "apply-nm-unmanaged",
+        operation: BrokerOperationName::apply_nm_unmanaged,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1870,7 +1870,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1893,7 +1893,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "apply-route",
+        operation: BrokerOperationName::apply_route,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1902,7 +1902,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1925,7 +1925,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "apply-sysctl",
+        operation: BrokerOperationName::apply_sysctl,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1934,7 +1934,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1957,7 +1957,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "create-bridge",
+        operation: BrokerOperationName::create_bridge,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1966,7 +1966,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -1989,7 +1989,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "delete-bridge",
+        operation: BrokerOperationName::delete_bridge,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -1998,7 +1998,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -2021,7 +2021,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "create-persistent-tap",
+        operation: BrokerOperationName::create_persistent_tap,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -2030,7 +2030,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -2053,7 +2053,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "delete-persistent-tap",
+        operation: BrokerOperationName::delete_persistent_tap,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -2062,7 +2062,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -2085,7 +2085,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "create-tap-fd",
+        operation: BrokerOperationName::create_tap_fd,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -2094,7 +2094,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -2117,7 +2117,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "set-bridge-port-flags",
+        operation: BrokerOperationName::set_bridge_port_flags,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -2126,7 +2126,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -2149,7 +2149,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "update-hosts-file",
+        operation: BrokerOperationName::update_hosts_file,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -2158,7 +2158,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -2181,7 +2181,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "seed-dnsmasq-lease",
+        operation: BrokerOperationName::seed_dnsmasq_lease,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -2190,7 +2190,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -2213,7 +2213,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ApplyNftables",
+        operation: BrokerOperationName::ApplyNftables,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2222,7 +2222,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["ApplyNftables"],
         authz: BrokerAuthzFacets {
@@ -2245,7 +2245,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ApplyNftablesProjection",
+        operation: BrokerOperationName::ApplyNftablesProjection,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2254,7 +2254,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["ApplyNftablesProjection"],
         authz: BrokerAuthzFacets {
@@ -2277,7 +2277,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ApplyNmUnmanaged",
+        operation: BrokerOperationName::ApplyNmUnmanaged,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2286,7 +2286,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["ApplyNmUnmanaged"],
         authz: BrokerAuthzFacets {
@@ -2309,7 +2309,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ApplyRoute",
+        operation: BrokerOperationName::ApplyRoute,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2318,7 +2318,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["ApplyRoute"],
         authz: BrokerAuthzFacets {
@@ -2341,7 +2341,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ApplySysctl",
+        operation: BrokerOperationName::ApplySysctl,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2350,7 +2350,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["ApplySysctl"],
         authz: BrokerAuthzFacets {
@@ -2373,7 +2373,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "CreateBridge",
+        operation: BrokerOperationName::CreateBridge,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2382,7 +2382,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["CreateBridge"],
         authz: BrokerAuthzFacets {
@@ -2405,7 +2405,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "DeleteBridge",
+        operation: BrokerOperationName::DeleteBridge,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2414,7 +2414,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["DeleteBridge"],
         authz: BrokerAuthzFacets {
@@ -2437,7 +2437,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "CreatePersistentTap",
+        operation: BrokerOperationName::CreatePersistentTap,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2446,7 +2446,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["CreatePersistentTap"],
         authz: BrokerAuthzFacets {
@@ -2469,7 +2469,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "DeletePersistentTap",
+        operation: BrokerOperationName::DeletePersistentTap,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2478,7 +2478,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["DeletePersistentTap"],
         authz: BrokerAuthzFacets {
@@ -2501,7 +2501,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "CreateTapFd",
+        operation: BrokerOperationName::CreateTapFd,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2510,7 +2510,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["CreateTapFd"],
         authz: BrokerAuthzFacets {
@@ -2533,7 +2533,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "SetBridgePortFlags",
+        operation: BrokerOperationName::SetBridgePortFlags,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2542,7 +2542,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["SetBridgePortFlags"],
         authz: BrokerAuthzFacets {
@@ -2565,7 +2565,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "UpdateHostsFile",
+        operation: BrokerOperationName::UpdateHostsFile,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2574,7 +2574,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["UpdateHostsFile"],
         authz: BrokerAuthzFacets {
@@ -2597,7 +2597,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "SeedDnsmasqLease",
+        operation: BrokerOperationName::SeedDnsmasqLease,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("network"),
@@ -2606,7 +2606,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["SeedDnsmasqLease"],
         authz: BrokerAuthzFacets {
@@ -2629,7 +2629,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "OpenPidfd",
+        operation: BrokerOperationName::OpenPidfd,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2638,7 +2638,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["OpenPidfd"],
         authz: BrokerAuthzFacets {
@@ -2661,7 +2661,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "OpenPeerPidfdFromAcceptedSocket",
+        operation: BrokerOperationName::OpenPeerPidfdFromAcceptedSocket,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2670,7 +2670,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "callable-read-only",
+        disposition: Disposition::CallableReadOnly,
         stub_target: None,
         audit_fields: &["OpenPeerPidfdFromAcceptedSocket"],
         authz: BrokerAuthzFacets {
@@ -2693,7 +2693,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ObserveRunner",
+        operation: BrokerOperationName::ObserveRunner,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2702,7 +2702,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["ObserveRunner"],
         authz: BrokerAuthzFacets {
@@ -2725,7 +2725,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "PollChildReaped",
+        operation: BrokerOperationName::PollChildReaped,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2734,7 +2734,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -2757,7 +2757,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "PrepareRuntimeDir",
+        operation: BrokerOperationName::PrepareRuntimeDir,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2766,7 +2766,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["PrepareRuntimeDir"],
         authz: BrokerAuthzFacets {
@@ -2789,7 +2789,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "PrepareStateDir",
+        operation: BrokerOperationName::PrepareStateDir,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2798,7 +2798,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: true,
         capabilities: true,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["PrepareStateDir", "PrepareSwtpmDir"],
         authz: BrokerAuthzFacets {
@@ -2821,7 +2821,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "CgroupKill",
+        operation: BrokerOperationName::CgroupKill,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2830,7 +2830,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["CgroupKill"],
         authz: BrokerAuthzFacets {
@@ -2853,7 +2853,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "SignalRunner",
+        operation: BrokerOperationName::SignalRunner,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2862,7 +2862,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["SignalRunner"],
         authz: BrokerAuthzFacets {
@@ -2885,7 +2885,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "DeregisterRunnerPidfd",
+        operation: BrokerOperationName::DeregisterRunnerPidfd,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2894,7 +2894,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["DeregisterRunnerPidfd"],
         authz: BrokerAuthzFacets {
@@ -2917,7 +2917,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "SpawnRunner",
+        operation: BrokerOperationName::SpawnRunner,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2926,7 +2926,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["SpawnRunner", "PrepareSwtpmDir"],
         authz: BrokerAuthzFacets {
@@ -2949,7 +2949,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "inspect-process-family",
+        operation: BrokerOperationName::inspect_process_family,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process"),
@@ -2958,7 +2958,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "callable-read-only",
+        disposition: Disposition::CallableReadOnly,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -2981,7 +2981,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "StartSystemdUnit",
+        operation: BrokerOperationName::StartSystemdUnit,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process-systemd"),
@@ -2990,7 +2990,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["SystemdUnit"],
         authz: BrokerAuthzFacets {
@@ -3013,7 +3013,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "CheckSystemdUserManager",
+        operation: BrokerOperationName::CheckSystemdUserManager,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process-systemd"),
@@ -3022,7 +3022,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["SystemdUnit"],
         authz: BrokerAuthzFacets {
@@ -3045,7 +3045,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "ObserveSystemdUnit",
+        operation: BrokerOperationName::ObserveSystemdUnit,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process-systemd"),
@@ -3054,7 +3054,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["SystemdUnit"],
         authz: BrokerAuthzFacets {
@@ -3077,7 +3077,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "OpenSystemdUnitPidfd",
+        operation: BrokerOperationName::OpenSystemdUnitPidfd,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process-systemd"),
@@ -3086,7 +3086,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["SystemdUnit"],
         authz: BrokerAuthzFacets {
@@ -3109,7 +3109,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         deadline_tier: DeadlineTier::Standard,
     },
     BrokerOperationRow {
-        operation: "StopSystemdUnit",
+        operation: BrokerOperationName::StopSystemdUnit,
         wire_variant: None,
         owner: OperationOwner::Family,
         family: Some("process-systemd"),
@@ -3118,7 +3118,7 @@ pub const BROKER_OPERATION_CATALOG: &[BrokerOperationRow] = &[
         profiles: &[BrokerProfileId::Host, BrokerProfileId::Guest],
         w3: false,
         capabilities: false,
-        disposition: "promoted-live",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &["SystemdUnit"],
         authz: BrokerAuthzFacets {

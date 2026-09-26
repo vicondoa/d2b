@@ -855,26 +855,30 @@ impl BrokerProfile {
     }
 
     /// Closed Host operation catalog.
-    pub const fn host_operations() -> &'static [&'static str] {
+    pub const fn host_operations() -> &'static [BrokerOperationName] {
         HOST_OPERATION_CATALOG
     }
 
     /// Closed Guest operation catalog.
-    pub const fn guest_operations() -> &'static [&'static str] {
+    pub const fn guest_operations() -> &'static [BrokerOperationName] {
         GUEST_OPERATION_CATALOG
     }
 
     /// Return the operation catalog for this profile.
-    pub const fn operations(self) -> &'static [&'static str] {
+    pub const fn operations(self) -> &'static [BrokerOperationName] {
         match self {
             Self::Host => Self::host_operations(),
             Self::Guest => Self::guest_operations(),
         }
     }
 
-    /// Check the stable operation name against the profile catalog.
+    /// Check the stable operation name against the profile catalog. The
+    /// admission keeps the string spelling, so the wire boundary is
+    /// unchanged by the typed catalogs.
     pub fn allows_operation(self, operation: &str) -> bool {
-        self.operations().contains(&operation)
+        self.operations()
+            .iter()
+            .any(|item| item.as_str() == operation)
     }
 
     /// Check the request against the closed profile catalog. The typed

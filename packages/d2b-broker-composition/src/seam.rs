@@ -162,7 +162,7 @@ pub fn register_declared_handlers(
     }
     let mut table = HandlerTable::new();
     for declaration in declarations {
-        table = table.with(declaration.row.operation, declaration.handler);
+        table = table.with(declaration.row.operation.as_str(), declaration.handler);
     }
     Ok(table)
 }
@@ -174,13 +174,13 @@ pub fn register_production_handlers(
     declarations: &[HandlerDeclaration<'_>],
 ) -> Result<HandlerTable, RoutingRefusal> {
     for declaration in declarations {
-        let committed = BrokerOperationRow::find(declaration.row.operation)
+        let committed = BrokerOperationRow::find(declaration.row.operation.as_str())
             .ok_or(RoutingRefusal::Uncommitted {
-                operation: declaration.row.operation,
+                operation: declaration.row.operation.as_str(),
             })?;
         if !std::ptr::eq(committed, declaration.row) {
             return Err(RoutingRefusal::Uncommitted {
-                operation: declaration.row.operation,
+                operation: declaration.row.operation.as_str(),
             });
         }
     }
@@ -255,14 +255,14 @@ fn admit(declaration: &HandlerDeclaration) -> Result<(), RoutingRefusal> {
         RoutingVerdict::InBroker => {}
         RoutingVerdict::Forward(class) => {
             return Err(RoutingRefusal::Forwarded {
-                operation: row.operation,
+                operation: row.operation.as_str(),
                 class,
             })
         }
     }
-    if declaration.pure_claim.operation != row.operation {
+    if declaration.pure_claim.operation != row.operation.as_str() {
         return Err(RoutingRefusal::ClaimMismatch {
-            operation: row.operation,
+            operation: row.operation.as_str(),
             claim: declaration.pure_claim.operation,
         });
     }
@@ -271,7 +271,7 @@ fn admit(declaration: &HandlerDeclaration) -> Result<(), RoutingRefusal> {
         .expect("route_row admitted the row, so its provider is set; unset providers route to the forward carrier");
     if declaration.source_crate != declaring_provider {
         return Err(RoutingRefusal::SourceCrateMismatch {
-            operation: row.operation,
+            operation: row.operation.as_str(),
             source_crate: declaration.source_crate,
             declaring_provider,
         });
@@ -322,19 +322,20 @@ mod tests {
     use super::*;
     use d2b_broker::catalog::{
         AuditMode, BROKER_OPERATION_CATALOG, BrokerAuthzFacets, BrokerProfileId,
-        BrokerRequirement, CellDurability, DeadlineTier, OperationOwner, PayloadProvenance,
-        SecretAccess,
+        BrokerRequirement, CellDurability, DeadlineTier, Disposition, OperationOwner,
+        PayloadProvenance, SecretAccess,
     };
+    use d2b_contracts_broker::broker_wire::BrokerOperationName;
     use d2b_broker::envelope::{
         BrokerEnvelope, CallerAuthority, DispatchFailure, DispatchOutcome, HANDLER_REFUSED,
     };
     use serde_json::json;
 
-    const FIXTURE_OPERATION: &str = "d2b.fixture.pure.echo";
+    const FIXTURE_OPERATION: &str = "Hello";
     const FIXTURE_PROVIDER: &str = "d2b-broker-fixture-handlers";
 
     const PURE_FIXTURE_ROW: BrokerOperationRow = BrokerOperationRow {
-        operation: FIXTURE_OPERATION,
+        operation: BrokerOperationName::Hello,
         wire_variant: None,
         owner: OperationOwner::BrokerGeneric,
         family: None,
@@ -343,7 +344,7 @@ mod tests {
         profiles: &[BrokerProfileId::Host],
         w3: false,
         capabilities: false,
-        disposition: "fixture",
+        disposition: Disposition::PromotedLive,
         stub_target: None,
         audit_fields: &[],
         authz: BrokerAuthzFacets {
@@ -562,7 +563,7 @@ mod tests {
         // pure (read-only, no cells, no fds).
         let pilot = BROKER_OPERATION_CATALOG
             .iter()
-            .find(|row| row.operation == "inspect-process-family")
+            .find(|row| row.operation.as_str() == "inspect-process-family")
             .expect("the pilot operation is committed");
         assert_eq!(pilot.owner, OperationOwner::Family);
         let declaration = HandlerDeclaration {
@@ -616,11 +617,11 @@ mod tests {
     #[test]
     fn registration_of_an_uncommitted_row_is_refused() {
         let mut row = PURE_FIXTURE_ROW;
-        row.operation = "d2b.fixture.not.committed";
+        row.operation = BrokerOperationName::PublishTrustedContext;
         row.audit_join = None;
         let declaration = HandlerDeclaration {
             row: &row,
-            pure_claim: PureTransformClaim::for_operation("d2b.fixture.not.committed"),
+            pure_claim: PureTransformClaim::for_operation("PublishTrustedContext"),
             ..fixture_declaration()
         };
         let refusal = register_production_handlers(&[declaration])
@@ -710,7 +711,7 @@ mod tests {
         // refuses none of them silently: two pure fixture declarations
         // both answer through .call().
         let mut second_row = PURE_FIXTURE_ROW;
-        second_row.operation = "d2b.fixture.second.echo";
+        second_row.operation = BrokerOperationName::ExportBrokerAudit;
         second_row.audit_join = None;
         let declarations = [
             fixture_declaration(),
@@ -718,7 +719,7 @@ mod tests {
                 row: &second_row,
                 handler: d2b_broker_fixture_handlers::echo,
                 source_crate: FIXTURE_PROVIDER,
-                pure_claim: PureTransformClaim::for_operation("d2b.fixture.second.echo"),
+                pure_claim: PureTransformClaim::for_operation("ExportBrokerAudit"),
             },
         ];
         let table =
@@ -739,7 +740,7 @@ mod tests {
         let second = envelope
             .call(
                 CallerAuthority::Daemon,
-                "d2b.fixture.second.echo",
+                "ExportBrokerAudit",
                 "zone-1",
                 &json!({ "echo": "two" }),
             )
