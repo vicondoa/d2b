@@ -1,4 +1,4 @@
-pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry};
+pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditPageError};
 use d2b_contracts::types::MediaRef;
 use d2b_contracts::{
     FeatureFlag, Version,
@@ -19,7 +19,7 @@ use schemars::{
     r#gen::SchemaGenerator,
     schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec, StringValidation},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::fmt;
 
 /// Lifecycle state projected for a target-local Process or
@@ -313,24 +313,120 @@ fn default_audit_request_limit() -> u32 {
 // Mutating-verb request payloads.
 // ---------------------------------------------------------------
 
+/// The mutating mode one request selects: plan the mutation, or execute it.
+///
+/// The wire has always spelled this as the flat `dryRun`/`apply` boolean
+/// pair. That pair also admits a request which selects neither, so the mode
+/// is closed here and the pair is derived from it instead of being
+/// re-checked at every mutation site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MutationMode {
+    /// Plan the mutation and return the daemon-side plan.
+    DryRun,
+    /// Execute the mutation.
+    Apply,
+}
+
+/// Why a raw `dryRun`/`apply` pair names no mutating mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MutationModeError;
+
+impl MutationMode {
+    /// Parse the wire `dryRun`/`apply` pair.
+    ///
+    /// A request that sets neither flag has no mode and is refused. When a
+    /// hand-written request sets both, `dryRun` wins - the precedence the
+    /// daemon has always applied to the pair, and a combination the CLI
+    /// cannot emit (`--dry-run` and `--apply` conflict).
+    pub fn from_flags(dry_run: bool, apply: bool) -> Result<Self, MutationModeError> {
+        match (dry_run, apply) {
+            (false, false) => Err(MutationModeError),
+            (true, _) => Ok(Self::DryRun),
+            (false, true) => Ok(Self::Apply),
+        }
+    }
+
+    /// The wire `dryRun`/`apply` pair this mode spells.
+    pub fn to_flags(self) -> (bool, bool) {
+        (matches!(self, Self::DryRun), matches!(self, Self::Apply))
+    }
+}
+
+impl fmt::Display for MutationModeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("mutating verb request sets neither dryRun nor apply")
+    }
+}
+
+impl std::error::Error for MutationModeError {}
+
+/// Common flags every mutating-verb request carries.
+///
+/// The mode moves with the flags, so a request that selects neither
+/// `dryRun` nor `apply` - which the daemon refuses - has no value here.
+/// The serialized shape is unchanged: the flat `dryRun`, `apply`, and `json`
+/// keys the protocol has always carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "MutationFlagsWire", into = "MutationFlagsWire")]
+pub struct MutationFlags {
+    pub mode: MutationMode,
+    /// Ask for the machine-readable (`json`) response body.
+    pub json: bool,
+}
+
+// The published wire schema renders this doc comment as the description of
+// every request that flattens the flags, so it stays word-for-word.
 /// Common flags every mutating-verb request carries. The daemon
 /// rejects requests that set neither `dry_run` nor `apply`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MutationFlags {
+struct MutationFlagsWire {
     #[serde(default)]
-    pub dry_run: bool,
+    dry_run: bool,
     #[serde(default)]
-    pub apply: bool,
+    apply: bool,
     #[serde(default)]
-    pub json: bool,
+    json: bool,
+}
+
+impl TryFrom<MutationFlagsWire> for MutationFlags {
+    type Error = MutationModeError;
+
+    fn try_from(wire: MutationFlagsWire) -> Result<Self, Self::Error> {
+        Ok(Self {
+            mode: MutationMode::from_flags(wire.dry_run, wire.apply)?,
+            json: wire.json,
+        })
+    }
+}
+
+impl From<MutationFlags> for MutationFlagsWire {
+    fn from(flags: MutationFlags) -> Self {
+        let (dry_run, apply) = flags.mode.to_flags();
+        Self {
+            dry_run,
+            apply,
+            json: flags.json,
+        }
+    }
+}
+
+impl JsonSchema for MutationFlags {
+    fn schema_name() -> String {
+        "MutationFlags".to_owned()
+    }
+
+    fn json_schema(r#gen: &mut SchemaGenerator) -> Schema {
+        MutationFlagsWire::json_schema(r#gen)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmLifecycleRequest {
     pub vm: String,
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub flags: MutationFlags,
     /// Bypass provider graceful-shutdown and use the existing forced cleanup path.
     #[schemars(default)]
@@ -353,7 +449,7 @@ pub struct ActivationRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub to_generation: Option<u64>,
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub flags: MutationFlags,
 }
 
@@ -362,7 +458,7 @@ pub struct ActivationRequest {
 pub struct UsbipBindCliRequest {
     pub vm: String,
     pub bus_id: String,
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub flags: MutationFlags,
 }
 
@@ -371,7 +467,7 @@ pub struct UsbipBindCliRequest {
 pub struct UsbipUnbindCliRequest {
     pub vm: String,
     pub bus_id: String,
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub flags: MutationFlags,
 }
 
@@ -2056,17 +2152,17 @@ pub enum AudioOpResponse {
 
 // ---- Remaining request structs -----------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostPrepareRequest {
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub flags: MutationFlags,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostDestroyRequest {
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub flags: MutationFlags,
 }
 
@@ -2075,10 +2171,10 @@ pub struct HostDestroyRequest {
 /// `--ownership`) carved out of `host prepare`. The daemon rejects
 /// requests with no scope selected with a typed `invalid-request`
 /// envelope.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostReconcileRequest {
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub flags: MutationFlags,
     /// Re-run the per-env nftables / route / sysctl reconcile.
     #[serde(default)]
@@ -2181,50 +2277,122 @@ pub struct PublicReadModelMetadata {
     pub deep_refresh: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, try_from = "AuditResponseWire")]
+/// The end of one audit page: the final-page marker, or the cursor that
+/// continues the export.
+///
+/// The wire carries the pair `complete: bool` plus `nextCursor`. That pair
+/// allowed two combinations the protocol never meant - a final page with a
+/// cursor, and an incomplete page without one - so the page end is closed
+/// here and the pair is derived from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuditPageEnd {
+    /// Final page: the response omits `nextCursor`.
+    Complete,
+    /// At least one more page follows; the response carries `nextCursor`.
+    More(AuditExportCursor),
+}
+
+impl AuditPageEnd {
+    /// Build a page end from the raw `(complete, nextCursor)` pair of a page
+    /// this crate did not construct itself (the broker export page the daemon
+    /// forwards), refusing the two combinations that pair admits.
+    pub fn from_parts(
+        complete: bool,
+        next_cursor: Option<AuditExportCursor>,
+    ) -> Result<Self, AuditPageError> {
+        match (complete, next_cursor) {
+            (true, None) => Ok(Self::Complete),
+            (false, Some(cursor)) => Ok(Self::More(cursor)),
+            (true, Some(_)) => Err(AuditPageError::CompleteWithCursor),
+            (false, None) => Err(AuditPageError::IncompleteWithoutCursor),
+        }
+    }
+
+    /// Whether this is the final page.
+    pub fn is_complete(&self) -> bool {
+        matches!(self, Self::Complete)
+    }
+
+    /// The cursor that continues the export; absent on the final page.
+    pub fn next_cursor(&self) -> Option<&AuditExportCursor> {
+        match self {
+            Self::Complete => None,
+            Self::More(cursor) => Some(cursor),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "AuditResponseWire")]
 pub struct AuditResponse {
     /// Typed broker audit entries. The public daemon page deliberately shares
     /// the broker entry shape so pagination does not lose sequence or export
     /// error information.
     pub entries: Vec<AuditExportEntry>,
-    /// Omitted only when this is the final page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_cursor: Option<AuditExportCursor>,
-    /// Protocol v5 requires an explicit completion marker.
-    pub complete: bool,
+    /// Where this page ends: the final marker, or the cursor that continues
+    /// the export.
+    pub page_end: AuditPageEnd,
 }
 
-#[derive(Debug, Deserialize)]
+// The serialized shape of `AuditResponse`: the flat `entries`, `nextCursor`,
+// and `complete` keys the protocol has always carried. The comment is not a
+// doc comment on purpose - the published schema description of this
+// definition comes from the wire struct and must stay absent, exactly as it
+// was before the page end became an enum.
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AuditResponseWire {
+    /// Typed broker audit entries. The public daemon page deliberately shares
+    /// the broker entry shape so pagination does not lose sequence or export
+    /// error information.
     entries: Vec<AuditExportEntry>,
-    #[serde(default)]
+    /// Omitted only when this is the final page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     next_cursor: Option<AuditExportCursor>,
+    /// Protocol v5 requires an explicit completion marker.
     complete: bool,
 }
 
+/// The serialized shape of [`AuditResponse`], borrowing the page end so a
+/// page never clones its entries just to be written.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditResponseOut<'a> {
+    entries: &'a [AuditExportEntry],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_cursor: Option<&'a AuditExportCursor>,
+    complete: bool,
+}
+
+impl Serialize for AuditResponse {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        AuditResponseOut {
+            entries: &self.entries,
+            next_cursor: self.page_end.next_cursor(),
+            complete: self.page_end.is_complete(),
+        }
+        .serialize(serializer)
+    }
+}
+
 impl TryFrom<AuditResponseWire> for AuditResponse {
-    type Error = &'static str;
+    type Error = AuditPageError;
 
     fn try_from(wire: AuditResponseWire) -> Result<Self, Self::Error> {
-        validate_audit_page(wire.complete, wire.next_cursor.as_ref())?;
         Ok(Self {
             entries: wire.entries,
-            next_cursor: wire.next_cursor,
-            complete: wire.complete,
+            page_end: AuditPageEnd::from_parts(wire.complete, wire.next_cursor)?,
         })
     }
 }
 
-pub(crate) fn validate_audit_page(
-    complete: bool,
-    next_cursor: Option<&AuditExportCursor>,
-) -> Result<(), &'static str> {
-    match (complete, next_cursor.is_some()) {
-        (true, true) => Err("complete audit page must omit nextCursor"),
-        (false, false) => Err("incomplete audit page requires nextCursor"),
-        _ => Ok(()),
+impl JsonSchema for AuditResponse {
+    fn schema_name() -> String {
+        "AuditResponse".to_owned()
+    }
+
+    fn json_schema(r#gen: &mut SchemaGenerator) -> Schema {
+        AuditResponseWire::json_schema(r#gen)
     }
 }
 
@@ -2725,11 +2893,11 @@ pub struct AuditEntry {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuditResponse, ExecReadOutputResult, ExecStream, ExecTerminalStatus, LevelPercent,
-        MutationFlags, NamedProcessStreamError, NamedProcessStreamErrorKind,
-        NamedProcessStreamRequest, NamedProcessStreamRequestFrame, NamedProcessStreamResponse,
-        NamedProcessStreamResponseFrame, PublicRequest, PublicResponse, RuntimeSummary,
-        VmLifecycleRequest, VmLifecycleState,
+        AuditPageEnd, AuditResponse, ExecReadOutputResult, ExecStream, ExecTerminalStatus,
+        LevelPercent, MutationFlags, MutationMode, MutationModeError, NamedProcessStreamError,
+        NamedProcessStreamErrorKind, NamedProcessStreamRequest, NamedProcessStreamRequestFrame,
+        NamedProcessStreamResponse, NamedProcessStreamResponseFrame, PublicRequest, PublicResponse,
+        RuntimeSummary, VmLifecycleRequest, VmLifecycleState,
     };
     use d2b_contracts::{
         Error, FeatureFlag, Version,
@@ -2905,8 +3073,11 @@ mod tests {
             serde_json::from_value(value).expect("paginated audit response decodes");
         assert_eq!(response.entries.len(), 1);
         assert_eq!(response.entries[0].sequence, 42);
-        assert_eq!(response.next_cursor, Some(cursor));
-        assert!(!response.complete);
+        assert_eq!(response.page_end, AuditPageEnd::More(cursor));
+        assert_eq!(
+            serde_json::to_string(&response).expect("page serializes"),
+            "{\"entries\":[{\"sequence\":42,\"record\":{\"operation\":\"ApplyNftables\"}}],\"nextCursor\":{\"day\":\"2026-08-13\",\"line\":41,\"sequence\":41},\"complete\":false}"
+        );
     }
 
     #[test]
@@ -2916,8 +3087,11 @@ mod tests {
             "complete": true
         }))
         .expect("complete audit page decodes");
-        assert!(response.next_cursor.is_none());
-        assert!(response.complete);
+        assert_eq!(response.page_end, AuditPageEnd::Complete);
+        assert_eq!(
+            serde_json::to_string(&response).expect("page serializes"),
+            "{\"entries\":[],\"complete\":true}"
+        );
     }
 
     #[test]
@@ -3017,7 +3191,7 @@ mod tests {
             decoded,
             PublicRequest::VmStop(VmLifecycleRequest {
                 vm,
-                flags: MutationFlags { apply: true, .. },
+                flags: MutationFlags { mode: MutationMode::Apply, .. },
                 force: false,
                 no_wait_api: false,
             }) if vm == "corp-vm"
@@ -3025,19 +3199,94 @@ mod tests {
     }
 
     #[test]
+    fn mutation_mode_closes_the_flag_pair() {
+        assert_eq!(
+            MutationMode::from_flags(false, false),
+            Err(MutationModeError)
+        );
+        assert_eq!(MutationMode::from_flags(true, false), Ok(MutationMode::DryRun));
+        assert_eq!(MutationMode::from_flags(false, true), Ok(MutationMode::Apply));
+        assert_eq!(MutationMode::from_flags(true, true), Ok(MutationMode::DryRun));
+        assert_eq!(MutationMode::DryRun.to_flags(), (true, false));
+        assert_eq!(MutationMode::Apply.to_flags(), (false, true));
+    }
+
+    #[test]
+    fn mutating_flags_keeps_the_flat_pair_and_requires_a_mode() {
+        let apply = MutationFlags {
+            mode: MutationMode::Apply,
+            json: false,
+        };
+        assert_eq!(
+            serde_json::to_string(&apply).expect("flags serialize"),
+            "{\"dryRun\":false,\"apply\":true,\"json\":false}"
+        );
+
+        let decoded: PublicRequest = serde_json::from_value(serde_json::json!({
+            "kind": "vm stop",
+            "payload": {
+                "vm": "corp-vm",
+                "dryRun": true
+            }
+        }))
+        .expect("dry run payload decodes");
+        assert!(matches!(
+            decoded,
+            PublicRequest::VmStop(VmLifecycleRequest {
+                flags: MutationFlags {
+                    mode: MutationMode::DryRun,
+                    json: false,
+                },
+                ..
+            })
+        ));
+
+        let error = serde_json::from_value::<PublicRequest>(serde_json::json!({
+            "kind": "vm stop",
+            "payload": {
+                "vm": "corp-vm"
+            }
+        }))
+        .expect_err("a payload with no mode must fail admission");
+        assert!(
+            error.to_string().contains("neither dryRun nor apply"),
+            "the refusal should name the flags: {error}"
+        );
+    }
+
+    #[test]
     fn vm_lifecycle_omits_false_force_but_serializes_true() {
         let without_force = serde_json::to_value(PublicRequest::VmStop(VmLifecycleRequest {
             vm: "corp-vm".to_owned(),
-            flags: MutationFlags::default(),
+            flags: MutationFlags {
+                mode: MutationMode::DryRun,
+                json: false,
+            },
             force: false,
             no_wait_api: false,
         }))
         .expect("vm stop serializes");
         assert!(without_force["payload"].get("force").is_none());
+        assert_eq!(
+            serde_json::to_string(&PublicRequest::VmStop(VmLifecycleRequest {
+                vm: "corp-vm".to_owned(),
+                flags: MutationFlags {
+                    mode: MutationMode::DryRun,
+                    json: false,
+                },
+                force: false,
+                no_wait_api: false,
+            }))
+            .expect("vm stop serializes"),
+            "{\"kind\":\"vm stop\",\"payload\":{\"vm\":\"corp-vm\",\"dryRun\":true,\"apply\":false,\"json\":false,\"noWaitApi\":false}}"
+        );
 
         let with_force = serde_json::to_value(PublicRequest::VmRestart(VmLifecycleRequest {
             vm: "corp-vm".to_owned(),
-            flags: MutationFlags::default(),
+            flags: MutationFlags {
+                mode: MutationMode::Apply,
+                json: false,
+            },
             force: true,
             no_wait_api: false,
         }))
