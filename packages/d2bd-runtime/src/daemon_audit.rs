@@ -526,8 +526,10 @@ pub struct DaemonAuditLog {
     /// Queue into the appender thread. `None` only when the appender could
     /// not start, which fails every write closed.
     sink: Option<AuditSink>,
+    /// Capture-only seat of the audit lines this log accepted, shared with
+    /// the appender thread.
     #[cfg(any(test, feature = "test-support"))]
-    pub captured: Arc<Mutex<Vec<String>>>,
+    captured: Arc<Mutex<Vec<String>>>,
 }
 
 /// The appender's queue and its thread handle.
@@ -892,6 +894,15 @@ impl DaemonAuditLog {
     #[cfg(any(test, feature = "test-support"))]
     pub fn no_op_with_state_dir(state_dir: impl Into<PathBuf>) -> Self {
         Self::with_appender(Some(state_dir.into()), false, true)
+    }
+
+    /// The capture-only seat of the audit lines this log accepted.
+    ///
+    /// The lines are appended by the single appender thread, so the guard is
+    /// the only way to read a consistent set of them.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn captured(&self) -> &Mutex<Vec<String>> {
+        &self.captured
     }
 
     /// Start the single appender and return the handle over its queue.
@@ -1956,7 +1967,7 @@ mod tests {
         .expect("write api-ready-timeout event");
 
         // Assert the in-memory captured record has the expected fields.
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(
             records.len(),
             1,
@@ -2093,7 +2104,7 @@ mod tests {
         })
         .expect("write terminated event");
 
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(records.len(), 2, "expected two captured lifecycle records");
 
         for line in records.iter() {
@@ -2164,7 +2175,7 @@ mod tests {
         })
         .expect("write provider-neutral shell event");
 
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(records.len(), 1, "expected one unified shell record");
         for line in records.iter() {
             assert!(
@@ -2229,7 +2240,7 @@ mod tests {
         })
         .expect("write detached kill event");
 
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(records.len(), 2, "expected two detached audit records");
 
         for line in records.iter() {
@@ -2418,7 +2429,7 @@ mod tests {
             .expect_err("blocked destination must return an io error");
         assert_eq!(error.kind(), io::ErrorKind::Other);
         assert_eq!(error.to_string(), "daemon audit unavailable");
-        assert!(log.captured.lock().expect("captured").is_empty());
+        assert!(log.captured().lock().expect("captured").is_empty());
     }
 
     #[test]
@@ -2477,7 +2488,7 @@ mod tests {
             DaemonAuditAuthority::Authoritative,
         );
         assert!(result.is_ok());
-        assert_eq!(log.captured.lock().unwrap().len(), 1);
+        assert_eq!(log.captured().lock().unwrap().len(), 1);
     }
 
     #[test]
@@ -2692,7 +2703,7 @@ mod tests {
         };
         assert!(!format!("{event:?}").contains("target-secret-canary"));
         log.write_event(event).unwrap();
-        let line = log.captured.lock().unwrap().last().cloned().unwrap();
+        let line = log.captured().lock().unwrap().last().cloned().unwrap();
         for canary in [
             "target-secret-canary",
             "item-secret-canary",

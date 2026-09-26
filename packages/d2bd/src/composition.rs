@@ -8636,7 +8636,7 @@ mod workload_observability_tests {
     fn captured_events(state: &ServerState) -> Vec<Value> {
         state
             .daemon_audit
-            .captured
+            .captured()
             .lock()
             .expect("audit capture")
             .iter()
@@ -11270,7 +11270,7 @@ async fn adopt_guest_target_assignments(
             continue;
         };
         let binding = d2b_resource_runtime::target::TargetBinding::new(
-            std::sync::Arc::clone(directory),
+            directory.as_ref().clone(),
             assignment,
         );
         match binding.adopt().await {
@@ -11346,7 +11346,7 @@ pub(crate) async fn target_local_mount_observed(
         return false;
     }
     let binding = d2b_resource_runtime::target::TargetBinding::new(
-        std::sync::Arc::clone(directory),
+        directory.as_ref().clone(),
         assignment,
     );
     let Ok((binding, _)) = binding.adopt().await else {
@@ -28792,7 +28792,7 @@ mod broker_dispatch_tests {
 
         let captured = state
             .daemon_audit
-            .captured
+            .captured()
             .lock()
             .expect("lock captured records");
         assert_eq!(

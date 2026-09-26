@@ -670,7 +670,7 @@ impl ResourceManagerState {
                 type_name: type_name.to_string(),
                 message: error.to_string(),
             })?;
-        let target_binding = TargetBinding::new(Arc::clone(&self.targets), assignment);
+        let target_binding = TargetBinding::new((*self.targets).clone(), assignment);
         let args = ResourceActorArgs {
             row: row.clone(),
             target: target_binding.handle(),
@@ -1890,7 +1890,7 @@ mod tests {
             })
             .expect("notify reconnect");
         wait_status(&h.client, &k, ResourceStatus::Ready).await;
-        let binding = TargetBinding::new(Arc::clone(&targets), assignment);
+        let binding = TargetBinding::new((*targets).clone(), assignment);
         assert_eq!(
             binding.guest().expect("guest handle").session_generation(),
             Some(1),

@@ -479,14 +479,17 @@ pub trait TargetResolver: Send + Sync + 'static {
 /// trusting a channel the caller kept.
 #[derive(Debug, Clone)]
 pub struct TargetBinding {
-    directory: Arc<TargetDirectory>,
+    directory: TargetDirectory,
     assignment: TargetAssignment,
 }
 
 impl TargetBinding {
     /// Bind one resource's recorded assignment to the directory it resolves
     /// through.
-    pub fn new(directory: Arc<TargetDirectory>, assignment: TargetAssignment) -> Self {
+    ///
+    /// The directory is the per-Zone handle every binding of that Zone
+    /// shares, so the binding takes its own cheap clone of it.
+    pub fn new(directory: TargetDirectory, assignment: TargetAssignment) -> Self {
         Self { directory, assignment }
     }
 
@@ -541,7 +544,7 @@ impl TargetBinding {
         let rebound = outcome.handle().clone();
         let mut assignment = self.assignment.clone();
         assignment.target = ResolvedTarget::Guest(rebound);
-        Ok((TargetBinding { directory: Arc::clone(&self.directory), assignment }, outcome))
+        Ok((TargetBinding { directory: self.directory.clone(), assignment }, outcome))
     }
 }
 
@@ -1618,7 +1621,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_target_binding_never_trusts_a_channel_it_kept() {
-        let directory = Arc::new(TargetDirectory::new());
+        let directory = TargetDirectory::new();
         let runtime = Arc::new(GuestTargetRuntime::new(guest()));
         runtime.bind_session(1).expect("bind session");
         directory
@@ -1627,7 +1630,7 @@ mod tests {
         let source = key("Process", "worker");
         let assignment =
             directory.assign(&source, &[7; 16], 2, "Guest/work-vm").expect("assign guest");
-        let binding = TargetBinding::new(Arc::clone(&directory), assignment);
+        let binding = TargetBinding::new(directory.clone(), assignment);
 
         binding.realize(spec(), digest(), "/run/d2b/worker.sock").await.expect("realize");
         assert_eq!(
@@ -1665,7 +1668,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn a_host_binding_has_no_guest_realization_path() {
-        let directory = Arc::new(TargetDirectory::new());
+        let directory = TargetDirectory::new();
         let source = key("Process", "hosted");
         let assignment =
             directory.assign(&source, &[1; 16], 1, "Host/main-host").expect("assign host");
