@@ -110,6 +110,7 @@ pub struct FakeFacets {
     socket_runtime_dir: std::path::PathBuf,
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 impl FakeFacets {
     /// Build a double from the given scripted configuration.
     pub fn new(config: FakeFacetsConfig) -> Self {
@@ -201,6 +202,7 @@ pub fn recorded_launch(
 }
 
 #[async_trait::async_trait]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 impl ProcessProviderRuntime for FakeFacets {
     fn bundle(&self) -> &BundleResolver {
         &self.bundle

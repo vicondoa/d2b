@@ -548,43 +548,38 @@
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 2451,
+      "line": 2453,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 2462,
+      "line": 2464,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 2463,
+      "line": 2465,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 3253,
+      "line": 3257,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 3263,
+      "line": 3269,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 3368,
+      "line": 3376,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-process/src/driver.rs",
-      "line": 3730,
+      "line": 3738,
       "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 227,
-      "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
@@ -598,92 +593,97 @@
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 240,
+      "line": 233,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 246,
+      "line": 242,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 252,
+      "line": 248,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 260,
+      "line": 254,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 261,
+      "line": 262,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 273,
+      "line": 263,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 274,
+      "line": 275,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 286,
+      "line": 276,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 287,
+      "line": 288,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 302,
+      "line": 289,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 303,
+      "line": 304,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 317,
+      "line": 305,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 318,
+      "line": 319,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 333,
+      "line": 320,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 334,
+      "line": 335,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 347,
+      "line": 336,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 355,
+      "line": 349,
       "reason": "test-support recorder lock"
     },
     {
       "file": "packages/d2b-provider-process/src/test_support.rs",
-      "line": 356,
+      "line": 357,
+      "reason": "test-support recorder lock"
+    },
+    {
+      "file": "packages/d2b-provider-process/src/test_support.rs",
+      "line": 358,
       "reason": "test-support recorder lock"
     },
     {

@@ -608,6 +608,7 @@ mod tests {
         rows: Mutex<BTreeMap<String, (ResourceUid, ResourceGeneration)>>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl TestCommittedIdentities {
         fn publish(&self, provider: &str, uid: &str, generation: u64) {
             self.rows.lock().insert(
@@ -620,6 +621,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl CommittedProviderIdentitySource for TestCommittedIdentities {
         fn committed_provider_identity(
             &self,

@@ -677,9 +677,9 @@ struct EphemeralRuntime {
     started: AtomicBool,
     /// When the process was launched or adopted: the clock for the bounded
     /// runtime deadline.
-    started_at: parking_lot::Mutex<Option<tokio::time::Instant>>,
+    started_at: tokio::sync::Mutex<Option<tokio::time::Instant>>,
     /// The terminal outcome, once observed: the clock for the retention TTL.
-    completed: parking_lot::Mutex<Option<EphemeralCompletion>>,
+    completed: tokio::sync::Mutex<Option<EphemeralCompletion>>,
 }
 
 /// One one-shot terminal outcome: the TTL class and when it was reached.
@@ -695,22 +695,22 @@ impl EphemeralRuntime {
         self.started.load(Ordering::Relaxed)
     }
 
-    fn mark_started(&self) {
-        let mut started_at = self.started_at.lock();
+    async fn mark_started(&self) {
+        let mut started_at = self.started_at.lock().await;
         if started_at.is_none() {
             *started_at = Some(tokio::time::Instant::now());
         }
         self.started.store(true, Ordering::Relaxed);
     }
 
-    fn started_at(&self) -> Option<tokio::time::Instant> {
-        *self.started_at.lock()
+    async fn started_at(&self) -> Option<tokio::time::Instant> {
+        *self.started_at.lock().await
     }
 
     /// Record the one-shot terminal state once; a second observation keeps
     /// the first (the TTL clock must not restart).
-    fn finish(&self, failed: bool, code: &'static str) -> EphemeralCompletion {
-        let mut completed = self.completed.lock();
+    async fn finish(&self, failed: bool, code: &'static str) -> EphemeralCompletion {
+        let mut completed = self.completed.lock().await;
         *completed.get_or_insert(EphemeralCompletion {
             failed,
             code,
@@ -718,14 +718,14 @@ impl EphemeralRuntime {
         })
     }
 
-    fn completed(&self) -> Option<EphemeralCompletion> {
-        *self.completed.lock()
+    async fn completed(&self) -> Option<EphemeralCompletion> {
+        *self.completed.lock().await
     }
 
     /// Test-only: backdate the runtime-deadline clock.
     #[cfg(test)]
-    fn backdate_started(&self, elapsed: Duration) {
-        let mut started_at = self.started_at.lock();
+    async fn backdate_started(&self, elapsed: Duration) {
+        let mut started_at = self.started_at.lock().await;
         if let Some(at) = started_at.as_mut() {
             *at -= elapsed;
         }
@@ -734,8 +734,8 @@ impl EphemeralRuntime {
 
     /// Test-only: backdate the retention TTL clock.
     #[cfg(test)]
-    fn backdate_completed(&self, elapsed: Duration) {
-        if let Some(completion) = self.completed.lock().as_mut() {
+    async fn backdate_completed(&self, elapsed: Duration) {
+        if let Some(completion) = self.completed.lock().await.as_mut() {
             completion.at -= elapsed;
         }
     }
@@ -1351,7 +1351,7 @@ impl ProcessDriver {
     ) -> Result<RecoveryOutcome, ProcessDriverError> {
         match self.effects.adopt_ephemeral(identity, spec).await {
             Ok(ProviderAdoption::Adopted(_)) => {
-                self.ephemeral.mark_started();
+                self.ephemeral.mark_started().await;
                 ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
                 Ok(RecoveryOutcome::Adopted)
             }
@@ -1603,7 +1603,7 @@ impl ProcessDriver {
         identity: &ProcessResourceIdentity,
         spec: &EphemeralProcessSpec,
     ) -> Result<ReconcileOutcome, ProcessDriverError> {
-        if let Some(completion) = self.ephemeral.completed() {
+        if let Some(completion) = self.ephemeral.completed().await {
             return self.ephemeral_retention(ctx, spec, completion).await;
         }
 
@@ -1611,7 +1611,7 @@ impl ProcessDriver {
         // this actor started outlived its bounded run, so it stops exactly and
         // the terminal outcome is `Failed`.
         if self.ephemeral.started()
-            && let Some(started_at) = self.ephemeral.started_at()
+            && let Some(started_at) = self.ephemeral.started_at().await
             && started_at.elapsed() >= Duration::from_millis(spec.runtime_deadline().as_millis())
         {
             if self.effects.has_active(
@@ -1629,7 +1629,7 @@ impl ProcessDriver {
                     .await
                     .map_err(|error| map_provider_error(error, DriverOp::Reconcile))?;
             }
-            let completion = self.ephemeral.finish(true, "runtime-deadline");
+            let completion = self.ephemeral.finish(true, "runtime-deadline").await;
             Self::publish_ephemeral_outcome(ctx, completion);
             ctx.set_status(ProcessDriverStatus::Failed {
                 code: "runtime-deadline",
@@ -1653,7 +1653,7 @@ impl ProcessDriver {
                     Ok(ReconcileOutcome::Satisfied)
                 }
                 Ok(ProviderLiveness::Exited) => {
-                    let completion = self.ephemeral.finish(false, "process-exited");
+                    let completion = self.ephemeral.finish(false, "process-exited").await;
                     Self::publish_ephemeral_outcome(ctx, completion);
                     ctx.set_status(ProcessDriverStatus::Succeeded {
                         code: "process-exited",
@@ -1661,7 +1661,7 @@ impl ProcessDriver {
                     self.ephemeral_retention(ctx, spec, completion).await
                 }
                 Ok(ProviderLiveness::Unknown) => {
-                    let completion = self.ephemeral.finish(true, "identity-ambiguous");
+                    let completion = self.ephemeral.finish(true, "identity-ambiguous").await;
                     Self::publish_ephemeral_outcome(ctx, completion);
                     ctx.set_status(ProcessDriverStatus::Failed {
                         code: "identity-ambiguous",
@@ -1678,7 +1678,7 @@ impl ProcessDriver {
         // or a fail-closed refusal.
         match self.effects.adopt_ephemeral(identity, spec).await {
             Ok(ProviderAdoption::Adopted(_)) => {
-                self.ephemeral.mark_started();
+                self.ephemeral.mark_started().await;
                 ctx.set_status(ProcessDriverStatus::Ready { adopted: true });
                 let _ = ctx.requeue_after(PROCESS_RESYNC);
                 Ok(ReconcileOutcome::Satisfied)
@@ -1824,7 +1824,7 @@ impl ProcessDriver {
                 .await
             {
                 Ok(_) => {
-                    ephemeral.mark_started();
+                    ephemeral.mark_started().await;
                     EffectResult::Completed
                 }
                 Err(error) => {
@@ -2407,6 +2407,7 @@ mod tests {
         deleted: parking_lot::Mutex<Vec<ResourceKey>>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl OwnershipManager {
         /// An owner-scoped manager with no owned rows: the retention delete
         /// path's double.
@@ -2435,6 +2436,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl ManagerEndpoint for OwnershipManager {
         async fn ensure_child(
             &self,
@@ -2502,6 +2504,7 @@ mod tests {
         delivered_tx: Option<mpsc::UnboundedSender<u64>>,
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl RecordingRequeue {
         fn new() -> (Self, mpsc::UnboundedReceiver<u64>) {
             let (tx, rx) = mpsc::unbounded_channel();
@@ -2522,6 +2525,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     impl RequeueScheduler for RecordingRequeue {
         fn schedule(&self, key: ResourceKey, after: Duration) -> RequeueId {
             let mut inner = self.inner.lock();
@@ -2646,17 +2650,17 @@ mod tests {
         }
 
         /// Test-only: backdate the one-shot runtime clock past its deadline.
-        fn backdate_runtime(&self, elapsed: Duration) {
-            self.typed.ephemeral.backdate_started(elapsed);
+        async fn backdate_runtime(&self, elapsed: Duration) {
+            self.typed.ephemeral.backdate_started(elapsed).await;
         }
 
         /// Test-only: backdate the one-shot retention clock.
-        fn backdate_completion(&self, elapsed: Duration) {
-            self.typed.ephemeral.backdate_completed(elapsed);
+        async fn backdate_completion(&self, elapsed: Duration) {
+            self.typed.ephemeral.backdate_completed(elapsed).await;
         }
 
-        fn ephemeral_completed(&self) -> bool {
-            self.typed.ephemeral.completed().is_some()
+        async fn ephemeral_completed(&self) -> bool {
+            self.typed.ephemeral.completed().await.is_some()
         }
     }
 
@@ -3255,7 +3259,9 @@ mod tests {
         );
 
         // TTL elapsed: the driver asks the manager to retire its own row.
-        driver.backdate_completion(Duration::from_secs(3600));
+        driver
+            .backdate_completion(Duration::from_secs(3600))
+            .await;
         assert_eq!(
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
@@ -3280,7 +3286,7 @@ mod tests {
         yield_until_effects_settled().await;
         f.effects.recv().await.expect("launch completion");
 
-        driver.backdate_runtime(Duration::from_secs(300));
+        driver.backdate_runtime(Duration::from_secs(300)).await;
         assert_eq!(
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
@@ -3339,7 +3345,7 @@ mod tests {
         yield_until_effects_settled().await;
         f.effects.recv().await.expect("launch completion");
 
-        driver.backdate_runtime(Duration::from_secs(300));
+        driver.backdate_runtime(Duration::from_secs(300)).await;
         assert_eq!(
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
@@ -3355,11 +3361,13 @@ mod tests {
             "no cleanup timer under incident hold"
         );
         assert!(
-            driver.ephemeral_completed(),
+            driver.ephemeral_completed().await,
             "the terminal state is recorded"
         );
 
-        driver.backdate_completion(Duration::from_secs(365 * 24 * 3600));
+        driver
+            .backdate_completion(Duration::from_secs(365 * 24 * 3600))
+            .await;
         assert_eq!(
             driver.reconcile(&mut f.ctx).await.expect("reconcile"),
             ReconcileOutcome::Satisfied
