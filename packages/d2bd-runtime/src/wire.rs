@@ -1,7 +1,7 @@
 use crate::typed_error::{ErrorEnvelope, TypedError};
 use d2b_contracts::{FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason, Version};
 use d2b_contracts_broker::broker_wire::ExportBrokerAuditResponse;
-use d2b_contracts_control::public_wire::{self, AuditResponse, AuthStatusResponse};
+use d2b_contracts_control::public_wire::{self, AuditPageEnd, AuditResponse, AuthStatusResponse};
 use d2b_contracts_resource::v3::ResourceRef;
 use semver::{Version as SemverVersion, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -458,15 +458,28 @@ pub fn status_response(status: Value) -> Value {
     json!({ "type": "statusResponse", "status": status })
 }
 
-pub fn audit_response(payload: ExportBrokerAuditResponse) -> AuditResponseFrame {
-    AuditResponseFrame {
+/// Build the public audit frame from one broker export page.
+///
+/// The broker page's `complete`/`nextCursor` pair is admitted on the broker
+/// wire, but a page built in process can still pair an incomplete page with
+/// no cursor. That page has no public representation, so it is refused here
+/// instead of being reported as final (which would silently end the CLI's
+/// pagination).
+pub fn audit_response(
+    payload: ExportBrokerAuditResponse,
+) -> Result<AuditResponseFrame, TypedError> {
+    let page_end = AuditPageEnd::from_parts(payload.complete, payload.next_cursor).map_err(|error| {
+        TypedError::WireInvalidFrame {
+            detail: format!("broker audit page: {error}"),
+        }
+    })?;
+    Ok(AuditResponseFrame {
         type_name: "auditResponse",
         payload: AuditResponse {
             entries: payload.entries,
-            next_cursor: payload.next_cursor,
-            complete: payload.complete,
+            page_end,
         },
-    }
+    })
 }
 
 pub fn usbip_probe_response(payload: public_wire::UsbipProbeResponse) -> Value {
@@ -585,7 +598,7 @@ fn map_parse_error(error: serde_json::Error) -> TypedError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, audit_response, parse_request};
+    use super::{AuditPageEnd, Request, audit_response, parse_request};
     use d2b_contracts_broker::broker_wire::ExportBrokerAuditResponse;
     use d2b_contracts_broker::{AuditExportCursor, AuditExportEntry};
     use serde_json::json;
@@ -680,7 +693,7 @@ mod tests {
 
     #[test]
     fn real_d2bd_audit_response_round_trips_through_public_contract() {
-        let private = ExportBrokerAuditResponse {
+        let private = || ExportBrokerAuditResponse {
             entries: vec![AuditExportEntry {
                 sequence: 42,
                 record: Some(json!({"operation": "ApplyNftables"})),
@@ -693,8 +706,13 @@ mod tests {
             }),
             complete: false,
         };
-        let frame = serde_json::to_value(audit_response(private))
+        let frame = serde_json::to_value(audit_response(private()).expect("valid broker page"))
             .expect("serialize real d2bd audit response");
+        assert_eq!(
+            serde_json::to_string(&audit_response(private()).expect("valid broker page"))
+                .expect("serialize real d2bd audit response"),
+            "{\"type\":\"auditResponse\",\"entries\":[{\"sequence\":42,\"record\":{\"operation\":\"ApplyNftables\"}}],\"nextCursor\":{\"day\":\"2026-08-13\",\"line\":41,\"sequence\":41},\"complete\":false}"
+        );
         let mut payload = frame.as_object().expect("audit frame object").clone();
         assert_eq!(payload.remove("type"), Some(json!("auditResponse")));
 
@@ -703,9 +721,24 @@ mod tests {
         assert_eq!(public.entries.len(), 1);
         assert_eq!(public.entries[0].sequence, 42);
         assert_eq!(
-            public.next_cursor.as_ref().map(|cursor| cursor.line),
-            Some(41)
+            public.page_end,
+            AuditPageEnd::More(AuditExportCursor {
+                day: "2026-08-13".to_owned(),
+                line: 41,
+                sequence: 41,
+            })
         );
-        assert!(!public.complete);
+    }
+
+    #[test]
+    fn incomplete_broker_audit_page_without_cursor_is_refused() {
+        let private = ExportBrokerAuditResponse {
+            entries: Vec::new(),
+            next_cursor: None,
+            complete: false,
+        };
+        let error =
+            audit_response(private).expect_err("an incomplete page must carry its cursor");
+        assert_eq!(error.kind(), "wire-invalid-frame");
     }
 }

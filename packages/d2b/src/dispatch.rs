@@ -22,7 +22,9 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 use d2b_contracts_broker::AuditExportCursor;
 use d2b_contracts_control::{
     cli_output::{AuthDeniedSubcommandV2, AuthRoleV2, AuthSocketStatusV2, AuthStatusOutputV2},
-    public_wire::{self, AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest},
+    public_wire::{
+        self, AuditFormat as IpcAuditFormat, AuditPageEnd, AuditRequest as IpcAuditRequest,
+    },
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -428,9 +430,7 @@ fn daemon_audit_frame_with_cursor(
     crate::context::encode_type_tagged_message(type_name, &request, "audit request")
 }
 
-fn parse_audit_page(
-    response: &[u8],
-) -> Result<(Vec<String>, Option<AuditExportCursor>, bool), CliFailure> {
+fn parse_audit_page(response: &[u8]) -> Result<(Vec<String>, AuditPageEnd), CliFailure> {
     let value = decode_daemon_frame(response, "audit reply")?;
     let Some(type_name) = value.get("type").and_then(Value::as_str) else {
         return Err(CliFailure::new(
@@ -461,7 +461,7 @@ fn parse_audit_page(
                             })
                     })
                     .collect();
-                (lines, frame.payload.next_cursor, frame.payload.complete)
+                (lines, frame.payload.page_end)
             })
             .map_err(|error| {
                 CliFailure::new(1, format!("failed to decode auditResponse: {error}"))
@@ -480,7 +480,7 @@ fn parse_audit_page(
 }
 
 pub(crate) fn parse_audit_reply(response: &[u8]) -> Result<Vec<String>, CliFailure> {
-    parse_audit_page(response).map(|(lines, _, _)| lines)
+    parse_audit_page(response).map(|(lines, _)| lines)
 }
 
 pub(crate) fn render_daemon_audit_lines(
@@ -561,17 +561,11 @@ async fn audit_via_socket(
             .recv_frame(budget)
             .await
             .map_err(|error| audit_failure(public_socket, "reply receive", &error))?;
-        let (page, next_cursor, complete) = parse_audit_page(&response)?;
+        let (page, page_end) = parse_audit_page(&response)?;
         lines.extend(page);
-        if complete {
-            return Ok(AuditSocketOutcome::Lines(lines));
-        }
-        cursor = next_cursor;
-        if cursor.is_none() {
-            return Err(CliFailure::new(
-                1,
-                "audit export pagination omitted continuation metadata",
-            ));
+        match page_end {
+            AuditPageEnd::Complete => return Ok(AuditSocketOutcome::Lines(lines)),
+            AuditPageEnd::More(next_cursor) => cursor = Some(next_cursor),
         }
     }
     Err(CliFailure::new(
