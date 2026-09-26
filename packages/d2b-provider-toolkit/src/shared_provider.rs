@@ -506,8 +506,8 @@ pub struct SharedProviderEffectRequest<'a> {
     pub generation: ResourceGeneration,
     /// Runtime-only operation id (never persisted).
     pub operation_id: String,
-    /// Canonical spec document of the row.
-    pub spec: Value,
+    /// Canonical spec document of the row (borrowed from the row's envelope).
+    pub spec: &'a Value,
     /// Decoded metadata envelope of the row (`ownerRef`, ...).
     pub metadata: Value,
     /// The driver's last in-memory status projection, when one was published.
@@ -936,7 +936,7 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
                 uid,
                 generation,
                 operation_id,
-                spec: envelope.value().clone(),
+                spec: envelope.value(),
                 metadata,
                 status,
                 children: &surface,
@@ -1016,7 +1016,7 @@ impl<C: Copy + core::fmt::Debug + Eq + Send + Sync + 'static, S: Default + Send 
                 uid,
                 generation,
                 operation_id,
-                spec: envelope.value().clone(),
+                spec: envelope.value(),
                 metadata,
                 status,
                 children: &surface,

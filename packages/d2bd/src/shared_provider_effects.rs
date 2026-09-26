@@ -441,7 +441,7 @@ impl ProductionSharedProviderEffects {
         kind: SharedProviderKind,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<bool, SharedProviderEffectError> {
-        for dependency in kind.declared_dependency_refs(&request.spec, &request.metadata) {
+        for dependency in kind.declared_dependency_refs(request.spec, &request.metadata) {
             if !self.resource_ready(&dependency).await {
                 return Ok(false);
             }
@@ -1252,9 +1252,7 @@ impl ProductionSharedProviderEffects {
         &self,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<d2b_contracts_resource::v3::network::NetworkSpec, SharedProviderEffectError> {
-        let mut spec_value = request
-            .spec
-            .clone();
+        let mut spec_value = (*request.spec).clone();
         if let Some(spec) = spec_value.as_object_mut() {
             for field in ["providerRef", "updatePolicy", "provider"] {
                 spec.remove(field);
@@ -3887,6 +3885,7 @@ mod tests {
         network_name: &str,
         uid: d2b_contracts_resource::v3::ResourceUid,
         generation: d2b_contracts_resource::v3::ResourceGeneration,
+        spec: &'a Value,
         children: &'a UnusedChildSurface,
     ) -> d2b_provider_toolkit::SharedProviderEffectRequest<'a> {
         d2b_provider_toolkit::SharedProviderEffectRequest {
@@ -3895,7 +3894,7 @@ mod tests {
             uid,
             generation,
             operation_id: "network-admission-test".to_owned(),
-            spec: serde_json::json!({}),
+            spec,
             metadata: serde_json::json!({}),
             status: None,
             children: children as &dyn d2b_provider_toolkit::SharedProviderChildSurface,
@@ -3916,11 +3915,13 @@ mod tests {
         let harness = network_admission_harness().await;
         let children = UnusedChildSurface;
 
+        let spec = serde_json::json!({});
         let request = network_admission_request(
             ZoneId::parse("work").unwrap(),
             "zone-net",
             harness.network_uid.clone(),
             harness.network_generation,
+            &spec,
             &children,
         );
         let result = harness
