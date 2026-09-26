@@ -27,7 +27,12 @@ mod startup;
 pub use allowed_sources::AllowedSources;
 pub use child_creation::{ChildCreation, ChildCustody};
 pub use descriptor::{CONVERTED_TYPE_VERBS, DriverDescriptor};
-pub use metadata::{assert_metadata_registration, metadata_descriptor};
+// The registration assertion drives the registry through a real plane open,
+// so it is test-only: this crate's own tests reach it through `cfg(test)`,
+// consumers through the `test-support` feature their test targets enable.
+#[cfg(any(test, feature = "test-support"))]
+pub use metadata::assert_metadata_registration;
+pub use metadata::metadata_descriptor;
 pub use operation::{
     KernelCaller, OperationCtx, OperationDef, OperationFailure, OperationHandler, OperationResult,
     RunnerLookup, ValidatedPayload,

@@ -21,6 +21,7 @@ d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-
 d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap" }
 
 [dev-dependencies]
+d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap", features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [[test]]

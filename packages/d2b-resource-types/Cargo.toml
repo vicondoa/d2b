@@ -9,6 +9,12 @@ license.workspace = true
 workspace = true
 
 [features]
+# `assert_metadata_registration` is needed by the eleven per-type crates'
+# `tests/registration.rs` suites (which opt in via the `test-support` feature)
+# and by this crate's own tests. Gating on `any(test, feature = "test-support")`
+# makes the helper available automatically when compiling this crate's tests,
+# so `cargo test -p d2b-resource-types` works without anyone having to
+# remember `--features test-support`.
 test-support = []
 
 [dependencies]

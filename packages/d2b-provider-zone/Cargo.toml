@@ -22,4 +22,10 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 
 [dev-dependencies]
+d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstrap", features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "registration"
+path = "tests/registration.rs"
+required-features = ["test-support"]

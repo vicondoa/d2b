@@ -43,6 +43,13 @@ pub mod diagnostics;
 pub mod effect_port;
 pub mod lock;
 pub mod marker;
+
+// `testing` is needed both by external crates (which opt in via the
+// `test-support` feature) and by this crate's own tests. Gating on
+// `any(test, feature = "test-support")` makes it available automatically
+// when compiling this crate's unit tests, and the `test-support`-gated
+// integration tests in `tests/` pick it up through the feature they require.
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 
 pub use adapter::{
