@@ -321,11 +321,10 @@ pub struct StateCellHandle<'a> {
 mod tests {
     use super::*;
     use d2b_broker::catalog::{
-        AuditMode, BROKER_OPERATION_CATALOG, BrokerAuthzFacets, BrokerProfileId,
-        BrokerRequirement, CellDurability, DeadlineTier, Disposition, OperationOwner,
-        PayloadProvenance, SecretAccess,
+        AuditMode, BROKER_OPERATION_CATALOG, BrokerAuthzFacets, BrokerOperationName,
+        BrokerProfileId, BrokerRequirement, CellDurability, DeadlineTier, Disposition,
+        OperationOwner, PayloadProvenance, SecretAccess,
     };
-    use d2b_contracts_broker::broker_wire::BrokerOperationName;
     use d2b_broker::envelope::{
         BrokerEnvelope, CallerAuthority, DispatchFailure, DispatchOutcome, HANDLER_REFUSED,
     };

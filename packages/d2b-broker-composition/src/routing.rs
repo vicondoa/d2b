@@ -129,10 +129,9 @@ pub fn catalog_admitted_operations() -> Vec<&'static str> {
 mod tests {
     use super::*;
     use d2b_broker::catalog::{
-        AuditMode, BrokerAuthzFacets, BrokerProfileId, BrokerRequirement, CellDurability,
-        Disposition, OperationOwner, PayloadProvenance,
+        AuditMode, BrokerAuthzFacets, BrokerOperationName, BrokerProfileId, BrokerRequirement,
+        CellDurability, Disposition, OperationOwner, PayloadProvenance,
     };
-    use d2b_contracts_broker::broker_wire::BrokerOperationName;
 
     /// A minimal pure, generic, provider-declared row (the shape a future
     /// pure transform will take; the fixture suite uses it as its happy

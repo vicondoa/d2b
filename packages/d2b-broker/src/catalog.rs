@@ -28,8 +28,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts_broker::broker_wire::{
-    BrokerOperationName, BrokerRequest, DEFAULT_CONTEXT_DEADLINE_MS, FdKind,
-    MAX_CONTEXT_DEADLINE_MS,
+    BrokerRequest, DEFAULT_CONTEXT_DEADLINE_MS, FdKind, MAX_CONTEXT_DEADLINE_MS,
 };
 use d2b_contracts_resource::v3::{CanonicalJsonObject, CanonicalJsonValue, canonical_json_bytes};
 
@@ -158,6 +157,12 @@ impl DeadlineTier {
         }
     }
 }
+
+/// The operation-name vocabulary the committed row table is typed against.
+///
+/// Re-exported here so a consumer that builds a [`BrokerOperationRow`] names
+/// the field's type through the module that owns the row.
+pub use d2b_contracts_broker::broker_wire::BrokerOperationName;
 
 /// One committed broker operation row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
