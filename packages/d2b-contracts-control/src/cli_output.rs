@@ -103,11 +103,59 @@ pub struct OpInspectLocalOutputV1 {
 /// One realm's view in `op inspect` output.
 pub struct OpInspectRealmOutputV1 {
     pub realm: String,
-    pub mode: String,
+    pub mode: RealmMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway_vm: Option<String>,
-    pub state: String,
+    pub state: RealmGatewayState,
     pub cross_realm_policy: String,
+}
+
+/// How a realm's entrypoint is dispatched.
+///
+/// `mode` used to be a free-form `String`; the realm entrypoint table admits
+/// exactly two modes, so both the wire protocol and the generated CLI schema
+/// carry enum constraints rather than a free-form string. Serde names match
+/// the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RealmMode {
+    /// The realm entrypoint runs on the local daemon.
+    HostResident,
+    /// A gateway guest fronts the realm and owns its policy.
+    GatewayBacked,
+}
+
+/// The gateway-side state of a realm row.
+///
+/// `gateway_state` and `state` used to be free-form `String`s carrying the
+/// gateway guest's lifecycle label; the field is `local-only` for a
+/// host-resident realm, the daemon's lifecycle state for a gateway-backed
+/// realm whose gateway the daemon listed, and the preserved sentinel string
+/// when the daemon did not list the gateway at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RealmGatewayState {
+    /// The realm has no gateway hop; it is dispatched on this host.
+    LocalOnly,
+    /// The gateway guest is stopped.
+    Stopped,
+    /// The gateway guest is starting.
+    Starting,
+    /// The gateway guest has booted.
+    Booted,
+    /// The gateway guest is running.
+    Running,
+    /// The gateway guest is stopping.
+    Stopping,
+    /// The gateway guest is restarting.
+    Restarting,
+    /// The gateway guest failed its last lifecycle transition.
+    Failed,
+    /// The daemon reported the gateway guest's lifecycle as unknown.
+    Unknown,
+    /// The daemon's list response did not include the gateway VM.
+    #[serde(rename = "not reported by d2bd")]
+    NotReported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -124,12 +172,12 @@ pub struct OpInspectDegradedOutputV1 {
 /// One realm's policy summary, shared by list and inspect output.
 pub struct RealmPolicyOutputV1 {
     pub realm: String,
-    pub mode: String,
+    pub mode: RealmMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway_vm: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway_target: Option<String>,
-    pub gateway_state: String,
+    pub gateway_state: RealmGatewayState,
     pub cross_realm_policy: String,
     pub credential_boundary: String,
 }
