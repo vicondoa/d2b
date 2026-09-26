@@ -117,12 +117,11 @@ pub enum OpLockClass {
 /// Per-VM + global in-process op locks. Cheaply [`Clone`]able (all state
 /// behind `Arc`) so it can live inside the `Clone` `ServerState`.
 ///
-/// The locks are `tokio::sync` primitives (async purity, plan U17). The
-/// daemon's dispatch threads are dedicated worker threads - never executor
-/// workers - so `acquire` takes the blocking owned-lock seats, which park
-/// the calling worker thread exactly like the parking_lot seats they replace
-/// (and which panic if ever called from inside a runtime; the daemon's
-/// dispatch boundary is a plain thread by construction).
+/// The locks are `tokio::sync` primitives (async purity, plan U17).
+/// Production dispatch runs on dedicated `d2b-conn` handler threads, so
+/// `acquire` parks them on the blocking seats; the `--once` serve path
+/// dispatches inline on the accept loop's runtime worker, where those seats
+/// panic, so `acquire` keeps the bounded try-lock spin there instead.
 #[derive(Debug, Clone, Default)]
 pub struct OpLockManager {
     /// A global op takes the write side (exclusive with every per-VM op);
@@ -154,51 +153,82 @@ impl OpLockManager {
     }
 
     /// Acquire the lock appropriate to `class`. The op lock spans a
-    /// synchronous critical section (never an await), and callers run both
-    /// on tokio runtime workers (the async dispatch path) and on dedicated
-    /// threads; tokio's `blocking_*` primitives panic inside a runtime, so
-    /// acquisition spins on `try_lock` until the lock is free (the repo's
-    /// lock_sync pattern). The critical sections are single map ops, so a
-    /// spin is bounded and there is no deadlock: holders never await.
+    /// synchronous critical section (never an await) and is held for the
+    /// whole op, so the wait matters.
+    ///
+    /// Off a runtime the acquisition takes the tokio blocking seats, which
+    /// park the calling thread; that is what production dispatch wants,
+    /// because every production connection is handled on its own dedicated
+    /// `d2b-conn` thread. The blocking seats panic on a runtime worker, and
+    /// the `--once` serve path dispatches its single connection inline on
+    /// the accept loop's runtime worker, so there the wait keeps the repo's
+    /// `lock_sync` bounded try-lock spin (`authority_persistence` and the
+    /// Zone activation guard take the same shape). The critical sections
+    /// are single map ops, holders never await, and the single lock ordering
+    /// is acyclic, so the wait is bounded and deadlock-free on either seat.
     pub fn acquire(&self, class: &OpLockClass) -> OpLockGuard<'_> {
+        let blocking = tokio::runtime::Handle::try_current().is_err();
         match class {
             OpLockClass::ReadOnly => OpLockGuard::None,
             OpLockClass::PerVm(vm) => {
                 // Lock ordering: global(read) THEN per-VM. A global op
                 // takes global(write), so it cannot interleave with an
                 // in-flight per-VM op, and the single ordering is acyclic.
-                let global = loop {
-                    match self.global.try_read() {
-                        Ok(guard) => break guard,
-                        Err(_) => std::hint::spin_loop(),
-                    }
-                };
+                let global = wait_for_op_lock(
+                    blocking,
+                    || self.global.try_read().ok(),
+                    || self.global.blocking_read(),
+                );
                 let vm_lock = {
-                    let mut map = loop {
-                        match self.per_vm.try_lock() {
-                            Ok(guard) => break guard,
-                            Err(_) => std::hint::spin_loop(),
-                        }
-                    };
+                    let mut map = wait_for_op_lock(
+                        blocking,
+                        || self.per_vm.try_lock().ok(),
+                        || self.per_vm.blocking_lock(),
+                    );
                     Arc::clone(
                         map.entry(vm.clone())
                             .or_insert_with(|| Arc::new(Mutex::new(()))),
                     )
                 };
-                let vm = loop {
-                    match vm_lock.clone().try_lock_owned() {
-                        Ok(guard) => break guard,
-                        Err(_) => std::hint::spin_loop(),
-                    }
-                };
+                let vm = wait_for_op_lock(
+                    blocking,
+                    || vm_lock.clone().try_lock_owned().ok(),
+                    || vm_lock.clone().blocking_lock_owned(),
+                );
                 OpLockGuard::PerVm { global, vm }
             }
-            OpLockClass::Global => loop {
-                match self.global.try_write() {
-                    Ok(guard) => break OpLockGuard::Global(guard),
-                    Err(_) => std::hint::spin_loop(),
-                }
-            },
+            OpLockClass::Global => OpLockGuard::Global(wait_for_op_lock(
+                blocking,
+                || self.global.try_write().ok(),
+                || self.global.blocking_write(),
+            )),
+        }
+    }
+}
+
+/// Wait for one op-lock seat.
+///
+/// `blocking` names the seat `OpLockManager::acquire` chose: the blocking
+/// seat parks the calling thread when the caller does not drive a runtime,
+/// and the bounded try-lock spin (the `lock_sync` shape,
+/// `authority_persistence`) carries the wait on a runtime worker, where
+/// tokio's blocking seats panic. The free fast path runs first, so an
+/// uncontended lock is taken without either wait.
+fn wait_for_op_lock<T>(
+    blocking: bool,
+    try_acquire: impl Fn() -> Option<T>,
+    blocking_acquire: impl FnOnce() -> T,
+) -> T {
+    if let Some(guard) = try_acquire() {
+        return guard;
+    }
+    if blocking {
+        return blocking_acquire();
+    }
+    loop {
+        match try_acquire() {
+            Some(guard) => return guard,
+            None => std::hint::spin_loop(),
         }
     }
 }

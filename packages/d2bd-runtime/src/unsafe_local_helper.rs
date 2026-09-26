@@ -23,7 +23,6 @@ use nix::sys::socket::{
     sockopt::PeerCredentials,
 };
 use nix::unistd::{self, Gid};
-use parking_lot::Mutex;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use socket2::{Domain, SockAddr, Socket, Type};
@@ -38,6 +37,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 
 /// How often a healthy helper must send a heartbeat to stay live.
 pub const HELPER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -101,6 +101,33 @@ impl fmt::Debug for HelperReply {
     }
 }
 
+/// Wait for one registry lock.
+///
+/// The registry's own accept loop and per-connection handler threads, and
+/// the daemon's `d2b-conn` handler threads, do not drive a runtime, so they
+/// take the tokio blocking seat and park until the lock is free. A runtime
+/// worker takes the repo's `lock_sync` bounded try-lock spin instead
+/// (`authority_persistence`), because the blocking seats panic there: the
+/// `--once` serve path dispatches its single connection inline on the
+/// accept loop's runtime worker, and the workload status and launcher
+/// dispatch read this registry on that path. Every critical section is a
+/// sub-microsecond map operation and no guard is held across an await, so
+/// the spin is short.
+fn lock_registry<T>(mutex: &Mutex<T>) -> tokio::sync::MutexGuard<'_, T> {
+    if let Ok(guard) = mutex.try_lock() {
+        return guard;
+    }
+    if tokio::runtime::Handle::try_current().is_err() {
+        return mutex.blocking_lock();
+    }
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return guard,
+            Err(_) => std::hint::spin_loop(),
+        }
+    }
+}
+
 struct PendingRequest {
     operation_id: String,
     sender: mpsc::SyncSender<Result<HelperReply, HelperRegistryError>>,
@@ -147,7 +174,7 @@ impl HelperConnection {
             return;
         }
         let _ = self.socket.shutdown(std::net::Shutdown::Both);
-        let pending = std::mem::take(&mut *self.pending.lock());
+        let pending = std::mem::take(&mut *lock_registry(&self.pending));
         for (_, request) in pending {
             let _ = request.sender.try_send(Err(reason));
         }
@@ -165,14 +192,14 @@ impl HelperConnection {
     }
 
     fn abandon_pending(&self, request_id: u64, operation_id: &str) {
-        let Some(pending) = self.pending.lock().remove(&request_id) else {
+        let Some(pending) = lock_registry(&self.pending).remove(&request_id) else {
             return;
         };
         if pending.operation_id != operation_id {
             return;
         }
         let now = Instant::now();
-        let mut abandoned = self.abandoned.lock();
+        let mut abandoned = lock_registry(&self.abandoned);
         abandoned.retain(|_, request| request.expires_at > now);
         if abandoned.len() >= MAX_HELPER_QUEUE_DEPTH
             && let Some(oldest) = abandoned
@@ -193,8 +220,7 @@ impl HelperConnection {
 
     fn reap_abandoned(&self) {
         let now = Instant::now();
-        self.abandoned
-            .lock()
+        lock_registry(&self.abandoned)
             .retain(|_, request| request.expires_at > now);
     }
 }
@@ -210,6 +236,13 @@ struct RegistryState {
 ///
 /// Tracks per-UID helper generations, snapshots, and operation
 /// completions; all peer contact flows through [`Self::accept_loop`].
+///
+/// The mutexes are `tokio::sync` primitives (async purity, plan U17)
+/// reached through the `lock_registry` helper: the accept loop, its
+/// per-connection handler threads, and the daemon's `d2b-conn` dispatch
+/// thread park on the blocking seat, while a runtime worker (the `--once`
+/// serve path dispatches its connection inline) takes the bounded try-lock
+/// spin there, because the blocking seats panic inside a runtime.
 pub struct HelperRegistry {
     daemon_uid: u32,
     allowed_uids: HashSet<u32>,
@@ -219,7 +252,7 @@ pub struct HelperRegistry {
 
 impl fmt::Debug for HelperRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = self.state.lock();
+        let state = lock_registry(&self.state);
         f.debug_struct("HelperRegistry")
             .field("allowed_uid_count", &self.allowed_uids.len())
             .field("active_helper_count", &state.connections.len())
@@ -277,8 +310,7 @@ impl HelperRegistry {
 
     /// The generation of the live helper connection for `uid`, or `None`.
     pub fn active_generation(&self, uid: u32) -> Option<u64> {
-        self.state
-            .lock()
+        lock_registry(&self.state)
             .connections
             .get(&uid)
             .filter(|connection| !connection.closed.load(Ordering::Acquire))
@@ -287,12 +319,12 @@ impl HelperRegistry {
 
     /// The last helper snapshot the daemon saw for `uid`, if any.
     pub fn snapshot(&self, uid: u32) -> Option<HelperSnapshot> {
-        self.state.lock().snapshots.get(&uid).cloned()
+        lock_registry(&self.state).snapshots.get(&uid).cloned()
     }
 
     /// Whether `uid` has a ready, unavailable, or stale helper connection.
     pub fn availability(&self, uid: u32) -> HelperAvailability {
-        let state = self.state.lock();
+        let state = lock_registry(&self.state);
         let Some(connection) = state.connections.get(&uid) else {
             return HelperAvailability::Unavailable;
         };
@@ -312,8 +344,7 @@ impl HelperRegistry {
         uid: u32,
         target: &d2b_contracts::workload_identity::WorkloadTarget,
     ) -> Option<HelperFailureCode> {
-        self.state
-            .lock()
+        lock_registry(&self.state)
             .last_failures
             .get(&(uid, target.to_canonical()))
             .copied()
@@ -339,7 +370,7 @@ impl HelperRegistry {
         let operation_key = request.operation_id.to_string();
         let workload_target = request.target.to_canonical();
         let request_id = request.request_id;
-        match self.operations.lock().begin(
+        match lock_registry(&self.operations).begin(
             requester_uid,
             operation_key.clone(),
             fingerprint,
@@ -356,33 +387,29 @@ impl HelperRegistry {
             LedgerBegin::Started => {}
         }
 
-        let connection = match self.state.lock().connections.get(&requester_uid).cloned() {
+        let connection = match lock_registry(&self.state).connections.get(&requester_uid).cloned() {
             Some(connection) => connection,
             None => {
-                self.operations
-                    .lock()
+                lock_registry(&self.operations)
                     .abort_active(requester_uid, &operation_key);
                 return Err(HelperRegistryError::HelperUnavailable);
             }
         };
         if connection.closed.load(Ordering::Acquire) {
-            self.operations
-                .lock()
+            lock_registry(&self.operations)
                 .abort_active(requester_uid, &operation_key);
             return Err(HelperRegistryError::HelperUnavailable);
         }
         if connection.is_stale() {
-            self.operations
-                .lock()
+            lock_registry(&self.operations)
                 .abort_active(requester_uid, &operation_key);
             return Err(HelperRegistryError::HelperStale);
         }
         let (sender, receiver) = mpsc::sync_channel(1);
         {
-            let mut pending = connection.pending.lock();
+            let mut pending = lock_registry(&connection.pending);
             if pending.len() >= MAX_HELPER_QUEUE_DEPTH {
-                self.operations
-                    .lock()
+                lock_registry(&self.operations)
                     .abort_active(requester_uid, &operation_key);
                 return Err(HelperRegistryError::QueueFull);
             }
@@ -396,16 +423,14 @@ impl HelperRegistry {
                 )
                 .is_some()
             {
-                self.operations
-                    .lock()
+                lock_registry(&self.operations)
                     .abort_active(requester_uid, &operation_key);
                 return Err(HelperRegistryError::RequestCorrelationMismatch);
             }
         }
         if let Err(error) = connection.queue_outbound(DaemonToUnsafeLocalHelper::Launch(Box::new(request))) {
-            connection.pending.lock().remove(&request_id);
-            self.operations
-                .lock()
+            lock_registry(&connection.pending).remove(&request_id);
+            lock_registry(&self.operations)
                 .abort_active(requester_uid, &operation_key);
             return Err(error);
         }
@@ -421,35 +446,32 @@ impl HelperRegistry {
         // `dispatch_request_locked` down to this call, to become async first.
         match receiver.recv_timeout(HELPER_OPERATION_TIMEOUT) {
             Ok(Ok(HelperReply::Operation(result))) => {
-                self.operations.lock().complete(
+                lock_registry(&self.operations).complete(
                     requester_uid,
                     &operation_key,
                     result.clone(),
                     now_epoch_seconds(),
                 );
-                self.state
-                    .lock()
+                lock_registry(&self.state)
                     .last_failures
                     .remove(&(requester_uid, workload_target));
                 Ok(result)
             }
             Ok(Ok(HelperReply::Rejected(rejected))) => {
-                self.operations.lock().reject(
+                lock_registry(&self.operations).reject(
                     requester_uid,
                     &operation_key,
                     rejected.code,
                     now_epoch_seconds(),
                 );
-                self.state
-                    .lock()
+                lock_registry(&self.state)
                     .last_failures
                     .insert((requester_uid, workload_target), rejected.code);
                 Err(HelperRegistryError::OperationRejected(rejected.code))
             }
             Ok(Err(error)) => {
-                connection.pending.lock().remove(&request_id);
-                self.operations
-                    .lock()
+                lock_registry(&connection.pending).remove(&request_id);
+                lock_registry(&self.operations)
                     .abort_active(requester_uid, &operation_key);
                 Err(error)
             }
@@ -535,7 +557,7 @@ impl HelperRegistry {
         connection.touch();
 
         let replaced = {
-            let mut state = self.state.lock();
+            let mut state = lock_registry(&self.state);
             state.snapshots.insert(uid, snapshot.clone());
             state.connections.insert(uid, Arc::clone(&connection))
         };
@@ -555,8 +577,7 @@ impl HelperRegistry {
                 "unsafe-local helper registered"
             );
         }
-        self.operations
-            .lock()
+        lock_registry(&self.operations)
             .adopt_snapshot(uid, &snapshot, now_epoch_seconds());
 
         let result = self.connection_loop(
@@ -566,7 +587,7 @@ impl HelperRegistry {
             &outbound_wakeup_read,
             &mut receive_buffer,
         );
-        let mut state = self.state.lock();
+        let mut state = lock_registry(&self.state);
         if state
             .connections
             .get(&uid)
@@ -638,8 +659,7 @@ impl HelperRegistry {
     }
 
     fn is_active_generation(&self, uid: u32, connection: &Arc<HelperConnection>) -> bool {
-        self.state
-            .lock()
+        lock_registry(&self.state)
             .connections
             .get(&uid)
             .is_some_and(|active| Arc::ptr_eq(active, connection))
@@ -670,7 +690,7 @@ let completion = complete_pending(
                 )?;
                 if !completion.delivered {
                     let operation_id = result.operation_id.to_string();
-                    self.operations.lock().complete(
+                    lock_registry(&self.operations).complete(
                         uid,
                         &operation_id,
                         result,
@@ -688,7 +708,7 @@ let completion = complete_pending(
                     HelperReply::Rejected(rejected.clone()),
                 )?;
                 if !completion.delivered {
-                    self.operations.lock().reject(
+                    lock_registry(&self.operations).reject(
                         uid,
                         rejected.operation_id.as_str(),
                         rejected.code,
@@ -716,9 +736,9 @@ fn complete_pending(
     operation_id: &str,
     reply: HelperReply,
 ) -> Result<PendingCompletion, HelperRegistryError> {
-    let pending = connection.pending.lock().remove(&request_id);
+    let pending = lock_registry(&connection.pending).remove(&request_id);
     let Some(pending) = pending else {
-        let abandoned = connection.abandoned.lock().remove(&request_id);
+        let abandoned = lock_registry(&connection.abandoned).remove(&request_id);
         return match abandoned {
             Some(abandoned) if abandoned.operation_id == operation_id => Ok(PendingCompletion {
                 delivered: false,
@@ -1435,9 +1455,7 @@ mod tests {
         let registry = HelperRegistry::new(42, [uid]);
         let request = launch(7, "late-op", "program");
         let fingerprint = launch_fingerprint(&request).unwrap();
-        registry
-            .operations
-            .lock()
+        lock_registry(&registry.operations)
             .begin(uid, "late-op".to_owned(), fingerprint, 1)
             .unwrap();
         let (socket, _peer) = seqpacket_pair();
@@ -1455,7 +1473,7 @@ mod tests {
             closed: AtomicBool::new(false),
         };
         let (sender, receiver) = mpsc::sync_channel(1);
-        connection.pending.lock().insert(
+        lock_registry(&connection.pending).insert(
             request.request_id,
             PendingRequest {
                 operation_id: request.operation_id.to_string(),
@@ -1474,13 +1492,11 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(
-            registry
-                .operations
-                .lock()
+            lock_registry(&registry.operations)
                 .begin(uid, "late-op".to_owned(), fingerprint, 2),
             Ok(LedgerBegin::Completed(_))
         ));
-        assert!(connection.abandoned.lock().is_empty());
+        assert!(lock_registry(&connection.abandoned).is_empty());
     }
 
     #[test]
@@ -1644,7 +1660,7 @@ mod tests {
             connected_at: Instant::now(),
             closed: AtomicBool::new(false),
         });
-        registry.state.lock().connections.insert(uid, connection);
+        lock_registry(&registry.state).connections.insert(uid, connection);
         let request = launch(1, "queue-op", "/bin/true");
         assert_eq!(
             registry.dispatch_launch(uid, request.clone()),
@@ -1684,7 +1700,7 @@ mod tests {
             d2b_contracts::workload_identity::WorkloadTarget::parse("browser.host.d2b").unwrap();
         let editor =
             d2b_contracts::workload_identity::WorkloadTarget::parse("editor.host.d2b").unwrap();
-        registry.state.lock().last_failures.insert(
+        lock_registry(&registry.state).last_failures.insert(
             (1000, browser.to_canonical()),
             HelperFailureCode::ProxyUnavailable,
         );
