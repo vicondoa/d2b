@@ -2173,12 +2173,27 @@ pub struct StatusResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PublicReadModelMetadata {
     pub schema_version: u32,
-    pub kind: String,
+    pub kind: PublicReadModelKind,
     pub generation: u64,
     pub source_fingerprint: String,
     pub updated_at_unix_ms: u128,
     pub freshness: String,
     pub deep_refresh: String,
+}
+
+/// Which public response frame the daemon's cached read model describes.
+///
+/// `kind` used to be a free-form `String`; the daemon publishes exactly two
+/// frames, the unfiltered `list` and `status` responses, so both the wire
+/// protocol and the generated CLI schema carry enum constraints rather than a
+/// free-form string. Serde names match the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum PublicReadModelKind {
+    /// The unfiltered public `list` frame.
+    List,
+    /// The unfiltered public `status` frame.
+    Status,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2668,8 +2683,21 @@ pub struct RuntimeSummary {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 /// Whether a VM is set to autostart, with the reason.
 pub struct VmAutostartPosture {
-    pub mode: String,
+    pub mode: VmAutostartMode,
     pub reason: String,
+}
+
+/// How the daemon's autostart pass treats a VM that carries an autostart row.
+///
+/// `mode` used to be a free-form `String`. The daemon emits a row only for
+/// VMs the pass refuses to start on its own, so the vocabulary has a single
+/// member today; a future posture is an additive variant here rather than a
+/// new string. Serde names match the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum VmAutostartMode {
+    /// Autostart skips this VM; the operator starts it explicitly.
+    ManualOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2689,7 +2717,23 @@ pub struct QemuMediaRunnerStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qmp_readiness: Option<String>,
     pub role: String,
-    pub state: String,
+    pub state: QemuMediaRunnerState,
+}
+
+/// Liveness of the qemu-media runner process the daemon projects.
+///
+/// `state` used to be a free-form `String`; the daemon derives it from the
+/// pidfd table, which reports a role as running while its recorded process is
+/// alive at the same start time and stopped otherwise, so the wire protocol
+/// and the generated CLI schema carry enum constraints rather than a free-form
+/// string. Serde names match the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum QemuMediaRunnerState {
+    /// The registered runner process is alive.
+    Running,
+    /// No live runner process is registered for the VM.
+    Stopped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2706,20 +2750,29 @@ pub struct QemuMediaSourceStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-/// The media registry's convergence state for one source.
 pub struct QemuMediaRegistryStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remediation: Option<String>,
-    pub state: String,
+    pub state: QemuMediaRegistryState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AuditEntry {
-    pub action: String,
-    pub result: String,
-    pub scope: String,
-    pub timestamp: String,
+/// The media probe registry's convergence state for one attached source.
+///
+/// `state` used to be a free-form `String`; the daemon classifies every source
+/// into exactly these four states, so both the wire protocol and the generated
+/// CLI schema carry enum constraints rather than a free-form string. Serde
+/// names match the canonical wire strings exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum QemuMediaRegistryState {
+    /// The source is declared as `direct-config` and needs no probe record.
+    DirectConfig,
+    /// A probe record matches the current declaration.
+    Present,
+    /// A probe record exists but does not match the declaration.
+    Stale,
+    /// No probe record exists for the declared source.
+    Missing,
 }
 
 #[cfg(test)]
@@ -2742,6 +2795,46 @@ mod tests {
     fn vm_lifecycle_keeps_booted_variant() {
         let encoded = serde_json::to_string(&VmLifecycleState::Booted).expect("serializes");
         assert_eq!(encoded, "\"Booted\"");
+    }
+
+    #[test]
+    fn status_dto_state_vocabularies_keep_their_wire_spellings() {
+        use super::{
+            PublicReadModelKind, QemuMediaRegistryState, QemuMediaRunnerState, VmAutostartMode,
+        };
+        use crate::cli_output::{RealmGatewayState, RealmMode};
+
+        fn assert_wire<T>(value: T, wire: &str)
+        where
+            T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + core::fmt::Debug,
+        {
+            let encoded = serde_json::to_value(&value).expect("vocabulary value serializes");
+            assert_eq!(encoded, serde_json::json!(wire));
+            let decoded: T = serde_json::from_value(encoded).expect("vocabulary value decodes");
+            assert_eq!(decoded, value);
+        }
+
+        assert_wire(PublicReadModelKind::List, "list");
+        assert_wire(PublicReadModelKind::Status, "status");
+        assert_wire(VmAutostartMode::ManualOnly, "manual-only");
+        assert_wire(QemuMediaRunnerState::Running, "running");
+        assert_wire(QemuMediaRunnerState::Stopped, "stopped");
+        assert_wire(QemuMediaRegistryState::DirectConfig, "direct-config");
+        assert_wire(QemuMediaRegistryState::Present, "present");
+        assert_wire(QemuMediaRegistryState::Stale, "stale");
+        assert_wire(QemuMediaRegistryState::Missing, "missing");
+        assert_wire(RealmMode::HostResident, "host-resident");
+        assert_wire(RealmMode::GatewayBacked, "gateway-backed");
+        assert_wire(RealmGatewayState::LocalOnly, "local-only");
+        assert_wire(RealmGatewayState::Stopped, "stopped");
+        assert_wire(RealmGatewayState::Starting, "starting");
+        assert_wire(RealmGatewayState::Booted, "booted");
+        assert_wire(RealmGatewayState::Running, "running");
+        assert_wire(RealmGatewayState::Stopping, "stopping");
+        assert_wire(RealmGatewayState::Restarting, "restarting");
+        assert_wire(RealmGatewayState::Failed, "failed");
+        assert_wire(RealmGatewayState::Unknown, "unknown");
+        assert_wire(RealmGatewayState::NotReported, "not reported by d2bd");
     }
 
     #[test]

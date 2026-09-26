@@ -124,6 +124,25 @@
       },
       "additionalProperties": false
     },
+    "PublicReadModelKind": {
+      "description": "Which public response frame the daemon's cached read model describes.\n\n`kind` used to be a free-form `String`; the daemon publishes exactly two frames, the unfiltered `list` and `status` responses, so both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string. Serde names match the canonical wire strings exactly.",
+      "oneOf": [
+        {
+          "description": "The unfiltered public `list` frame.",
+          "type": "string",
+          "enum": [
+            "list"
+          ]
+        },
+        {
+          "description": "The unfiltered public `status` frame.",
+          "type": "string",
+          "enum": [
+            "status"
+          ]
+        }
+      ]
+    },
     "PublicReadModelMetadata": {
       "type": "object",
       "required": [
@@ -148,7 +167,7 @@
           "minimum": 0.0
         },
         "kind": {
-          "type": "string"
+          "$ref": "#/definitions/PublicReadModelKind"
         },
         "schemaVersion": {
           "type": "integer",
@@ -166,8 +185,40 @@
       },
       "additionalProperties": false
     },
+    "QemuMediaRegistryState": {
+      "description": "The media probe registry's convergence state for one attached source.\n\n`state` used to be a free-form `String`; the daemon classifies every source into exactly these four states, so both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string. Serde names match the canonical wire strings exactly.",
+      "oneOf": [
+        {
+          "description": "The source is declared as `direct-config` and needs no probe record.",
+          "type": "string",
+          "enum": [
+            "direct-config"
+          ]
+        },
+        {
+          "description": "A probe record matches the current declaration.",
+          "type": "string",
+          "enum": [
+            "present"
+          ]
+        },
+        {
+          "description": "A probe record exists but does not match the declaration.",
+          "type": "string",
+          "enum": [
+            "stale"
+          ]
+        },
+        {
+          "description": "No probe record exists for the declared source.",
+          "type": "string",
+          "enum": [
+            "missing"
+          ]
+        }
+      ]
+    },
     "QemuMediaRegistryStatus": {
-      "description": "The media registry's convergence state for one source.",
       "type": "object",
       "required": [
         "state"
@@ -180,10 +231,29 @@
           ]
         },
         "state": {
-          "type": "string"
+          "$ref": "#/definitions/QemuMediaRegistryState"
         }
       },
       "additionalProperties": false
+    },
+    "QemuMediaRunnerState": {
+      "description": "Liveness of the qemu-media runner process the daemon projects.\n\n`state` used to be a free-form `String`; the daemon derives it from the pidfd table, which reports a role as running while its recorded process is alive at the same start time and stopped otherwise, so the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string. Serde names match the canonical wire strings exactly.",
+      "oneOf": [
+        {
+          "description": "The registered runner process is alive.",
+          "type": "string",
+          "enum": [
+            "running"
+          ]
+        },
+        {
+          "description": "No live runner process is registered for the VM.",
+          "type": "string",
+          "enum": [
+            "stopped"
+          ]
+        }
+      ]
     },
     "QemuMediaRunnerStatus": {
       "description": "Runner-side QMP media state for one VM.",
@@ -207,7 +277,7 @@
           "type": "string"
         },
         "state": {
-          "type": "string"
+          "$ref": "#/definitions/QemuMediaRunnerState"
         }
       },
       "additionalProperties": false
@@ -910,6 +980,18 @@
       },
       "additionalProperties": false
     },
+    "VmAutostartMode": {
+      "description": "How the daemon's autostart pass treats a VM that carries an autostart row.\n\n`mode` used to be a free-form `String`. The daemon emits a row only for VMs the pass refuses to start on its own, so the vocabulary has a single member today; a future posture is an additive variant here rather than a new string. Serde names match the canonical wire strings exactly.",
+      "oneOf": [
+        {
+          "description": "Autostart skips this VM; the operator starts it explicitly.",
+          "type": "string",
+          "enum": [
+            "manual-only"
+          ]
+        }
+      ]
+    },
     "VmAutostartPosture": {
       "description": "Whether a VM is set to autostart, with the reason.",
       "type": "object",
@@ -919,7 +1001,7 @@
       ],
       "properties": {
         "mode": {
-          "type": "string"
+          "$ref": "#/definitions/VmAutostartMode"
         },
         "reason": {
           "type": "string"

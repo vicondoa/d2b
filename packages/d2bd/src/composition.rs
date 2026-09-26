@@ -48,7 +48,8 @@ use d2b_contracts_broker::kernel_client::{
 };
 use d2b_resource_types::{KernelCaller, RunnerLookup};
 use d2b_contracts_control::public_wire::{
-    self, AuthRole, AuthStatusResponse, DeniedCommandHint, SocketReachability,
+    self, AuthRole, AuthStatusResponse, DeniedCommandHint, PublicReadModelKind,
+    QemuMediaRegistryState, QemuMediaRunnerState, SocketReachability,
 };
 use d2b_contracts_resource::resource_proto as resource_wire;
 use d2b_contracts_resource::v3::identity::ReconnectGeneration;
@@ -118,8 +119,7 @@ use d2bd_runtime::public_projection::{
     qemu_media_unix_socket_listening, resolve_vm_filter_target, serde_kebab_string,
 };
 pub use d2bd_runtime::public_read_model::{
-    PublicArtifactFingerprint, PublicReadModelKind, PublicStatusReadModel,
-    request_invalidates_public_status_model,
+    PublicArtifactFingerprint, PublicStatusReadModel, request_invalidates_public_status_model,
 };
 #[cfg(test)]
 pub(crate) use d2bd_runtime::readiness::wait_for_readiness;
@@ -20939,7 +20939,6 @@ fn dispatch_list(
             PublicReadModelKind::List,
             before,
             frame,
-            "list",
         ));
     }
     Ok(frame)
@@ -21029,7 +21028,6 @@ fn build_public_list(
                             runtime_kind.as_deref(),
                             host,
                             process_vm,
-                            &services,
                         ),
                         "services": services,
                     });
@@ -21074,7 +21072,6 @@ fn dispatch_status_as(
             PublicReadModelKind::Status,
             before,
             frame,
-            "status",
         ));
     }
     Ok(frame)
@@ -21085,14 +21082,12 @@ fn publish_public_frame_if_stable(
     kind: PublicReadModelKind,
     before: Option<PublicArtifactFingerprint>,
     frame: Value,
-    kind_name: &'static str,
 ) -> Value {
     state.public_status_read_model.publish_if_unchanged(
         kind,
         before,
         public_artifact_fingerprint(state).ok(),
         frame,
-        kind_name,
     )
 }
 
@@ -21159,7 +21154,6 @@ fn build_public_status(
                             runtime_kind.as_deref(),
                             host,
                             process_vm,
-                            &services,
                         ),
                         "usb": usb_resolver
                             .and_then(|resolver| {
@@ -21348,7 +21342,6 @@ fn public_qemu_media_status(
     runtime_kind: Option<&str>,
     host: Option<&HostJson>,
     process_vm: Option<&d2b_core::processes::VmProcessDag>,
-    services: &Value,
 ) -> Option<Value> {
     if runtime_kind != Some("qemu-media") {
         return None;
@@ -21360,17 +21353,10 @@ fn public_qemu_media_status(
             .find(|node| node.role == ProcessRole::QemuMediaRunner)
     });
     let qmp_socket = runner.and_then(qemu_media_qmp_socket);
-    let state_text = services
-        .get("qemuMedia")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            d2bd_runtime::public_projection::public_pidfd_role_state(
-                &state.pidfd_table,
-                vm,
-                RunnerRole::QemuMedia.as_str(),
-            )
-        });
+    let runner_state = d2bd_runtime::public_projection::public_qemu_media_runner_state(
+        &state.pidfd_table,
+        vm,
+    );
     let qemu_media_host = host.and_then(|host| host.qemu_media.as_ref());
     let media = qemu_media_host
         .map(|contract| {
@@ -21385,21 +21371,21 @@ fn public_qemu_media_status(
     let qmp_readiness = qmp_socket.as_deref().map(|path| {
         if qemu_media_unix_socket_listening(path) {
             "ready".to_owned()
-        } else if state_text == "running" {
+        } else if runner_state == QemuMediaRunnerState::Running {
             "pending".to_owned()
         } else {
             "not-started".to_owned()
         }
     });
     let pre_cont_progress = match qmp_readiness.as_deref() {
-        Some("ready") if state_text == "running" => "paused-before-cont",
-        Some("pending") if state_text == "running" => "waiting-for-qmp",
+        Some("ready") if runner_state == QemuMediaRunnerState::Running => "paused-before-cont",
+        Some("pending") if runner_state == QemuMediaRunnerState::Running => "waiting-for-qmp",
         _ => "not-started",
     };
     Some(json!({
         "firmwareMode": "none",
         "runner": {
-            "state": state_text,
+            "state": runner_state,
             "role": RunnerRole::QemuMedia.as_str(),
             "preContProgress": pre_cont_progress,
             "qmpReadiness": qmp_readiness,
@@ -21424,9 +21410,11 @@ fn qemu_media_source_status(source: &QemuMediaSourceIntent) -> Value {
     status
 }
 
-fn qemu_media_registry_state(source: &QemuMediaSourceIntent) -> (String, Option<String>) {
+fn qemu_media_registry_state(
+    source: &QemuMediaSourceIntent,
+) -> (QemuMediaRegistryState, Option<String>) {
     if serde_kebab_string(&source.source_kind) != "physical-usb" {
-        return ("direct-config".to_owned(), None);
+        return (QemuMediaRegistryState::DirectConfig, None);
     }
     let records = qemu_media_probe_registry_records();
     let Some(record) = records
@@ -21434,7 +21422,7 @@ fn qemu_media_registry_state(source: &QemuMediaSourceIntent) -> (String, Option<
         .find(|record| record.vm == source.vm && record.media_ref == source.media_ref)
     else {
         return (
-            "missing".to_owned(),
+            QemuMediaRegistryState::Missing,
             Some(format!(
                 "declare the boot-drive physical USB source for vm `{}` in config, then run `d2b usb probe` to verify the runtime selector for `{}` before starting or attaching this media",
                 source.vm, source.media_ref
@@ -21449,10 +21437,10 @@ fn qemu_media_registry_state(source: &QemuMediaSourceIntent) -> (String, Option<
         && record.format == expected_format
         && record.read_only == source.read_only
     {
-        ("present".to_owned(), None)
+        (QemuMediaRegistryState::Present, None)
     } else {
         (
-            "stale".to_owned(),
+            QemuMediaRegistryState::Stale,
             Some(
                 "registry entry does not match the current declaration; update qemu-media config if needed, then run `d2b usb probe`"
                     .to_owned(),
@@ -22125,11 +22113,23 @@ mod public_status_tests {
             Some(&dag),
         );
         let runtime = public_runtime_summary(&lifecycle, &manifest_entry);
+        let qemu = public_qemu_media_status(
+            &state,
+            "installer",
+            Some("qemu-media"),
+            None,
+            Some(&dag),
+        )
+        .expect("qemu media status");
 
         assert_eq!(lifecycle_state(&lifecycle), "Running");
         assert_eq!(
             runtime.get("kind").and_then(Value::as_str),
             Some("qemu-media")
+        );
+        assert_eq!(
+            qemu.pointer("/runner/state").and_then(Value::as_str),
+            Some("running")
         );
         assert_eq!(
             services.get("microvm").and_then(Value::as_str),
@@ -22179,21 +22179,13 @@ mod public_status_tests {
     #[test]
     fn qemu_media_status_reports_manual_runtime_and_missing_registry() {
         let (state, _dir) = test_state();
-        let manifest_entry = qemu_media_manifest_entry();
         let dag = qemu_media_process_dag();
-        let services = d2bd_runtime::public_projection::public_service_states(
-            &state.pidfd_table,
-            "installer",
-            &manifest_entry,
-            Some(&dag),
-        );
         let qemu = public_qemu_media_status(
             &state,
             "installer",
             Some("qemu-media"),
             None,
             Some(&dag),
-            &services,
         )
         .expect("qemu media status");
 
@@ -22204,6 +22196,10 @@ mod public_status_tests {
         assert_eq!(
             qemu.pointer("/runner/role").and_then(Value::as_str),
             Some("qemu-media")
+        );
+        assert_eq!(
+            qemu.pointer("/runner/state").and_then(Value::as_str),
+            Some("stopped")
         );
         assert_eq!(
             qemu.pointer("/runner/qmpSocket").and_then(Value::as_str),
@@ -22548,7 +22544,6 @@ mod public_status_tests {
             PublicReadModelKind::Status,
             Some(before),
             stale_frame.clone(),
-            "status",
         );
 
         assert_eq!(returned, stale_frame);
