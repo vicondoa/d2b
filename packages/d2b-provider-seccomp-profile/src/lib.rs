@@ -20,6 +20,7 @@ mod seccomp_profile;
 
 pub use driver::seccomp_profile_descriptor;
 pub use seccomp_profile::{
-    DeviceBind, DeviceNodeKind, DeviceNodePath, SECCOMP_PROFILE_RESOURCE_TYPE,
-    SeccompCgroups, SeccompDeviceAccess, SeccompNamespaces, SeccompProfileSpec,
+    DeviceBind, DeviceNodeKind, DeviceNodePath, MAX_DEVICE_NODE_PATH_BYTES,
+    MAX_SECCOMP_DEVICE_BINDS, MAX_SECCOMP_SYSCALLS, SECCOMP_PROFILE_RESOURCE_TYPE, SeccompCgroups,
+    SeccompDeviceAccess, SeccompNamespaces, SeccompProfileContractError, SeccompProfileSpec,
 };

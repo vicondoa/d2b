@@ -856,7 +856,7 @@ The current `d2b.realms.<r>.workloads.<w>.kind = "unsafe-local"` workload
 `IsolationPosture::UnsafeLocal`, current files:
 `nixos-modules/unsafe-local-workloads-json.nix`,
 `nixos-modules/unsafe-local-helper.nix`,
-`packages/d2b-core/src/unsafe_local_workloads.rs`) maps to a user-only `Host`
+`packages/d2b-contracts/src/unsafe_local_workloads.rs`) maps to a user-only `Host`
 resource in v3. It is never a `Guest` and is not a v3 Provider.
 
 The target shape is a `Host` resource reconciled by `Provider/system-core` with
@@ -2491,7 +2491,7 @@ marked compile-only.
 | `WorkloadId` | `d2b-realm-core/src/ids.rs` | Live | `ResourceName` + `ResourceRef` for `Guest/<name>` or `Process/<name>` | ADR046-identities-001 |
 | `NodeId`, `NodeSummary`, `NodeKind` | `d2b-realm-core/src/node.rs` | Live in metadata | `Host` / `Guest` ResourceType (see NodeKind table) | ADR046-identities-001 |
 | `ProviderId` | `d2b-realm-core/src/ids.rs` | Live | `ResourceName` for `Provider/<name>` | ADR046-identities-001 |
-| `RealmTarget` / `WorkloadTarget` (`<wid>.<realm>.d2b`) | `d2b-realm-core/src/target.rs`, `d2b-core/src/workload_identity.rs` | Live in resolver | `Zone/<z>` + `Guest/<name>` ResourceRef | ADR046-identities-001 |
+| `RealmTarget` / `WorkloadTarget` (`<wid>.<realm>.d2b`) | `d2b-realm-core/src/target.rs`, `d2b-contracts/src/workload_identity.rs` | Live in resolver | `Zone/<z>` + `Guest/<name>` ResourceRef | ADR046-identities-001 |
 | `RealmControllerPlacement` (`HostLocal`, `GatewayVm`, `CloudFullHost`, `ProviderController`, `ProviderAgent`) | `d2b-realm-core/src/realm.rs` | Metadata only | `Host.providerRef` + `Guest.providerRef` per NodeKind table | ADR046-nix-001 |
 | `EntrypointMode` (`HostResident`, `GatewayBacked`) | `d2b-realm-core/src/realm.rs` | Metadata only | `Host` vs `Guest` ExecutionPolicy distinction | ADR046-nix-001 |
 | `VmProcessDag`, `ProcessNode`, `ProcessRole` | `d2b-core/src/processes.rs` | Live (processes.json consumed by broker) | `Process`/`EphemeralProcess` per disposition table | ADR046-nix-006 |
@@ -2790,7 +2790,7 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Field | Value |
 | --- | --- |
 | Dependency/owner | ADR046-nix-001; unsafe-local migration |
-| Current source | `nixos-modules/unsafe-local-workloads-json.nix` (`WorkloadProviderKind::UnsafeLocal`/`IsolationPosture::UnsafeLocal`; current `unsafe-local-workloads.json` artifact); `nixos-modules/unsafe-local-helper.nix` (user-domain process/helper definitions); `packages/d2b-core/src/unsafe_local_workloads.rs` |
+| Current source | `nixos-modules/unsafe-local-workloads-json.nix` (`WorkloadProviderKind::UnsafeLocal`/`IsolationPosture::UnsafeLocal`; current `unsafe-local-workloads.json` artifact); `nixos-modules/unsafe-local-helper.nix` (user-domain process/helper definitions); `packages/d2b-contracts/src/unsafe_local_workloads.rs` |
 | Reuse action | adapt |
 | Destination | User-only `Host` resource in `zones/<z>/resource-bundle.json` (`spec.isolationPosture: "none"`, `defaultDomain: user`, `allowedDomains: [user]`, `defaultUserRef: User/<name>`); child `Process` resources in `zones/<z>/resource-bundle.json` using normal Process Providers; shell session supervisor -> `Process` under `Provider/shell-terminal`; never a `Guest`; not a v3 Provider |
 | Detailed design | `isolationPosture: "none"` is a promoted Host base field declared at top-level `spec.isolationPosture` in the Host schema; enforced at eval time; user-only Host rejects system-domain Process refs; `NoIsolation` condition in Host status; `status.isolationPosture: none`; every `ProcessEffect` audit event under this Host carries `no_isolation=true`; OTEL telemetry never carries an isolation label; CLI/UI warning non-suppressible |

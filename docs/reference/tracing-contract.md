@@ -148,7 +148,7 @@ for the per-VM key drift event. The `drift_kind` is a typed
    working directory, provider endpoint, provider credential, provider
    resource id, or child output:
    route it through the typed error envelope
-   (`packages/d2b-core/src/error.rs`) and the broker audit log,
+   (`packages/d2b-contracts/src/error.rs`) and the broker audit log,
    not the span.
 3. Run `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` locally before
    pushing a tracing-contract change.

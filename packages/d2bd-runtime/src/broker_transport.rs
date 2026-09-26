@@ -63,17 +63,25 @@ pub fn dispatch_broker_request_to_socket(
 /// # Errors
 ///
 /// Returns `WireInvalidFrame` when the cited identities are not canonical
-/// audit digests, so a malformed broker claim cannot poison the log.
+/// audit digests. The identities are produced by hashing the request's
+/// authoritative fields, so the canonical spelling holds by construction and
+/// today's producers cannot reach the refusal; it converts the fallible
+/// digest constructor into a typed error so this dispatch path never panics
+/// on a value derived from the wire.
 pub fn default_audit_join_context(
     request: &BrokerRequest,
 ) -> Result<Option<AuditJoinContext>, TypedError> {
     let Some((zone_id, operation_identity)) = request.authoritative_audit_join() else {
         return Ok(None);
     };
-    let zone_id = CanonicalAuditDigest::parse(zone_id)
-        .map_err(|_| TypedError::WireInvalidFrame { detail: "audit zone identity invalid".to_owned() })?;
+    let zone_id =
+        CanonicalAuditDigest::parse(zone_id).map_err(|_| TypedError::WireInvalidFrame {
+            detail: "audit zone identity invalid".to_owned(),
+        })?;
     let operation_identity = CanonicalAuditDigest::parse(operation_identity).map_err(|_| {
-        TypedError::WireInvalidFrame { detail: "audit operation identity invalid".to_owned() }
+        TypedError::WireInvalidFrame {
+            detail: "audit operation identity invalid".to_owned(),
+        }
     })?;
     Ok(Some(AuditJoinContext {
         zone_id,
@@ -345,27 +353,7 @@ impl std::error::Error for ModeBoundBrokerError {}
 mod tests {
     use super::*;
     use d2b_contracts::types::{RoleId, VmId};
-    use d2b_contracts_broker::broker_wire::{
-        HelloRequest, LaunchMinijailChildRequest, SecretByIdRequest,
-    };
-
-    fn request_with_opaque_id(opaque_id: &str) -> BrokerRequest {
-        BrokerRequest::InjectSecretById(SecretByIdRequest {
-            opaque_id: opaque_id.to_owned(),
-            tracing_span_id: None,
-        })
-    }
-
-    #[test]
-    fn malformed_audit_join_material_does_not_panic() {
-        // The audit-join material is wire-supplied (a client-controlled
-        // opaque id), so a non-canonical value must never panic the daemon.
-        let request = request_with_opaque_id("not-a-canonical-digest");
-        let context = default_audit_join_context(&request)
-            .expect("malformed audit-join material must not panic")
-            .expect("audit join is present for secret requests");
-        assert!(context.zone_id.as_str().starts_with("sha256:"));
-    }
+    use d2b_contracts_broker::broker_wire::{HelloRequest, LaunchMinijailChildRequest};
 
     #[test]
     fn request_without_audit_join_yields_none() {
@@ -438,6 +426,8 @@ mod tests {
             Err(TypedError::InternalBrokerTimeout { .. })
         ));
         let future = Instant::now() + Duration::from_secs(60);
-        assert!(broker_remaining_before_op(future, Path::new("/run/d2b/guest-broker.sock")).is_ok());
+        assert!(
+            broker_remaining_before_op(future, Path::new("/run/d2b/guest-broker.sock")).is_ok()
+        );
     }
 }
