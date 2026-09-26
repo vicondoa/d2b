@@ -59,7 +59,7 @@ impl DeviceWorkerScope {
     /// The per-Guest runtime socket directory the worker binds its socket in
     /// (`<runtime_root>/vms/<guest>`), validated to stay strictly inside the
     /// broker's own runtime root.
-    pub(crate) fn socket_directory(&self, runtime_root: &Path) -> Result<PathBuf, &'static str> {
+    pub(crate) fn socket_directory(&self, runtime_root: &Path) -> Result<PathBuf, GuestSocketError> {
         guest_socket_directory(runtime_root, &self.guest)
     }
 }
@@ -253,6 +253,30 @@ pub(crate) const fn binds_runtime_socket(role: &ProcessRole) -> bool {
     )
 }
 
+/// Why one Guest's runtime socket directory could not be derived.
+///
+/// The Display of each refusal keeps the stable static-code spelling the
+/// broker's launch-failure envelope surfaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GuestSocketError {
+    /// The runtime root is not an anchored absolute path.
+    RuntimeRootNotAnchored,
+    /// The Guest name is not one plain path component.
+    GuestNotAPlainName,
+    /// The derived directory escapes the runtime root.
+    DirectoryOutsideRuntimeRoot,
+}
+
+impl std::fmt::Display for GuestSocketError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::RuntimeRootNotAnchored => "device-worker-runtime-root-not-anchored",
+            Self::GuestNotAPlainName => "device-worker-guest-not-a-plain-name",
+            Self::DirectoryOutsideRuntimeRoot => "device-worker-socket-dir-outside-runtime-root",
+        })
+    }
+}
+
 /// The per-Guest runtime socket directory of one trusted Guest name.
 ///
 /// The name must be one plain component (never empty, `.`, `..`, or a
@@ -262,9 +286,9 @@ pub(crate) const fn binds_runtime_socket(role: &ProcessRole) -> bool {
 pub(crate) fn guest_socket_directory(
     runtime_root: &Path,
     guest: &str,
-) -> Result<PathBuf, &'static str> {
+) -> Result<PathBuf, GuestSocketError> {
     if !is_anchored_absolute(runtime_root) || runtime_root.parent().is_none() {
-        return Err("device-worker-runtime-root-not-anchored");
+        return Err(GuestSocketError::RuntimeRootNotAnchored);
     }
     let mut components = Path::new(guest).components();
     let plain_name = !guest.is_empty()
@@ -272,11 +296,11 @@ pub(crate) fn guest_socket_directory(
         && matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none();
     if !plain_name {
-        return Err("device-worker-guest-not-a-plain-name");
+        return Err(GuestSocketError::GuestNotAPlainName);
     }
     let directory = runtime_root.join(RUNTIME_VM_DIR).join(guest);
     if directory == runtime_root || !directory.starts_with(runtime_root) {
-        return Err("device-worker-socket-dir-outside-runtime-root");
+        return Err(GuestSocketError::DirectoryOutsideRuntimeRoot);
     }
     Ok(directory)
 }
