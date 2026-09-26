@@ -502,7 +502,29 @@ const REQUEST_READ_DEADLINE: Duration = Duration::from_secs(60);
 mod owner_connection_test_hook {
     use std::sync::{Arc, Mutex, OnceLock};
 
-    pub(crate) type Hook = Arc<dyn Fn() + Send + Sync>;
+    use serde_json::Value;
+
+    /// A test fake for the owner body, called with the connection's request
+    /// frame. Returning `true` claims the connection: the body drops it
+    /// without a reply, standing in for an owner that is still running.
+    /// Returning `false` leaves the connection to the real owner body, so a
+    /// hook installed by one test can never swallow a concurrent test's
+    /// connection.
+    pub(crate) type Hook = Arc<dyn Fn(&Value) -> bool + Send + Sync>;
+
+    /// The request field that claims the hook. Only the test that installed
+    /// the hook sets it, and only on the frames it sends itself.
+    pub(crate) const CLAIM_FIELD: &str = "ownerConnectionHookClaim";
+
+    /// Marks `request` as the installing test's own connection.
+    pub(crate) fn claim(request: &mut Value) {
+        request[CLAIM_FIELD] = Value::Bool(true);
+    }
+
+    /// Whether `request` is the installing test's own connection.
+    pub(crate) fn claims(request: &Value) -> bool {
+        request.get(CLAIM_FIELD) == Some(&Value::Bool(true))
+    }
 
     // Synchronous by construction (the accept-loop hook fires from a
     // dedicated handler thread): the process-global slot stays a
@@ -13140,12 +13162,11 @@ fn run_process_resource_owner(
     _conn_permit: Option<d2bd_runtime::concurrency::ConnPermit>,
 ) {
     #[cfg(test)]
+    if let Some(hook) = owner_connection_test_hook::active()
+        && hook(&request)
     {
-        if let Some(hook) = owner_connection_test_hook::active() {
-            hook();
-            drop(stream);
-            return;
-        }
+        drop(stream);
+        return;
     }
     let (vm, execution_ref) = match if request.get("executionRef").is_some() {
         process_resource_execution_ref(&request)
@@ -13313,12 +13334,11 @@ fn run_typed_shell_owner(
     _conn_permit: Option<d2bd_runtime::concurrency::ConnPermit>,
 ) {
     #[cfg(test)]
+    if let Some(hook) = owner_connection_test_hook::active()
+        && hook(&request)
     {
-        if let Some(hook) = owner_connection_test_hook::active() {
-            hook();
-            drop(stream);
-            return;
-        }
+        drop(stream);
+        return;
     }
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -23594,8 +23614,11 @@ mod accept_loop_concurrency_tests {
         .expect("encode workload list frame")
     }
 
+    /// The Process create frame the owner-hook test sends on the connection it
+    /// owns. It claims the process-global owner hook, so the hook intercepts
+    /// that connection and leaves every other test's connection alone.
     fn process_resource_start_frame(op_id: u64) -> Vec<u8> {
-        serde_json::to_vec(&json!({
+        let mut frame = json!({
             "type": "resourceRequest",
             "method": "Create",
             "service": "d2b.resource.v3",
@@ -23608,8 +23631,9 @@ mod accept_loop_concurrency_tests {
             "detached": false,
             "argv": ["true"],
             "opId": op_id,
-        }))
-        .expect("serialize Process resource frame")
+        });
+        owner_connection_test_hook::claim(&mut frame);
+        serde_json::to_vec(&frame).expect("serialize Process resource frame")
     }
 
     /// Scoped guard for the test SO_PEERCRED override so a panic still clears
@@ -23774,7 +23798,10 @@ mod accept_loop_concurrency_tests {
         let _hook_guard = HookGuard;
 
         let hook_shared = Arc::clone(&shared);
-        let hook: owner_connection_test_hook::Hook = Arc::new(move || {
+        let hook: owner_connection_test_hook::Hook = Arc::new(move |request| {
+            if !owner_connection_test_hook::claims(request) {
+                return false;
+            }
             let (lock, cv) = &*hook_shared;
             {
                 let mut s = lock.lock().expect("hook state lock");
@@ -23788,6 +23815,7 @@ mod accept_loop_concurrency_tests {
             }
             s.running = false;
             cv.notify_all();
+            true
         });
         owner_connection_test_hook::set(hook);
 
@@ -23898,6 +23926,52 @@ mod accept_loop_concurrency_tests {
         drop(client_a);
     }
 
+    /// A hook installed by one test intercepts only the connections that
+    /// test claimed: an unclaimed connection still reaches the real owner
+    /// body and gets its reply instead of being dropped by the hook.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn owner_connection_hook_leaves_unclaimed_connections_to_the_real_owner() {
+        // Serialize the process-global owner hook with the Process owner test.
+        let _env = PeerOverrideEnv::admin();
+        let (state, _state_dir) = admin_exec_state();
+        let (server, client) = seqpacket_pair();
+
+        struct HookGuard;
+        impl Drop for HookGuard {
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            fn drop(&mut self) {
+                owner_connection_test_hook::clear();
+            }
+        }
+        let _hook_guard = HookGuard;
+        // The plain claim check the owner-body hooks install, so this test
+        // exercises exactly the interception rule they rely on.
+        let hook: owner_connection_test_hook::Hook =
+            Arc::new(owner_connection_test_hook::claims);
+        owner_connection_test_hook::set(hook);
+
+        run_process_resource_owner(
+            server,
+            state,
+            admin_peer_identity(),
+            json!({
+                "resourceType": "EphemeralProcess",
+                "resourceRef": "EphemeralProcess/exec-unclaimed",
+                "executionRef": "Guest/work",
+                "tty": false,
+                "detached": false,
+                "argv": ["true"],
+            }),
+            None,
+        );
+
+        let frame = read_frame(&client).expect("client reads the owner reply frame");
+        let reply: serde_json::Value = serde_json::from_slice(&frame).expect("reply frame is JSON");
+        assert_eq!(reply["type"], "error");
+        assert_eq!(reply["error"]["kind"], "runtime-capability-unsupported");
+    }
+
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn typed_shell_owner_keeps_admission_permit_until_owner_exits() {
@@ -23923,7 +23997,10 @@ mod accept_loop_concurrency_tests {
         let _hook_guard = HookGuard;
 
         let hook_release_rx = Arc::clone(&release_rx);
-        let hook: owner_connection_test_hook::Hook = Arc::new(move || {
+        let hook: owner_connection_test_hook::Hook = Arc::new(move |request| {
+            if !owner_connection_test_hook::claims(request) {
+                return false;
+            }
             entered_tx
                 .send(())
                 .expect("typed shell owner entered receiver");
@@ -23932,15 +24009,18 @@ mod accept_loop_concurrency_tests {
                 .expect("typed shell owner release lock")
                 .recv()
                 .expect("typed shell owner release signal");
+            true
         });
         owner_connection_test_hook::set(hook);
 
         let (server, _client) = seqpacket_pair();
+        let mut request = json!({});
+        owner_connection_test_hook::claim(&mut request);
         let owner = spawn_typed_shell_owner(
             server,
             state,
             admin_peer_identity(),
-            json!({}),
+            request,
             Some(permit),
         )
         .expect("spawn typed shell owner");

@@ -719,11 +719,11 @@ impl From<&OperationAuthzRow> for OperationAuthz {
                 .map(|group| (*group).to_owned())
                 .collect(),
             destructive: row.destructive,
-            secret_access: row.secret_access.clone(),
-            broker_required: row.broker_required.clone(),
+            secret_access: row.secret_access,
+            broker_required: row.broker_required,
             audit: AuditPolicy {
                 required: !matches!(row.audit_mode, AuditMode::DenyOnly | AuditMode::Errors),
-                mode: row.audit_mode.clone(),
+                mode: row.audit_mode,
                 retained_fields: vec![
                     "operation".to_owned(),
                     "subject".to_owned(),
