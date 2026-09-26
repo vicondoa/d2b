@@ -25,7 +25,6 @@ use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -230,13 +229,19 @@ impl GatewayCredential {
         self.not_after
     }
 
+    /// Parse the plaintext material shape the enrollment flow admits.
+    ///
+    /// The nested shape is fixed, so it is described by types: the wire
+    /// structs decide presence, string typing, and unknown keys, and the
+    /// validation pass below decides the values.
     fn parse_material_json(raw: &str) -> Result<GatewayCredentialMaterial, CredentialError> {
-        let v: Value = serde_json::from_str(raw).map_err(|_| CredentialError::Malformed)?;
+        let file: CredentialMaterialFile =
+            serde_json::from_str(raw).map_err(|_| CredentialError::Malformed)?;
         let material = GatewayCredentialMaterial {
-            listen_key_name: required_str(&v, &["relayListen", "keyName"])?,
-            listen_key: required_str(&v, &["relayListen", "key"])?,
-            send_key_name: required_str(&v, &["relaySend", "keyName"])?,
-            send_key: required_str(&v, &["relaySend", "key"])?,
+            listen_key_name: file.relay_listen.key_name,
+            listen_key: file.relay_listen.key,
+            send_key_name: file.relay_send.key_name,
+            send_key: file.relay_send.key,
         };
         if [
             &material.listen_key_name,
@@ -495,6 +500,24 @@ impl ScopedCredentialClient for GatewayGuestCredentialPort {
     }
 }
 
+/// Plaintext credential material shape the enrollment flow admits.
+///
+/// `Debug` is deliberately not derived: both branches carry Relay keys.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CredentialMaterialFile {
+    relay_listen: RelayRoleMaterial,
+    relay_send: RelayRoleMaterial,
+}
+
+/// One Relay role's rule name and key, as the envelope names them.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RelayRoleMaterial {
+    key_name: String,
+    key: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SealedCredentialFile {
@@ -636,17 +659,6 @@ fn decode_fixed<const N: usize>(encoded: &str) -> Result<[u8; N], CredentialErro
         .map_err(|_| CredentialError::Malformed)
 }
 
-fn required_str(v: &Value, path: &[&str]) -> Result<String, CredentialError> {
-    let mut cur = v;
-    for key in path {
-        cur = cur.get(*key).ok_or(CredentialError::Malformed)?;
-    }
-    cur.as_str()
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .ok_or(CredentialError::Malformed)
-}
-
 fn system_now_unix_ms() -> Result<u64, RelayCredentialError> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -779,6 +791,76 @@ mod tests {
             send_key_name: "gateway-send".to_owned(),
             send_key: "send-secret".to_owned(),
         }
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn material_file(dir: &Path, contents: &str) -> PathBuf {
+        let path = dir.join("credential.json");
+        fs::write(&path, contents).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        path
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn rejects_malformed_material_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        for (label, contents) in [
+            (
+                "missing listen key",
+                r#"{"relayListen":{"keyName":"gateway-listen"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "missing send branch",
+                r#"{"relayListen":{"keyName":"gateway-listen","key":"listen-secret"}}"#,
+            ),
+            (
+                "wrong key type",
+                r#"{"relayListen":{"keyName":5,"key":"listen-secret"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "non-object listen branch",
+                r#"{"relayListen":"gateway-listen","relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "unknown top-level key",
+                r#"{"relayListen":{"keyName":"gateway-listen","key":"listen-secret"},"relaySend":{"keyName":"gateway-send","key":"send-secret"},"relayOther":{"keyName":"x","key":"y"}}"#,
+            ),
+            (
+                "unknown nested key",
+                r#"{"relayListen":{"keyName":"gateway-listen","key":"listen-secret","audience":"azure-relay-listen"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "empty key name",
+                r#"{"relayListen":{"keyName":"","key":"listen-secret"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "control character in key",
+                r#"{"relayListen":{"keyName":"gateway-listen","key":"listen\u0000secret"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+            (
+                "duplicate role key",
+                r#"{"relayListen":{"keyName":"gateway-listen","key":"listen-secret","key":"listen-secret-two"},"relaySend":{"keyName":"gateway-send","key":"send-secret"}}"#,
+            ),
+        ] {
+            let path = material_file(dir.path(), contents);
+            assert_eq!(
+                GatewayCredential::load(&path, &CredentialFilePolicy::default()).unwrap_err(),
+                CredentialError::Malformed,
+                "{label} must stay refused"
+            );
+        }
+
+        let oversized = format!(
+            r#"{{"relayListen":{{"keyName":"gateway-listen","key":"{}"}},"relaySend":{{"keyName":"gateway-send","key":"send-secret"}}}}"#,
+            "k".repeat(16 * 1024 + 1)
+        );
+        let path = material_file(dir.path(), &oversized);
+        assert_eq!(
+            GatewayCredential::load(&path, &CredentialFilePolicy::default()).unwrap_err(),
+            CredentialError::Malformed,
+            "an over-long key must stay refused"
+        );
     }
 
     #[test]

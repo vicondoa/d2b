@@ -5,13 +5,36 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 /// Bounded non-secret Relay settings.
+///
+/// Deserialization runs the same validation as [`RelayTransportSettings::new`]
+/// through [`RelayTransportSettingsWire`], so a value that arrives over the
+/// wire cannot be admitted when the constructor would refuse it.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "RelayTransportSettingsWire")]
 pub struct RelayTransportSettings {
     /// Bare namespace identifier, without scheme or DNS suffix.
     pub relay_namespace_id: String,
     /// Hybrid Connection entity identifier.
     pub relay_entity_id: String,
+}
+
+/// Unvalidated wire form of [`RelayTransportSettings`].
+///
+/// The shape is the only thing this type decides; every admitted value is
+/// handed to [`RelayTransportSettings::new`] before it becomes settings.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RelayTransportSettingsWire {
+    relay_namespace_id: String,
+    relay_entity_id: String,
+}
+
+impl TryFrom<RelayTransportSettingsWire> for RelayTransportSettings {
+    type Error = RelayTransportSettingsError;
+
+    fn try_from(wire: RelayTransportSettingsWire) -> Result<Self, Self::Error> {
+        Self::new(wire.relay_namespace_id, wire.relay_entity_id)
+    }
 }
 
 impl RelayTransportSettings {
@@ -70,6 +93,18 @@ pub enum RelayTransportSettingsError {
     /// Identifier grammar, bound, or secret-shape check failed.
     InvalidIdentifier,
 }
+
+impl fmt::Display for RelayTransportSettingsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidIdentifier => formatter.write_str(
+                "relay transport settings must carry a bounded non-secret namespace and entity",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RelayTransportSettingsError {}
 
 fn valid_namespace(value: &str) -> bool {
     (3..=50).contains(&value.len())
