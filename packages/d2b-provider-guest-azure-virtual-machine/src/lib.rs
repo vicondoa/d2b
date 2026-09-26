@@ -17,8 +17,8 @@ pub use config::{
     AzureVmConfig, AzureVmGuestSettings, BootstrapPskDelivery, DataDiskSpec, DiskSku,
 };
 pub use controller::{
-    AzureVmController, AzureVmPhase, AzureVmReconcileOutcome, AzureVmRecoveryState, AzureVmStatus,
-    AzureVmUpdate, AZURE_VM_GUEST_FINALIZER, AZURE_VM_REPAIR_INTERVAL_SECS,
+    AzureVmController, AzureVmPhase, AzureVmReconcileOutcome, AzureVmRecoveryState,
+    AZURE_VM_GUEST_FINALIZER, AZURE_VM_REPAIR_INTERVAL_SECS,
 };
 pub use effect::{
     AzureAccessToken, AzureCredentialPort, AzureEffectPort, AzureOperationHandle, AzureVmHandle,

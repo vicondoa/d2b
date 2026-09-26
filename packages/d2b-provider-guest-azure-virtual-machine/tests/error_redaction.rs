@@ -1,11 +1,13 @@
 use d2b_provider_guest_azure_virtual_machine::{
-    AzureOperationHandle, AzureVmError, BootstrapPsk,
+    AzureOperationHandle, AzureVmError, AzureVmHandle, BootstrapPsk,
 };
 
 #[test]
 fn errors_and_handles_do_not_render_remote_values() {
     let handle = AzureOperationHandle::from_core(b"opaque-operation").unwrap();
     assert!(!format!("{:?}", handle).contains("opaque-operation"));
+    let vm = AzureVmHandle::from_core("opaque-vm").unwrap();
+    assert!(!format!("{:?}", vm).contains("opaque-vm"));
     assert!(!format!("{:?}", BootstrapPsk::from_bytes(b"secret").unwrap()).contains("secret"));
     assert_eq!(
         AzureVmError::ArmCredentialDenied.code(),
