@@ -2302,6 +2302,61 @@ fn authority_proof(value: &str, generation: u64) -> AuthorityOwnerProof {
         index.admit_authority(other_zone).unwrap();
     }
 
+    /// The index refuses an admission before any effect runs until the
+    /// startup barrier completes. This is the index's own guard, distinct
+    /// from the process-level stage barrier in `main`: the index is shared
+    /// into the controller admission surface, so a caller outside the
+    /// startup path reaches this refusal too, and a claim on a host
+    /// resource whose pre-restart owner set was never loaded must not
+    /// succeed.
+    #[test]
+    fn admission_waits_for_the_same_startup_barrier_before_any_effect() {
+        let host = uid("623e4567-e89b-42d3-a456-426614174005");
+        let claim = || {
+            AuthorityRequest::gpu_full_device(
+                host.clone(),
+                digest(1),
+                authority_proof("723e4567-e89b-42d3-a456-426614174006", 1),
+            )
+            .unwrap()
+        };
+
+        let mut unrehydrated = HostGlobalAuthorityIndex::new_unrehydrated();
+        assert!(!unrehydrated.is_ready_for_readiness());
+        let mut effects = 0;
+        assert_eq!(
+            unrehydrated
+                .admit_authority_before_effect(claim(), |_| {
+                    effects += 1;
+                    AuthorityEffectOutcome::Confirmed
+                })
+                .unwrap_err(),
+            AuthorityError::StartupRehydrationRequired
+        );
+        assert_eq!(effects, 0);
+        assert_eq!(
+            AuthorityError::StartupRehydrationRequired.code(),
+            "authority-startup-rehydration-required"
+        );
+
+        // A restart relist invalidates an index that has already
+        // admitted claims, and the same barrier refuses again until
+        // rehydration loads the durable owner proofs.
+        let mut live = HostGlobalAuthorityIndex::new_for_tests_ready();
+        live.admit_authority(claim()).unwrap();
+        live.invalidate_for_restart();
+        let mut effects = 0;
+        assert_eq!(
+            live.admit_authority_before_effect(claim(), |_| {
+                effects += 1;
+                AuthorityEffectOutcome::Confirmed
+            })
+            .unwrap_err(),
+            AuthorityError::StartupRehydrationRequired
+        );
+        assert_eq!(effects, 0);
+    }
+
     #[test]
     fn host_global_hardware_matrix_cannot_be_bypassed_by_zone_or_private_class() {
         let host = uid("623e4567-e89b-42d3-a456-426614174005");
