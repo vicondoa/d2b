@@ -5,7 +5,6 @@ execution: code
 title: Rust skills audit remediation - Plan
 type: refactor
 date: 2026-09-24
-origin: docs/audits/2026-09-24-rust-skills-audit/README.md
 ---
 
 # Rust skills audit remediation - Plan
@@ -149,7 +148,7 @@ Each gate is the KTD3 set. Ratchet reconciliation (KTD6) and ledger rows (R8) ha
 - **Goal:** the unit of record is tracked, the gate baseline is recorded, and the correctness-first rows are fixed (or, for the one policy-confirmed row, recorded) so the first wave gate reads as evidence.
 - **Requirements:** R2, R3, R5, R10; KTD4.
 - **Dependencies:** none.
-- **Files:** `docs/audits/2026-09-24-rust-skills-audit/` (report, `U1-constraints.md`, `lane/`, `VERIFICATION.md`, plus the new ledger), `changelog.d/`, and the finding sites - `packages/d2b-resource-runtime/src/revision.rs`, `packages/d2bd-runtime/src/runtime_process.rs`, `packages/d2b-broker/src/runtime.rs`, `packages/d2b-broker/src/ops/kernel_ops.rs`, `packages/d2b-broker/src/ops/sys.rs`, `packages/d2b-bus/src/` (telemetry test), `packages/d2b-provider-display-wayland/src/filter.rs`, `packages/d2b-provider-wayland-policy/src/` (applied), `packages/d2b-provider-user/src/` (record-only, no code change).
+- **Files:** `changelog.d/`, and the finding sites - `packages/d2b-resource-runtime/src/revision.rs`, `packages/d2bd-runtime/src/runtime_process.rs`, `packages/d2b-broker/src/runtime.rs`, `packages/d2b-broker/src/ops/kernel_ops.rs`, `packages/d2b-broker/src/ops/sys.rs`, `packages/d2b-bus/src/` (telemetry test), `packages/d2b-provider-display-wayland/src/filter.rs`, `packages/d2b-provider-wayland-policy/src/` (applied), `packages/d2b-provider-user/src/` (record-only, no code change).
 - **Approach:**
   1. Commit the audit corpus and create the ledger with this row schema: finding id, lens, cluster, audit verdict, outcome, apply-time anchor, wave, commit, reason or policy citation, escalation history, and - for an escalated row - the final outcome recorded when the owning wave applies it (KTD1, R8).
   2. Record the baseline: run the KTD3 gate set at the untouched head and write the result - pass or fail per gate, with every pre-existing failure attributed. Any additional pre-existing failure inside the audit's crates is fixed here when it blocks the gate and otherwise recorded as baseline-attributed and deferred.
@@ -346,7 +345,6 @@ Counts are the audit's own cluster membership (`README.md` section 6); each wave
 
 ### Sources
 
-- Audit report, lane files, lane contract, and independent verification: `docs/audits/2026-09-24-rust-skills-audit/` (report sections 2, 6, 7 are the finding corpus, the cluster map, and the verification record).
 - Gate authority: `Makefile`, `docs/contributing/gates-and-lints.md`, `tests/AGENTS.md`, `.github/workflows/pr-l1-static-fast.yml`.
 - Policy surfaces that fail closed: `Cargo.toml` (`disallowed_methods` is live `deny`; the `clippy.toml` comment claiming `allow` is stale), `clippy.toml`, `packages/xtask/data/async-gate-inventory.json`, `packages/xtask/data/blocking-census-baseline.json`, `packages/xtask/src/provider_crate_policy.rs`, `docs/explanation/over-engineering-audit-record.md`.
 - Landing lifecycle: `docs/contributing/workflow.md` (worktrees, reviewed-head lifecycle, security scan gate), `docs/contributing/changelog-and-commits.md`, `changelog.d/README.md`.
