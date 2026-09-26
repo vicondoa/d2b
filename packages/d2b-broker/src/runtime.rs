@@ -11353,7 +11353,7 @@ fn profile_capabilities(profile: BrokerProfile) -> Vec<String> {
         BrokerProfile::Guest => profile
             .operations()
             .iter()
-            .map(|item| (*item).to_owned())
+            .map(|item| item.as_str().to_owned())
             .collect(),
     }
 }
@@ -12587,8 +12587,9 @@ mod tests {
                 let Some(_marker) = crate::catalog::stub_target(name) else {
                     continue;
                 };
-                if crate::catalog::BrokerOperationRow::find(name)
-                    .is_some_and(|row| row.disposition == "promoted-live")
+                if crate::catalog::BrokerOperationRow::find(name).is_some_and(|row| {
+                    row.disposition == crate::catalog::Disposition::PromotedLive
+                })
                 {
                     both_stubbed_and_dispatchable.push(name);
                 }

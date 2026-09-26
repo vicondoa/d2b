@@ -18,7 +18,7 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
         "ExportBrokerAudit",
     ] {
         assert!(
-            operations.contains(&operation),
+            operations.iter().any(|item| item.as_str() == operation),
             "host profile lost the existing operation {operation}"
         );
         assert!(
@@ -46,7 +46,7 @@ fn host_profile_keeps_the_complete_closed_operation_catalog() {
         "SeedDnsmasqLease",
     ] {
         assert!(
-            !operations.contains(&operation),
+            !operations.iter().any(|item| item.as_str() == operation),
             "host profile must not re-admit the retired operation {operation}"
         );
     }

@@ -87,6 +87,25 @@
         "deny-and-audit"
       ]
     },
+    "Destructive": {
+      "description": "Destructive class for an authorization row.",
+      "oneOf": [
+        {
+          "description": "No state mutation, teardown, rollback, GC, or live routing change.",
+          "type": "string",
+          "enum": [
+            "no"
+          ]
+        },
+        {
+          "description": "State mutation, teardown, rollback, GC, or live routing changes are possible.",
+          "type": "string",
+          "enum": [
+            "yes"
+          ]
+        }
+      ]
+    },
     "OperationAuthz": {
       "description": "One explicit authorization row; unknown future operations always deny.",
       "type": "object",
@@ -135,7 +154,11 @@
         },
         "destructive": {
           "description": "Whether state mutation, teardown, rollback, GC, or live routing changes are possible.",
-          "type": "boolean"
+          "allOf": [
+            {
+              "$ref": "#/definitions/Destructive"
+            }
+          ]
         },
         "operation": {
           "description": "Stable operation enum or command name.",
