@@ -423,6 +423,45 @@ async fn recovery_state_restores_opaque_lro_without_secret_material() {
     restored.reconcile("zone", "guest", 1).await.unwrap();
 }
 
+#[test]
+fn legacy_operation_pair_recovery_record_still_loads() {
+    // Records written before the in-flight operation was grouped carry the
+    // `operation` + `operationStartedAtUnixMs` pair instead of
+    // `inFlightOperation`; they must still load, folding into the grouped
+    // shape, and re-serialize in the grouped shape.
+    let recovery: AzureVmRecoveryState = serde_json::from_value(serde_json::json!({
+        "phase": "provisioning",
+        "finalizerInstalled": true,
+        "operation": "cHJvdmlzaW9u",
+        "pendingDeleteOperationId": null,
+        "bootstrapStartedAtUnixMs": null,
+        "pskDeliveryAttempts": 0,
+        "operationStartedAtUnixMs": 42,
+        "pendingUpdate": null,
+        "bootstrapServiceState": "Waiting",
+        "bootstrapExtensionPresent": false,
+        "childCleanupComplete": false,
+        "bootstrapDeadlineFailed": false,
+    }))
+    .unwrap();
+    let in_flight = recovery
+        .in_flight_operation
+        .clone()
+        .expect("legacy pair folds into the grouped shape");
+    assert_eq!(
+        in_flight.operation,
+        AzureOperationHandle::from_core(b"provision").unwrap()
+    );
+    assert_eq!(in_flight.started_at, 42);
+    assert_eq!(recovery.phase, AzureVmPhase::Provisioning);
+
+    let encoded = serde_json::to_string(&recovery).unwrap();
+    assert!(encoded.contains("\"inFlightOperation\""));
+    assert!(!encoded.contains("operationStartedAtUnixMs"));
+    let reloaded: AzureVmRecoveryState = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(reloaded, recovery);
+}
+
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn restart_adopts_only_tagged_running_vm() {
@@ -618,11 +657,10 @@ async fn restart_with_pending_delete_never_reprovisions_an_absent_vm() {
         .restore_recovery_state(AzureVmRecoveryState {
             phase: AzureVmPhase::Deleting,
             finalizer_installed: true,
-            operation: None,
+            in_flight_operation: None,
             pending_delete_operation_id: Some("delete-id".to_owned()),
             bootstrap_started_at_unix_ms: None,
             psk_delivery_attempts: 0,
-            operation_started_at_unix_ms: None,
             pending_update: None,
             bootstrap_service_state: BootstrapService::default().state(),
             bootstrap_extension_present: false,
@@ -861,11 +899,10 @@ async fn bootstrap_deadline_retries_failed_extension_cleanup() {
     let recovery = AzureVmRecoveryState {
         phase: AzureVmPhase::Failed,
         finalizer_installed: true,
-        operation: None,
+        in_flight_operation: None,
         pending_delete_operation_id: None,
         bootstrap_started_at_unix_ms: Some(0),
         psk_delivery_attempts: 0,
-        operation_started_at_unix_ms: None,
         pending_update: None,
         bootstrap_service_state: BootstrapService::default().state(),
         bootstrap_extension_present: true,
