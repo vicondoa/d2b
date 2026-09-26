@@ -15,83 +15,101 @@
 //! these modules depend on `d2b-host` and `d2b-contracts`, but
 //! nothing in the runtime depends on them beyond the integrator-managed
 //! dispatch wiring.
+//!
+//! Only three of the arms below are `pub` - `network`, `audit_op`, and
+//! `pidfd` - because the crate's integration tests are separate crates
+//! and address those arms by path (`tests/bridge_lifecycle.rs`,
+//! `tests/persistent_tap_lifecycle.rs`, `tests/security_key_broker.rs`,
+//! `tests/pidfd_handoff_scm_rights.rs`, `tests/pidfd_real_spawner.rs`);
+//! `pub(crate)` would hide them from that oracle. Every other arm is
+//! `pub(crate)`: no crate outside `d2b-broker` imports it, so its items
+//! were reachable published surface for no consumer. Keep the split -
+//! a new handler arm stays `pub(crate)` until something outside this
+//! crate imports it, and the integration tests are the only thing that
+//! reopens an arm.
 
 // Cgroup v2 delegation + pidfd handoff ops.
-pub mod cgroup;
+pub(crate) mod cgroup;
+// Public arm: `tests/pidfd_handoff_scm_rights.rs` and
+// `tests/pidfd_real_spawner.rs` import it from outside the crate.
 pub mod pidfd;
 // Bridge / TAP / NM / IPv6 / IfName / state-dir ops.
-pub mod hosts;
-pub mod nm;
-pub mod route;
-pub mod state_dir;
-pub mod storage_contract;
+pub(crate) mod hosts;
+pub(crate) mod nm;
+pub(crate) mod route;
+pub(crate) mod state_dir;
+pub(crate) mod storage_contract;
 // Per-VM swtpm state-dir first-run hardening (issue #64).
-pub mod swtpm_dir;
-pub mod sysctl;
-pub mod tap;
+pub(crate) mod swtpm_dir;
+pub(crate) mod sysctl;
+pub(crate) mod tap;
 // Nftables + USBIP firewall skeleton ops.
+// Public arm: `tests/bridge_lifecycle.rs` imports it from outside the
+// crate.
 pub mod network;
-pub mod nft;
-pub mod usbip_firewall;
+pub(crate) mod nft;
+pub(crate) mod usbip_firewall;
 // Per-busid USBIP exclusivity lock helper.
-pub mod usbip_lock;
+pub(crate) mod usbip_lock;
 // Broker-side USBIP host inspection and physical-policy enforcement.
-pub mod usbip_host;
+pub(crate) mod usbip_host;
 
 // Kernel-module + device-fd handoff ops.
-pub mod device;
+pub(crate) mod device;
 // Trusted scope of one Device-owned worker launch (row -> Device -> Guest
 // pin, per-Guest socket directory, Device row uid derivation).
-pub mod device_worker;
+pub(crate) mod device_worker;
 // GPU-specific role, allowlist, and restart identity preflight.
-pub mod gpu;
-pub mod modprobe;
+pub(crate) mod gpu;
+pub(crate) mod modprobe;
 // Security-key hidraw open op: resolves stable selector → opens
 // hidraw fd for `d2bd`'s long-lived CTAPHID relay session.
-pub mod security_key;
+pub(crate) mod security_key;
 // Broker SpawnRunner preflight + spawn helper.
-pub mod spawn_runner;
+pub(crate) mod spawn_runner;
 // Broker reconcile executors (nft / sysctl / hosts / ip route) with
 // FakeReconcileExecutor for unit tests + the SystemReconcileExecutor
 // for production shellouts.
-pub mod exec_reconcile;
+pub(crate) mod exec_reconcile;
 
 // Audit-helper introduced by s2; reusable by s1/s3/s4 going forward.
+// Public arm: `tests/persistent_tap_lifecycle.rs` and
+// `tests/security_key_broker.rs` import it from outside the crate.
 pub mod audit_op;
 // Broker-owned source-to-target NixOS generation handoff journal and replay.
-pub mod host_generation_handoff;
+pub(crate) mod host_generation_handoff;
 
 // Typed broker op that hardlink-farms per-VM closures into
 // `/var/lib/d2b/vms/<vm>/store/` and atomically swaps the `current`
 // symlink. Replaces the `d2b-<vm>-store-sync.service` bash oneshot.
-pub mod store_sync;
+pub(crate) mod store_sync;
 
 // Signed ADR 0027 terminal audit schema for `StoreSync` (enums +
 // invariant-enforcing constructors + validation).
-pub mod store_sync_audit;
+pub(crate) mod store_sync_audit;
 
 // StoreSync-only observability JSONL export: a positive-allow-list
 // projection of the host-confidential `StoreSync` terminal audit record
 // (ADR 0027). Written to the alloy-readable export directory; never
 // carries caller identity, retained generations, or any host path.
-pub mod store_sync_export;
+pub(crate) mod store_sync_export;
 
 // Single-inode ownership/mode posture for broker-created store-view
 // metadata paths. Never recursive into the hardlinked live pool.
-pub mod store_view_posture;
+pub(crate) mod store_view_posture;
 
 // Out-of-process, mount-namespace-isolated store-view hardlink farm
 // build. Used by `store_sync` so the farm hardlinks succeed even when
 // `/nix/store` is a separate (bind) mount from `/var/lib/d2b`.
-pub mod store_view_farm;
+pub(crate) mod store_view_farm;
 
 // Per-VM writable store overlay disk-image provisioning. Runs before
 // SpawnRunner when `DiskInit` plan-ops are present.
-pub mod disk_init;
+pub(crate) mod disk_init;
 
 // qemu-media physical USB enrollment/open by opaque ref. Raw device identity
 // stays in root-only registry/runtime artifacts outside the Nix store.
-pub mod media;
+pub(crate) mod media;
 use std::fmt;
 use std::path::PathBuf;
 
