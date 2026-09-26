@@ -734,7 +734,7 @@ impl TargetDirectory {
             .get(guest)
             .map(|record| record.assignments.keys().cloned().collect())
             .unwrap_or_default();
-        assigned.sort_by(|left, right| identity_order(left).cmp(&identity_order(right)));
+        assigned.sort_by_cached_key(identity_order);
         assigned
     }
 
@@ -1046,8 +1046,12 @@ impl TargetDirectory {
 }
 
 /// Stable ordering for resource identities inside the directory.
-fn identity_order(key: &ResourceKey) -> (&str, &str, &str) {
-    (&key.zone, &key.type_name, &key.name)
+///
+/// The key is owned rather than a tuple of borrows because the ordering is
+/// applied through `sort_by_cached_key`, which caches one key per element and
+/// so cannot take a key borrowed from the element it is called on.
+fn identity_order(key: &ResourceKey) -> (String, String, String) {
+    (key.zone.clone(), key.type_name.clone(), key.name.clone())
 }
 
 #[cfg(test)]
