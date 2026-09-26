@@ -26,7 +26,6 @@ d2b-provider-guest-azure-virtual-machine = { path = "../d2b-provider-guest-azure
 d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-bootstrap" }
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 sha2 = { workspace = true }
-parking_lot = "0.12"
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json.workspace = true

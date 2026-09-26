@@ -504,11 +504,14 @@ pub fn view_phase(view: &d2b_resource_runtime::manager::ResourceView) -> &'stati
 /// controller's status write into: the converted Guest's status is
 /// actor-local, so the effect call that drives the controller is the only
 /// place it can be observed (R11: no dual-write into any store).
-pub type GuestStatusSink = Arc<parking_lot::Mutex<Option<Value>>>;
+///
+/// The capture point is an async lock: every write awaits it and no guard
+/// is ever held across another await.
+pub type GuestStatusSink = Arc<tokio::sync::Mutex<Option<Value>>>;
 
 /// A fresh, empty Guest status sink.
 pub fn guest_status_sink() -> GuestStatusSink {
-    Arc::new(parking_lot::Mutex::new(None))
+    Arc::new(tokio::sync::Mutex::new(None))
 }
 
 // ---------------------------------------------------------------------------
@@ -1515,6 +1518,8 @@ mod tests {
     use d2b_resource_runtime::resource::ResourceStatus;
     use d2b_resource_runtime::spec_store::EnsureOutcome;
 
+    use d2b_provider_toolkit::testing::SharedLog;
+
     use super::{
         GUEST_REGISTRATIONS, GUEST_TYPE_NAME, GuestDriver, GuestDriverArgs, GuestDriverFactory,
         GuestDriverStatus, GuestEffectError, GuestEffectPhase, GuestFinalizeStage, GuestKind,
@@ -1538,9 +1543,9 @@ mod tests {
     /// (or keeps) the child row and its live view; the child's published
     /// phase is the `children_ready` switch.
     struct RecordingManager {
-        calls: Arc<parking_lot::Mutex<Vec<String>>>,
-        rows: parking_lot::Mutex<Vec<StoredDesiredResource>>,
-        views: parking_lot::Mutex<Vec<(ResourceKey, ResourceView)>>,
+        calls: SharedLog,
+        rows: std::sync::Mutex<Vec<StoredDesiredResource>>,
+        views: std::sync::Mutex<Vec<(ResourceKey, ResourceView)>>,
         children_ready: std::sync::atomic::AtomicBool,
         fail_reads: std::sync::atomic::AtomicBool,
     }
@@ -1548,9 +1553,9 @@ mod tests {
     impl RecordingManager {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                calls: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                rows: parking_lot::Mutex::new(Vec::new()),
-                views: parking_lot::Mutex::new(Vec::new()),
+                calls: SharedLog::new(),
+                rows: std::sync::Mutex::new(Vec::new()),
+                views: std::sync::Mutex::new(Vec::new()),
                 children_ready: std::sync::atomic::AtomicBool::new(false),
                 fail_reads: std::sync::atomic::AtomicBool::new(false),
             })
@@ -1558,8 +1563,8 @@ mod tests {
 
         /// The shared order log: effect calls that were constructed over it
         /// append to the same sequence.
-        fn log_handle(&self) -> Arc<parking_lot::Mutex<Vec<String>>> {
-            Arc::clone(&self.calls)
+        fn log_handle(&self) -> SharedLog {
+            self.calls.clone()
         }
 
         fn set_children_ready(&self, ready: bool) {
@@ -1585,25 +1590,28 @@ mod tests {
                 status_generation: Some(row.generation),
                 status_projection: None,
             };
-            self.rows.lock().push(row);
-            self.views.lock().push((view.key.clone(), view));
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.rows.lock().unwrap().push(row);
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.views.lock().unwrap().push((view.key.clone(), view));
         }
 
         fn drop_row(&self, key: &ResourceKey) {
-            self.rows.lock().retain(|row| row.key != *key);
-            self.views.lock().retain(|(view_key, _)| view_key != key);
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.rows.lock().unwrap().retain(|row| row.key != *key);
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.views.lock().unwrap().retain(|(view_key, _)| view_key != key);
         }
 
         fn call_order(&self) -> Vec<String> {
-            self.calls.lock().clone()
+            self.calls.entries()
         }
 
         fn ensure_order(&self) -> Vec<String> {
             self.calls
-                .lock()
-                .iter()
+                .entries()
+                .into_iter()
                 .filter(|call| call.starts_with("ensure:"))
-                .cloned()
                 .collect()
         }
     }
@@ -1616,14 +1624,14 @@ mod tests {
             child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
             self.calls
-                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                .push(format!("ensure:{}/{}", child.type_name.as_str(), child.name));
+                .record(format!("ensure:{}/{}", child.type_name.as_str(), child.name));
             let key = ResourceKey::new(
                 parent.zone.clone(),
                 child.type_name.as_str(),
                 child.name.as_str(),
             );
-            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            let mut rows = self.rows.lock().unwrap(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             if let Some(existing) = rows.iter().find(|row| row.key == key).cloned() {
                 if existing.spec == child.spec {
                     return Ok(EnsureOutcome::Unchanged(existing));
@@ -1635,8 +1643,10 @@ mod tests {
                 updated.generation += 1;
                 rows.push(updated.clone());
                 drop(rows);
-                self.views.lock().retain(|(view_key, _)| view_key != &key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                self.views.lock().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+                #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+                self.views.lock().unwrap().retain(|(view_key, _)| view_key != &key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+                #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+                self.views.lock().unwrap().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                     key,
                     ResourceView {
                         key: updated.key.clone(),
@@ -1671,7 +1681,8 @@ mod tests {
             };
             rows.push(row.clone());
             drop(rows);
-            self.views.lock().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.views.lock().unwrap().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 key,
                 ResourceView {
                     key: row.key.clone(),
@@ -1698,33 +1709,37 @@ mod tests {
             &self,
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push(format!("get:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.record(format!("get:{}/{}", key.type_name, key.name));
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
             Ok(self
                 .rows
                 .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+                .unwrap()
                 .iter()
                 .find(|row| row.key == *key)
                 .cloned())
         }
 
         async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-            self.calls.lock().push(format!("view:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.record(format!("view:{}/{}", key.type_name, key.name));
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
             Ok(self
                 .views
                 .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+                .unwrap()
                 .iter()
                 .find(|(view_key, _)| view_key == key)
                 .map(|(_, view)| view.clone()))
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.calls.lock().push(format!("delete:{}/{}", key.type_name, key.name)); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.record(format!("delete:{}/{}", key.type_name, key.name));
             self.drop_row(key);
             Ok(())
         }
@@ -1733,13 +1748,15 @@ mod tests {
             &self,
             owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push("list-owned".to_owned());
+            self.calls.record("list-owned".to_owned());
             if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
             }
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
             Ok(self
                 .rows
-                .lock()
+                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+                .unwrap()
                 .iter()
                 .filter(|row| row.owner_uid == Some(owner_uid))
                 .cloned()
@@ -1751,7 +1768,7 @@ mod tests {
             _subscriber: &ResourceKey,
             registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            self.calls.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.record(format!(
                 "watch:{}/{}",
                 registration.target.type_name, registration.target.name
             ));
@@ -1759,26 +1776,27 @@ mod tests {
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            self.calls.lock().push("cancel-watch".to_owned()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.record("cancel-watch".to_owned());
             Ok(())
         }
     }
 
     struct RecordingRequeue {
-        scheduled: parking_lot::Mutex<Vec<(ResourceKey, std::time::Duration)>>,
+        scheduled: std::sync::Mutex<Vec<(ResourceKey, std::time::Duration)>>,
     }
 
     impl RecordingRequeue {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                scheduled: parking_lot::Mutex::new(Vec::new()),
+                scheduled: std::sync::Mutex::new(Vec::new()),
             })
         }
     }
 
     impl RequeueScheduler for RecordingRequeue {
         fn schedule(&self, key: ResourceKey, after: std::time::Duration) -> RequeueId {
-            self.scheduled.lock().push((key, after));
+            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+            self.scheduled.lock().unwrap().push((key, after));
             RequeueId(0)
         }
 
@@ -1977,28 +1995,34 @@ mod tests {
     #[tokio::test]
     async fn driver_recreation_shares_the_factorys_controller_state() {
         let facets = crate::test_support::ScriptedFacets::new();
-        facets.add_row(crate::test_support::row_fixture(
-            "work",
-            "Provider",
-            "runtime-azure-container-apps",
-            aca_provider_spec(),
-            ResourceStatus::Ready,
-        ));
-        facets.add_row(crate::test_support::row_fixture_with_metadata(
-            "work",
-            "Guest",
-            "gateway",
-            serde_json::json!({}),
-            ResourceStatus::Ready,
-            serde_json::json!({ "zone": "work" }),
-        ));
-        facets.add_row(crate::test_support::row_fixture(
-            "work",
-            "Credential",
-            "control",
-            serde_json::json!({ "scope": { "executionRef": "Guest/gateway" } }),
-            ResourceStatus::Ready,
-        ));
+        facets
+            .add_row(crate::test_support::row_fixture(
+                "work",
+                "Provider",
+                "runtime-azure-container-apps",
+                aca_provider_spec(),
+                ResourceStatus::Ready,
+            ))
+            .await;
+        facets
+            .add_row(crate::test_support::row_fixture_with_metadata(
+                "work",
+                "Guest",
+                "gateway",
+                serde_json::json!({}),
+                ResourceStatus::Ready,
+                serde_json::json!({ "zone": "work" }),
+            ))
+            .await;
+        facets
+            .add_row(crate::test_support::row_fixture(
+                "work",
+                "Credential",
+                "control",
+                serde_json::json!({ "scope": { "executionRef": "Guest/gateway" } }),
+                ResourceStatus::Ready,
+            ))
+            .await;
         facets.add_committed_provider(
             ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap(),
             d2b_contracts_resource::v3::ResourceUid::parse(
@@ -2132,7 +2156,7 @@ mod tests {
         let (mut ctx, effects, manager) = qemu_fixture();
         manager.set_children_ready(true);
         let projection = serde_json::json!({ "phase": "Ready", "runtimeReady": true });
-        effects.set_projection(Some(projection.clone()));
+        effects.set_projection(Some(projection.clone())).await;
         let mut driver = driver(Arc::clone(&effects));
 
         let outcome = driver.reconcile(&mut ctx).await.expect("reconcile");
@@ -2145,7 +2169,7 @@ mod tests {
             ],
             "the qemu child graph is the runtime Volume then the VMM Process",
         );
-        let observation = effects.observations().pop().expect("effect call");
+        let observation = effects.observations().await.pop().expect("effect call");
         assert_eq!(observation.kind, GuestKind::QemuMedia);
         assert_eq!(observation.provider_spec, Some(qemu_provider_spec()));
         assert_eq!(
@@ -2285,7 +2309,9 @@ mod tests {
     #[tokio::test]
     async fn cloud_hypervisor_guests_commit_no_children_through_the_driver() {
         let effects = ScriptedEffects::new();
-        effects.set_projection(Some(serde_json::json!({ "phase": "Ready" })));
+        effects
+            .set_projection(Some(serde_json::json!({ "phase": "Ready" })))
+            .await;
         let manager = RecordingManager::new();
         let mut ctx = context(
             guest_row(
@@ -2299,7 +2325,12 @@ mod tests {
 
         driver.reconcile(&mut ctx).await.expect("reconcile");
         assert_eq!(
-            effects.observations().pop().expect("effect call").kind,
+            effects
+            .observations()
+            .await
+            .pop()
+            .expect("effect call")
+            .kind,
             GuestKind::CloudHypervisor,
         );
         assert!(manager.ensure_order().is_empty());
@@ -2433,7 +2464,7 @@ mod tests {
             owned_row("Volume", "work-vm-stale", serde_json::json!({})),
             ResourceStatus::Ready,
         );
-        effects.set_finalize(GuestFinalizeStage::Pending);
+        effects.set_finalize(GuestFinalizeStage::Pending).await;
         let mut driver = driver(Arc::clone(&effects));
 
         let failure = driver.delete(&mut ctx).await.expect_err("stage pending");
@@ -2455,12 +2486,12 @@ mod tests {
         let (mut ctx, effects, manager) = qemu_fixture();
         manager.set_children_ready(true);
         let projection = serde_json::json!({ "phase": "Ready", "runtimeReady": true });
-        effects.set_projection(Some(projection.clone()));
+        effects.set_projection(Some(projection.clone())).await;
         let mut driver = driver(Arc::clone(&effects));
         driver.reconcile(&mut ctx).await.expect("first pass");
         assert_eq!(ctx.take_status_projection(), Some(projection.clone()));
 
-        effects.set_projection(None);
+        effects.set_projection(None).await;
         driver.reconcile(&mut ctx).await.expect("second pass");
         assert_eq!(ctx.take_status_projection(), Some(projection.clone()));
         let status = guest_status(&ctx);

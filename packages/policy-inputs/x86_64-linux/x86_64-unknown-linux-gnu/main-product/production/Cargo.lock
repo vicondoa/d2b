@@ -1492,7 +1492,6 @@ dependencies = [
  "d2b-resource-runtime",
  "d2b-resource-types",
  "d2bd-runtime",
- "parking_lot",
  "schemars",
  "serde",
  "serde_json",
