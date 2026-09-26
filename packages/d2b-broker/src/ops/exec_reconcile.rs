@@ -1666,8 +1666,13 @@ mod fake {
     }
 }
 
-#[cfg(any(test, feature = "fake-backends"))]
-pub use fake::{FakeReconcileExecutor, ReconcileOp};
+// `exec_reconcile` is a `pub(crate)` arm (see `ops::mod`), so every reader
+// of this re-export is an in-crate `#[cfg(test)]` module: the five `ops/*`
+// test modules that import the pair by path, `live_handlers`, and the one
+// below. A `feature = "fake-backends"` library build compiles the re-export
+// with no reader at all, which `-D warnings` rejects as an unused import.
+#[cfg(test)]
+pub(crate) use fake::{FakeReconcileExecutor, ReconcileOp};
 
 #[cfg(test)]
 mod tests {

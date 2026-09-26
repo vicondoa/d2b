@@ -680,10 +680,10 @@ fn compute_lock_context<'a>(
         }
     }
     let lock_sha256 = sha256_file(&root.join(&spec.lock_path))?;
-    let production = make_lock_closure(&spec, &records, &selected, &edges, &lock_sha256)?;
+    let production = make_lock_closure(spec, &records, &selected, &edges, &lock_sha256)?;
     let policy = production.clone();
     let metadata = metadata_projection(
-        &spec,
+        spec,
         &production,
         &policy,
         &json!({ "resolve": { "nodes": [] } }),
