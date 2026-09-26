@@ -32,7 +32,7 @@
 //! - `observe` -> [`ResourceDriver::recover`].
 //! - socket realization -> [`ResourceDriver::reconcile`].
 //! - socket removal -> [`ResourceDriver::delete`].
-//! - `UpdateStatus` -> `ctx.set_status` (in-memory only).
+//! - `UpdateStatus` -> `ctx. set_status` (in-memory only).
 //!
 //! Which purposes a declaring provider commits, and on which producer, is
 //! this crate's own derivation ([`crate::effects_service`]): the closed
@@ -540,7 +540,7 @@ impl ResourceDriver for EndpointDriver {
 ///
 /// Derived from the placement contract: `Endpoint` names no placement anchor
 /// (`PlacementAnchor::canonical_for` resolves none), so an Endpoint row never
-/// carries the canonical `spec.executionRef` and the plane reconciles it on
+/// carries the canonical `spec. executionRef` and the plane reconciles it on
 /// its own Host domain. A realized producer may live in a Guest; the effects
 /// reach that row through the manager, not through this row's placement.
 const ENDPOINT_EXECUTION_DOMAINS: &[&str] = &["host"];
@@ -563,7 +563,7 @@ const ENDPOINT_READS: &[WellKnownType] = &[
 /// `Endpoint` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot serve
 /// the converted endpoint shapes without it, so it must be registered before
 /// the plane opens. The type is not exportable: `ResourceExport` admits only
-/// qualified `*.d2bus.org.*Service` types, so an endpoint can never be an
+/// qualified `*.d2bus. org.*Service` types, so an endpoint can never be an
 /// export subject. The driver serves no broker operations and creates no
 /// children through this declaration; the endpoint children the volume
 /// binding realizes are created by that family. The declaration carries the

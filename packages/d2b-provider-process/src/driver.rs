@@ -316,7 +316,7 @@ pub enum DeviceWorkerFamily {
 }
 
 /// The VM scope of one declared Device-owned worker row: the owning Device's
-/// declared Guest owner (`Device.metadata.ownerRef == Guest/<vm>`).
+/// declared Guest owner (`Device. metadata. ownerRef == Guest/<vm>`).
 ///
 /// A Device-owned worker row runs on the Host (`executionRef
 /// Host/host-system`) and names no Guest target, so the row's own launch
@@ -382,12 +382,12 @@ pub fn resource_uid_from_bytes(bytes: &[u8; 16]) -> Option<ResourceUid> {
 /// KTD7 Guest-owner identity source: the owning `Guest` row's durable uid for
 /// one canonical Guest reference. `Guest` has not been converted, so a
 /// converted Process row owned by a Guest cannot carry the durable owner
-/// linkage the pre-v3 store computed (`record.owner_uid` = the resolved owner
+/// linkage the pre-v3 store computed (`record. owner_uid` = the resolved owner
 /// row's uid) - the manager row carries only the authored
-/// `metadata.ownerRef`. The old descriptor composer read the linkage first
+/// `metadata. ownerRef`. The old descriptor composer read the linkage first
 /// and the owner identity cache second; a reference this source cannot
 /// resolve stays unbound, so the Cloud Hypervisor launch stays refused closed
-/// (the broker requires the owner uid to bind `d2b.guest_uid=`).
+/// (the broker requires the owner uid to bind `d2b. guest_uid=`).
 ///
 /// Trait, not a concrete type, because `d2b-provider-process` consumes it
 /// (`resolve_guest_owner_uid`) and cannot depend on `d2bd`, where the
@@ -604,14 +604,14 @@ pub(crate) const PROCESS_FAMILY_READS: &[WellKnownType] = &[
 /// `Process` and `EphemeralProcess` are `BUILTIN | STARTUP` (no RUNTIME bit):
 /// the plane cannot admit workloads without a process launcher, so both must
 /// be registered before the plane opens. Neither member type is exportable:
-/// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
+/// `ResourceExport` admits only qualified `*.d2bus. org.*Service` types, so a
 /// process can never be an export subject.
 ///
 /// The family's declared operations and services ride on the `Process`
 /// descriptor alone: the registry gives one operation reference exactly one
 /// owning type (a second declaring driver is refused as foreign), the
 /// declaration inspection is a family operation, not a per-member one, and
-/// the family's effects service (`process.d2bus.org/effects`, U1) is a
+/// the family's effects service (`process. d2bus. org/effects`, U1) is a
 /// family surface its member types share. The family creates no children
 /// through this declaration today.
 pub fn process_family_descriptors(args: ProcessDriverArgs) -> [DriverDescriptor; 2] {
@@ -1887,7 +1887,7 @@ impl ProcessDriver {
                 Err(self.identity_ambiguous(DriverOp::Delete, &report))
             }
             // A row no host-minted ticket can describe (a Guest-owned one-shot
-            // outside the guest VMM chain, e.g. the projected
+            // outside the guest VMM chain, e. g. the projected
             // `store-preflight-<guest>` intent) has no identity this daemon
             // could ever have realized, so its deletion converges with no
             // provider effect. The guard's real intent is preserved: nothing
@@ -1940,7 +1940,7 @@ fn provider_error_kind(error: &str) -> ProcessDriverErrorKind {
         ProcessDriverErrorKind::ResolutionRefused
     } else if error.contains("guest-process-not-vmm") {
         // The trusted bundle holds no host-minted intent for this row at all
-        // (a Guest-owned one-shot outside the guest VMM chain, e.g. a
+        // (a Guest-owned one-shot outside the guest VMM chain, e. g. a
         // projected preflight intent): no retry can ever mint a ticket, so
         // the refusal is terminal - never an ambiguous identity to quarantine
         // (R15 is about observed identity).
@@ -2785,7 +2785,7 @@ mod tests {
     /// A Device-owned worker row names no VM of its own (`executionRef
     /// Host/host-system`, no Guest target), so the Process controller derives
     /// the worker's VM scope from the owning Device's declared Guest owner -
-    /// the same `Device.metadata.ownerRef == Guest/<vm>` derivation the TPM
+    /// the same `Device. metadata. ownerRef == Guest/<vm>` derivation the TPM
     /// admission fence requires and the TPM shared-provider effects mint
     /// their `VmId` from. A Device with no Guest owner is the genuinely
     /// unresolvable case and refuses by name; absence and an unanswerable
@@ -2934,7 +2934,7 @@ mod tests {
 
     /// The Guest-owner resolution reads the pre-v3 plane only for a Guest
     /// owner whose row carries no linked uid; a linked uid always wins (the
-    /// old composer's precedence: `record.resource.owner_uid` first, the
+    /// old composer's precedence: `record. resource. owner_uid` first, the
     /// owner identity cache second), and a non-Guest owner never reaches the
     /// Guest plane. Without a wired source the slot stays unbound, so the
     /// launch still refuses closed.

@@ -1109,7 +1109,7 @@ impl fmt::Debug for SessionKey {
 /// ```compile_fail
 /// # use d2b_provider_credential_secret_service::SecretServiceSessionCapability;
 /// fn cannot_clone(capability: SecretServiceSessionCapability) {
-///     let _ = capability.clone();
+///     let _ = capability. clone();
 /// }
 /// ```
 pub struct SecretServiceSessionCapability {

@@ -216,7 +216,7 @@ pub struct HotplugOutcome {
 }
 
 /// The result of a VM boot media attach:the broker wire response plus
-/// which registry/udev artifacts were (re)written and whether udev was
+/// which registry/udev artifacts were (re) written and whether udev was
 /// reloaded.
 pub struct BootOutcome {
     /// The wire response echoed to the daemon.
@@ -325,7 +325,7 @@ pub async fn refresh_registry(resolver: &BundleResolver) -> Result<RefreshOutcom
 
 /// Boot a VM's declared media: resolves the bundle source, opens the
 /// declared image, and runs the attach transaction, gathering which
-/// registry/udev artifacts were refreshed.as side effects.
+/// registry/udev artifacts were refreshed. as side effects.
 ///
 /// # Errors
 ///

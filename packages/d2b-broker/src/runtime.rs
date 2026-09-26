@@ -105,7 +105,7 @@ const DEFAULT_GUEST_AUDIT_DIR: &str = "/var/lib/d2b/guest-audit";
 /// Default audit retention. Matches the docs claim in
 /// `docs/reference/daemon-api.md` "Audit" and `AGENTS.md` "Control
 /// plane". Override via `--audit-retention-days` (broker flag) or the
-/// NixOS module's `d2b.site.audit.retentionDays` option. Set to 0
+/// NixOS module's `d2b. site. audit. retentionDays` option. Set to 0
 /// to disable pruning.
 const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 30;
 const DEFAULT_BUNDLE_PATH: &str = "/var/lib/d2b/current-bundle/manifest.json";
@@ -142,7 +142,7 @@ const MAX_MODULE_NAME_LEN: usize = 64;
 /// the caller has not moved past.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetiredWireVariant {
-    /// The wire variant name, exactly as the frame's `request.kind` spells
+    /// The wire variant name, exactly as the frame's `request. kind` spells
     /// it.
     pub variant: &'static str,
     /// The negotiated wire version the variant was retired in: a straggler
@@ -268,7 +268,7 @@ pub const RETIRED_WIRE_VARIANTS: &[RetiredWireVariant] = &[
 ];
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-/// The variant one frame's `request.kind` names, when the envelope's request
+/// The variant one frame's `request. kind` names, when the envelope's request
 /// is shaped the way the closed wire spells it.
 ///
 /// The frame is inspected before the typed decode precisely so a variant the
@@ -290,7 +290,7 @@ fn request_kind(envelope: &Value) -> Option<&str> {
 #[cfg(not(feature = "layer1-bootstrap"))]
 /// The gate's lookup, public so a mixed-version fixture can exercise it the
 /// way the production accept loop does; the variant name is the frame's
-/// `request.kind` ([`request_kind`]).
+/// `request. kind` ([`request_kind`]).
 pub fn retired_wire_variant<'a>(
     kind: &str,
     retired: &'a [RetiredWireVariant],
@@ -343,7 +343,7 @@ pub struct ServerConfig {
     /// path. The daemon never names a bundle path on the wire (security:
     /// prevents path-traversal + symlink-confusion). Defaults to
     /// `/var/lib/d2b/current-bundle/manifest.json`; the NixOS module's
-    /// `d2b.site.bundle.currentManifest` option overrides.
+    /// `d2b. site. bundle. currentManifest` option overrides.
     pub bundle_path: PathBuf,
     pub state_dir: PathBuf,
     /// Trusted target-local activation helper. The daemon never supplies
@@ -448,11 +448,11 @@ pub(crate) enum BrokerError {
     AuditRequiresAdmin,
     HostShutdownRestricted,
     /// Broker started without a loadable bundle at
-    /// `ServerConfig.bundle_path`; bundle-dependent real-wire ops cannot
+    /// `ServerConfig. bundle_path`; bundle-dependent real-wire ops cannot
     /// resolve their `BundleOpId` refs and refuse fail-closed.
     #[cfg_attr(feature = "layer1-bootstrap", allow(dead_code))]
     BundleResolverUnavailable,
-    /// Bundle artifact at `ServerConfig.bundle_path` failed the
+    /// Bundle artifact at `ServerConfig. bundle_path` failed the
     /// tamper-resistance check (symlink / owner / mode / hash). Every
     /// incoming operation surfaces this error until the broker is
     /// restarted with a clean bundle.
@@ -515,7 +515,7 @@ pub(crate) enum BrokerError {
     },
     /// `SpawnRunner` was called with `RunnerRole::OtelHostBridge`, but
     /// the bundle-resolved intent points at a VM whose name does not
-    /// match `manifest._observability.vmName`. The bridge MUST forward
+    /// match `manifest._observability. vmName`. The bridge MUST forward
     /// only into the obs VM declared in the trusted bundle; any other
     /// target is a closed-set violation and the broker refuses
     /// fail-closed.
@@ -631,7 +631,7 @@ where
     // --socket-path is optional.  Resolution order:
     //   1. --socket-path flag (explicit override)
     //   2. D2B_BROKER_SOCKET_PATH env var
-    //   3. DEFAULT_SOCKET_PATH constant ("/run/d2b/priv.sock")
+    //   3. DEFAULT_SOCKET_PATH constant ("/run/d2b/priv. sock")
     // Under SD_LISTEN_FDS=1 (socket activation) the resolved path is
     // informational only; the broker adopts fd 3 from systemd and
     // MUST NOT bind, fchmod, or fchown the socket path.
@@ -869,7 +869,7 @@ pub fn run(command: BrokerMode) -> Result<(), RunError> {
 ///   or if `LISTEN_FDS` is absent or not `"1"` - not socket-activated.
 /// - `Some(Ok(fd))` when socket activation is valid and fd 3 has been
 ///   verified as an `AF_UNIX SOCK_SEQPACKET` listen socket.
-/// - `Some(Err(_))` if `LISTEN_FDNAMES` is present but is not `"priv.sock"`,
+/// - `Some(Err(_))` if `LISTEN_FDNAMES` is present but is not `"priv. sock"`,
 ///   or if the fd-level validation in `sys::adopt_listen_fd_from_fd3` fails.
 ///
 /// The `LISTEN_*` vars are NOT unset after adoption. The `sd_listen_fds(3)`
@@ -892,7 +892,7 @@ fn adopt_listen_fd() -> Option<Result<OwnedFd, RunError>> {
         return None;
     }
 
-    // Step 3: If LISTEN_FDNAMES is present it must equal "priv.sock".
+    // Step 3: If LISTEN_FDNAMES is present it must equal "priv. sock".
     if let Ok(fdnames) = env::var("LISTEN_FDNAMES")
         && fdnames != "priv.sock"
     {
@@ -1366,7 +1366,7 @@ pub fn probe_bundle_load_response(bundle_path: &std::path::Path) -> BrokerRespon
 }
 
 /// Like [`probe_bundle_load_response`] but uses an explicit [`BundleVerifyPolicy`].
-/// Tests that need to control uid/gid/mode requirements (e.g. to avoid requiring
+/// Tests that need to control uid/gid/mode requirements (e. g. to avoid requiring
 /// root in CI) pass `current_user_policy()` so the uid check passes and only the
 /// intended tamper reason fires.
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -2895,7 +2895,7 @@ fn intent_is_serving_worker_template(
 /// ([`Self::carries_controller_escrow`]) and the advertised response fd
 /// indices ([`Self::bootstrap_response_index`] /
 /// [`Self::console_response_index`]) - instead of re-deriving it from
-/// `(req.role, intent)`.
+/// `(req. role, intent)`.
 ///
 /// The posture deliberately decides NO identity: a launch's executor uid/gid
 /// and in-namespace root mapping are always the trusted intent's principal
@@ -3041,7 +3041,7 @@ impl LaunchPosture {
 /// This is the single evaluation point for runner identity, and it
 /// deliberately takes no identity from the posture: the broker's only
 /// authentication factor is peer identity - `peer_matches_instance` admits
-/// exactly `config.d2bd_uid` / `config.d2bd_gid` on the privileged socket,
+/// exactly `config. d2bd_uid` / `config. d2bd_gid` on the privileged socket,
 /// whose mode is `0660 d2bd:d2bd` - so a runner launched with the daemon's
 /// uid/gid could connect that socket, pass the pre-decode peer check, and use
 /// the whole daemon API (the pre-PR security review's finding: the
@@ -4706,7 +4706,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
                 d2b_contracts::usbip::lock_path_for_busid(&req.bus_id),
             );
 
-            // Same-VM replay: lock is already held by this VM (e.g. daemon restart).
+            // Same-VM replay: lock is already held by this VM (e. g. daemon restart).
             let same_vm_replay = match crate::ops::usbip_lock::peek_owner(&lock_path) {
                 Some(owner) if owner == req.vm => true,
                 Some(owner) => {
@@ -7393,8 +7393,8 @@ fn usbip_binary_path() -> PathBuf {
 }
 
 /// Best-effort lookup of the human-readable VM name carried in the
-/// bundle's `processes.vms[*].vm` list. The wire `VmId` is a transparent
-/// opaque string; the bundle index is the `processes.vms[*].vm` field.
+/// bundle's `processes. vms[*].vm` list. The wire `VmId` is a transparent
+/// opaque string; the bundle index is the `processes. vms[*].vm` field.
 /// We use the wire value as both the opaque key and the human-readable
 /// name today - the daemon emits them identically.
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -8164,7 +8164,7 @@ async fn handle_usbip_acl_revoke_failure_after_unbind(
         return revoke_error;
     }
 
-    // `backend.usbip_unbind` succeeded before the ACL revoke was attempted.
+    // `backend. usbip_unbind` succeeded before the ACL revoke was attempted.
     // Release the host-session claim on revoke failure unless a best-effort
     // live recheck proves the device is still attached to usbip-host. If the
     // recheck itself fails, trust the successful unbind result and release to
@@ -9292,7 +9292,7 @@ fn validate_typed_process_metadata(
     serving_worker: bool,
     intent: &d2b_core::bundle_resolver::ResolvedRunnerIntent,
     // Owning-Device scope already pinned from the verified bundle (the
-    // launched row's `metadata.ownerRef`, `device_worker::resolve_launch_scope`).
+    // launched row's `metadata. ownerRef`, `device_worker::resolve_launch_scope`).
     // `Some` on the launch path, where that Device anchors every runtime path
     // the launch derives; `None` for the observe/adopt requests, which carry
     // no owner uid to pin and derive no Device paths.
@@ -9396,7 +9396,7 @@ fn validate_typed_process_metadata(
             // the intent was resolved through. WHICH Device owns the launched
             // row is pinned from the verified bundle by the launch arm
             // (`device_worker::resolve_launch_scope`: the row's
-            // `metadata.ownerRef`, plus the Device row's durable uid), and the
+            // `metadata. ownerRef`, plus the Device row's durable uid), and the
             // request must name exactly that Device - a launch aimed at
             // another Device would derive another Guest's runtime socket
             // directory and state Volume. The scope is `None` for the
@@ -10031,9 +10031,9 @@ async fn video_socket_path(argv: &[String]) -> Result<PathBuf, BrokerError> {
     ))
 }
 
-// The OtelHostBridge runner is `socat UNIX-LISTEN:<host-egress.sock>,...`.
+// The OtelHostBridge runner is `socat UNIX-LISTEN:<host-egress. sock>,...`.
 // socat does not unlink a pre-existing socket path before binding, so a
-// stale `host-egress.sock` left behind by a prior bridge instance (e.g.
+// stale `host-egress. sock` left behind by a prior bridge instance (e. g.
 // after the obs VM is restarted, draining and respawning the bridge)
 // makes the fresh socat exit immediately with "address in use". The
 // readiness probe only checks the socket *file* exists, so the stale
@@ -11880,7 +11880,7 @@ fn deliver_targeted_reap(
     match broker_audit_log_handle().get() {
         Some(audit_log) => remove_and_notify(runner_id, notif, audit_log.as_ref()),
         None => {
-            // No audit handle (e.g. a unit test that didn't start the
+            // No audit handle (e. g. a unit test that didn't start the
             // reaper): still reap + notify so the child can't zombie.
             let removed = remove_runner_registries(runner_id);
             push_child_reap_notification(notif);
@@ -17688,7 +17688,7 @@ mod tests {
         assert_eq!(export_record.authz_outcome, AuthzOutcome::Allow);
 
         // The outer error-audit path must NOT write a second (duplicate)
-        // record: BrokerError::StoreSyncFailed.audit() is a no-op because
+        // record: BrokerError::StoreSyncFailed. audit() is a no-op because
         // the terminal record was already emitted in the dispatch arm.
         error
             .audit(
@@ -18096,7 +18096,7 @@ mod tests {
                 caller_role: BrokerCallerRole::AdminUid {
                     uid: configured_daemon_uid,
                 },
-                // Ignored because config.test_mode=false: the broker must use the
+                // Ignored because config. test_mode=false: the broker must use the
                 // kernel SO_PEERCRED uid, not the envelope's claimed caller role.
                 audit_join: None,
             };

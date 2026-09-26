@@ -12,7 +12,7 @@
 //!
 //! ```
 //! let digest = d2b_resource_compiler::sha256_digest(b"provider");
-//! assert_eq!(digest.as_str().len(), 71);
+//! assert_eq!(digest. as_str().len(), 71);
 //! ```
 
 use std::{
@@ -970,7 +970,7 @@ fn append_virtiofsd_worker_templates(
 /// for `device-tpm`, `Process/gpu-<device>` and `Process/video-<device>` for
 /// `device-gpu` - each carrying the row's `template` and an `ownerRef` to the
 /// claiming Device. The declared row is the authority this pass reads: the
-/// owner Device's declared `spec.providerRef` names the Device Provider, whose
+/// owner Device's declared `spec. providerRef` names the Device Provider, whose
 /// artifact must enumerate the executable the closed posture for
 /// (`providerRef`, `template`) pins
 /// ([`d2b_core::bundle_resolver::device_worker_posture`]), and a declared row

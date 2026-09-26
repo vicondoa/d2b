@@ -115,7 +115,7 @@ impl StoredBinding {
     /// The envelope must be a `VolumeBinding` owned by an existing
     /// Volume and served by this Provider, and it must be strictly
     /// neutral: the standard catalog admits no provider extension path
-    /// for the type, so a `spec.provider` block -- legacy schema id
+    /// for the type, so a `spec. provider` block -- legacy schema id
     /// or otherwise -- is rejected, and the envelope never carries
     /// attachment settings (KTD1). The serving posture is the frozen
     /// default declared by the worker plan.

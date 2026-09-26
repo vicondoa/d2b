@@ -3530,18 +3530,6 @@ const SHARED_FAMILY_KNOWLEDGE_RATCHET: &[SharedFamilyKnowledgeExemption] = &[
     },
     SharedFamilyKnowledgeExemption {
         module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
-        token: "network_local",
-        family: "network-local",
-        retires_with: "permanent: the unsafe-local workload limits are shared wire vocabulary whose error variants are family-named; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
-        token: "volume_local",
-        family: "volume-local",
-        retires_with: "permanent: the unsafe-local workload limits are shared wire vocabulary whose error variants are family-named; no shared crate may depend on a provider crate",
-    },
-    SharedFamilyKnowledgeExemption {
-        module: "packages/d2b-contracts/src/unsafe_local_workloads.rs",
         token: "nixos",
         family: "activation-nixos",
         retires_with: "permanent: wire vocabulary crossing CLI/daemon/broker boundaries; no shared crate may depend on a provider crate",
@@ -6437,7 +6425,7 @@ fn check_shared_structural_knowledge(repo_root: &Path) -> Result<(), String> {
 }
 /// The named shared-crate-to-provider dependency edges the
 /// dependency-direction detector lists. A shared crate may depend on
-/// a provider crate only through an edge named here;the list is empty
+/// a provider crate only through an edge named here; the list is empty
 /// today and only the owning crates' moves add edges to it./
 ///
 /// U4 re-homed the laneless primitive types into their owning provider
@@ -7081,7 +7069,7 @@ fn packages_tokens(line: &str) -> Vec<String> {
             end += 1;
         }
         // A `<...>` immediately after the run marks a naming-template
-        // placeholder (e.g. `packages/d2b-provider-<base>-<implementation>/`),
+        // placeholder (e. g. `packages/d2b-provider-<base>-<implementation>/`),
         // not a resolvable citation; skip it.
         if bytes.get(end) == Some(&b'<') {
             search = &rest[end..];
@@ -8836,7 +8824,7 @@ enum CommittedScopeClass {
 /// stale. A committed-scope check cannot police every file outside these
 /// classes without encoding the whole plan's touch surface, so it polices
 /// the crate set and the declared artifact roots, the two surfaces the plan
-/// names; every other surface (docs/plans, changelog.d, tests/, Nix
+/// names; every other surface (docs/plans, changelog. d, tests/, Nix
 /// modules, Bazel files, ...) is out of its scope by construction.
 struct CommittedScopeEntry {
     crate_name: &'static str,
@@ -8845,7 +8833,7 @@ struct CommittedScopeEntry {
 }
 
 /// The committed workspace-crate scope, seeded from the tree the plan
-/// refactors. Every workspace member must appear exactly once;every entry
+/// refactors. Every workspace member must appear exactly once; every entry
 /// must stay a live member. The classes are the plan's own naming: the plan
 /// names provider crates as a class, the shared crates its lanes read
 /// through, the daemon, the broker, and the tooling its own check lives in.

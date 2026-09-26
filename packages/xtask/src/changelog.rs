@@ -1,6 +1,6 @@
-//! Fragment assembler for the `changelog.d/` directory.
+//! Fragment assembler for the `changelog. d/` directory.
 //!
-//! Concurrent branches each drop one fragment file into `changelog.d/`
+//! Concurrent branches each drop one fragment file into `changelog. d/`
 //! instead of appending to the shared `## [Unreleased]` block in
 //! `CHANGELOG.md`. Every branch then writes a file no other branch touches,
 //! so the changelog stops being a guaranteed merge conflict whenever more
@@ -30,7 +30,7 @@ pub const CHANGELOG_FILE: &str = "CHANGELOG.md";
 
 /// Transaction directory for an in-flight fold, created in the resolved
 /// repository root - the real directory holding `CHANGELOG.md` and
-/// `changelog.d/` - so every rename into and out of it is atomic and stays on
+/// `changelog. d/` - so every rename into and out of it is atomic and stays on
 /// one filesystem. A fixed (non-PID) name lets a later invocation discover an
 /// interrupted transaction and recover it.
 const TXN_DIR: &str = ".changelog-fold-txn";
@@ -131,7 +131,7 @@ pub struct FragmentSection {
     pub entries: Vec<String>,
 }
 
-/// A parsed `changelog.d/<name>.md` fragment.
+/// A parsed `changelog. d/<name>.md` fragment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fragment {
     /// Fragment file name, used for ordering and error messages.
@@ -390,7 +390,7 @@ pub struct Outcome {
 ///
 /// The Bazel entry point (`bazel run --config=local //packages/xtask:xtask`)
 /// reaches the checkout through a symlink forest: `CHANGELOG.md` and
-/// `changelog.d/` under the execroot are links into the real workspace. Reads
+/// `changelog. d/` under the execroot are links into the real workspace. Reads
 /// follow those links, but renaming the folded changelog *onto* `CHANGELOG.md`
 /// replaces the link and leaves the real file untouched, so the fold would
 /// consume every fragment and write nowhere (issue #519). Resolving both paths
@@ -454,7 +454,7 @@ impl FoldTree {
                 )));
             }
             // An absent fragment directory is no fragments at all, the same
-            // no-op a repository without `changelog.d/` has always been.
+            // no-op a repository without `changelog. d/` has always been.
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => root.join(FRAGMENT_DIR),
             Err(err) => {
                 return Err(FoldError::single(format!(
@@ -745,7 +745,7 @@ fn read_journal(txn: &Path) -> Option<Journal> {
 /// recovery finishes forward by discarding the transaction (the reserved
 /// fragments are already consumed). Any earlier state - or an unreadable
 /// journal - means the promotion did not durably happen, so recovery rolls
-/// back: reserved fragments return to `changelog.d/` and the original changelog
+/// back: reserved fragments return to `changelog. d/` and the original changelog
 /// is restored from its backup. Either way the tree ends fully folded or fully
 /// unfolded, never half-consumed.
 ///
@@ -896,7 +896,7 @@ fn finish_forward(
 }
 
 /// Undo an uncommitted transaction: return every reserved fragment to
-/// `changelog.d/` and restore the original changelog from its backup, then
+/// `changelog. d/` and restore the original changelog from its backup, then
 /// remove the transaction directory. Restorative steps run before the backup is
 /// consumed so a crash mid-rollback stays recoverable on the next pass. Errors
 /// are surfaced, never swallowed.
@@ -1762,7 +1762,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn fold_repo_consumes_fragments_through_a_symlinked_fragment_directory() {
-        // The execroot reaches `changelog.d/` through a link too: the fold must
+        // The execroot reaches `changelog. d/` through a link too: the fold must
         // reserve the real fragments and leave the link in place.
         let repo = TempRepo::new("fragment-dir-symlink");
         repo.write_changelog(CHANGELOG);
@@ -2032,7 +2032,7 @@ mod tests {
         repo.write_fragment("feature-a.md", "### Added\n\n- from a\n");
 
         crash_at_boundary(&repo, FoldStage::AfterReserve(0));
-        // The reserved fragment is out of changelog.d/ and inside the txn.
+        // The reserved fragment is out of changelog. d/ and inside the txn.
         assert!(
             repo.fragment_names().is_empty(),
             "fragment reserved, not in place"

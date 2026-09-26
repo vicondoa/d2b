@@ -1,12 +1,12 @@
 //! Frozen resource API admission limits.
 //!
 //! These ceilings cap resource API admission: request envelope, response,
-//! batch, and list bounds size a single admission round-trip;watch bounds cap
-//! per-session and per-zone credits, filters, and queue growth;deadline bounds
+//! batch, and list bounds size a single admission round-trip; watch bounds cap
+//! per-session and per-zone credits, filters, and queue growth; deadline bounds
 //! cap request admission wait, with separate expedited and per-principal concurrency
-//! ceilings;and role bounds cap role rule graphs and bindings. The `DEFAULT_`
+//! ceilings; and role bounds cap role rule graphs and bindings. The `DEFAULT_`
 //! variants name the fallback applied when a caller omits the corresponding field.
-//! Byte ceilings are raw bytes;deadline ceilings are raw milliseconds.
+//! Byte ceilings are raw bytes; deadline ceilings are raw milliseconds.
 
 pub const MAX_REQUEST_CANONICAL_BYTES: usize = 512 * 1024;
 pub const MAX_RESPONSE_CANONICAL_BYTES: usize = 512 * 1024;

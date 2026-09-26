@@ -290,7 +290,7 @@ pub enum BridgeTransferKind {
 
 impl BridgeHandoff for UnixStream {
     // Descriptor-passing sendmsg, MSG_DONTWAIT non-blocking on a poll-driven
-    // sync bridge surface;no async form fits the trait contract here.
+    // sync bridge surface; no async form fits the trait contract here.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn handoff_transfer_fd(
         &mut self,

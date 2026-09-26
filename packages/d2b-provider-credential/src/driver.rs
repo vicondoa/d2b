@@ -25,7 +25,7 @@
 //! - finalizer enrollment + agent child minting + provider readiness ->
 //!   [`ResourceDriver::reconcile`].
 //! - `prepare_finalize`/`execute_finalize`/`finalize` -> [`ResourceDriver::delete`].
-//! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
+//! - `UpdateStatus` -> `ctx. set_status` (in-memory only, R11).
 //!
 //! One input has no durable home in the new runtime below the port: the old
 //! revocation gate read the lease facts from the Credential's persisted
@@ -296,7 +296,7 @@ pub struct CredentialDriverArgs {
     /// The zone the plane serves.
     pub zone: ZoneId,
     /// Zone controller generation folded into every revocation request
-    /// (old `policy_snapshot.controller_generation`).
+    /// (old `policy_snapshot. controller_generation`).
     pub controller_generation: ControllerGeneration,
     /// The daemon-supplied facet set the family's own effects
     /// implementation is built from (U8): the construction site holds no
@@ -977,7 +977,7 @@ const CREDENTIAL_VERBS: &[&str] = &[
 /// The execution domains the Credential type can be reconciled in.
 ///
 /// A Credential row names a Host or a Guest execution target
-/// (`spec.scope.executionRef`; the old `credential_execution_ref` admitted
+/// (`spec. scope. executionRef`; the old `credential_execution_ref` admitted
 /// exactly those two), so the type spans both domains.
 const CREDENTIAL_EXECUTION_DOMAINS: &[&str] = &["host", "guest"];
 
@@ -1011,7 +1011,7 @@ const CREDENTIAL_CREATIONS: &[ChildCreation] = &[ChildCreation {
 /// `Credential` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot
 /// serve credential rows without it, so it must be registered before the
 /// plane opens. The type is not exportable (`ResourceExport` admits only
-/// qualified `*.d2bus.org.*Service` types), and it serves no broker
+/// qualified `*.d2bus. org.*Service` types), and it serves no broker
 /// operations.
 ///
 /// U8: the driver's effects are this crate's own implementation

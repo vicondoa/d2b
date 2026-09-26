@@ -1,5 +1,3 @@
-# `w3-33-sk-frontend-uhid.md`
-
 ### Changed
 
 - d2b-sk-frontend: extract UHID event parsing into a testable `parse_event`

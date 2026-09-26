@@ -68,7 +68,7 @@ impl AsyncHidrawDevice {
     }
 
     /// Read a single 64-byte CTAPHID report from the physical token.
-    // Readiness-gated non-blocking read inside `AsyncFd::try_io`;the std
+    // Readiness-gated non-blocking read inside `AsyncFd::try_io`; the std
     // `Read` impl over the raw fd is the sanctioned AsyncFd shape.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub async fn read_report(&self) -> std::io::Result<CtaphidReport> {
@@ -94,7 +94,7 @@ impl AsyncHidrawDevice {
     }
 
     /// Write a single 64-byte CTAPHID report to the physical token.
-    // Readiness-gated non-blocking write inside `AsyncFd::try_io`;the std
+    // Readiness-gated non-blocking write inside `AsyncFd::try_io`; the std
     // `Write` impl over the raw fd is the sanctioned AsyncFd shape.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub async fn write_report(&self, report: &CtaphidReport) -> std::io::Result<()> {
@@ -239,7 +239,7 @@ pub fn authenticate_peer<F: std::os::fd::AsFd>(
 
 /// Bind (and tighten) the per-VM relay socket the accept loop serves.
 // Short mkdir/unlink/chmod on the socket path at a sync public surface;
-    // converting to async would ripple the crate's exported API beyond scope。
+    // converting to async would ripple the crate's exported API beyond scope.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub fn bind_accept_socket(path: &Path) -> std::io::Result<StdUnixListener> {
     if let Some(parent) = path.parent() {

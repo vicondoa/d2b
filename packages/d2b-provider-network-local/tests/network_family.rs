@@ -157,7 +157,7 @@ let handle = std::thread::spawn(move || {
     }
 
     // Joining the fake kernel server's thread is the sync test harness's own
-    // blocking wait;the server leg itself runs on a plain test thread.
+    // blocking wait; the server leg itself runs on a plain test thread.
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn captured(&mut self) -> BrokerRequestEnvelope {
@@ -177,7 +177,7 @@ let handle = std::thread::spawn(move || {
 /// Serve one accepted kernel call:capture the EnvelopeInvoke frame and
 /// sendthe canned reply over the same SEQPACKET connection, exactly as
 /// the broker's origination socket would. Runs on the test's own blocking
-/// thread;the poll-and-sleep wait for the caller's canned answer is part
+/// thread; the poll-and-sleep wait for the caller's canned answer is part
 /// of this sync test harness, so the leg carries the test-helper sanction.
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 fn serve_kernel_call(

@@ -28,7 +28,7 @@ pub enum SystemCoreError {
     CapabilityMissing,
     /// The kernel is below the mandatory system-minijail floor.
     KernelTooOld,
-    /// The delegated cgroup leaf has no writable cgroup.kill.
+    /// The delegated cgroup leaf has no writable cgroup. kill.
     CgroupKillUnavailable,
 }
 

@@ -1563,7 +1563,7 @@ fn zone_bundle_for_uid<'a>(
     Some((zone.as_str().to_owned(), bytes))
 }
 
-/// The authored `metadata.ownerRef` of one row of a verified Zone resource
+/// The authored `metadata. ownerRef` of one row of a verified Zone resource
 /// bundle, parsed into a canonical reference.
 fn row_owner_ref(bundle_bytes: &[u8], resource_type: &str, name: &str) -> Option<ResourceRef> {
     let bundle: serde_json::Value = serde_json::from_slice(bundle_bytes).ok()?;
@@ -1619,7 +1619,7 @@ fn binds_runtime_socket(role: &ProcessRole) -> bool {
 /// Pin the Device scope of one Device-owned worker launch.
 ///
 /// The launched row is resolved from the verified Zone resource bundle the
-/// request's `zone_uid` names (`Process.metadata.ownerRef`), that owner must
+/// request's `zone_uid` names (`Process. metadata. ownerRef`), that owner must
 /// be a `Device`, `owner_ref` must be exactly it, and `owner_uid` must be
 /// that Device row's durable uid. Only then is the Device's declared Guest
 /// read. Every refusal is fail-closed (the retired broker arm's

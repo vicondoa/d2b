@@ -1,5 +1,3 @@
-# `w3-10-contracts-resource-status-size.md`
-
 ### Changed
 
 - Building a v3 `ResourceStatus` now enforces the 64 KiB status-size bound

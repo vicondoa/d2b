@@ -3594,7 +3594,7 @@ mod tests {
 
         // 60s is a 12x headroom over that budget: wide enough that scheduling
         // delay cannot trip it on any normally-loaded machine, finite enough
-        // that inflation beyond ~12x (e.g., an ms-misread-as-seconds budget
+        // that inflation beyond ~12x (e. g., an ms-misread-as-seconds budget
         // like 5000ms read as 500s) fails on the measurement. Smaller
         // inflations - a 10x arithmetic error to 50s, or a copy-paste to the
         // 30s request lifetime - land below the ceiling by design: catching

@@ -8,7 +8,7 @@
 //! check relies on pidfs (per-pidfd `(st_dev, st_ino)` stability
 //! across PID reuse). Static eval gates
 //! (`tests/v1.1-kernel-floor-eval.sh`) catch the easy case (operator
-//! flake declares an older kernel via `boot.kernelPackages`); this
+//! flake declares an older kernel via `boot. kernelPackages`); this
 //! runtime probe catches the hard case - a custom-built kernel at
 //! >= 6.9 that strips pidfs support.
 //!

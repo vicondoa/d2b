@@ -84,17 +84,17 @@ pub enum InteractionEffectPhase {
 }
 
 /// One Provider effect outcome: the phase the effect returned plus the
-/// `status.resource` projection the effect publishes.
+/// `status. resource` projection the effect publishes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InteractionEffectOutcome {
     /// The convergence phase of the row.
     pub phase: InteractionEffectPhase,
-    /// The optional `status.resource` projection.
+    /// The optional `status. resource` projection.
     pub resource: Option<Value>,
 }
 
 impl InteractionEffectOutcome {
-    /// A phase-only outcome with no `status.resource` projection.
+    /// A phase-only outcome with no `status. resource` projection.
     pub const fn phase(phase: InteractionEffectPhase) -> Self {
         Self {
             phase,
@@ -102,7 +102,7 @@ impl InteractionEffectOutcome {
         }
     }
 
-    /// A phase outcome carrying the row's `status.resource` projection.
+    /// A phase outcome carrying the row's `status. resource` projection.
     pub fn projection(phase: InteractionEffectPhase, resource: Value) -> Self {
         Self {
             phase,
@@ -201,13 +201,13 @@ impl core::fmt::Display for InteractionDriverError {
 impl std::error::Error for InteractionDriverError {}
 
 /// Typed in-memory status projection (never persisted). Carries the closed
-/// phase the effect published plus the Provider's `status.resource`
+/// phase the effect published plus the Provider's `status. resource`
 /// projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InteractionDriverStatus {
     /// Whether the Provider realization is current.
     pub ready: bool,
-    /// The Provider's `status.resource` projection, when it published one.
+    /// The Provider's `status. resource` projection, when it published one.
     pub resource: Option<Value>,
 }
 
@@ -330,7 +330,7 @@ pub struct InteractionEffectRequest<'a> {
     /// stripped, so every type decodes its typed spec without re-deriving the
     /// split.
     pub spec: Value,
-    /// The row's `spec.providerRef`.
+    /// The row's `spec. providerRef`.
     pub provider_ref: Option<ResourceRef>,
     /// Owned child rows realizing the current desired child set.
     pub children: &'a [InteractionChild],
@@ -392,7 +392,7 @@ pub trait InteractionType: Clone + Send + Sync + 'static {
     const RESOURCE_TYPE: &'static str;
     /// The Provider reference the type's rows select.
     const PROVIDER_REF: &'static str;
-    /// Whether a row's spec must carry the typed universal `spec.providerRef`.
+    /// Whether a row's spec must carry the typed universal `spec. providerRef`.
     const SPEC_PROVIDER_SELECTOR: bool;
 
     /// The preserved reconcile resync cadence of the type: the Provider's

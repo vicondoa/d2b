@@ -18,7 +18,7 @@
 //! - `observe` -> [`ResourceDriver::recover`].
 //! - layout effect + `volume_children` ensure -> [`ResourceDriver::reconcile`].
 //! - volume-local cleanup -> [`ResourceDriver::delete`].
-//! - `UpdateStatus` -> `ctx.set_status` (in-memory only).
+//! - `UpdateStatus` -> `ctx. set_status` (in-memory only).
 //!
 //! Everything the driver needs from outside arrives through the driver
 //! effect port ([`VolumeDriverEffects`]): the layout effect over the
@@ -689,7 +689,7 @@ impl ResourceDriver for VolumeDriver {
 ///
 /// Derived from the placement contract: `Volume` names no placement anchor
 /// (`PlacementAnchor::canonical_for` resolves none), so a Volume row never
-/// carries the canonical `spec.executionRef` and the plane reconciles it on
+/// carries the canonical `spec. executionRef` and the plane reconciles it on
 /// its containing Zone's Host. A source or attachment reference selects
 /// where a share is served, never where the row itself is reconciled.
 const VOLUME_EXECUTION_DOMAINS: &[&str] = &["host"];
@@ -705,7 +705,7 @@ const VOLUME_READS: &[WellKnownType] = &[];
 /// `Volume` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot serve
 /// the converted volume shapes without it, so it must be registered before
 /// the plane opens. The type is not exportable: `ResourceExport` admits only
-/// qualified `*.d2bus.org.*Service` types, so a volume can never be an
+/// qualified `*.d2bus. org.*Service` types, so a volume can never be an
 /// export subject. The driver serves no broker operations and contributes no
 /// startup steps; the `VolumeBinding` children it mints are declared in
 /// [`VOLUME_CREATIONS`].

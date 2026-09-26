@@ -107,7 +107,7 @@ pub enum ImportDisconnectPolicy {
     Teardown,
 }
 
-/// ResourceImport lifecycle state projected into `status.resource`.
+/// ResourceImport lifecycle state projected into `status. resource`.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]

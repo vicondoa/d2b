@@ -72,7 +72,7 @@ pub struct CredentialRevocationInputs {
     pub controller_generation: ControllerGeneration,
     /// The live Provider session generation the request binds.
     pub session_generation: ReconnectGeneration,
-    /// `credential.rotationGeneration`; a missing or zero value keeps the
+    /// `credential. rotationGeneration`; a missing or zero value keeps the
     /// old status read's default of 1.
     pub rotation_generation: u64,
 }

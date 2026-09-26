@@ -118,11 +118,11 @@ const SERVICE_INTERFACE: &str = "org.freedesktop.systemd1.Service";
 
 /// The systemd object interface a unit-identity property is defined on.
 ///
-/// `ControlGroup` and `MainPID` are defined on `org.freedesktop.systemd1.Service`
+/// `ControlGroup` and `MainPID` are defined on `org. freedesktop. systemd1.Service`
 /// (the family's transient service units), not on `Unit`; reading them through
 /// the Unit proxy fails every read with `UnknownProperty` and the identity can
 /// never bind (issue #587). `ActiveState` and `InvocationID` are defined on
-/// `org.freedesktop.systemd1.Unit`. `read_identity` routes every property read
+/// `org. freedesktop. systemd1.Unit`. `read_identity` routes every property read
 /// through this selection.
 fn identity_property_interface(property: &str) -> &'static str {
     match property {
@@ -464,7 +464,7 @@ async fn unit_proxy<'a>(manager: &Proxy<'a>, name: &str) -> Result<OwnedObjectPa
 
 /// Reads one unit-identity property through the proxy the selection seam
 /// names for it (issue #587: Service-owned properties must be addressed
-/// through `org.freedesktop.systemd1.Service`).
+/// through `org. freedesktop. systemd1.Service`).
 async fn unit_identity_property(
     connection: &Connection,
     unit_path: &str,
@@ -714,7 +714,7 @@ async fn invoke_open_pidfd_kernel(
 }
 
 // ---------------------------------------------------------------------------
-// Typed wire (de)serialization helpers
+// Typed wire (de) serialization helpers
 // ---------------------------------------------------------------------------
 
 /// Deserialize one typed request from the forwarded payload.
@@ -1448,7 +1448,7 @@ mod tests {
 
     /// Hermetic pin for the identity read's interface selection (issue
     /// #587): Service-owned properties (ControlGroup, MainPID) must be
-    /// addressed through `org.freedesktop.systemd1.Service`; reading them
+    /// addressed through `org. freedesktop. systemd1.Service`; reading them
     /// through the Unit proxy fails every read with UnknownProperty and the
     /// identity can never bind. Unit-owned identity properties
     /// (ActiveState, InvocationID) stay on the Unit interface.

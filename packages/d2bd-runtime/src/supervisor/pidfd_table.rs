@@ -272,7 +272,7 @@ impl PidfdTable {
         self
     }
 
-    /// Set the `BrokerReapLog` on an already-constructed table (e.g.
+    /// Set the `BrokerReapLog` on an already-constructed table (e. g.
     /// after `restore_from_disk`).
     pub fn set_broker_reap_log(&self, log: Arc<BrokerReapLog>) {
         let _ = self.broker_reap_log.set(log);
@@ -598,7 +598,7 @@ impl PidfdTable {
     /// Duplicate the daemon-held pidfd for `(vm, role)` for a read-only
     /// liveness poll. Returns the dup'd fd plus the registered
     /// `(pid, start_time_ticks)`, or `None` when no entry is registered
-    /// (e.g. rollback already removed it) or the dup fails.
+    /// (e. g. rollback already removed it) or the dup fails.
     ///
     /// This OBSERVES only - it never removes the entry. All
     /// deregistration stays in the teardown / rollback path.

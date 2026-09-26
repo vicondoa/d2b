@@ -21,7 +21,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use crate::runtime::RuntimeMetadata;
 
-/// Current emitted `_manifest.manifestVersion`.
+/// Current emitted `_manifest. manifestVersion`.
 ///
 /// Bumped to `6` for the local runtime/provider contract. Per-VM manifest
 /// entries now carry runtime/provider metadata and provider capability bits, and

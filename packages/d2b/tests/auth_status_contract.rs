@@ -8,7 +8,7 @@
 //!   * `auth status --json` deserializes strictly into
 //!     `d2b_contracts_control::cli_output::AuthStatusOutputV2` (`deny_unknown_fields` makes a successful
 //!     typed deserialize equivalent to the schema check the bash gate did via
-//!     docs/reference/cli-output/auth-status.schema.json);
+//!     docs/reference/cli-output/auth-status. schema.json);
 //!   * the per-role allowed/denied subcommand authz surface matches the binary's
 //!     contract (launcher gets `up` but keeps `audit` denied; `none` stays
 //!     read-only; admin gains `audit` and denies nothing);
@@ -85,7 +85,7 @@ fn parse_json(out: &std::process::Output) -> AuthStatusOutputV2 {
     );
     // Strict schema validation: AuthStatusOutputV2 (and its nested DTOs) are
     // deny_unknown_fields, so a successful typed deserialize is equivalent to
-    // validating against docs/reference/cli-output/auth-status.schema.json.
+    // validating against docs/reference/cli-output/auth-status. schema.json.
     serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
         panic!(
             "auth status --json did not match the AuthStatusOutputV2 schema: {err}\noutput:\n{}",
@@ -101,7 +101,7 @@ fn auth_status_roles_match_schema_and_authz() {
     let none_fixture = write_fixture(tmp.path(), "auth-none.json", NONE_FIXTURE);
     let admin_fixture = write_fixture(tmp.path(), "auth-admin.json", ADMIN_FIXTURE);
 
-    // Case 1 - launcher: gains launcher-allowed verbs (e.g. `list`) but keeps
+    // Case 1 - launcher: gains launcher-allowed verbs (e. g. `list`) but keeps
     // `audit` denied, and no retired v2 verbs are reported as allowed.
 
     let launcher = parse_json(&run_auth_status(

@@ -1,5 +1,3 @@
-# `w3-12-core-bundle-resolver.md`
-
 ### Changed
 
 - Zone bundle lookups no longer re-parse resource-bundle JSON or allocate composite keys per call: zone UID presence/identity, network-spec resolution, and guest setup descriptor / VMM intent lookups now read the bundles parsed once at load and borrow (zone, guest) keys from per-zone nested maps, so intent resolution allocates less on bundles with many zones.

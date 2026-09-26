@@ -310,7 +310,7 @@ pub(crate) async fn bridge_manager_row(
 ///
 /// Role/RoleBinding/Zone/Provider and the subject rows are manager rows, so
 /// without them a RoleBinding whose Role row moved returns
-/// `AuthorizationUnavailable` and its subjects are dropped - i.e. the Zone's
+/// `AuthorizationUnavailable` and its subjects are dropped - i. e. the Zone's
 /// committed policy would empty out. A miss stays the loud, fail-closed
 /// compile failure it is today.
 ///
@@ -2471,7 +2471,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 // row has no durable status to write - the row's actor owns
                 // status (R11). The controller's layered status is captured
                 // by the effect call that drove this session and published as
-                // the row's `status.resource` projection; a session with no
+                // the row's `status. resource` projection; a session with no
                 // capture point (an explicit lifecycle relist) acknowledges
                 // the write without persisting it. Converted children never
                 // never receive a provider-written status either: the Process and
@@ -4155,8 +4155,8 @@ impl ZoneResourceRuntime {
     /// reference.
     ///
     /// The pre-v3 store linked every owned row to its owner by uid: it
-    /// resolved the row's `metadata.ownerRef` to the owner row's uid and
-    /// carried that value in `record.owner_uid`
+    /// resolved the row's `metadata. ownerRef` to the owner row's uid and
+    /// carried that value in `record. owner_uid`
     /// (`@@REDB-D@@::transaction::resolve_uid_in_read`), and the
     /// old Process descriptor composer read it as the launch ticket's owner
     /// identity. `Guest` stays on this plane, so a converted Process row
@@ -6079,7 +6079,7 @@ fn child_publication_gate(
 
 /// Whether one committed child row's status reports a failure the row's own
 /// actor will retry: the manager view stamps a failed actor's closed
-/// classification under `status.resource.driverFailure` (the converted plane
+/// classification under `status. resource. driverFailure` (the converted plane
 /// has no durable status, R11/AE6), so this is where a reader can tell a
 /// child's retry in progress from a terminal child failure.
 fn row_status_failure_is_retryable(resource: &Value) -> bool {
@@ -10022,7 +10022,7 @@ where
 /// R11/AE6 leaves the public Resource API no status write path, so the
 /// daemon's operator admission is the last layer that sees a submission: both
 /// spellings a request may use (`status`, or the nested
-/// `resource.status`) are read here, and this is the enforcement point for
+/// `resource. status`) are read here, and this is the enforcement point for
 /// `ADR-046-telemetry-audit-and-support`, section "Host resource status". The
 /// `system-core` reconciler sets `isolationPosture` and
 /// `isolationPostureMessage` on every user-only Host from the spec alone, and

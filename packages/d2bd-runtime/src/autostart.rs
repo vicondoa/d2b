@@ -47,7 +47,7 @@ use tokio::task::JoinSet;
 /// see meaningful progress in the journal before the next batch
 /// starts" on the small-fleet desktop deployments d2b targets.
 /// Operators with bigger fleets override via
-/// `d2b.daemon.autostart.parallelism` (NixOS) →
+/// `d2b. daemon. autostart. parallelism` (NixOS) →
 /// `AutostartConfig::parallelism`.
 pub const DEFAULT_PARALLELISM: usize = 3;
 
@@ -56,7 +56,7 @@ pub const DEFAULT_PARALLELISM: usize = 3;
 /// can be re-derived without re-loading the world.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmAutostartEntry {
-    /// VM name as it appears in `_manifest.vms`.
+    /// VM name as it appears in `_manifest. vms`.
     pub vm: String,
     /// Env this VM belongs to, if any. Net VMs use the env from
     /// their `sys-<env>-net` name (= `Some("<env>")`); workloads
@@ -93,7 +93,7 @@ impl AutostartPlan {
 }
 
 /// Tunables for [`execute_autostart`]. Mirrors the
-/// `d2b.daemon.autostart.*` NixOS option set.
+/// `d2b. daemon. autostart.*` NixOS option set.
 #[derive(Debug, Clone, Copy)]
 pub struct AutostartConfig {
     /// Concurrency cap N (number of VMs started in parallel within
@@ -254,14 +254,14 @@ fn vm_is_autostart_eligible(vm: &d2b_core::manifest_v04::VmEntry) -> bool {
 }
 
 /// Drive a built plan. Net VMs are started first (up to
-/// `config.parallelism` in parallel); once that phase settles, any
+/// `config. parallelism` in parallel); once that phase settles, any
 /// env whose net VM ended in a degraded/failed state has its
 /// workloads marked `Outcome::Degraded` *without dispatch*, and
 /// the remaining workloads are started (again, up to
-/// `config.parallelism` in parallel).
+/// `config. parallelism` in parallel).
 ///
 /// The function is safe to invoke repeatedly: each VM is gated on
-/// `starter.is_running(...)`, so a re-entry on SIGHUP or
+/// `starter. is_running(...)`, so a re-entry on SIGHUP or
 /// bundle-reload short-circuits to `Outcome::AlreadyRunning` for
 /// every VM that's still supervised.
 pub async fn execute_autostart<S: VmStarter>(
@@ -402,7 +402,7 @@ where
         let pre_degraded = Arc::clone(&pre_degraded);
         let request_txs = Arc::clone(&request_txs);
         join_set.spawn(async move {
-            // Pre-degraded VMs (e.g. flagged by the kernel-module-check
+            // Pre-degraded VMs (e. g. flagged by the kernel-module-check
             // pass) short-circuit before anything else.
             if pre_degraded.contains(&entry.vm) {
                 return (

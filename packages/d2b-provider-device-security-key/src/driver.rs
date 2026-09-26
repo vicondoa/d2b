@@ -2,8 +2,8 @@
 //! conversion of the daemon-owned security-key Provider path.
 //!
 //! The family serves the two converted security-key ResourceTypes the
-//! Provider owns - `security-key.d2bus.org.SecurityKeyService` and
-//! `security-key.d2bus.org.SecurityKeyBinding` - and their `Device` rows
+//! Provider owns - `security-key. d2bus. org.SecurityKeyService` and
+//! `security-key. d2bus. org.SecurityKeyBinding` - and their `Device` rows
 //! belong to the `d2b-provider-device` family, which owns the `Device`
 //! ResourceType.
 //!
@@ -77,10 +77,10 @@ const FRONTEND_PROCESS_PROVIDER_REF: &str = d2b_provider_process_systemd::PROVID
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityKeyComponent {
     /// The security-key authority Service
-    /// (`security-key.d2bus.org.SecurityKeyService`).
+    /// (`security-key. d2bus. org.SecurityKeyService`).
     Service,
     /// The per-Guest security-key Binding
-    /// (`security-key.d2bus.org.SecurityKeyBinding`).
+    /// (`security-key. d2bus. org.SecurityKeyBinding`).
     Binding,
 }
 
@@ -624,7 +624,7 @@ mod tests {
     }
 
     /// The relay Endpoint this driver declares carries a closed purpose
-    /// token: `EndpointSpec.purpose` is a `BoundedToken`, so the dotted
+    /// token: `EndpointSpec. purpose` is a `BoundedToken`, so the dotted
     /// pre-wave spelling is an admission refusal.
     #[test]
     fn security_key_relay_endpoint_purpose_is_a_closed_token() {

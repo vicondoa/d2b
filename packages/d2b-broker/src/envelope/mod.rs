@@ -906,11 +906,11 @@ pub struct DispatchOutcome {
     /// The canonical result payload.
     pub result: CanonicalJsonObject,
     /// The descriptors the answering peer minted this invocation, when the
-    /// operation's result carries any.where
+    /// operation's result carries any. Wherewhere
     ///
     /// Formal fd provenance tracking is the answering peer's job (KTD7):the
     /// carrier only refuses a descriptor that is one of the call's own attached
-    /// fds, never a fresh mint. The caller owns the returned descriptors;the
+    /// fds, never a fresh mint. The caller owns the returned descriptors; the
     /// forwarder closes them on any refusal.
     pub fds: Vec<OwnedFd>,
 }
@@ -980,7 +980,7 @@ pub struct DirectInvocation<'a> {
     /// sees the same block the forward carrier would carry.
     pub context: Option<&'a ForwardContext>,
     /// The descriptors the caller attached to this invocation, when any.
-    /// The caller owns them;the invocation borrows them for its duration.
+    /// The caller owns them; the invocation borrows them for its duration.
     pub fds: &'a [OwnedFd],
 
     /// The kernel kind the row's fd facet declares, when it declares one.
@@ -1145,7 +1145,7 @@ impl BrokerEnvelope {
     /// frame's SCM_RIGHTS attachments are the operation's descriptors, validated
     /// here against the row's declared fd facet before dispatch, so an
     /// oversized-but-transport-legal set is refused with the fd-leg code
-    /// rather than truncated by the transport.where
+    /// rather than truncated by the transport. Wherewhere
     ///
     /// # Errors
     ///
@@ -1531,13 +1531,13 @@ impl BrokerEnvelope {
     }
 
     /// Whether one request's attached fd set is admitted by the row's fd
-    /// facet, before dispatch。
+    /// facet, before dispatch.
     ///
-    /// A row that declares no fd carriage admits only the empty set;an
+    /// A row that declares no fd carriage admits only the empty set; an
     /// oversized-but-transport-legal set (count over the row's declared max,
     /// kind mismatch, or a row whose facet exceeds the frame ceiling) is
     /// refused with the fd-leg code rather than let the transport truncate an
-    /// anonymous oversized frame.where
+    /// anonymous oversized frame. Wherewhere
     fn request_fds_admitted(row: &BrokerOperationRow, fds: &[OwnedFd]) -> bool {
         if fds.len() > usize::from(row.max_fds) {
             return false;
@@ -3101,12 +3101,12 @@ mod tests {
                 let returned_write_end = Arc::clone(&returned_write_end);
                 Box::pin(async move {
                     // Request leg:the descriptor the caller attached crossed the socket
-                    // and reads back what the caller wrote.to
+                    // and reads back what the caller wrote. to
                     let mut echoed = [0_u8; 4];
                     let n =
                         read(invocation.fds[0].as_raw_fd(), &mut echoed).expect("read request fd");
                     assert_eq!(&echoed[..n], b"ping");
-                    // Response leg:answer with a fresh descriptor the peer minted.to
+                    // Response leg:answer with a fresh descriptor the peer minted. to
                     let (answer_read, answer_write) = pipe().expect("answer pipe");
                     *returned_write_end.lock().expect("slot") = Some(answer_write);
                     Ok(DispatchOutcome {
@@ -3141,7 +3141,7 @@ mod tests {
 
         // Read back what the peer wrote through the returned descriptor:the
         // minted write end stays on the peer's side,and the returned read end
-        // is a working duplicated handle, exactly as w12 asserts.to
+        // is a working duplicated handle, exactly as w12 asserts. to
         let write_end = write_slot
             .lock()
             .expect("slot")
@@ -3283,7 +3283,7 @@ mod tests {
                             .expect("canonical"),
                         // Return the call's own descriptor - a descriptor the peer did
                         // not mint this call. The carrier spoils the theft at the wire
-                        // boundary rather than at the handler.se
+                        // boundary rather than at the handler. se
                         fds: vec![invocation.fds[0].try_clone().expect("dup request fd")],
                     })
                 })

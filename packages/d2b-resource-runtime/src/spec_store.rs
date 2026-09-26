@@ -11,7 +11,7 @@
 //! variant of the message-passing surface allowed by KTD2: SQLite calls never
 //! run inside an async context or an actor mailbox (KTD12), writers serialize
 //! structurally on the single connection, and `busy_timeout` covers the
-//! remaining cross-connection case (two stores open on one file, e.g. during
+//! remaining cross-connection case (two stores open on one file, e. g. during
 //! handover).
 //!
 //! Admission is refuse-don't-queue (the loader_worker doctrine): a full
@@ -435,7 +435,7 @@ fn tighten_file_modes(path: &Path) {
     // files carry the daemon's private-data mode (0600). SQLite names the
     // side files by appending `-wal`/`-shm` to the *database file name*, so
     // the suffix is appended here too - `with_extension` would rewrite the
-    // real suffix (`spec-store.sqlite3` -> `spec-store.db-wal`) and leave
+    // real suffix (`spec-store. sqlite3` -> `spec-store. db-wal`) and leave
     // the files SQLite actually created at their creation mode. Side files
     // only exist while a connection holds the database open in WAL mode.
     let tighten = |p: &Path| {

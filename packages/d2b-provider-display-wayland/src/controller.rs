@@ -243,7 +243,7 @@ pub struct WaylandSessionStatus {
     pub resource: WaylandSessionResourceStatus,
 }
 
-/// Bounded `WaylandSession.status.resource` projection.
+/// Bounded `WaylandSession. status. resource` projection.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WaylandSessionResourceStatus {
     /// Stable Host proxy Process reference.

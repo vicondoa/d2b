@@ -207,7 +207,7 @@ impl ConsoleSessionTable {
 }
 
 impl ConsoleSessionTable {
-    /// drainer.  Replaces any existing session (e.g. after a VM restart).
+    /// drainer.  Replaces any existing session (e. g. after a VM restart).
     pub fn register_session(&mut self, vm: String, session: ConsoleSession) {
         // Abort any previous drainer for this VM.
         if let Some(mut old) = self.sessions.remove(&vm) {
@@ -372,7 +372,7 @@ pub struct ConsoleReadOutput {
 /// Spawn a drainer task for a Cloud Hypervisor serial socket.
 ///
 /// The task connects to `socket_path` (CH's `--serial socket=<path>`), reads
-/// bytes into the ring, and reconnects if CH closes the connection (e.g. after
+/// bytes into the ring, and reconnects if CH closes the connection (e. g. after
 /// a VM reboot). The ring's `notify` is triggered on each new chunk. The task
 /// runs on the caller-provided runtime handle (owned by the daemon binary).
 pub fn spawn_ch_serial_drainer(
@@ -408,7 +408,7 @@ pub fn spawn_ch_serial_drainer(
     })
 }
 
-/// Spawn a drainer task for a pre-opened async stream (e.g. the host end of a
+/// Spawn a drainer task for a pre-opened async stream (e. g. the host end of a
 /// qemu-media socketpair, converted to `tokio::net::UnixStream`).
 ///
 /// Unlike [`spawn_ch_serial_drainer`], this does not reconnect after EOF: the

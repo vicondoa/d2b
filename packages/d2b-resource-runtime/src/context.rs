@@ -95,7 +95,7 @@ pub struct WatchSatisfied {
 ///
 /// ```text
 /// if status matches condition { notify(subscriber, Satisfied) }
-/// else { watchers.insert(watch_id, ...) }
+/// else { watchers. insert(watch_id, ...) }
 /// ```
 ///
 /// Status transitions evaluate registered watches in the same handler. U3
@@ -347,7 +347,7 @@ pub struct ResourceContext {
     status: Option<Box<dyn Any + Send>>,
     /// Free-form status projection for the read surfaces (R11: in-memory
     /// only, never persisted). The erased status slot above is typed and
-    /// driver-private; this is the closed-JSON `status.resource` layer the
+    /// driver-private; this is the closed-JSON `status. resource` layer the
     /// manager renders onto the wire for rows whose consumer contract
     /// carries one (the Cloud Hypervisor Guest runtime status).
     status_projection: Option<serde_json::Value>,
@@ -463,7 +463,7 @@ impl ResourceContext {
         self.status = Some(Box::new(status));
     }
 
-    /// Publish the wire-visible `status.resource` layer of this row (R11:
+    /// Publish the wire-visible `status. resource` layer of this row (R11:
     /// in-memory only). The actor takes it after the pass that set it and the
     /// manager renders it onto the row's status; a driver that publishes no
     /// projection leaves the layer empty, exactly as today.
@@ -518,11 +518,11 @@ impl ResourceContext {
     ///
     /// - `Ok(None)`: **absent** - no row for `key` exists in this manager's
     ///   Zone (never created, already retired, or owned by another Zone).
-    /// - `Ok(Some(view))` with `view.status == None`: the row exists but no
+    /// - `Ok(Some(view))` with `view. status == None`: the row exists but no
     ///   actor has ever published a status for it (spawn still in flight,
     ///   poisoned spawn, actor restart). **Unknown**, never "not ready".
     /// - `Ok(Some(view))` with
-    ///   `view.status_generation != Some(view.generation)`: the last
+    ///   `view. status_generation != Some(view. generation)`: the last
     ///   published status describes an older generation, so it is not
     ///   observed state of the current row.
     ///   [`ResourceView::observed_status`] folds both of the last two cases
@@ -533,7 +533,7 @@ impl ResourceContext {
     ///   Never reported as absence.
     ///
     /// Readiness of a child or dependency is therefore
-    /// `view.observed_status() == Some(ResourceStatus::Ready)`; when the
+    /// `view. observed_status() == Some(ResourceStatus::Ready)`; when the
     /// answer is not-ready, a [`Self::watch`] on [`WatchCondition::Ready`]
     /// wakes this resource's actor on the transition and the next reconcile
     /// re-reads here.
@@ -596,7 +596,7 @@ impl ResourceContext {
     /// child that owns it.
     ///
     /// Idempotent under retry, and non-blocking (R5): every owned child's
-    /// deletion is (re)requested - the manager's `Remove` is idempotent and
+    /// deletion is (re) requested - the manager's `Remove` is idempotent and
     /// the child's own finalize/delete are retry-idempotent - and the call
     /// then reports [`ResourceError::ChildrenDraining`] while any owned child
     /// row is still live. The caller classifies that retryable and requeues,
@@ -610,7 +610,7 @@ impl ResourceContext {
             // The manager already cascaded the deletion when this resource
             // was marked deleting; requesting it again is the idempotent
             // nudge that guarantees a child whose actor missed the first
-            // cascade (e.g. spawned between passes) runs its own
+            // cascade (e. g. spawned between passes) runs its own
             // finalize-before-delete pass.
             let _ = self.manager.delete(&child.key).await;
         }
@@ -1590,7 +1590,7 @@ mod tests {
         assert!(notify2_rx.try_recv().is_err(), "exactly one immediate notification");
     }
 
-    /// `ctx.watch()` routes the registration through the manager with this
+    /// `ctx. watch()` routes the registration through the manager with this
     /// resource's key as the subscriber, and satisfaction arrives on this
     /// resource's notify channel.
     #[tokio::test]

@@ -20,10 +20,10 @@
 //!   over the [`UserDriverEffects`] discovery port.
 //! - `finalize` -> [`ResourceDriver::delete`] (old `FinalizeResult` was
 //!   converged: the family owns no children and carries no finalizer).
-//! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
+//! - `UpdateStatus` -> `ctx. set_status` (in-memory only, R11).
 //!
 //! Deliberately not carried from the old handler: the durable
-//! `status.resource` JSON projection and its `lastReconciledAt` /
+//! `status. resource` JSON projection and its `lastReconciledAt` /
 //! `observedGeneration` writes (status is runtime-only now, R11), and the
 //! `assess_update` / `plan_upgrade` runner path (no driver equivalent; the
 //! family never planned an upgrade). The old runner's 5s resync relisted and
@@ -126,7 +126,7 @@ impl std::error::Error for UserDriverError {}
 /// Typed in-memory status projection (R11: never persisted).
 ///
 /// The discovery is kept with the generation it was taken at, which is the
-/// runtime-only successor of the old durable `status.observedGeneration`
+/// runtime-only successor of the old durable `status. observedGeneration`
 /// plan short-circuit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserDriverStatus {
@@ -390,11 +390,11 @@ impl ResourceDriver for UserDriver {
 /// `User` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot serve the
 /// converted bootstrap rows without it, so it must be registered before the
 /// plane opens. The type is not exportable: `ResourceExport` admits only
-/// qualified `*.d2bus.org.*Service` types. The driver serves no broker
+/// qualified `*.d2bus. org.*Service` types. The driver serves no broker
 /// operations, creates no children, and reads no other resource: discovery
 /// reaches the local machine through the family's own probe. `User` names
 /// no placement anchor, so a User row never carries the canonical
-/// `spec.executionRef` and the plane reconciles it on its own Host domain -
+/// `spec. executionRef` and the plane reconciles it on its own Host domain -
 /// the machine whose local identity it names.
 ///
 /// U5: the declaration builds the family's own effects implementation from

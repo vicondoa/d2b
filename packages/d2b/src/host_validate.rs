@@ -4,7 +4,7 @@
 //! This module ships the operator-facing one-command preflight that
 //! must run after a fresh `nixos-rebuild switch` to record the
 //! per-wave validation evidence the readiness assertions consume.
-//! (`d2b.daemonExperimental.enable` defaults `true` and is no
+//! (`d2b. daemonExperimental. enable` defaults `true` and is no
 //! longer evidence-auto-flipped - there is no default to flip - but it
 //! still functionally gates the daemon control plane; setting it
 //! `false` reverts the host to the unsupported pre-daemon legacy
@@ -39,7 +39,7 @@
 //! and external hardware). Instead, it lets the operator attest that
 //! the validators were run by issuing the evidence record as a
 //! single composite operation. Per-wave validators that already write
-//! their own evidence records (e.g. `tests/minijail-validator-swtpm.sh`
+//! their own evidence records (e. g. `tests/minijail-validator-swtpm.sh`
 //! → `p1-swtpm.json`) continue to do so; this verb is the umbrella
 //! preflight that produces the per-wave `<wave>.json` records the
 //! readiness option consumes.
@@ -63,7 +63,7 @@ pub(crate) const DEFAULT_EVIDENCE_DIR: &str = "/var/lib/d2b/validated";
 /// `tests/host-validate-verb-eval.sh` enforces parity.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WaveSpec {
-    /// Wave id, e.g. `"p1"` or `"w5Fu"`. Matches the file basename the
+    /// Wave id, e. g. `"p1"` or `"w5Fu"`. Matches the file basename the
     /// readiness option consumes (`/var/lib/d2b/validated/<wave>.json`).
     pub wave: &'static str,
     /// Short human-readable summary of what the wave covers.
@@ -185,7 +185,7 @@ pub(crate) enum WaveStatus {
     /// At least one declared validator script is missing.
     Missing,
     /// No validators are declared for this wave (informational -
-    /// e.g. `p6`/`p7` whose readiness signal is gate-output, not a
+    /// e. g. `p6`/`p7` whose readiness signal is gate-output, not a
     /// per-host script).
     NoValidators,
     /// Apply mode only: evidence record was written successfully.
@@ -193,7 +193,7 @@ pub(crate) enum WaveStatus {
     /// Apply mode only: evidence write was skipped because the wave
     /// is `Missing` or because `--wave <other>` filtered it out.
     Skipped,
-    /// Apply mode only: evidence write failed (e.g. permission
+    /// Apply mode only: evidence write failed (e. g. permission
     /// denied). The detail field carries the underlying error.
     WriteFailed,
 }
@@ -218,7 +218,7 @@ pub(crate) struct WaveReport {
     pub status: WaveStatus,
     /// Per-validator presence map: `(basename, present)`.
     pub validators: Vec<(String, bool)>,
-    /// Human-readable detail (e.g. evidence path written, error
+    /// Human-readable detail (e. g. evidence path written, error
     /// reason).
     pub detail: String,
     /// On `Attested`, the absolute evidence path. Otherwise `None`.

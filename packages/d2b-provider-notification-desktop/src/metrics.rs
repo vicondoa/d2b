@@ -180,7 +180,7 @@ mod tests {
     }
 
     /// The collector-field injection fence: duplicate keys, newline or
-    /// oversized values, `d2b.provider` spoofing, and out-of-vocabulary
+    /// oversized values, `d2b. provider` spoofing, and out-of-vocabulary
     /// categories are all rejected.
     #[test]
     fn collector_field_validation_rejects_injection_and_spoofing() {

@@ -64,7 +64,7 @@ impl From<io::Error> for ApplySysctlError {
     }
 }
 
-/// Converts `net.ipv6.conf.<ifname>.disable_ipv6` to
+/// Converts `net. ipv6.conf.<ifname>.disable_ipv6` to
 /// `<root>/net/ipv6/conf/<ifname>/disable_ipv6` for safe per-link
 /// writes.
 pub(crate) fn intent_to_proc_path(root: &Path, intent: &SysctlIntent) -> PathBuf {

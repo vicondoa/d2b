@@ -5,7 +5,7 @@
 //! Host or Guest attachment policy that separate file, directory, ACL, and
 //! filesystem-view types would otherwise carry.
 //!
-//! `source.settings` never carries a raw host path in the authored spec: the
+//! `source. settings` never carries a raw host path in the authored spec: the
 //! `local-path` and `block-image` source kinds name an opaque bounded
 //! `sourcePolicyId` that resolves, only inside the Volume Provider's private
 //! authority, against that Provider's allowlisted root policy. Layout paths

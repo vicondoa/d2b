@@ -665,7 +665,7 @@ impl ForwardRendezvous {
                     ),
                 };
 // The handler-side legs append the invoking handler's own
-                // identity;the daemon-side record of a forwarded nested leg
+                // identity; the daemon-side record of a forwarded nested leg
                 // keys on the root id and the chain's depth exactly as the
                 // broker-side record of the in-broker leg does.
 
@@ -1439,7 +1439,7 @@ impl AsyncSeqpacket {
     ///
     /// A frame and its attachments arrive together or not at all, so the
     /// received descriptor count is exactly what the sender put on the
-    /// carrier;an oversized cmsg set is capped by the kernel at the receive
+    /// carrier; an oversized cmsg set is capped by the kernel at the receive
     /// buffer's ceiling, which is why the caller-side declaration check
     /// refuses a count over that ceiling rather than let a truncation pass..
     async fn read_frame_with_fds(&self, deadline: Duration) -> Result<(Vec<u8>, Vec<RawFd>), TypedError> {
@@ -1462,7 +1462,7 @@ impl AsyncSeqpacket {
         deadline: Duration,
     ) -> Result<(), TypedError> {
         // The transport writes the length prefix itself,so the body crosses
-        // as-is;the receiving transport strips the same prefix back off..
+        // as-is; the receiving transport strips the same prefix back off..
         match tokio::time::timeout(deadline, self.send_datagram_with_fds(body, fds)).await {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => Err(send_failure(error.to_string(), error_source(error))),
@@ -1967,9 +1967,9 @@ mod tests {
 
     /// A handler that reads the descriptor the carrier attached to its
     /// call. The forwarded request leg carries the caller's descriptor over
-    /// SCM_RIGHTS;the rendezvous validates it against the wire declarations
+    /// SCM_RIGHTS; the rendezvous validates it against the wire declarations
     /// and hands it to the declared handler, so this handler reading it back
-    /// proves the round trip through the real socket and the provider envelope.to
+    /// proves the round trip through the real socket and the provider envelope. to
     struct FdEchoHandler;
 
     #[async_trait::async_trait]
@@ -2487,7 +2487,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
     use d2bd_runtime::unix_transport::write_frame_with_fds;
     /// Forward one invocation with SCM_RIGHTS attachments on the request
     /// frame, the way the broker's forwarder does once the request leg
-    /// carries fds.to
+    /// carries fds. to
     fn forward_with_fds(
         socket_path: &Path,
         operation: &str,
@@ -3746,7 +3746,7 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         // one-shot publication dial (started by the test after this returns)
         // can never race the bind: a dial before the bind would error, the
         // daemon would never retry, and the accept below would block the
-        // test's `broker.join()` forever.
+        // test's `broker. join()` forever.
         let listener = bind_public_socket(&socket_path, &test_identity())
             .expect("bind the test broker socket");
         std::thread::spawn(move || {

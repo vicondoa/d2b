@@ -882,7 +882,7 @@ mod tests {
         }
 
         /// Publish one declared row together with the driver-projected
-        /// `status.resource` layer the Process controller writes for a
+        /// `status. resource` layer the Process controller writes for a
         /// one-shot's terminal outcome.
         fn publish_outcome(&self, reference: &str, status: ResourceStatus, projection: Value) {
             self.publish(reference, status);
@@ -1321,7 +1321,7 @@ async fn deletion_targets_the_declared_rows() {
     }
 
     /// Malformed manager-child documents fail closed before any mutation: a
-    /// missing type, metadata.name, or spec is rejected, and an
+    /// missing type, metadata. name, or spec is rejected, and an
     /// unparseable type/name pair can never name a row.
 
     #[test]

@@ -1,7 +1,7 @@
 //! The TelemetryService resource type's driver, its spec decoder, and its
 //! driver declaration.
 //!
-//! The crate owns the `telemetry.d2bus.org.TelemetryService` type's complete
+//! The crate owns the `telemetry. d2bus. org.TelemetryService` type's complete
 //! resource knowledge: the observed-phase projection the old reconciler
 //! published, the admission rule over the spec's declared `serviceRole`, the
 //! driver's validate, recover, reconcile, and delete verbs, and the
@@ -12,7 +12,7 @@
 //! durable ingest-`Endpoint` rows reconcile re-reads, and it owns no child, so
 //! the crate declares no effect port and no child creation. The telemetry
 //! Serving Provider stays the authority for what a Service *means* - the
-//! `telemetry.d2bus.org.TelemetryService` contract this crate keys on lives in
+//! `telemetry. d2bus. org.TelemetryService` contract this crate keys on lives in
 //! `d2b-contracts-provider`, beside the sibling Binding type.
 //!
 //! # Contract flag (KTD3 fit; preserved from the daemon-side conversion)

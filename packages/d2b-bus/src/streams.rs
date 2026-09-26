@@ -559,7 +559,7 @@ impl StreamBridge {
         }
     }
 
-    // Bridge state is mutated in brief non-suspending critical sections;the
+    // Bridge state is mutated in brief non-suspending critical sections; the
     // same state is closed synchronously from Drop teardown (OutgoingStream/
     // IncomingStream), so the lock has no async form here.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]

@@ -255,7 +255,7 @@ pub fn tun_set_group(fd: &OwnedFd, gid: u32) -> io::Result<()> {
 /// (`RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_BENEATH`).
 /// `RESOLVE_NO_XDEV` is additionally enforced at every component as
 /// defense-in-depth and is relaxed *only* exactly where a real,
-/// pre-existing kernel/framework mount sits (e.g. `/run` tmpfs, `/dev`
+/// pre-existing kernel/framework mount sits (e. g. `/run` tmpfs, `/dev`
 /// devtmpfs), since broker paths legitimately span those mounts - see
 /// [`open_dir_path_safe`] for the per-component mount-tolerant walk:
 ///
@@ -291,7 +291,7 @@ pub mod path_safe {
     }
 
     /// Reject a world-writable (or symlink) parent directory, the most
-    /// common path-safety regression.for broker file targets.
+    /// common path-safety regression. for broker file targets.
     pub fn refuse_world_writable_parent(path: &Path) -> io::Result<()> {
         let parent = path.parent().ok_or_else(|| {
             io::Error::new(
@@ -976,7 +976,7 @@ pub mod path_safe {
     /// `fstatat(AT_SYMLINK_NOFOLLOW)` of a single `name` component
     /// beneath an already-open safe parent dirfd. Returns `Ok(None)`
     /// when the entry is absent (`ENOENT`). The caller inspects
-    /// `st_mode` (e.g. `S_IFLNK` / `S_IFDIR`), `st_uid`/`st_gid`, and
+    /// `st_mode` (e. g. `S_IFLNK` / `S_IFDIR`), `st_uid`/`st_gid`, and
     /// `st_dev`/`st_ino` without following a symlink. Used by the
     /// swtpm-dir hardening step to detect symlink / non-dir / owner
     /// drift without opening the target.
@@ -1006,7 +1006,7 @@ pub mod path_safe {
 
     /// Returns whether `fd` carries an extended POSIX ACL xattr. The
     /// tuple is `(access_present, default_present)` for
-    /// `system.posix_acl_access` and `system.posix_acl_default`. A
+    /// `system. posix_acl_access` and `system. posix_acl_default`. A
     /// directory with only the base owner/group/other entries (a
     /// "minimal" ACL) has NO xattr, so both `false` means "clean". An
     /// `ENODATA`/`ENOATTR`/`ENOTSUP` result is treated as absent so
@@ -1172,7 +1172,7 @@ pub mod path_safe {
     /// tmpfs, `/dev` a devtmpfs, `/sys` sysfs, `/proc` procfs, and
     /// `/var/lib` may be its own mount. A single `/`-anchored `NO_XDEV`
     /// walk therefore fails with `EXDEV` at the first mount crossing
-    /// (e.g. `/`→`/run` when preparing `/run/d2b/vms/<vm>`, or
+    /// (e. g. `/`→`/run` when preparing `/run/d2b/vms/<vm>`, or
     /// `/`→`/dev` when opening `/dev/net/tun`).
     ///
     /// We resolve **component by component**. Each component is opened
@@ -1335,7 +1335,7 @@ pub mod path_safe {
         // Apply mode + ownership only when WE created the dir, or when
         // the caller asked to re-assert metadata. The `created == false`
         // case here is the `mkdirat` EEXIST race: a concurrent actor
-        // (e.g. host activation) created the per-VM root between our
+        // (e. g. host activation) created the per-VM root between our
         // initial open (which returned NotFound) and this `mkdirat`.
         // Re-stamping it then would defeat `ensure_dir_preserve_existing`
         // exactly as the always-fchmod path did - clipping the ACL mask
@@ -1406,7 +1406,7 @@ pub mod path_safe {
     /// Like [`mkdir_at`] but FAILS CLOSED on `EEXIST` (surfaced as
     /// [`io::ErrorKind::AlreadyExists`]) instead of treating a pre-existing
     /// entry as success. Used where adopting a directory this call did NOT
-    /// create would be a security bug - e.g. the swtpm NVRAM dir
+    /// create would be a security bug - e. g. the swtpm NVRAM dir
     /// fresh-create path (issue #64): a role UID with `rwx` on the sticky
     /// per-VM root can race-create `swtpm/` between the absence pre-check
     /// and this `mkdirat`, and the broker must refuse rather than
@@ -1582,7 +1582,7 @@ pub mod pidfd_sys {
     /// `clone_args` per `<linux/sched.h>`. Layout is stable since
     /// kernel 5.5 (the first `clone3`-with-pidfd release). We pin the
     /// `size = 88` shape (clone3 v2 / set_tid extension); the kernel
-    /// `clone3` accepts a smaller `args.size` (88) and rejects bigger
+    /// `clone3` accepts a smaller `args. size` (88) and rejects bigger
     /// sizes on older kernels, so we pass the minimal size that
     /// supports CLONE_PIDFD.
     #[repr(C)]
@@ -1623,16 +1623,16 @@ pub mod pidfd_sys {
     /// v1.1.1 `into_cgroup_dirfd` parameter (per ADR 0011
     /// Decision item 8 + ADR 0018 § "Atomic cgroup placement"):
     /// when `Some(dirfd)`, the clone3 syscall is invoked with
-    /// `CLONE_INTO_CGROUP` and `args.cgroup = dirfd as u64`. The
+    /// `CLONE_INTO_CGROUP` and `args. cgroup = dirfd as u64`. The
     /// kernel atomically places the new child into the cgroup
     /// pointed at by `dirfd` (typically the per-role leaf
-    /// `d2b.slice/<vm>/<role>/`) - eliminating the
+    /// `d2b. slice/<vm>/<role>/`) - eliminating the
     /// classical race window where the parent writes the child's
-    /// PID to `cgroup.procs` AFTER fork (during which the child
+    /// PID to `cgroup. procs` AFTER fork (during which the child
     /// is unaccounted in the per-role cgroup).
     ///
     /// `CLONE_INTO_CGROUP` is supported on kernel ≥ 5.7; the
-    /// fork+cgroup.procs fallback retains the v1.0 semantics for
+    /// fork+cgroup. procs fallback retains the v1.0 semantics for
     /// any kernel that returns ENOSYS/EINVAL on the new flag.
     #[allow(unsafe_code)]
     pub fn clone3_pidfd_or_fork_fallback<F>(
@@ -1887,7 +1887,7 @@ pub mod pidfd_sys {
     /// Run `setfacl <op> <acl_spec> /proc/self/fd/<fd>` in a forked
     /// child while keeping the target fd CLOEXEC in the broker parent.
     ///
-    /// `op` is the setfacl operation flag, e.g. `-m` to add/modify an
+    /// `op` is the setfacl operation flag, e. g. `-m` to add/modify an
     /// entry or `-x` to remove one. See [`run_setfacl_on_fd`] for the
     /// CLOEXEC rationale.
     #[allow(unsafe_code)]
@@ -2408,7 +2408,7 @@ pub mod pidfd_sys {
         for path in &policy.writable_paths {
             by_path.entry(path.path.clone()).or_insert(false);
         }
-        // device_binds (e.g. /dev/kvm, /dev/dri/renderD128,
+        // device_binds (e. g. /dev/kvm, /dev/dri/renderD128,
         // /dev/nvidia*) are bind-mounted writable into the runner mount
         // namespace. The host already controls access via the dev-node
         // mode bits + groups; the bind-mount just ensures the device
@@ -2431,7 +2431,7 @@ pub mod pidfd_sys {
                 readonly,
             });
         }
-        // bind_mounts entries are cross-domain bind mounts (e.g.
+        // bind_mounts entries are cross-domain bind mounts (e. g.
         // /run/user/<uid>/wayland-0 -> /run/d2b-gpu/<vm>/wayland-0).
         // The dst is created if missing; the src is bind-mounted at the
         // dst with MS_BIND|MS_REC. Both src and dst must be absolute. The
@@ -3095,10 +3095,10 @@ pub mod pidfd_sys {
                 "SpawnRunner: activation stdin exceeds bounded envelope",
             ));
         }
-        // NamespaceSet.user is ALLOWED when
-        // RunnerIsolationSpec.user_namespace provides the uid_map/gid_map
+        // NamespaceSet. user is ALLOWED when
+        // RunnerIsolationSpec. user_namespace provides the uid_map/gid_map
         // values. Caller must set both for the child to be fake-root
-        // inside the new user NS. Setting namespaces.user without
+        // inside the new user NS. Setting namespaces. user without
         // user_namespace is rejected because the child would land in the
         // namespace with overflowuid (65534) and no caps - never useful.
         let user_ns_spec = isolation.user_namespace;
@@ -3491,7 +3491,7 @@ pub mod pidfd_sys {
                 // not mask=---.
                 //
                 // Reject umasks that exceed the POSIX file-mode width (0o777)
-                // so a config typo (e.g. umask = 9999) is caught explicitly
+                // so a config typo (e. g. umask = 9999) is caught explicitly
                 // rather than silently truncated by libc::umask.
                 if let Some(mask) = child_umask {
                     if mask > 0o777 {
@@ -3541,10 +3541,10 @@ pub mod pidfd_sys {
         }
 
         // Parent-side user-NS map writes. Performed AFTER clone3 returns
-        // (we have the child's PID) and AFTER any fallback cgroup.procs
+        // (we have the child's PID) and AFTER any fallback cgroup. procs
         // attach that the parent must perform with host credentials. Both
         // complete BEFORE the sync pipe write that unblocks the child.
-        // Sequencing per `man 7 user_namespaces`: cgroup.procs fallback
+        // Sequencing per `man 7 user_namespaces`: cgroup. procs fallback
         // attach → uid_map → setgroups=deny → gid_map → sync byte. The
         // child has already closed its inherited write_fd, so if the
         // parent dies BEFORE this point the child gets EOF on read and
@@ -3981,7 +3981,7 @@ mod tests {
 
     #[test]
     fn user_namespace_true_requires_spec() {
-        // namespaces.user=true but user_namespace=None is
+        // namespaces. user=true but user_namespace=None is
         // rejected before clone3 - the child would land in the
         // NS with overflowuid and never be able to setuid(0).
         let mut iso = isolation_with_user_namespace(None);
@@ -3994,7 +3994,7 @@ mod tests {
 
     #[test]
     fn user_namespace_spec_requires_namespace_flag() {
-        // user_namespace=Some but namespaces.user=false is
+        // user_namespace=Some but namespaces. user=false is
         // also rejected - the spec would be silently ignored.
         let mut iso = isolation_with_user_namespace(Some(UserNamespaceSpec {
             host_uid_for_zero: 1000,
@@ -4236,7 +4236,7 @@ mod tests {
     ///   to mutate mounts owned by the parent user-NS); the call
     ///   returns EPERM and the child exits `CHILD_EXIT_MOUNT` (64).
     ///
-    /// Skips cleanly on hosts with `kernel.unprivileged_userns_clone=0`
+    /// Skips cleanly on hosts with `kernel. unprivileged_userns_clone=0`
     /// (clone3 returns EPERM before any child runs).
     #[test]
     fn apply_mount_actions_skipped_in_user_ns() {
@@ -4309,7 +4309,7 @@ mod tests {
         ) {
             Ok(o) => o,
             Err(e) if e.raw_os_error() == Some(nix::libc::EPERM) => {
-                // kernel.unprivileged_userns_clone=0: user namespaces
+                // kernel. unprivileged_userns_clone=0: user namespaces
                 // not available on this host - skip rather than fail.
                 println!(
                     "SKIP: unprivileged user NS not available \
@@ -4332,7 +4332,7 @@ mod tests {
         }
 
         // CHILD_EXIT_MOUNT = 64 would mean apply_mount_actions ran and
-        // got EPERM on the locked /nix/store bind-mount - i.e., the
+        // got EPERM on the locked /nix/store bind-mount - i. e., the
         // `if !in_ns_credentials` guard is absent.
         assert_eq!(
             wait_status,

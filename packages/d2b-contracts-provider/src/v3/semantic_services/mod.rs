@@ -13,12 +13,12 @@
 //!
 //! Two spellings appear here and are never interchangeable. The API
 //! ResourceType is the dot-qualified name, for example
-//! `audio.d2bus.org.AudioService`, and a ResourceRef appends `/<name>` to it.
+//! `audio. d2bus. org.AudioService`, and a ResourceRef appends `/<name>` to it.
 //! The schema identity is the slash form, `<namespace>/<Type>/spec` and
 //! `<namespace>/<Type>/status`.
 //!
 //! Scope of the base. A base layer here is the frozen top-level field set of
-//! `spec` and of `status.resource` for one ResourceType, plus its schema
+//! `spec` and of `status. resource` for one ResourceType, plus its schema
 //! identity, version, and fingerprint. That is exactly the surface the
 //! specification freezes as provider-neutral. Where the specification names a
 //! base field but does not fix that field's interior member names or value
@@ -297,7 +297,7 @@ impl SemanticLayer {
 pub enum SemanticContractError {
     /// A base spec or status layer failed its frozen field-name schema.
     SchemaViolation,
-    /// A projection spec carried a `spec.provider` extension. A Core-generated
+    /// A projection spec carried a `spec. provider` extension. A Core-generated
     /// projection permits only `providerRef`, the semantic base and import
     /// fields, and ResourceImport ownership.
     ProjectionProviderExtensionForbidden,
@@ -574,7 +574,7 @@ impl SemanticTypeContract {
         &self.spec
     }
 
-    /// Borrow the frozen base `status.resource` layer.
+    /// Borrow the frozen base `status. resource` layer.
     pub const fn status(&self) -> &SemanticLayerSchema {
         &self.status
     }
@@ -583,7 +583,7 @@ impl SemanticTypeContract {
     ///
     /// This is exactly the field set the canonical minimal valid base Spec
     /// supplies, and every conformant implementation must accept it without
-    /// a `spec.provider` extension.
+    /// a `spec. provider` extension.
     pub fn required_spec_fields(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.spec.required_names()
     }
@@ -621,7 +621,7 @@ impl SemanticTypeContract {
     }
 
     /// Assemble the canonical minimal valid base Spec, without a
-    /// `spec.provider` extension.
+    /// `spec. provider` extension.
     ///
     /// `base_values` must supply exactly the required base field names other
     /// than `providerRef`, which the envelope owns. The catalog supplies the
@@ -903,13 +903,13 @@ impl SemanticProjectionBinding {
     /// Admit a Core-generated projection Service spec.
     ///
     /// A projection permits only `providerRef`, the semantic base and import
-    /// fields, and ResourceImport ownership. A `spec.provider` extension is
+    /// fields, and ResourceImport ownership. A `spec. provider` extension is
     /// rejected: Core never synthesizes one and never copies a remote one.
     ///
     /// # Errors
     ///
     /// Returns [`SemanticContractError::ProjectionProviderExtensionForbidden`]
-    /// when the spec carries a `spec.provider` extension and
+    /// when the spec carries a `spec. provider` extension and
     /// [`SemanticContractError::SchemaViolation`] when a field name is outside
     /// the projection's allowed set or a required name is missing.
     pub fn validate_projection_spec(
@@ -1118,7 +1118,7 @@ impl SemanticPairContract {
         Ok(())
     }
 
-    /// Check the ResourceType half of a `ResourceExport.resourceRef`.
+    /// Check the ResourceType half of a `ResourceExport. resourceRef`.
     ///
     /// It must target the owner Service, never a `Device`, an `Endpoint`, or
     /// a `*Binding`. This type-only helper does not establish resource origin;
@@ -1240,7 +1240,7 @@ pub(crate) mod tests_support {
     }
 
     /// Assert that the canonical minimal base Spec is accepted with no
-    /// `spec.provider`, and that it survives a strict serde and canonical
+    /// `spec. provider`, and that it survives a strict serde and canonical
     /// JSON round trip unchanged.
     pub(crate) fn assert_minimal_base_round_trips(member: &SemanticTypeContract, base: &str) {
         let contract = member
@@ -1292,7 +1292,7 @@ pub(crate) mod tests_support {
     }
 
     /// The Provider-specific settings field each installed implementation
-    /// registers under `spec.provider`, and a name no implementation
+    /// registers under `spec. provider`, and a name no implementation
     /// registers at all. Every observation probes all three, so a base that
     /// admitted one implementation's detail - or admitted an arbitrary extra
     /// field for one implementation and not the other - moves a probe.
@@ -1470,7 +1470,7 @@ pub(crate) mod tests_support {
     /// Prove the base is genuinely Provider-neutral.
     ///
     /// Two different implementations are installed in turn - each with its
-    /// own registered `spec.provider` / `status.provider` extension - and the
+    /// own registered `spec. provider` / `status. provider` extension - and the
     /// entire Provider-observable base surface is captured under each. The
     /// two observations must be equal: same schema identities, same versions,
     /// same frozen field sets, same base and factory fingerprints, and the
@@ -1840,7 +1840,7 @@ mod tests {
         }
     }
 
-    /// Core projection rejection of `spec.provider`.
+    /// Core projection rejection of `spec. provider`.
     #[test]
     fn a_core_projection_rejects_a_provider_extension() {
         let pair = SemanticFamily::SecurityKey.contract();
@@ -2070,8 +2070,8 @@ mod tests {
         }
     }
 
-    /// Common fields only under `status.resource`; implementation observation
-    /// only under `status.provider`. A registered Provider extension may not
+    /// Common fields only under `status. resource`; implementation observation
+    /// only under `status. provider`. A registered Provider extension may not
     /// shadow a common status field.
     #[test]
     fn a_provider_status_extension_may_not_shadow_a_common_status_field() {

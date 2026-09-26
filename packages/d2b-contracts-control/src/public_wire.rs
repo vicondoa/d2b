@@ -364,13 +364,17 @@ impl std::error::Error for MutationModeError {}
 /// Common flags every mutating-verb request carries.
 ///
 /// The mode moves with the flags, so a request that selects neither
-/// `dryRun` nor `apply` - which the daemon refuses - has no value here.
-/// The serialized shape is unchanged: the flat `dryRun`, `apply`, and `json`
-/// keys the protocol has always carried.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// `dryRun` nor `apply` decodes with no mode rather than failing to decode:
+/// the daemon refuses it through the same structured
+/// `MutatingVerbOutcome::InvalidRequest` envelope and remediation string every
+/// other invalid mutating request gets, which is a contract a client can
+/// match on. The serialized shape is unchanged: the flat `dryRun`, `apply`,
+/// and `json` keys the protocol has always carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(try_from = "MutationFlagsWire", into = "MutationFlagsWire")]
 pub struct MutationFlags {
-    pub mode: MutationMode,
+    /// `None` when the request selected neither `dryRun` nor `apply`.
+    pub mode: Option<MutationMode>,
     /// Ask for the machine-readable (`json`) response body.
     pub json: bool,
 }
@@ -395,7 +399,7 @@ impl TryFrom<MutationFlagsWire> for MutationFlags {
 
     fn try_from(wire: MutationFlagsWire) -> Result<Self, Self::Error> {
         Ok(Self {
-            mode: MutationMode::from_flags(wire.dry_run, wire.apply)?,
+            mode: MutationMode::from_flags(wire.dry_run, wire.apply).ok(),
             json: wire.json,
         })
     }
@@ -403,7 +407,10 @@ impl TryFrom<MutationFlagsWire> for MutationFlags {
 
 impl From<MutationFlags> for MutationFlagsWire {
     fn from(flags: MutationFlags) -> Self {
-        let (dry_run, apply) = flags.mode.to_flags();
+        let (dry_run, apply) = flags
+            .mode
+            .map(MutationMode::to_flags)
+            .unwrap_or((false, false));
         Self {
             dry_run,
             apply,
@@ -426,7 +433,7 @@ impl JsonSchema for MutationFlags {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VmLifecycleRequest {
     pub vm: String,
-    #[serde(flatten)]
+    #[serde(default, flatten)]
     pub flags: MutationFlags,
     /// Bypass provider graceful-shutdown and use the existing forced cleanup path.
     #[schemars(default)]
@@ -449,7 +456,7 @@ pub struct ActivationRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1))]
     pub to_generation: Option<u64>,
-    #[serde(flatten)]
+    #[serde(default, flatten)]
     pub flags: MutationFlags,
 }
 
@@ -458,7 +465,7 @@ pub struct ActivationRequest {
 pub struct UsbipBindCliRequest {
     pub vm: String,
     pub bus_id: String,
-    #[serde(flatten)]
+    #[serde(default, flatten)]
     pub flags: MutationFlags,
 }
 
@@ -467,13 +474,13 @@ pub struct UsbipBindCliRequest {
 pub struct UsbipUnbindCliRequest {
     pub vm: String,
     pub bus_id: String,
-    #[serde(flatten)]
+    #[serde(default, flatten)]
     pub flags: MutationFlags,
 }
 
 /// Maximum decoded stdin chunk per `WriteStdin` op and decoded output chunk
 /// per `ReadOutput` op. The base64 envelope of a
-/// 64 KiB chunk (~87 KiB) stays well under the 1 MiB public.sock frame, so a
+/// 64 KiB chunk (~87 KiB) stays well under the 1 MiB public. sock frame, so a
 /// single exec op never approaches the frame cap.
 pub const EXEC_MAX_CHUNK_BYTES: u64 = 64 * 1024;
 
@@ -1994,7 +2001,7 @@ pub enum AudioErrorKind {
     ProviderMisconfigured,
     /// The requested VM was not found in the bundle.
     VmNotFound,
-    /// Audio enforcement is not available for this VM (e.g. the runtime does
+    /// Audio enforcement is not available for this VM (e. g. the runtime does
     /// not support it and no degraded path exists).
     EnforcementUnavailable,
     /// The VM exists but audio is not enabled in its manifest entry.
@@ -2063,7 +2070,7 @@ pub enum AudioOp {
 #[serde(rename_all = "camelCase")]
 pub struct AudioChannelState {
     /// Current volume/gain level in percent. `None` when the level is unknown
-    /// (e.g. the provider has not yet synced state).
+    /// (e. g. the provider has not yet synced state).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<LevelPercent>,
     /// Whether the channel is currently muted.
@@ -2155,26 +2162,26 @@ pub enum AudioOpResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostPrepareRequest {
-    #[serde(flatten)]
+    #[serde(default, flatten)]
     pub flags: MutationFlags,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostDestroyRequest {
-    #[serde(flatten)]
+    #[serde(default, flatten)]
     pub flags: MutationFlags,
 }
 
 /// `host reconcile` request payload. Today the only scope is
-/// `--network`; future versions may add additional scopes (e.g.
+/// `--network`; future versions may add additional scopes (e. g.
 /// `--ownership`) carved out of `host prepare`. The daemon rejects
 /// requests with no scope selected with a typed `invalid-request`
 /// envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostReconcileRequest {
-    #[serde(flatten)]
+    #[serde(default, flatten)]
     pub flags: MutationFlags,
     /// Re-run the per-env nftables / route / sysctl reconcile.
     #[serde(default)]
@@ -2732,7 +2739,7 @@ pub struct ListEntry {
     pub usbip: bool,
     pub vm: String,
     /// Realm-native workload identity. Present for workloads that have been
-    /// associated with a realm; `None` for classical `d2b.vms` entries that
+    /// associated with a realm; `None` for classical `d2b. vms` entries that
     /// have not yet been adopted into a realm. Additive field - old daemons
     /// omit it; new CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2769,7 +2776,7 @@ pub struct VmStatus {
     pub usb: Option<UsbipVmStatus>,
     pub vm: String,
     /// Realm-native workload identity. Present for workloads that have been
-    /// associated with a realm; `None` for classical `d2b.vms` entries that
+    /// associated with a realm; `None` for classical `d2b. vms` entries that
     /// have not yet been adopted into a realm. Additive field - old daemons
     /// omit it; new CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3284,7 +3291,7 @@ mod tests {
             decoded,
             PublicRequest::VmStop(VmLifecycleRequest {
                 vm,
-                flags: MutationFlags { mode: MutationMode::Apply, .. },
+                flags: MutationFlags { mode: Some(MutationMode::Apply), .. },
                 force: false,
                 no_wait_api: false,
             }) if vm == "corp-vm"
@@ -3305,9 +3312,9 @@ mod tests {
     }
 
     #[test]
-    fn mutating_flags_keeps_the_flat_pair_and_requires_a_mode() {
+    fn mutating_flags_keep_the_flat_pair_and_admit_a_no_mode_payload() {
         let apply = MutationFlags {
-            mode: MutationMode::Apply,
+            mode: Some(MutationMode::Apply),
             json: false,
         };
         assert_eq!(
@@ -3327,23 +3334,59 @@ mod tests {
             decoded,
             PublicRequest::VmStop(VmLifecycleRequest {
                 flags: MutationFlags {
-                    mode: MutationMode::DryRun,
+                    mode: Some(MutationMode::DryRun),
                     json: false,
                 },
                 ..
             })
         ));
 
-        let error = serde_json::from_value::<PublicRequest>(serde_json::json!({
+        // A payload that selects neither flag decodes with no mode rather
+        // than failing admission: the daemon refuses it through the same
+        // structured `MutatingVerbOutcome::InvalidRequest` envelope, with its
+        // remediation string, that every other invalid mutating request gets.
+        // A decode failure here would replace that matchable outcome with an
+        // opaque frame error.
+        let decoded: PublicRequest = serde_json::from_value(serde_json::json!({
             "kind": "vm stop",
             "payload": {
                 "vm": "corp-vm"
             }
         }))
-        .expect_err("a payload with no mode must fail admission");
-        assert!(
-            error.to_string().contains("neither dryRun nor apply"),
-            "the refusal should name the flags: {error}"
+        .expect("a payload that selects no mode still decodes");
+        assert!(matches!(
+            decoded,
+            PublicRequest::VmStop(VmLifecycleRequest {
+                flags: MutationFlags { mode: None, json: false },
+                ..
+            })
+        ));
+
+        // Both flags set still resolves to the documented precedence.
+        let decoded: PublicRequest = serde_json::from_value(serde_json::json!({
+            "kind": "vm stop",
+            "payload": {
+                "vm": "corp-vm",
+                "dryRun": true,
+                "apply": true
+            }
+        }))
+        .expect("a payload that sets both flags decodes");
+        assert!(matches!(
+            decoded,
+            PublicRequest::VmStop(VmLifecycleRequest {
+                flags: MutationFlags {
+                    mode: Some(MutationMode::DryRun),
+                    ..
+                },
+                ..
+            })
+        ));
+
+        // Round trip: a no-mode value re-serializes to the flat pair unset.
+        assert_eq!(
+            serde_json::to_string(&MutationFlags::default()).expect("flags serialize"),
+            "{\"dryRun\":false,\"apply\":false,\"json\":false}"
         );
     }
 
@@ -3352,7 +3395,7 @@ mod tests {
         let without_force = serde_json::to_value(PublicRequest::VmStop(VmLifecycleRequest {
             vm: "corp-vm".to_owned(),
             flags: MutationFlags {
-                mode: MutationMode::DryRun,
+                mode: Some(MutationMode::DryRun),
                 json: false,
             },
             force: false,
@@ -3364,7 +3407,7 @@ mod tests {
             serde_json::to_string(&PublicRequest::VmStop(VmLifecycleRequest {
                 vm: "corp-vm".to_owned(),
                 flags: MutationFlags {
-                    mode: MutationMode::DryRun,
+                    mode: Some(MutationMode::DryRun),
                     json: false,
                 },
                 force: false,
@@ -3377,7 +3420,7 @@ mod tests {
         let with_force = serde_json::to_value(PublicRequest::VmRestart(VmLifecycleRequest {
             vm: "corp-vm".to_owned(),
             flags: MutationFlags {
-                mode: MutationMode::Apply,
+                mode: Some(MutationMode::Apply),
                 json: false,
             },
             force: true,

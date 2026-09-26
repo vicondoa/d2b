@@ -204,7 +204,7 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(dir).await;
     }
 
-    /// Serve one `vm.info` HTTP-over-unix exchange for the given wire state,
+    /// Serve one `vm. info` HTTP-over-unix exchange for the given wire state,
     /// and return the socket path the poll reads, plus the serving dir the
     /// caller removes when the exchange is complete.
     async fn serve_vm_info(state: &str) -> (PathBuf, PathBuf) {

@@ -1,20 +1,20 @@
 //! swtpm argv generator (UNIX-socket TPM 2.0 backend).
 //!
 //! `swtpm` is the per-VM software TPM sidecar d2b spawns for VMs
-//! that declare `d2b.vms.<vm>.tpm.enable = true`. The guest-side
+//! that declare `d2b. vms.<vm>.tpm. enable = true`. The guest-side
 //! TPM module passes the CH TPM socket via
-//! `d2b.vms.<vm>.runner.hypervisor.extraArgs`, and the sidecar
+//! `d2b. vms.<vm>.runner. hypervisor. extraArgs`, and the sidecar
 //! process is shaped as a standalone broker-spawned worker:
 //!
 //! ```text
 //! swtpm socket \
 //!   --tpm2 \
 //!   --tpmstate dir=<state-dir> \
-//!   --ctrl type=unixio,path=<state-dir>/ctrl.sock,mode=0660,uid=<uid>,gid=<gid> \
-//!   --server type=unixio,path=<vm>-tpm.sock,mode=0660,uid=<uid>,gid=<gid> \
+//!   --ctrl type=unixio,path=<state-dir>/ctrl. sock,mode=0660,uid=<uid>,gid=<gid> \
+//!   --server type=unixio,path=<vm>-tpm. sock,mode=0660,uid=<uid>,gid=<gid> \
 //!   --flags startup-clear \
 //!   --log file=<state-dir>/swtpm.log,level=20 \
-//!   --pid file=<state-dir>/swtpm.pid
+//!   --pid file=<state-dir>/swtpm. pid
 //! ```
 //!
 //! `swtpm socket` stays in the foreground unless `-d|--daemon` is
@@ -29,7 +29,7 @@
 //! (`processes::VmProcessInvariants::swtpm_pre_start_flush = true`):
 //!
 //! ```text
-//! swtpm_ioctl -i --unix <state-dir>/ctrl.sock
+//! swtpm_ioctl -i --unix <state-dir>/ctrl. sock
 //! ```
 //!
 //! …followed by a clean shutdown command (`-s`) before the supervisor
@@ -51,7 +51,7 @@ pub struct SwtpmArgvInput {
     /// VM name; the Provider refuses an empty one.
     pub vm_name: String,
     /// Absolute path to the per-VM TPM state directory. swtpm writes
-    /// `tpm2-00.permall` plus its log/pid in here.
+    /// `tpm2-00. permall` plus its log/pid in here.
     pub state_dir: String,
     /// Absolute path to the swtpm control socket (`--ctrl`). CH never
     /// connects to this one - the daemon uses it for shutdown/flush.
@@ -72,7 +72,7 @@ pub struct SwtpmArgvInput {
     /// `--log level=<N>` value. swtpm accepts 1..20; d2b defaults
     /// to 20 (debug) during alpha and clamps in the daemon caller.
     pub log_level: u8,
-    /// `--pid file=<path>` value; usually `<state_dir>/swtpm.pid`.
+    /// `--pid file=<path>` value; usually `<state_dir>/swtpm. pid`.
     pub pid_path: String,
     /// `--flags startup-clear` is emitted when this is `true`. On
     /// startup the supervisor runs `swtpm_ioctl -i` first, so the
@@ -299,7 +299,7 @@ mod tests {
 
     /// Byte-parity oracle for the long-lived swtpm argv.
     ///
-    /// The golden file `tests/golden/runner-shape/swtpm-argv-minimal.txt`
+    /// The golden file `tests/golden/runner-shape/swtpm-argv-minimal. txt`
     /// contains a leading comment block (lines starting with `#`)
     /// followed by the argv vector joined by `'\n'`, one argument per
     /// line. This test strips the comment block and asserts byte-parity

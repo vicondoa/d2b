@@ -327,7 +327,7 @@ pub fn build_usbip_plan(
 ///
 /// The daemon MUST have already checked, before calling this:
 ///  1. the busid is present in `/sys/bus/usb/devices/<busid>/` (sysfs check),
-///  2. the target VM has `runtime.capabilities.usbHotplug = true` (USB-capable gate),
+///  2. the target VM has `runtime. capabilities. usbHotplug = true` (USB-capable gate),
 ///  3. the per-busid OFD lock at `/run/d2b/locks/usbip/<busid>` is NOT held by
 ///     another VM (active-claim exclusivity).
 ///
@@ -682,7 +682,7 @@ mod tests {
 
     /// Per-step failure surfaces as a typed error tagged with the
     /// exact step. Execution halts immediately (no later steps run)
-    /// and prior steps stay in `report.completed` so the stop-path
+    /// and prior steps stay in `report. completed` so the stop-path
     /// reconciler can undo them.
     #[test]
     fn each_step_failure_surfaces_typed_error() {

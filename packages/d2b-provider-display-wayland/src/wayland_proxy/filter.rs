@@ -371,7 +371,7 @@ impl VirtualClipboardState {
             .and_then(|vs| vs.borrow().source.upgrade());
         self.selection = source.and_then(|source| self.sources.get(&source.unique_id()).cloned());
         // Return the old source only when it is being superseded by a different source
-        // (or cleared), so the caller can send wl_data_source.cancelled.
+        // (or cleared), so the caller can send wl_data_source. cancelled.
         old_strong.filter(|old| source.is_none_or(|new| old.unique_id() != new.unique_id()))
     }
 

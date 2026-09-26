@@ -4,8 +4,8 @@
 // otherwise correct and well-tested:
 //
 // - `deprecated`: cgroup vm_leaf_path migration is tracked but the deprecated
-//   path is still referenced in legacy code paths kept for v1.1.x compat.
-// - `clippy::dead_code`: helper functions (e.g. apply_mount_actions, apply)
+//   path is still referenced in legacy code paths kept for v1.1. x compat.
+// - `clippy::dead_code`: helper functions (e. g. apply_mount_actions, apply)
 //   are public API of internal modules that downstream callers may use.
 // - `clippy::large_enum_variant`, `clippy::result_large_err`: TypedError
 //   variants intentionally carry rich context; boxing tracked separately.

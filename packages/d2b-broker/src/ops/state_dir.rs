@@ -58,11 +58,11 @@ pub enum DirKind {
 pub struct PrepareDirRequest {
     /// Whether the op prepares the state or runtime tree.
     pub kind: DirKind,
-    /// The tree root under whichthe subdirectories are created.
+    /// The tree root under which the subdirectories are created.
     pub base_dir: PathBuf,
     /// Per-VM or global scope (`global` if `vm_id` is `None`).
     pub vm_id_or_scope: String,
-    /// 0o-mode (e.g. 0o750 for state, 0o755 for runtime).
+    /// 0o-mode (e. g. 0o750 for state, 0o755 for runtime).
     pub mode: u32,
     /// The owner uid to apply to created directories.
     pub owner_uid: u32,
@@ -254,7 +254,7 @@ pub struct PreparedStateDir {
 /// Returns [`super::OpError::InvalidInput`] for a non-VM path class,
 /// [`super::OpError::UnknownSubject`] / [`super::OpError::Refused`]
 /// for unresolvable subjects, and the swtpm-hardening refusal as
-/// [`PrepareStateDirError::SwtpmDirHardening`].where applicable。
+/// [`PrepareStateDirError::SwtpmDirHardening`]. Where applicable.
 pub fn live_prepare_state_dir(
     _exec:&SystemLiveExec,
     resolver:&BundleResolver,

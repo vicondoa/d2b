@@ -917,7 +917,7 @@ impl BusCore {
 
     // Active-session gauges are updated in a brief non-suspending critical
     // section fed from async registration/reconnect flows and sync teardown
-    // accounting;the std lock stays short and never crosses an await.
+    // accounting; the std lock stays short and never crosses an await.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn record_session_registered(&self, session: SessionId) {
         let (direction, transport) = self.session_metrics(session);
@@ -1108,7 +1108,7 @@ impl BusCore {
     }
 
     // Operation bookkeeping is a brief non-suspending critical sectionshared
-    // with synchronous teardown (Drop impls of OperationLease/BusStream)and
+    // with synchronous teardown (Drop impls of OperationLease/BusStream) and
     // the operation table has no async form here.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock_operations(&self) -> MutexGuard<'_, OperationTable> {
@@ -1896,7 +1896,7 @@ pub struct CommittedInteractionSubjectInstallBody {
 /// use d2b_bus::CommittedInteractionSubjectIssuer;
 ///
 /// fn clone(value: CommittedInteractionSubjectIssuer) {
-///     let _ = value.clone();
+///     let _ = value. clone();
 /// }
 /// ```
 ///
@@ -1933,7 +1933,7 @@ pub struct CommittedInteractionSubjectIssuer {
 /// use d2b_bus::CommittedInteractionSubjectInstall;
 ///
 /// fn inspect(value: &CommittedInteractionSubjectInstall) {
-///     let _ = &value.body;
+///     let _ = &value. body;
 /// }
 /// ```
 ///
@@ -1941,7 +1941,7 @@ pub struct CommittedInteractionSubjectIssuer {
 /// use d2b_bus::CommittedInteractionSubjectInstall;
 ///
 /// fn clone(value: CommittedInteractionSubjectInstall) {
-///     let _ = value.clone();
+///     let _ = value. clone();
 /// }
 /// ```
 ///
@@ -2070,7 +2070,7 @@ struct ComponentSessionRegistrar {
 /// use d2b_bus::ComponentSessionAdmission;
 ///
 /// fn inspect(value: &ComponentSessionAdmission) {
-///     let _ = &value.identity;
+///     let _ = &value. identity;
 /// }
 /// ```
 ///
@@ -2451,7 +2451,7 @@ impl ComponentResponses {
                         }
                     };
                     let accepted = {
-                        // Brief non-suspending endpoint-state critical section;the
+                        // Brief non-suspending endpoint-state critical section; the
                         // same state is locked by the sync BusEndpoint trait paths
                         // (invalidate_session/terminalize_cancel), so it has no
                         // async form.
@@ -2494,7 +2494,7 @@ impl ComponentResponses {
         }
     }
 
-    // Brief non-suspending response-waiter mutation;state has no async form
+    // Brief non-suspending response-waiter mutation; state has no async form
     // because sync BusEndpoint trait paths lock it too.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn deliver(&self, request_id: d2b_session::contract::RequestId, response: ComponentResponse) {
@@ -2541,7 +2541,7 @@ impl ComponentResponses {
         }
         let stream_id = ttrpc_stream_id(&frame).map_err(|_| EndpointError::Rejected)?;
         {
-            // Brief non-suspending critical section;locked by sync trait paths
+            // Brief non-suspending critical section; locked by sync trait paths
             // too (invalidate_session/terminalize_cancel), so no async form.
             #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             let mut state = self
@@ -2726,7 +2726,7 @@ fn publish_component_request(
 }
 
 // Component request publication takes both endpoint locks in one brief
-    // non-suspending critical section;the same state is locked by the sync
+    // non-suspending critical section; the same state is locked by the sync
     // BusEndpoint trait paths (invalidate_session/terminalize_cancel), so
     // the locks have no async form.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
@@ -2789,7 +2789,7 @@ fn publish_component_request(
 
 #[async_trait::async_trait]
 impl crate::registry::BusEndpoint for ComponentEndpoint {
-    // Sync BusEndpoint trait contract;brief non-suspending activity revocation.
+    // Sync BusEndpoint trait contract; brief non-suspending activity revocation.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn invalidate_session(&self) -> crate::registry::SessionInvalidation {
         let writer_fence = self.cancellation.revoke_generation_writes();
@@ -2857,7 +2857,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let caller_stream_id =
             ttrpc_stream_id(request.payload()).map_err(|_| EndpointError::Rejected)?;
         let correlation = {
-            // Brief non-suspending correlation allocation;the same lock is
+            // Brief non-suspending correlation allocation; the same lock is
             // used from sync paths, and no await happens while it is held.
             #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             let mut correlations = self
@@ -3703,8 +3703,8 @@ impl BusIngress {
 /// # Errors
 /// Returns `BusError::SessionClosed` when the bus or session is closed;
 /// `BusError::RouteShape` for a non-method route, an oversized payload, or
-/// an oversized response;the session's authorization or registry admission
-/// failures otherwise;an endpoint rejection wrapped as `BusError::Endpoint`;
+/// an oversized response; the session's authorization or registry admission
+/// failures otherwise; an endpoint rejection wrapped as `BusError::Endpoint`;
 /// `BusError::Cancelled` or
 /// `BusError::Operation(OperationError::DeadlineExceeded)` when the attempt is
 /// cancelled or outlives its deadline.

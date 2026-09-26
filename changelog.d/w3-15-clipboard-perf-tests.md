@@ -1,5 +1,3 @@
-# `w3-15-clipboard-perf-tests.md`
-
 ### Changed
 
 - d2b-clipd now shares clipboard payload maps by reference instead of

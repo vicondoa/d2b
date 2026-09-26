@@ -150,7 +150,7 @@ pub struct SpawnRunnerPlanInput {
     pub mount_policy: MountPolicy,
     pub cgroup_placement: CgroupPlacement,
     /// Set by the broker dispatch when the bundle row's
-    /// `adr_carve_out` field is non-null (e.g. for the swtpm
+    /// `adr_carve_out` field is non-null (e. g. for the swtpm
     /// pre-start flush which legitimately runs as root).
     pub root_carve_out: bool,
     /// Set to `true` only by unit tests so the preflight skips

@@ -7,7 +7,7 @@
 //! `TelemetryResourceReconciler`'s Service half (spec section 13 mapping):
 //!
 //! - `describe` -> [`TelemetryServiceDriverFactory`], registered for
-//!   `telemetry.d2bus.org.TelemetryService` in the plane's provider directory.
+//!   `telemetry. d2bus. org.TelemetryService` in the plane's provider directory.
 //! - `validate_spec` -> [`ResourceDriver::validate`]: the stored spec envelope
 //!   must decode.
 //! - `observe` -> [`ResourceDriver::recover`]: a Service realizes nothing on a
@@ -19,7 +19,7 @@
 //!   route that is not materialized yet re-schedules the preserved resync.
 //! - `prepare_finalize` + `execute_finalize` + `finalize` ->
 //!   [`ResourceDriver::delete`]. The old
-//!   `d2b.d2bus.org/binding-children` finalizer is gone by construction: the
+//!   `d2b. d2bus. org/binding-children` finalizer is gone by construction: the
 //!   v3 manager already holds a parent row until its owned children retire,
 //!   and a Service owns none.
 
@@ -60,7 +60,7 @@ pub const PHASE_DEGRADED: &str = "Degraded";
 /// The readiness term of the preserved phase predicate.
 ///
 /// CONTRACT FLAG: the term reads a dependency's observed status (an ingest
-/// Endpoint's `status.phase`), which the KTD3 driver surface does not expose.
+/// Endpoint's `status. phase`), which the KTD3 driver surface does not expose.
 /// It evaluates fail-closed until the surface carries observed state, so
 /// `Ready` is never claimed without evidence.
 pub const DEPENDENCY_READINESS_PROVEN: bool = false;
@@ -379,7 +379,7 @@ impl ResourceDriver for TelemetryServiceDriver {
     type Error = TelemetryServiceDriverError;
 
     fn classify_error(&self, error: &TelemetryServiceDriverError) -> DriverFailure {
-        // The old reconciler classified every failure retryable;the actor
+        // The old reconciler classified every failure retryable; the actor
         // owns retry/backoff from the closed class (R13).
         match error.source() {
             Some(source) => DriverFailure::retryable(error.op)
@@ -458,7 +458,7 @@ fn ingest_endpoint_refs(
 ///
 /// Derived from the placement contract: `TelemetryService` names no placement
 /// anchor (`PlacementAnchor::canonical_for` resolves none), so a Service row
-/// never carries the canonical `spec.executionRef` and the plane reconciles it
+/// never carries the canonical `spec. executionRef` and the plane reconciles it
 /// on its own Host domain.
 const TELEMETRY_SERVICE_EXECUTION_DOMAINS: &[&str] = &["host"];
 
@@ -473,7 +473,7 @@ const TELEMETRY_SERVICE_READS: &[WellKnownType] = &[WellKnownType::ENDPOINT];
 /// `TelemetryService` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane
 /// cannot serve the Zone's telemetry authority without it, so it must be
 /// registered before the plane opens. The type is exportable: the qualified
-/// `telemetry.d2bus.org.TelemetryService` is exactly the shape
+/// `telemetry. d2bus. org.TelemetryService` is exactly the shape
 /// `ResourceExport` admits. The driver serves no broker operations and owns
 /// no child, so it declares no creation.
 pub fn telemetry_service_descriptor() -> DriverDescriptor {
@@ -687,7 +687,7 @@ mod tests {
         assert_eq!(status.present_endpoints.len(), 1);
         assert_eq!(status.projection.as_ref().unwrap().service_role, "authority");
         // CONTRACT FLAG: the old predicate also required the ingest
-        // Endpoint's own `status.phase == "Ready"`, which this surface cannot
+        // Endpoint's own `status. phase == "Ready"`, which this surface cannot
         // read; the phase stays fail-closed Pending while the row exists.
         assert_eq!(status.phase, TelemetryServicePhase::Pending);
         assert_eq!(

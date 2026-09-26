@@ -2,8 +2,8 @@
 //!
 //! `User` is the named identity that ACL principals, Process user domains,
 //! and Host or Guest `defaultUserRef` fields resolve. The Zone-local resource
-//! name and the OS username are separate: `metadata.name` is the canonical
-//! Zone-local key, and `spec.osUsername` is the actual username resolved
+//! name and the OS username are separate: `metadata. name` is the canonical
+//! Zone-local key, and `spec. osUsername` is the actual username resolved
 //! through NSS.
 //!
 //! The User base spec carries no credential material, public key, PAM

@@ -514,7 +514,7 @@ fn cmd_enforce_dir_posture(args: &Args) -> ExitCode {
 /// already holds, so the setxattr cannot be redirected to a
 /// different path and the target fd is not inherited by setfacl. The
 /// `--setfacl-bin` flag pins the setfacl binary (typically
-/// `${pkgs.acl}/bin/setfacl`) so $PATH is not consulted.
+/// `${pkgs. acl}/bin/setfacl`) so $PATH is not consulted.
 // CLI-only verb: synchronous `setfacl` status wait at the
 // activation-helper entry point, never on an executor worker shared
 // with other tasks.

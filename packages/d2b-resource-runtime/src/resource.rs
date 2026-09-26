@@ -115,7 +115,7 @@ impl ResourceStatus {
     }
 
     /// The structured failure classification rendered into the free-form
-    /// `status.resource` layer, for a row whose driver published no
+    /// `status. resource` layer, for a row whose driver published no
     /// projection of its own: the universal status object is closed to
     /// unknown fields, so a failure classification rides the type's own
     /// layer. `None` for every non-failed classification.
@@ -360,7 +360,7 @@ impl ResourceActorState {
         self.transition_published(status, None);
     }
 
-    /// [`Self::transition`] with the pass's wire-visible `status.resource`
+    /// [`Self::transition`] with the pass's wire-visible `status. resource`
     /// projection attached (R11: in-memory only, dropped with the next
     /// status). The projection is `None` for transitions no driver pass
     /// produced.
@@ -1419,7 +1419,7 @@ pub(crate) mod test_support {
     }
 
     /// Restart semantics with the caller's factory: restart tests can pin
-    /// driver behavior (e.g. blocked deletes) on keys before the manager
+    /// driver behavior (e. g. blocked deletes) on keys before the manager
     /// loads rows and spawns their actors.
     pub(crate) async fn harness_over_with_factory(
         store: Arc<crate::spec_store::SpecStore>,

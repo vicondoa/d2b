@@ -6,9 +6,9 @@
 //!    module that is neither built-in nor loaded forces a closed-fail
 //!    `host-modules-locked` finding.
 //! 2. `/proc/modules` + `/sys/module/<name>/` - loaded-module detection.
-//! 3. `/lib/modules/$(uname -r)/modules.builtin` (preferred) or
-//!    `modules.builtin.bin` - built-in detection.
-//! 4. `/boot/config-$(uname -r)` or `/proc/config.gz` - secondary
+//! 3. `/lib/modules/$(uname -r)/modules. builtin` (preferred) or
+//!    `modules. builtin. bin` - built-in detection.
+//! 4. `/boot/config-$(uname -r)` or `/proc/config. gz` - secondary
 //!    `CONFIG_*` evidence only.
 //!
 //! `br_netfilter` post-step-2 detection drives the
@@ -61,9 +61,9 @@ pub struct BuiltinModuleSet {
 }
 
 impl BuiltinModuleSet {
-    /// Parses `modules.builtin`: one relative path per line; the
-    /// module name is the basename minus the `.ko` (or `.ko.xz`,
-    /// `.ko.zst`) suffix.
+    /// Parses `modules. builtin`: one relative path per line; the
+    /// module name is the basename minus the `.ko` (or `.ko. xz`,
+    /// `.ko. zst`) suffix.
     pub fn parse_modules_builtin(contents: &str) -> Self {
         let mut names = BTreeSet::new();
         for line in contents.lines() {
@@ -87,16 +87,16 @@ impl BuiltinModuleSet {
         Self { names }
     }
 
-    /// Parses the in-kernel `modules.builtin.bin` format (the binary
-    /// sibling of `modules.builtin`). The file is a concatenation of
+    /// Parses the in-kernel `modules. builtin. bin` format (the binary
+    /// sibling of `modules. builtin`). The file is a concatenation of
     /// null-terminated records `<key>=<value>\0`; per-module records
     /// share a `<module-relpath>.<info>=<value>` shape with the module
     /// path acting as the prefix before the first `.` in the key.
-    /// Older kernels (depmod ≤ 5.x without `--symbol-prefix`) store
+    /// Older kernels (depmod ≤ 5. x without `--symbol-prefix`) store
     /// just `<module-relpath>\0` records; we accept both.
     ///
     /// We extract the unique set of module relpaths (anything ending
-    /// in `.ko`, `.ko.xz`, `.ko.zst`, or `.ko.gz`) and reuse the
+    /// in `.ko`, `.ko. xz`, `.ko. zst`, or `.ko. gz`) and reuse the
     /// basename stemming pass from [`Self::parse_modules_builtin`].
     pub fn parse_modules_builtin_bin(bytes: &[u8]) -> Self {
         let mut names = BTreeSet::new();
@@ -114,7 +114,7 @@ impl BuiltinModuleSet {
             let key = lhs.rsplit('/').next().unwrap_or(lhs);
             let candidate = key.split('.').next().unwrap_or(key);
             // Also handle the legacy `<relpath>` (no `.info`) form by
-            // running the modules.builtin-style stemming pass on the
+            // running the modules. builtin-style stemming pass on the
             // whole record.
             let stems = [
                 candidate,
@@ -215,9 +215,9 @@ pub fn read_loaded_modules_at(proc_modules: &Path, sys_module_dir: &Path) -> Loa
     set
 }
 
-/// Reads `/lib/modules/$(uname -r)/modules.builtin`. Returns an empty
+/// Reads `/lib/modules/$(uname -r)/modules. builtin`. Returns an empty
 /// set on failure; the production probe order falls back to
-/// `modules.builtin.bin` via [`read_builtin_modules_with_fallback`]
+/// `modules. builtin. bin` via [`read_builtin_modules_with_fallback`]
 /// in step 3.
 pub fn read_builtin_modules() -> BuiltinModuleSet {
     let release = uname_release().unwrap_or_default();
@@ -225,8 +225,8 @@ pub fn read_builtin_modules() -> BuiltinModuleSet {
     read_builtin_modules_at(&primary)
 }
 
-/// Two-stage builtin probe: prefers `modules.builtin` (text), falls
-/// back to `modules.builtin.bin` (in-kernel format) when the text
+/// Two-stage builtin probe: prefers `modules. builtin` (text), falls
+/// back to `modules. builtin. bin` (in-kernel format) when the text
 /// variant is missing or unparseable. Returns the union of both if
 /// both parse successfully.
 pub fn read_builtin_modules_with_fallback() -> BuiltinModuleSet {
@@ -262,7 +262,7 @@ pub fn read_builtin_modules_with_fallback_at(primary: &Path, fallback: &Path) ->
 }
 
 /// Reads the host kernel config. Tries `/boot/config-$(uname -r)`
-/// first; falls back to `/proc/config.gz` in step 4. Kernel config is treated
+/// first; falls back to `/proc/config. gz` in step 4. Kernel config is treated
 /// as **secondary** evidence; failure returns `None` and the
 /// loaded+builtin path drives the decision.
 pub fn read_kernel_config() -> Option<KernelConfig> {
@@ -281,7 +281,7 @@ pub fn read_kernel_config_at(path: &Path) -> Option<KernelConfig> {
 }
 
 /// Two-stage kernel-config probe: prefers `<primary>` (uncompressed),
-/// falls back to a `<fallback>` gzip-encoded blob (`/proc/config.gz`).
+/// falls back to a `<fallback>` gzip-encoded blob (`/proc/config. gz`).
 /// Returns `None` only if neither source yields a parseable config.
 #[allow(clippy::disallowed_methods, reason = "synchronous path")]
 pub fn read_kernel_config_with_fallback_at(
@@ -298,7 +298,7 @@ pub fn read_kernel_config_with_fallback_at(
 }
 
 /// Minimal RFC 1952 gzip → DEFLATE → text decoder used by the
-/// `/proc/config.gz` fallback. Strips the gzip header (magic +
+/// `/proc/config. gz` fallback. Strips the gzip header (magic +
 /// optional FEXTRA / FNAME / FCOMMENT) and the trailing 8-byte
 /// CRC32 + ISIZE, then hands the raw DEFLATE stream to
 /// `miniz_oxide`. Pure: callers feed a `&[u8]` so the test path
@@ -434,8 +434,8 @@ pub struct ProbeInputs {
 }
 
 /// Real-host wrapper around [`probe_with`]. Reads `/proc` + `/sys`
-/// plus the modules.builtin two-stage probe (text first, then
-/// `modules.builtin.bin`).
+/// plus the modules. builtin two-stage probe (text first, then
+/// `modules. builtin. bin`).
 pub fn probe(kmodules: &[KernelModuleEntry]) -> ModuleProbeResult {
     probe_with(
         kmodules,

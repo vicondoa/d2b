@@ -130,8 +130,8 @@ pub mod fixtures {
     ///
     /// It is deliberately different from the `User/alice` resource name, so
     /// a redaction assertion can tell the two apart. The split is the one
-    /// the User primitive contract describes: `metadata.name` is the
-    /// Zone-local key and `spec.osUsername` is what NSS resolves.
+    /// the User primitive contract describes: `metadata. name` is the
+    /// Zone-local key and `spec. osUsername` is what NSS resolves.
     pub const OS_USERNAME: &str = "alice_admin";
 
     /// A User spec declaring no additional groups.

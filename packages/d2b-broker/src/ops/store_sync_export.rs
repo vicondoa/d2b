@@ -185,7 +185,7 @@ impl StoreSyncObservabilityRecord {
 /// one's ownership/permissions/ACLs.
 ///
 /// In production the directory is created by the observability host
-/// module's `systemd.tmpfiles` rule (mode `0750` + a focused `alloy`
+/// module's `systemd. tmpfiles` rule (mode `0750` + a focused `alloy`
 /// read/traverse ACL and a default ACL so broker-created `0640` files
 /// inherit `user:alloy:r`). The broker must NOT chmod/chown/setfacl an
 /// existing directory - doing so would clobber that grant. We only
@@ -235,7 +235,7 @@ fn ensure_export_dir(export_dir: &Path) -> io::Result<()> {
 /// directory's default ACL grants `alloy` read on new files; the broker
 /// does not chown to or know about the `alloy` gid. Daily rotation is by
 /// filename, so a long-lived broker that crosses midnight simply opens
-/// the next day's file. The host Alloy `local.file_match` globs the
+/// the next day's file. The host Alloy `local. file_match` globs the
 /// directory and follows new files + truncation.
 ///
 /// Call-site contract: this is best-effort observability. The

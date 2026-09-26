@@ -128,7 +128,7 @@ pub enum BrokerRequest {
     /// without requiring static bundle firewall/bind intent refs.
     ///
     /// The daemon has already validated: (1) the busid is present in sysfs,
-    /// (2) the target VM has `runtime.capabilities.usbHotplug = true`, (3) no
+    /// (2) the target VM has `runtime. capabilities. usbHotplug = true`, (3) no
     /// other active claim holds this busid. The broker validates the busid shape,
     /// acquires the per-busid OFD lock, and runs the `usbip bind` helper.
     ///
@@ -1210,7 +1210,7 @@ pub struct CreateTapFdRequest {
 }
 
 /// The slice path is pinned by the bundle
-/// (`/sys/fs/cgroup/d2b.slice`). It is **not** taken from caller
+/// (`/sys/fs/cgroup/d2b. slice`). It is **not** taken from caller
 /// input - the broker reads it from its own bundle copy via `scope_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1287,7 +1287,7 @@ pub struct SecretByIdRequest {
 
 /// The daemon never passes argv, env, uid/gid, caps, seccomp profile
 /// path, or any other launch authority across the wire. The broker
-/// reads the full launch context from `bundle.vms[vm_id].roles[role_id]`
+/// reads the full launch context from `bundle. vms[vm_id].roles[role_id]`
 /// and constructs the minijail exec line itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2065,7 +2065,7 @@ pub struct StoreSyncRequest {
 
 /// Store-sync response. Returned after the broker successfully
 /// populates the per-VM hardlink farm and swaps the `current` symlink
-/// atomically. The `hardlink_farm_path` is the per-VM farm root (i.e.
+/// atomically. The `hardlink_farm_path` is the per-VM farm root (i. e.
 /// `/var/lib/d2b/vms/<vm>/store-view/`); the active generation
 /// directory is reachable via the `current` symlink.
 ///
@@ -2137,7 +2137,7 @@ pub struct UsbipBindRequest {
 
 /// USBIP firewall-rule skeleton. The rule body and the bus_id are
 /// derived from the per-busid policy in the trusted bundle
-/// (`bundle.usbip.busidLocks[*]`) via the
+/// (`bundle. usbip. busidLocks[*]`) via the
 /// `bundle_usbip_firewall_intent_ref` opaque-ID lookup. The legacy
 /// caller-supplied `bus_id: String` + `rule_hash: String` fields were
 /// replaced with this opaque reference because the raw `bus_id` was
@@ -2177,7 +2177,7 @@ pub struct UsbipUnbindRequest {
 /// Explicit-attach: bind a present sysfs busid for a USB-capable VM
 /// without a bundle intent ref. The daemon has already completed:
 ///  1. sysfs busid presence check (fail-closed if device absent),
-///  2. USB-capable gate (`runtime.capabilities.usbHotplug`),
+///  2. USB-capable gate (`runtime. capabilities. usbHotplug`),
 ///  3. active-claim exclusivity check (OFD lock read).
 ///
 /// The broker acquires the per-busid OFD lock, runs `usbip bind`, and
@@ -2415,7 +2415,7 @@ pub struct DeregisterRunnerPidfdResponse {
 /// The daemon never names argv, env, uid/gid, caps,
 /// kernel/initrd/cmdline strings, virtiofs sockets, TAP fds, or any
 /// other launch authority across the wire. The broker resolves the full
-/// role spawn context from `bundle.vms[vm_id].roles[role_id]` anchored
+/// role spawn context from `bundle. vms[vm_id].roles[role_id]` anchored
 /// by the opaque `bundle_runner_intent_ref`. The wire shape follows the
 /// opaque-only contract for every other mutating variant.
 ///
@@ -2445,7 +2445,7 @@ pub enum RunnerRole {
     /// persisted record written before the rename still decodes.
     #[serde(rename = "activation-nixos-runner", alias = "activation-nixos")]
     ActivationNixos,
-    /// virtiofsd sidecar; one per `d2b.vms.<vm>.runner.shares` row. The
+    /// virtiofsd sidecar; one per `d2b. vms.<vm>.runner. shares` row. The
     /// daemon/bundle provides argv from the runner-shape generators.
     Virtiofsd,
     /// swtpm sidecar (long-lived `swtpm socket ...` process).
@@ -2853,7 +2853,7 @@ pub struct SpawnRunnerResponse {
     pub start_time_ticks: u64,
     /// Index into the SCM_RIGHTS fd vector the daemon should treat as
     /// the spawned process's pidfd. Always `0` today - kept explicit
-    /// so future multi-fd spawn responses (e.g. CH API socket + pidfd)
+    /// so future multi-fd spawn responses (e. g. CH API socket + pidfd)
     /// have an existing wire slot.
     pub pidfd_index: u32,
     /// Provider-controller bootstrap endpoint created and retained by the broker.
@@ -2936,7 +2936,7 @@ pub struct BrokerRequestEnvelope {
 }
 
 /// Caller role classification derived from `SO_PEERCRED` + the
-/// `d2b.site.adminUsers` / `d2b.site.launcherUsers`
+/// `d2b. site. adminUsers` / `d2b. site. launcherUsers`
 /// allowlists. Mirrors the legacy `bootstrap::wire::CallerRole`
 /// but lives in the production wire crate so the live broker
 /// dispatch can take it directly.
@@ -3088,7 +3088,7 @@ pub struct ValidateLockSpecResponse {
 ///
 /// The daemon sends the VM's opaque `vm_id`; the broker resolves
 /// every `DiskInit` plan-op from the trusted bundle's
-/// `ProcessNode.plan_ops` for that VM and creates or validates the
+/// `ProcessNode. plan_ops` for that VM and creates or validates the
 /// disk images before runner spawn. Existing `ifAbsent` images are
 /// skipped only after fd-bound identity and ext4-superblock validation;
 /// declared owner/mode posture drift is repaired automatically when the

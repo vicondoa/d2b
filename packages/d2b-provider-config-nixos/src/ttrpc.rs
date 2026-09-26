@@ -222,29 +222,29 @@ impl ConfigNixosClient {
     }
 }
 
-/// The bound on admitted-but-unstarted blocking config dispatches, per seat。
+/// The bound on admitted-but-unstarted blocking config dispatches, per seat.
 ///
 /// The Guest read walks the working-copy path with `O_NOFOLLOW` and reads the
-/// document through `rustix`;that kernel path has no async form, so a
+/// document through `rustix`; that kernel path has no async form, so a
 /// dispatch must not run on the runtime worker that polls this service: a
 /// blocked worker stalls every other task sharing it. Dispatches run on one
 /// dedicated bounded worker (plan R4) instead of the runtime's shared
 /// blocking pool: the worker admits at most this many queued jobs, and a
 /// full queue refuses the caller (mapped to `Unavailable`) rather than
-/// parking an executor worker or growing a thread per call。
+/// parking an executor worker or growing a thread per call.
 const MAX_DISPATCH_QUEUE_DEPTH: usize = 16;
 
 type DispatchJob = Box<dyn FnOnce() + Send + 'static>;
 
-/// One dedicated dispatch worker thread with its own bounded queue。
+/// One dedicated dispatch worker thread with its own bounded queue.
 struct DispatchWorker {
     sender: SyncSender<DispatchJob>,
 }
 
-/// Start one named worker with its own bounded queue。
+/// Start one named worker with its own bounded queue.
 ///
 /// `None` records a worker that could not start, so every later call refuses
-/// rather than retrying a failing spawn。
+/// rather than retrying a failing spawn.
 fn start_dispatch_worker() -> Option<DispatchWorker> {
     let (sender, receiver) = sync_channel::<DispatchJob>(MAX_DISPATCH_QUEUE_DEPTH);
     thread::Builder::new()
@@ -262,15 +262,15 @@ fn start_dispatch_worker() -> Option<DispatchWorker> {
         .map(|_| DispatchWorker { sender })
 }
 
-/// The blocking config-dispatch seat, started on first use。
+/// The blocking config-dispatch seat, started on first use.
 static DISPATCH_WORKER: LazyLock<Option<DispatchWorker>> = LazyLock::new(start_dispatch_worker);
 
-/// Dispatch one operation on the dedicated bounded dispatch worker。
+/// Dispatch one operation on the dedicated bounded dispatch worker.
 ///
 /// The backend read is a synchronous kernel path, so it must not run on the
 /// runtime worker that polls this service: a blocked worker stalls every other
 /// task sharing it. Admission is a non-blocking `try_send`, so the caller's
-/// executor is never parked;the outcome is awaited from the worker。
+/// executor is never parked; the outcome is awaited from the worker.
 async fn dispatch_on_blocking_worker(
     backend: Arc<dyn ConfigServiceBackend>,
     operation: ConfigOperation,
@@ -285,7 +285,7 @@ async fn dispatch_on_blocking_worker(
             let backend = Arc::clone(&backend);
             move || {
                 // A panicking job drops the reply sender, so the waiter sees
-                // `Unavailable` instead of hanging on a dead worker。
+                // `Unavailable` instead of hanging on a dead worker.
 
                 let _ = reply.send(backend.dispatch(operation, payload));
             }
@@ -306,7 +306,7 @@ async fn dispatch_on_blocking_worker(
             })
         }
         // A saturated queue refuses instead of growing threads or parking the
-        // caller;the RPC surface maps that refusal to `Unavailable`, matching
+        // caller; the RPC surface maps that refusal to `Unavailable`, matching
         // the previous semaphore ceiling's error.
 
         Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
@@ -541,7 +541,7 @@ mod tests {
         // Drive the registered service handler, not the helper behind it. On
         // the single-threaded runtime below the release can only be delivered
         // while the backend is parked if the handler left its polling worker
-        // free: an inline `backend.dispatch` would stall the only worker and
+        // free: an inline `backend. dispatch` would stall the only worker and
         // the handler would answer the parked call with an error.
         let (started, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
         let (release, release_rx) = channel();

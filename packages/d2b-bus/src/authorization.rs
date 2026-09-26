@@ -185,7 +185,7 @@ impl BusAuthorizer {
         };
         if let Some(registry) = &self.assignments {
             // The assignment registry lock is an externally supplied std Mutex
-            // (d2bd-runtime's AssignmentRegistry);the validation is a brief
+            // (d2bd-runtime's AssignmentRegistry); the validation is a brief
             // non-suspending critical section on the sync authorization surface.
             #[allow(clippy::disallowed_methods, reason = "synchronous path")]
             registry
@@ -268,7 +268,7 @@ impl BusAuthorizer {
 
     // Policy state is evaluated in brief non-suspending critical sections behind
     // the synchronous SessionAcceptor surface (component_session_acceptor
-    // closures)and pub sync API consumed by the daemon;the lock has no async
+    // closures) and pub sync API consumed by the daemon; the lock has no async
     // form here.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn lock(&self) -> MutexGuard<'_, AuthorizationRuntime> {

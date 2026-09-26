@@ -7,7 +7,7 @@
 //!   never from caller input; the wire request only names the
 //!   subject (`subtree`, `vm_id`) and the broker maps that name to
 //!   the canonical delegated subtree (default
-//!   `/sys/fs/cgroup/d2b.slice`) plus per-VM interiors and
+//!   `/sys/fs/cgroup/d2b. slice`) plus per-VM interiors and
 //!   per-role leaves beneath it;
 //! - the 8-step delegation algorithm runs through
 //!   [`d2b_host::cgroup`];
@@ -47,9 +47,9 @@ pub enum CgroupOpError {
     /// that the broker is allowed to manage.
     CgroupNotDelegated { expected_parent: PathBuf },
     /// `OpenCgroupDir` was asked about a path that does not resolve
-    /// under the delegated d2b.slice (`path-class = foreign`).
+    /// under the delegated d2b. slice (`path-class = foreign`).
     PathClassForeign { requested: PathBuf },
-    /// `cgroup.kill` was attempted on a non-leaf path.
+    /// `cgroup. kill` was attempted on a non-leaf path.
     KillAncestor { requested: PathBuf },
 }
 
@@ -130,15 +130,15 @@ impl CgroupBundleContext {
 
     /// v1.1.1 per-VM-interior + per-role-leaf taxonomy per ADR 0011
     /// Decision item 1: `vm_interior_path` returns the
-    /// process-free intermediate directory `d2b.slice/<vm_id>/`.
-    /// Per-role leaf cgroups (`d2b.slice/<vm_id>/<role>/`) are
+    /// process-free intermediate directory `d2b. slice/<vm_id>/`.
+    /// Per-role leaf cgroups (`d2b. slice/<vm_id>/<role>/`) are
     /// the only entries that carry processes.
     pub fn vm_interior_path(&self, vm_id: &str) -> PathBuf {
         self.slice_path().join(vm_id)
     }
 
     /// v1.1.1 per-role leaf cgroup path
-    /// `d2b.slice/<vm_id>/<role_id>/`. Processes for the
+    /// `d2b. slice/<vm_id>/<role_id>/`. Processes for the
     /// `(vm_id, role_id)` SpawnRunner instance are placed here via
     /// `clone3(CLONE_INTO_CGROUP)` at spawn time.
     pub fn vm_role_leaf_path(&self, vm_id: &str, role_id: &str) -> PathBuf {
@@ -230,7 +230,7 @@ impl PathClass {
 /// systemd-managed parent slice that has already been delegated to the
 /// broker/daemon. The broker never writes `/sys/fs/cgroup` root; the
 /// operator must pre-create + `Delegate=yes` the parent slice (default
-/// `/sys/fs/cgroup/d2b.slice`) and then the broker
+/// `/sys/fs/cgroup/d2b. slice`) and then the broker
 /// enables controllers / chowns only within that subtree. Per the
 /// broker variant table, `destructive: no`, `secret: no`, audit
 /// decision `allowed` on success.
@@ -316,8 +316,8 @@ where
     };
 
     // Subject classification: the wire request carries a logical
-    // subject name (e.g. "d2b-slice" or a vm id). The broker
-    // maps that to a canonical path under d2b.slice.
+    // subject name (e. g. "d2b-slice" or a vm id). The broker
+    // maps that to a canonical path under d2b. slice.
     let (canonical_path, class) =
         if requested_subject == D2B_SLICE_NAME || requested_subject == "d2b-slice" {
             (context.slice_path().to_path_buf(), PathClass::D2bSlice)
@@ -431,7 +431,7 @@ pub(crate) fn create_d2b_slice<B: CgroupBackend>(
     host_cgroup::probe_unified_hierarchy(backend, unified_hierarchy_root)?;
     // Systemd must pre-create + delegate this slice. The broker only
     // enables controllers and changes ownership within that subtree;
-    // it never writes `/sys/fs/cgroup/cgroup.subtree_control`.
+    // it never writes `/sys/fs/cgroup/cgroup. subtree_control`.
     if !backend.exists(parent_slice) {
         return Err(CgroupOpError::CgroupNotDelegated {
             expected_parent: parent_slice.to_path_buf(),
@@ -684,8 +684,8 @@ fn runner_cgroup_shape(subtree: &str, vm_id: &str) -> Option<usize> {
 ///
 /// The request carries `(vm_id, role_id)`. The broker resolves the cgroup
 /// placement from its bundle copy and refuses anything other than a
-/// canonical `d2b.slice/<zone>/<guest>/<role>` or legacy
-/// `d2b.slice/<vm>/<role>` leaf shape. A same-named Zone-qualified Guest
+/// canonical `d2b. slice/<zone>/<guest>/<role>` or legacy
+/// `d2b. slice/<vm>/<role>` leaf shape. A same-named Zone-qualified Guest
 /// collision is refused as ambiguous rather than selecting a cgroup.
 pub fn live_kill_runner_cgroup(
     resolver: &BundleResolver,

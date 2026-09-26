@@ -9,7 +9,7 @@
 //! section 13 mapping):
 //!
 //! - `describe` -> [`TelemetryBindingDriverFactory`], registered for
-//!   `telemetry.d2bus.org.TelemetryBinding` in the plane's provider directory.
+//!   `telemetry. d2bus. org.TelemetryBinding` in the plane's provider directory.
 //! - `validate_spec` -> [`ResourceDriver::validate`]: the stored spec envelope
 //!   must decode. A malformed Service/target relationship is fenced in
 //!   reconcile (old `telemetry_binding_owner`), never fatal here.
@@ -24,7 +24,7 @@
 //!   writes).
 //! - `prepare_finalize` + `execute_finalize` + `finalize` ->
 //!   [`ResourceDriver::delete`]. The old
-//!   `d2b.d2bus.org/binding-children` finalizer is gone by construction: the
+//!   `d2b. d2bus. org/binding-children` finalizer is gone by construction: the
 //!   v3 manager already holds a parent row until its owned children retire
 //!   (`ResourceManagerState::remove_internal` cascades the removal to owned
 //!   children and `pending_retirement` keeps the parent's durable deleting
@@ -610,7 +610,7 @@ fn teardown_rank(resource_type: &str) -> u8 {
 ///
 /// Derived from the placement contract: `TelemetryBinding` names no placement
 /// anchor (`PlacementAnchor::canonical_for` resolves none), so a Binding row
-/// never carries the canonical `spec.executionRef` and the plane reconciles it
+/// never carries the canonical `spec. executionRef` and the plane reconciles it
 /// on its own Host domain. The Provider declares every child host-placed, so
 /// the declared set is realized from that same domain.
 const TELEMETRY_BINDING_EXECUTION_DOMAINS: &[&str] = &["host"];
@@ -633,7 +633,7 @@ const TELEMETRY_BINDING_READS: &[WellKnownType] = &[
 /// `TelemetryBinding` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane
 /// cannot serve the Zone's telemetry producers without it, so it must be
 /// registered before the plane opens. The type is not exportable:
-/// `ResourceExport` admits only qualified `*.d2bus.org.*Service` types, so a
+/// `ResourceExport` admits only qualified `*.d2bus. org.*Service` types, so a
 /// binding can never be an export subject. The driver serves no broker
 /// operations and declares the two child creations it performs - the
 /// collector/forwarder Process and its Endpoint.

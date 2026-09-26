@@ -2,7 +2,7 @@
 //!
 //! The daemon owns a long-lived, authenticated Process named-stream client per
 //! exec session. The CLI establishes the resource owner through the
-//! admin-gated `public.sock` route, then sends one correlated named-stream
+//! admin-gated `public. sock` route, then sends one correlated named-stream
 //! frame per [`ExecOp`]. A dedicated worker thread (current-thread tokio
 //! runtime) owns the authenticated client, the target-local process resource,
 //! the authoritative stdin offset, and the monotone control sequence; it is
@@ -136,7 +136,7 @@ pub enum ExecEstablishError {
     Timeout,
     OldGeneration,
     Capability,
-    /// Guest accepted the handshake but rejected the create (e.g. exec
+    /// Guest accepted the handshake but rejected the create (e. g. exec
     /// disabled, root denied, unsupported mode).
     Guest(ProcessOpError),
 }
@@ -831,7 +831,7 @@ pub struct WorkerCommand {
 pub type EstablishReply = Result<ExecSessionInfo, ExecEstablishError>;
 
 /// Owner-socket teardown seam for the terminal-cleanup reaper.
-/// `reap` forces the owner connection's reader to unblock (e.g. by shutting
+/// `reap` forces the owner connection's reader to unblock (e. g. by shutting
 /// down the socket) so the session slot is released after the command has gone
 /// terminal and the cleanup TTL elapsed. It MUST be idempotent and MUST NOT be
 /// called while the command is still live.

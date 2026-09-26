@@ -1,5 +1,3 @@
-# `w3-16-config-nixos-parse-tests.md`
-
 ### Changed
 
 - The config-nixos RPC boundary now decodes each request into its typed form once and validates the typed value, removing a redundant JSON parse and the admission-time base64 decode of Stage payloads (up to ~683 KiB); Stage document bounds are still enforced when the staging store applies the document, and the backend hop keeps re-checking the original payload.

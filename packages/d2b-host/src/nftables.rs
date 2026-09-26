@@ -206,14 +206,14 @@ pub struct NftChain {
     pub priority: i32,
     pub policy: ChainPolicy,
     /// Rules in order. The reconcile contract requires specific
-    /// carve-outs (e.g. USBIP per-busid) to be inserted BEFORE the
+    /// carve-outs (e. g. USBIP per-busid) to be inserted BEFORE the
     /// generic allow/drop rules - [`NftBatch::add_usbip_carveout`]
     /// enforces this invariant.
     pub rules: Vec<NftRule>,
 }
 
 /// A single nft rule. The `expr` field is the rendered nft expression
-/// (e.g. `"ip saddr 10.10.0.5 accept"`); `comment` carries the
+/// (e. g. `"ip saddr 10.10.0.5 accept"`); `comment` carries the
 /// mandatory `d2b managed: <ownership-id>` marker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NftRule {
@@ -858,7 +858,7 @@ pub fn assert_no_forbidden_hooks(batch: &NftBatch) -> Result<(), NftError> {
         }
         // The enum has no raw/mangle/nat variant, so a hook that
         // round-trips through it can never be one of those - but we
-        // also defend against a buggy chain.name suggesting otherwise.
+        // also defend against a buggy chain. name suggesting otherwise.
         let lname = chain.name.to_ascii_lowercase();
         if lname == "raw" || lname == "mangle" || lname == "nat" {
             return Err(NftError::ForeignNftRuleShadowsD2b {
@@ -897,7 +897,7 @@ pub mod fake {
             Self::default()
         }
 
-        /// Seed a foreign rule (e.g. an iptables-nft generated table)
+        /// Seed a foreign rule (e. g. an iptables-nft generated table)
         /// the reconcile path MUST preserve.
         pub fn seed_foreign(&self, rule: impl Into<String>) {
             self.foreign.borrow_mut().push(rule.into());

@@ -150,11 +150,11 @@ pub struct IfNameMapping {
     pub vm: Option<String>,
     /// TAP role for the bridge-port flag matrix.
     pub role: TapRole,
-    /// User-visible interface name as it appears in `d2b.envs.*`
-    /// and operator docs (e.g. `br-work-lan`).
+    /// User-visible interface name as it appears in `d2b. envs.*`
+    /// and operator docs (e. g. `br-work-lan`).
     pub user_visible_name: String,
     /// Deterministic hash-derived IFNAMSIZ-safe interface name with
-    /// `d2b-` prefix (e.g. `d2b-br-a1b2c3d4`). Bundle build refuses any
+    /// `d2b-` prefix (e. g. `d2b-br-a1b2c3d4`). Bundle build refuses any
     /// collision.
     pub derived_ifname: IfName,
 }

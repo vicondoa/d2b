@@ -1,13 +1,13 @@
 //! The shared telemetry semantic Service and Binding base contract.
 //!
 //! This module owns the common base spec, status, and schema contract for the
-//! frozen telemetry pair `telemetry.d2bus.org.TelemetryService` and
-//! `telemetry.d2bus.org.TelemetryBinding`. The spec field sets below are the
+//! frozen telemetry pair `telemetry. d2bus. org.TelemetryService` and
+//! `telemetry. d2bus. org.TelemetryBinding`. The spec field sets below are the
 //! "TelemetryService base spec" and "TelemetryBinding base spec" D089 tables
 //! of the telemetry Provider dossier.
 //!
 //! OTEL, OTLP, and backend-product choices are not base fields. They belong
-//! only in an implementation's strict `spec.provider` extension.
+//! only in an implementation's strict `spec. provider` extension.
 //!
 //! Interiors this catalog does not model. `signals` is the non-empty subset of
 //! metrics, traces, and logs. `quota` and `policy` are named as required base
@@ -15,7 +15,7 @@
 //! frozen member table, so this catalog freezes the top-level field only.
 //!
 //! Status field names this catalog could not determine. The dossier describes
-//! `TelemetryService.status.resource` and `TelemetryBinding.status.resource`
+//! `TelemetryService. status. resource` and `TelemetryBinding. status. resource`
 //! in prose. Only `serviceRole` and `serviceReadiness` are stated as field
 //! spellings; the effective signal, quota, and policy digests, the ingest and
 //! import readiness summaries, the producer counts, the queue and drop
@@ -122,7 +122,7 @@ mod tests {
         r#"{"policy":{},"quota":{},"serviceRole":"authority","signals":["metrics"]}"#;
     const MINIMAL_BINDING: &str = r#"{"policy":{},"producerRef":"Zone/work","quota":{},"serviceRef":"telemetry.d2bus.org.TelemetryService/ingest","signals":["metrics"]}"#;
 
-    /// Canonical minimal base acceptance without `spec.provider`.
+    /// Canonical minimal base acceptance without `spec. provider`.
     #[test]
     fn the_canonical_minimal_base_is_accepted_without_a_provider_extension() {
         assert_minimal_base_round_trips(contract().service(), MINIMAL_SERVICE);

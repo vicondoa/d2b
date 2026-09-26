@@ -58,7 +58,7 @@ pub const PROVIDER_NAME: &str = "system-core";
 
 /// The canonical `Provider/system-core` reference.
 ///
-/// This is the only value admitted by `Host.spec.providerRef`, and it is
+/// This is the only value admitted by `Host. spec. providerRef`, and it is
 /// the same constant the Host primitive contract pins.
 pub const PROVIDER_REF: &str = d2b_contracts_resource::v3::host::HOST_PROVIDER_REF;
 

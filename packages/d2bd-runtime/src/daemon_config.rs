@@ -85,7 +85,7 @@ pub struct DaemonConfig {
     pub realm_identity_config_path: PathBuf,
     /// Concurrency cap for the autostart pass that runs on daemon
     /// startup. Default `3`.
-    /// Mirrors `d2b.daemon.autostart.parallelism`.
+    /// Mirrors `d2b. daemon. autostart. parallelism`.
     #[serde(default = "default_autostart_parallelism")]
     pub autostart_parallelism: usize,
     /// Default provider graceful-shutdown wait before forced cleanup.

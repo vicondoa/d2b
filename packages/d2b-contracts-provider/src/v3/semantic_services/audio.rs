@@ -1,16 +1,16 @@
 //! The shared audio semantic Service and Binding base contract.
 //!
 //! This module owns the common base spec, status, and schema contract for the
-//! frozen audio pair `audio.d2bus.org.AudioService` and
-//! `audio.d2bus.org.AudioBinding`. The field sets below are the top-level
+//! frozen audio pair `audio. d2bus. org.AudioService` and
+//! `audio. d2bus. org.AudioBinding`. The field sets below are the top-level
 //! provider-neutral base fields stated by the audio Provider dossier's
-//! `AudioService.spec`, `AudioService.status`, `AudioBinding.spec`, and
-//! `AudioBinding.status` tables, which are the ResourceType base per D089 and
+//! `AudioService. spec`, `AudioService. status`, `AudioBinding. spec`, and
+//! `AudioBinding. status` tables, which are the ResourceType base per D089 and
 //! D088.
 //!
 //! PipeWire aliases, node selectors, portal settings, frontend parameters, and
 //! every other implementation detail are rejected from these bases and belong
-//! only in an implementation's strict `spec.provider` and `status.provider`
+//! only in an implementation's strict `spec. provider` and `status. provider`
 //! extensions.
 //!
 //! Interiors this catalog does not model. `grants` carries `mic`, `speaker`,
@@ -79,7 +79,7 @@ const BINDING_STATUS_ALLOWED: &[&str] = &[
 
 /// A projection Service carries only `providerRef`, its observed role, and its
 /// local route Endpoints. It never carries the owner authority descriptor and
-/// never carries `spec.provider`.
+/// never carries `spec. provider`.
 const PROJECTION_SPEC_ALLOWED: &[&str] =
     &["providerRef", "serviceRole", "implementationEndpointRefs"];
 const PROJECTION_SPEC_REQUIRED: &[&str] =
@@ -121,7 +121,7 @@ mod tests {
         assert_base_is_provider_neutral, assert_minimal_base_round_trips, object, provider_ref,
     };
 
-    /// Canonical minimal base acceptance without `spec.provider`, plus a
+    /// Canonical minimal base acceptance without `spec. provider`, plus a
     /// strict serde and canonical-schema round trip.
     #[test]
     fn the_canonical_minimal_base_is_accepted_without_a_provider_extension() {
@@ -167,8 +167,8 @@ mod tests {
         assert!(contract.validate_minimal_base_spec(&spec).is_err());
     }
 
-    /// Common fields only under `status.resource`; implementation observation
-    /// only under `status.provider`.
+    /// Common fields only under `status. resource`; implementation observation
+    /// only under `status. provider`.
     #[test]
     fn a_pipewire_observation_is_not_a_common_status_field() {
         let status = contract().service().status();

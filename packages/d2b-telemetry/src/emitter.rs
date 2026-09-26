@@ -241,7 +241,7 @@ impl BoundedEmitter {
     ///
     /// # Errors
     ///
-    /// Returns the same `EmitterError` conditions as [`BoundedEmitter::new`]。
+    /// Returns the same `EmitterError` conditions as [`BoundedEmitter::new`].
     pub fn with_default_capacity(path: impl Into<PathBuf>) -> Result<Self, EmitterError> {
         Self::new(path, DEFAULT_RING_CAPACITY_BYTES)
     }

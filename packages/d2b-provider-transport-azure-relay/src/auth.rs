@@ -56,9 +56,9 @@ impl RelayRole {
 /// (hybrid connection) name. Non-secret.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RelayEndpoint {
-    /// Namespace FQDN, e.g. `relns-xxxx.servicebus.windows.net`.
+    /// Namespace FQDN, e. g. `relns-xxxx. servicebus. windows. net`.
     pub namespace: String,
-    /// Hybrid connection (entity) name, e.g. `hc-d2b-display`.
+    /// Hybrid connection (entity) name, e. g. `hc-d2b-display`.
     pub entity: String,
 }
 
@@ -80,7 +80,7 @@ pub enum RelayCredential {
     /// Gateway Guest-side (the Listen rule), and transitionally for non-MI
     /// senders.
     Sas {
-        /// The authorization-rule (key) name, e.g. `gateway-listen`.
+        /// The authorization-rule (key) name, e. g. `gateway-listen`.
         key_name: String,
         /// The rule's key. Secret.
         key: String,

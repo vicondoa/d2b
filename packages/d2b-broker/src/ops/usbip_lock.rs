@@ -43,7 +43,7 @@ pub enum UsbipLockError {
         expected: String,
         observed: String,
     },
-    /// Underlying I/O error (e.g. parent dir missing).
+    /// Underlying I/O error (e. g. parent dir missing).
     Io {
         path: PathBuf,
         source: std::io::Error,
@@ -175,7 +175,7 @@ pub fn acquire_lock(
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             let existing =
                 read_owner(&full_lock_path).unwrap_or_else(|_| "<unreadable>".to_owned());
-            // Idempotent: if the same VM already owns the lock (e.g.
+            // Idempotent: if the same VM already owns the lock (e. g.
             // after a VM restart without an explicit detach), treat the
             // acquire as a success rather than refusing.
             if existing.trim() == owner_vm {
@@ -478,7 +478,7 @@ mod tests {
         let lock = tmp.path().join("6-1");
         let gid = nix::unistd::Gid::current().as_raw();
         acquire_lock(&lock, "work-aad", gid).unwrap();
-        // Re-acquire by the same VM succeeds (e.g. after VM restart).
+        // Re-acquire by the same VM succeeds (e. g. after VM restart).
         acquire_lock(&lock, "work-aad", gid).unwrap();
         assert_eq!(peek_owner(&lock).unwrap(), "work-aad");
     }

@@ -2,7 +2,7 @@
 //! conversion of the daemon-owned USBIP Provider path.
 //!
 //! The family serves the two converted USB ResourceTypes the Provider owns -
-//! `usb.d2bus.org.UsbService` and `usb.d2bus.org.UsbBinding` - and their
+//! `usb. d2bus. org.UsbService` and `usb. d2bus. org.UsbBinding` - and their
 //! `Device` rows belong to the `d2b-provider-device` family, which owns the
 //! `Device` ResourceType. The scope here is the crate's own declaration: the
 //! rows below name the components this crate serves, and the typed effect
@@ -63,9 +63,9 @@ pub const USBIP_RESYNC: Duration = Duration::from_secs(30);
 /// ResourceTypes it owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsbipComponent {
-    /// The USB authority Service (`usb.d2bus.org.UsbService`).
+    /// The USB authority Service (`usb. d2bus. org.UsbService`).
     Service,
-    /// The per-Guest USB Binding (`usb.d2bus.org.UsbBinding`).
+    /// The per-Guest USB Binding (`usb. d2bus. org.UsbBinding`).
     Binding,
 }
 

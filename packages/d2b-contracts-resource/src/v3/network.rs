@@ -4,7 +4,7 @@
 //! layer-3, isolation, routing, DHCP and DNS, external-attachment, mDNS,
 //! net-VM, and per-execution-target attachment fields are all Layer 2 base
 //! fields; only genuinely implementation-only desired settings belong to the
-//! Layer 3 `spec.provider` envelope on the universal `ResourceSpec`.
+//! Layer 3 `spec. provider` envelope on the universal `ResourceSpec`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -115,7 +115,7 @@ pub const DEFAULT_HOST_BLOCKLIST: [&str; 4] = [
     "192.168.0.0/16",
     "169.254.0.0/16",
 ];
-/// A validated IPv4 CIDR in `a.b.c.d/prefix` form.
+/// A validated IPv4 CIDR in `a. b.c. d/prefix` form.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct Ipv4Cidr(String);

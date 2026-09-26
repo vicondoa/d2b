@@ -50,7 +50,7 @@ pub enum Kind {
     #[serde(rename = "bundle-tampered")]
     BundleTampered,
     /// A provider required by an audio or console operation is present but
-    /// not in a state where enforcement can proceed (e.g. expected
+    /// not in a state where enforcement can proceed (e. g. expected
     /// target-local Process absent). Operator remediation required.
     #[serde(rename = "provider-misconfigured")]
     ProviderMisconfigured,
@@ -630,7 +630,7 @@ impl Error {
     }
 
     /// Provider required by an audio or console operation is present but
-    /// misconfigured (e.g. expected target-local Process absent).
+    /// misconfigured (e. g. expected target-local Process absent).
     pub fn provider_misconfigured(vm: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::Audio(AudioError::ProviderMisconfigured {
             vm: vm.into(),
@@ -755,7 +755,7 @@ impl From<AudioError> for Error {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioError {
     /// Provider required by an audio or console operation is present but
-    /// misconfigured (e.g. expected target-local Process absent).
+    /// misconfigured (e. g. expected target-local Process absent).
     ProviderMisconfigured { vm: String, reason: String },
 }
 

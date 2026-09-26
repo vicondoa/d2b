@@ -339,7 +339,7 @@ fn render_artifacts(
 
 /// The declared standard (unqualified) ResourceTypes in committed order, with
 /// a declared standard type absent from the committed order appended after it
-/// in sorted order. A qualified type (`<namespace>.d2bus.org.<Name>`) carries
+/// in sorted order. A qualified type (`<namespace>.d2bus. org.<Name>`) carries
 /// a dot and never enters the standard registry.
 fn declared_standard_types(registry: &AuthorityRegistry) -> Vec<String> {
     let mut declared = BTreeSet::new();

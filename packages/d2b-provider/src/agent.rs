@@ -288,7 +288,7 @@ where
     /// # Errors
     ///
     /// Returns [`ProviderAgentError::UnsupportedService`] when the request
-    /// names a service other than `d2b.provider.v3`,
+    /// names a service other than `d2b. provider. v3`,
     /// [`ProviderAgentError::DispatchSaturated`] when the in-flight budget
     /// is exhausted, [`ProviderAgentError::DispatchTimeout`] when the
     /// request exceeds its timeout, and

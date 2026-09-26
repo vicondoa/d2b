@@ -483,7 +483,7 @@ pub struct ProcessEffectsServiceFactory {
 }
 
 impl ProcessEffectsServiceFactory {
-    /// Build the factory from one zone's facet set。
+    /// Build the factory from one zone's facet set.
     pub fn new(facets: ProcessEffectFacets) -> Self {
         Self { facets }
     }

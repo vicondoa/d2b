@@ -233,7 +233,7 @@ impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
         }
     }
 
-    // Sync by construction:the ledger sits behind the sync trait surface;the
+    // Sync by construction:the ledger sits behind the sync trait surface; the
     // shared helper's critical section is short and never held across a suspension
     // point.
     fn record(&self, identity: SystemdInvocationIdentity) -> Result<(), ProcessEffectError> {

@@ -2,9 +2,9 @@
 //!
 //! `Device` is the inventoried, exclusive-or-shared device arbitration
 //! ResourceType. `deviceClass`, `arbitration`, `maxConcurrentClaims`, and the
-//! `inventory.selector` discriminated union are Layer 2 base fields;
+//! `inventory. selector` discriminated union are Layer 2 base fields;
 //! implementation-only device configuration belongs to the Layer 3
-//! `spec.provider` envelope on the universal `ResourceSpec`.
+//! `spec. provider` envelope on the universal `ResourceSpec`.
 //!
 //! No raw device path appears in the spec. A physical device is selected by a
 //! stable operator-defined label plus optional bounded filter fields, and the
@@ -669,7 +669,7 @@ wire_deserialize!(
 
 /// The common Device-specific status resource layer.
 ///
-/// This object is placed in universal `status.resource`; it deliberately does
+/// This object is placed in universal `status. resource`; it deliberately does
 /// not duplicate `observedGeneration`, `phase`, `conditions`, or `update`.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1054,7 +1054,7 @@ impl DeviceMetricOutcome {
 }
 
 /// Fixed Device metric labels. Zone, resource, UID, selector, and backing
-/// identity never occur in this struct; `d2b.zone` and `d2b.provider` belong
+/// identity never occur in this struct; `d2b. zone` and `d2b. provider` belong
 /// only to the OTEL resource-attribute set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 pub struct DeviceMetricLabels {

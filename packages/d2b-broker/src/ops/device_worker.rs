@@ -37,7 +37,7 @@ pub struct DeviceWorkerScope {
     /// uid the request carried, now the Zone the bundle row was read from.
     pub(crate) zone_uid: ResourceUid,
     /// The `Device` row that owns the launched Process row, per the verified
-    /// Zone resource bundle (`Process.metadata.ownerRef`, cross-checked with
+    /// Zone resource bundle (`Process. metadata. ownerRef`, cross-checked with
     /// the request's claim).
     pub(crate) device_ref: ResourceRef,
     /// That Device's durable row uid: the deterministic derivation of its
@@ -45,7 +45,7 @@ pub struct DeviceWorkerScope {
     /// the request must carry.
     pub(crate) device_uid: ResourceUid,
     /// The Guest the Device declares as its owner
-    /// (`Device.metadata.ownerRef == Guest/<guest>`): the VM scope every
+    /// (`Device. metadata. ownerRef == Guest/<guest>`): the VM scope every
     /// runtime path of the worker hangs off.
     pub(crate) guest: String,
 }
@@ -140,7 +140,7 @@ impl DeviceWorkerScopeError {
 /// Pin the Device scope of one Device-owned worker launch.
 ///
 /// The launched row is resolved from the verified Zone resource bundle the
-/// request's `zone_uid` names (`Process.metadata.ownerRef`), that owner must
+/// request's `zone_uid` names (`Process. metadata. ownerRef`), that owner must
 /// be a `Device`, `owner_ref` must be exactly it, and `owner_uid` must be that
 /// Device row's durable uid. Only then is the Device's declared Guest read.
 ///
@@ -241,8 +241,8 @@ pub(crate) fn unique_tpm_state_dir(
 /// Whether one Device-owned worker role binds its socket under the broker
 /// runtime root's per-Guest directory.
 ///
-/// The long-lived swtpm worker (`--server ...path=<root>/vms/<guest>/tpm.sock`)
-/// and both GPU sidecars (`--socket <root>/vms/<guest>/gpu.sock`) do. The
+/// The long-lived swtpm worker (`--server ...path=<root>/vms/<guest>/tpm. sock`)
+/// and both GPU sidecars (`--socket <root>/vms/<guest>/gpu. sock`) do. The
 /// one-shot flush binds its ctrl socket inside the Device's state Volume, and
 /// the video sidecar's socket lives in the video module's own `/run/d2b-video`
 /// runtime directory: neither is a directory the broker owns or opens.
@@ -345,7 +345,7 @@ fn find_resource_row<'a>(
         .find(pred)
 }
 
-/// The authored `metadata.ownerRef` of one row of a verified Zone resource
+/// The authored `metadata. ownerRef` of one row of a verified Zone resource
 /// bundle, parsed into a canonical reference.
 pub(crate) fn row_owner_ref(
     bundle_bytes: &[u8],
@@ -368,7 +368,7 @@ let bundle: serde_json::Value = serde_json::from_slice(bundle_bytes).ok()?;
         .and_then(|owner| ResourceRef::parse(owner).ok())
 }
 
-/// `Device.metadata.ownerRef == Guest/<guest>` for one Device row of a
+/// `Device. metadata. ownerRef == Guest/<guest>` for one Device row of a
 /// verified Zone resource bundle.
 ///
 /// The same derivation the daemon's Device-worker ticket uses to name the

@@ -50,7 +50,7 @@ pub const PUBLIC_MANIFEST_FIELDS: &[&str] = &[
     "usbipdHostIp",
     "securityKey",
     "observability",
-    // `observability.enabled` (public-safe boolean) is nested under the per-VM
+    // `observability. enabled` (public-safe boolean) is nested under the per-VM
     // `observability` object in the current manifest; the bash allowlist
     // predated this field. The path-bearing key/secret invariant separately
     // guards the observability block against host-path leaks.
@@ -264,7 +264,7 @@ mod tests {
 
     /// Negative fixture from `tests/static-invariant-opaque-key-ids.sh`:
     /// path-bearing key suffixes with host-path values must be reported as
-    /// `dotted.path=value`.
+    /// `dotted. path=value`.
     #[test]
     fn path_bearing_key_rejects_host_paths() {
         let manifest = json!({

@@ -267,14 +267,14 @@ pub fn check_sshd_host_keys(vm: &str, keys_dir: &Path) -> Result<(), SshdHostKey
         }
         let mode = meta.permissions().mode() & 0o7777;
         // Review note: when the file has POSIX ACL named
-        // entries (e.g. from the activation script's per-keyfile
+        // entries (e. g. from the activation script's per-keyfile
         // `u:virtiofsd_uid:r` grant required by ADR 0021 broker-
         // pre-NS virtiofsd reading the 0400 root:root host key),
         // Linux stores the mask in the file's group-mode bits. The
         // group's BASE perm (in the ACL's ACL_GROUP_OBJ entry) is
         // still ---, but stat() reports 0440 because the mask is r.
         // Accept either 0400 (no ACL) or 0440 (ACL with mask r--)
-        // when the file has a system.posix_acl_access xattr; reject
+        // when the file has a system. posix_acl_access xattr; reject
         // any other mode.
         let mode_ok = if mode == EXPECTED_KEY_MODE {
             true
@@ -309,7 +309,7 @@ pub fn check_sshd_host_keys(vm: &str, keys_dir: &Path) -> Result<(), SshdHostKey
 }
 
 /// Returns true when the file has a
-/// `system.posix_acl_access` xattr (i.e. the activation script's
+/// `system. posix_acl_access` xattr (i. e. the activation script's
 /// `setfacl -m u:UID:r` grant for ADR 0021 broker-pre-NS
 /// virtiofsd has been applied). Used by the preflight to
 /// distinguish 0o0440-with-ACL (legitimate) from 0o0440-without-ACL

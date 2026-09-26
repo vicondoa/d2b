@@ -85,7 +85,7 @@ pub struct DeviceNodeEntry {
     pub class: DeviceClass,
     pub path: PathBuf,
     pub kind: DeviceNodeKind,
-    /// Required POSIX mode bits (e.g. `0o660`). Validation requires an
+    /// Required POSIX mode bits (e. g. `0o660`). Validation requires an
     /// exact `0o7777` match (permission plus special bits).
     pub mode_required: u32,
     /// Required POSIX group name (UNIX group ownership), matched via
@@ -217,7 +217,7 @@ pub enum DeviceValidation {
     MissingOptional,
     /// Required path is absent; broker cannot open the fd.
     MissingRequired,
-    /// Path exists but is the wrong kind (e.g. file instead of char
+    /// Path exists but is the wrong kind (e. g. file instead of char
     /// device).
     WrongKind,
     /// POSIX mode bits do not exactly match the required mask.

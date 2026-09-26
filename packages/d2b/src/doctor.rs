@@ -1,9 +1,9 @@
 //! `d2b host doctor --read-only` checks.
 //!
 //! Each check is a passive, read-only probe:
-//! - `broker_ready` - connect to `/run/d2b/priv.sock`, or verify the
+//! - `broker_ready` - connect to `/run/d2b/priv. sock`, or verify the
 //!   private socket exists and correctly rejects this unprivileged caller.
-//! - `daemon_ready` - connect to `/run/d2b/public.sock`.
+//! - `daemon_ready` - connect to `/run/d2b/public. sock`.
 //! - `metrics_endpoint` - `GET /metrics` over the canonical
 //!   operator-configured external Prometheus URL (see
 //!   `docs/reference/daemon-metrics.md`). The scrape endpoint is optional;
@@ -11,7 +11,7 @@
 //!   posture so local host health stays clean until the metrics listener
 //!   is enabled.
 //! - `signoz-ui-endpoint` - when observability is enabled, read
-//!   `_observability.signozUrl` from `vms.json` and probe the SigNoz
+//!   `_observability. signozUrl` from `vms.json` and probe the SigNoz
 //!   health endpoint.
 //! - `otel_host_bridge_runner` - inspect daemon-persisted
 //!   `pidfd-table.json` for a registration with role
@@ -78,12 +78,12 @@ impl DoctorStatus {
 /// One row in the doctor's `checks[]` array.
 #[derive(Debug, Clone)]
 pub(crate) struct DoctorCheck {
-    /// Stable kebab-case identifier (e.g. `broker-ready`).
+    /// Stable kebab-case identifier (e. g. `broker-ready`).
     pub name: &'static str,
     pub status: DoctorStatus,
     pub detail: String,
     /// Optional structured payload that the JSON renderer merges
-    /// into the per-check object (e.g. runner counts).
+    /// into the per-check object (e. g. runner counts).
     pub data: Option<Value>,
 }
 
@@ -1593,7 +1593,7 @@ fn is_d2b_bridge_name(name: &str) -> bool {
 }
 
 /// For each declared d2b bridge, query
-/// `net.ipv6.conf.<bridge>.disable_ipv6` via `sysctl`.
+/// `net. ipv6.conf.<bridge>.disable_ipv6` via `sysctl`.
 ///
 /// - **Fail** if any bridge returns `0` (IPv6 active).
 /// - **Pass** if all bridges return `1`.

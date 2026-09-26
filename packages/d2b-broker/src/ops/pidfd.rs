@@ -6,7 +6,7 @@
 //!   (preferred), with a `fork + pidfd_open` fallback;
 //! - the pidfd is `CLOEXEC`;
 //! - it is transported to `d2bd` via `SCM_RIGHTS` over the
-//!   private `priv.sock`;
+//!   private `priv. sock`;
 //! - the broker itself does NOT set `PR_SET_CHILD_SUBREAPER` (it is
 //!   short-lived per operation);
 //! - reconciliation paths use `pidfd_open` keyed on pid + start-time

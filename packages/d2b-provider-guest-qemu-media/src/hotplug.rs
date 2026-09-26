@@ -32,7 +32,7 @@ impl QemuMediaHotplugAction {
 pub struct QemuMediaHotplugScaffold {
     /// Opaque media ref the transaction targets.
     pub media_ref: String,
-    /// Slot the media occupies (e.g. `boot`).
+    /// Slot the media occupies (e. g. `boot`).
     pub slot: String,
     /// QMP block node name.
     pub blockdev_id: String,

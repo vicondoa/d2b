@@ -12,7 +12,7 @@
 //! Conversion mapping (spec section 13):
 //! - `describe` -> [`host_descriptor`] registration under `Host`.
 //! - `validate_spec` -> [`ResourceDriver::validate`]: typed spec decode plus
-//!   the `Host.spec.providerRef` fence (`Provider/system-core` is the only
+//!   the `Host. spec. providerRef` fence (`Provider/system-core` is the only
 //!   Provider the Host contract admits).
 //! - `plan` -> the preserved `observedGeneration` short-circuit: a status
 //!   observed at the current generation skips re-observing (the old
@@ -23,10 +23,10 @@
 //!   over the [`HostDriverEffects`] probe port.
 //! - `finalize` -> [`ResourceDriver::delete`] (old `FinalizeResult` was
 //!   converged: the family owns no children and carries no finalizer).
-//! - `UpdateStatus` -> `ctx.set_status` (in-memory only, R11).
+//! - `UpdateStatus` -> `ctx. set_status` (in-memory only, R11).
 //!
 //! Deliberately not carried from the old handler: the durable
-//! `status.resource` JSON projection and its `lastReconciledAt` /
+//! `status. resource` JSON projection and its `lastReconciledAt` /
 //! `observedGeneration` writes (status is runtime-only now, R11), and the
 //! `assess_update` / `plan_upgrade` runner path (no driver equivalent; the
 //! family never planned an upgrade). The old runner's 5s resync relisted and
@@ -42,7 +42,7 @@
 //! ([`crate::effects_service::HostEffectsService`]) built from the
 //! daemon-supplied facet set - the construction site holds no externally
 //! built port (R2) - and the family's declared effects service
-//! (`host.d2bus.org/effects`) rides the declaration, so a zone that cannot
+//! (`host. d2bus. org/effects`) rides the declaration, so a zone that cannot
 //! host it refuses startup by name (R5).
 //!
 //! KTD13: the driver has no spawn surface at all. It observes the local host
@@ -137,7 +137,7 @@ impl std::error::Error for HostDriverError {}
 /// Typed in-memory status projection (R11: never persisted).
 ///
 /// The observation is kept with the generation it was taken at, which is the
-/// runtime-only successor of the old durable `status.observedGeneration`
+/// runtime-only successor of the old durable `status. observedGeneration`
 /// plan short-circuit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HostDriverStatus {
@@ -301,7 +301,7 @@ impl HostDriver {
             .map_err(|_| self.error(HostDriverErrorKind::SpecInvalid, op))
     }
 
-    /// The declared `spec.providerRef` fence plus the typed Host base spec.
+    /// The declared `spec. providerRef` fence plus the typed Host base spec.
     fn host_spec(
         &self,
         ctx: &ResourceContext,
@@ -457,7 +457,7 @@ impl ResourceDriver for HostDriver {
 ///
 /// Derived from the placement contract: `Host` names no placement anchor
 /// (`PlacementAnchor::canonical_for` resolves none), so a Host row never
-/// carries the canonical `spec.executionRef` and the plane reconciles it on
+/// carries the canonical `spec. executionRef` and the plane reconciles it on
 /// its own Host domain - which is the row's own subject.
 const HOST_EXECUTION_DOMAINS: &[&str] = &["host"];
 
@@ -466,7 +466,7 @@ const HOST_EXECUTION_DOMAINS: &[&str] = &["host"];
 /// `Host` is `BUILTIN | STARTUP` (no RUNTIME bit): the plane cannot serve the
 /// converted bootstrap rows without it, so it must be registered before the
 /// plane opens. The type is not exportable: `ResourceExport` admits only
-/// qualified `*.d2bus.org.*Service` types. The driver serves no broker
+/// qualified `*.d2bus. org.*Service` types. The driver serves no broker
 /// operations, creates no children, and reads no other resource: the
 /// observation reaches the local machine through the family's own probe.
 ///

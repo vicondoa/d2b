@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! crosvm device video-decoder \
-//!   --socket-path /run/d2b-video/<vm>/video.sock \
+//!   --socket-path /run/d2b-video/<vm>/video. sock \
 //!   --backend vaapi
 //! ```
 //!
@@ -26,19 +26,19 @@ use serde::{Deserialize, Serialize};
 // Wire-contract pins
 // =========================================================================
 //
-// `pkgs/spectrum-ch/cloud-hypervisor/0003-vhost-user-media-device.patch`
+// `pkgs/spectrum-ch/cloud-hypervisor/0003-vhost-user-media-device. patch`
 // hard-codes the virtio-media wire shape that this sidecar speaks to the
 // guest through cloud-hypervisor. These constants are NOT user-tunable
 // argv flags - they live in the CH patch and the crosvm vhost-user-media
 // backend. We mirror them here so the byte-parity golden
-// (`tests/golden/runner-shape/video-argv-minimal.txt`) captures the full
+// (`tests/golden/runner-shape/video-argv-minimal. txt`) captures the full
 // effective wire shape, and any future drift in the CH patch surfaces as
 // a golden diff in CI even though no argv changed.
 //
 // Every constant cites the patch line that pins it.
 
 /// virtio device-type id for `vhost-user-media`. Pinned in
-/// `0003-vhost-user-media-device.patch` as `const VIRTIO_ID_MEDIA: u32 = 48`.
+/// `0003-vhost-user-media-device. patch` as `const VIRTIO_ID_MEDIA: u32 = 48`.
 pub const VIRTIO_ID_MEDIA: u32 = 48;
 
 /// Number of virtqueues exposed by `vhost-user-media` (one command, one
@@ -55,7 +55,7 @@ pub const VHOST_USER_MEDIA_QUEUE_SIZE: u16 = 256;
 pub const VHOST_USER_MEDIA_SHM_REGION_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Forced `SET_VRING_BASE` value for every queue. Pinned in the CH patch
-/// in `activate()`: `self.vu_common.vring_bases = Some(vec![0; queues.len()])`.
+/// in `activate()`: `self. vu_common. vring_bases = Some(vec![0; queues. len()])`.
 /// The virtio-media guest driver pre-queues event buffers on queue 1 before
 /// `DRIVER_OK`; the explicit zero override keeps those buffers visible to
 /// the backend on resume.
@@ -68,8 +68,8 @@ pub const VHOST_USER_MEDIA_VRING_BASE: u64 = 0;
 pub const VHOST_USER_MEDIA_PROTOCOL_FLAGS: &str = "BACKEND_REQ|REPLY_ACK|SHMEM_MAP_CROSVM";
 
 /// PCI MMIO allocator used for the SHM region. Pinned in the CH patch via
-/// `self.pci_segments[..].mem64_allocator.lock()...allocate(...)`. The
-/// allocator name is part of the wire shape because changing it (e.g. to
+/// `self. pci_segments[..].mem64_allocator.lock()...allocate(...)`. The
+/// allocator name is part of the wire shape because changing it (e. g. to
 /// `mem32_allocator`) changes the guest-visible BAR layout.
 pub const VHOST_USER_MEDIA_MMIO_ALLOCATOR: &str = "pci-mem64";
 
@@ -114,12 +114,12 @@ impl VideoBackend {
 pub struct VideoArgvInput {
     /// Absolute store path to the `crosvm` binary (the video component
     /// overlays `cargoBuildFeatures += [video-decoder,
-    /// vaapi, media]` against `pkgs.crosvm`).
+    /// vaapi, media]` against `pkgs. crosvm`).
     pub crosvm_binary_path: String,
     /// VM name; used by the worker launch arg0 only.
     pub vm_name: String,
     /// `--socket-path` value. Per host.nix:
-    /// `/run/d2b-video/<vm>/video.sock` (the video module uses its
+    /// `/run/d2b-video/<vm>/video. sock` (the video module uses its
     /// own `RuntimeDirectory = d2b-video/<vm>` rather
     /// than sharing `/run/d2b/vms/<vm>/`).
     pub socket_path: String,

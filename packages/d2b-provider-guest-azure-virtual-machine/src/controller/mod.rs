@@ -192,18 +192,27 @@ impl<'de> Deserialize<'de> for AzureVmRecoveryState {
                 // pending update was set carries the removed reconfiguration
                 // phase, which the phase decode refuses.
                 let _ = shape.pending_update;
+                // A legacy record carries the operation and its start stamp
+                // as a pair. The write side emits both or neither, but this
+                // is decoded data read back off disk, so a half-Some pair is
+                // a malformed record: it fails the decode with a typed serde
+                // error instead of aborting the thread.
+                let in_flight_operation = match (shape.operation, shape.operation_started_at_unix_ms)
+                {
+                    (Some(operation), Some(started_at)) => {
+                        Some(InFlightOperation { operation, started_at })
+                    }
+                    (None, None) => None,
+                    (Some(_), None) | (None, Some(_)) => {
+                        return Err(<D::Error as serde::de::Error>::custom(
+                            "legacy recovery record has a half-Some operation pair",
+                        ));
+                    }
+                };
                 Self {
                     phase: shape.phase,
                     finalizer_installed: shape.finalizer_installed,
-                    in_flight_operation: match (shape.operation, shape.operation_started_at_unix_ms)
-                    {
-                        (Some(operation), Some(started_at)) => {
-                            Some(InFlightOperation { operation, started_at })
-                        }
-                        (None, None) => None,
-                        // Unreachable: the write side keeps the pair together.
-                        _ => unreachable!("legacy recovery record has a half-Some operation pair"),
-                    },
+                    in_flight_operation,
                     pending_delete_operation_id: shape.pending_delete_operation_id,
                     bootstrap_started_at_unix_ms: shape.bootstrap_started_at_unix_ms,
                     psk_delivery_attempts: shape.psk_delivery_attempts,
@@ -306,8 +315,11 @@ where
     /// # Errors
     ///
     /// Returns [`AzureVmError::InvalidConfiguration`] when the recovery
-    /// record is internally inconsistent (phase/operation pairing,
-    /// finalizer, or identifier bounds).
+    /// record is internally inconsistent (an in-flight operation under a
+    /// phase that allows none, a finalizer that disagrees with the phase, or
+    /// identifier bounds). The operation/start-stamp pairing is checked when
+    /// the record is decoded, not here: a half-paired legacy record fails the
+    /// decode instead of reaching this predicate.
     pub fn restore_recovery_state(
         mut self,
         recovery: AzureVmRecoveryState,

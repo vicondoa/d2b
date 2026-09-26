@@ -154,7 +154,7 @@ impl EntryDigest {
         }
     }
 
-    /// Wrap a digest freshly minted for an entry;the prefix is guaranteed by construction.
+    /// Wrap a digest freshly minted for an entry; the prefix is guaranteed by construction.
     pub(crate) fn from_sha256_hex(value: String) -> Self {
         Self(value)
     }

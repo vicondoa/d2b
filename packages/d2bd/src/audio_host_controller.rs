@@ -19,9 +19,9 @@
 //! ## PipeWire node targeting
 //!
 //! The vhost-user-sound sidecar is launched with
-//! `PIPEWIRE_PROPS={ application.name = "d2b-<vm>" ... }`. The controller
+//! `PIPEWIRE_PROPS={ application. name = "d2b-<vm>" ... }`. The controller
 //! resolves the live PipeWire node id with `pw-dump`, filtering by
-//! `application.name` plus `media.class` so speaker and microphone controls do
+//! `application. name` plus `media. class` so speaker and microphone controls do
 //! not target the same ambiguous node name.
 //!
 //! ## Credential posture

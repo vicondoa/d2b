@@ -1,6 +1,6 @@
 //! Socket-activation integration test.
 //!
-//! Spawns the broker binary with `LISTEN_FDS=1 LISTEN_FDNAMES=priv.sock`
+//! Spawns the broker binary with `LISTEN_FDS=1 LISTEN_FDNAMES=priv. sock`
 //! and fd 3 = a bound `AF_UNIX SOCK_SEQPACKET` listen socket, then asserts
 //! that the broker:
 //!
@@ -14,7 +14,7 @@
 //! passed to `execve`.  To work around this we launch a POSIX `sh` one-liner:
 //!
 //! ```sh
-//! LISTEN_PID=$$ LISTEN_FDS=1 LISTEN_FDNAMES=priv.sock exec 3>&<fd> broker
+//! LISTEN_PID=$$ LISTEN_FDS=1 LISTEN_FDNAMES=priv. sock exec 3>&<fd> broker
 //! ```
 //!
 //! `$$` expands to the shell's PID; after `exec`, the broker runs in the same
@@ -146,7 +146,7 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
     // Shell one-liner:
     //   LISTEN_PID=$$       → shell's PID; after `exec`, broker's PID matches.
     //   LISTEN_FDS=1        → one socket fd follows.
-    //   LISTEN_FDNAMES=priv.sock → matches the broker's fd-name expectation.
+    //   LISTEN_FDNAMES=priv. sock → matches the broker's fd-name expectation.
     //   exec 3>&<fd> broker → redirect listen socket to fd 3, then exec broker.
     //
     // Variable references ($BROKER etc.) protect against path quoting issues.

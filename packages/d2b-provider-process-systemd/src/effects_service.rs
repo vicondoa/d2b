@@ -35,7 +35,7 @@ use crate::operations::{
 /// to the crate's committed handler table with the invocation's kernel seam -
 /// the same handler table the provider-operation path serves, over the same
 /// authority path (U15). The service is hermetic and carries no declared
-/// facet;the family's privileged operations reach daemon-structural state
+/// facet; the family's privileged operations reach daemon-structural state
 /// through the per-zone kernel seam of the forwarded invocation, never
 /// through a daemon handle.
 pub const PROCESS_SYSTEMD_EFFECTS_SERVICE: ServiceDecl = ServiceDecl {
@@ -83,7 +83,7 @@ pub const PROCESS_SYSTEMD_SERVICES: &[ServiceDecl] = &[PROCESS_SYSTEMD_EFFECTS_S
 
 /// The provider-owned system-systemd effects service (U15).
 ///
-/// One value per zone serves the declared methods;the factory constructs it
+/// One value per zone serves the declared methods; the factory constructs it
 /// from crate-owned constants alone, so a respawn rebuilds the same surface
 /// from its durable row (KTD5).
 #[derive(Default)]
@@ -138,7 +138,7 @@ fn inspect_response() -> Result<EffectResponse, EffectServiceError> {
 /// assembled from the invocation:the zone, the caller `Provider/process-
 /// systemd` the family's registered identity, the invocation id, the
 /// request-leg descriptors, the invocation's kernel seam, and an empty
-/// evidence chain (a root forwarded call carries none;the chain the broker
+/// evidence chain (a root forwarded call carries none; the chain the broker
 /// minted for the forwarded root stays broker-side, exactly as a
 /// provider-operation-table dispatch's root call does.
 async fn run_operation(
@@ -286,7 +286,7 @@ mod tests {
             )
             .expect("payload object");
             let mut resources = ServiceResourceContext::fail_closed();
-            // No kernel seam is wired in this hermetic test;the handler que
+            // No kernel seam is wired in this hermetic test; the handler que
             // validates the typed request before its kernel read, so an
             // empty payload refuses with the invalid-request code rather
             // than reaching the kernel-seam check. Either code is the

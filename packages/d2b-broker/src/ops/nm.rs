@@ -1,7 +1,7 @@
 //! `ApplyNmUnmanaged` op.
 //!
 //! Writes one d2b-prefixed file under
-//! `/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf` that
+//! `/etc/NetworkManager/conf. d/00-d2b-unmanaged.conf` that
 //! declares every d2b-owned bridge/TAP as `unmanaged`. Reload via
 //! `nmcli general reload conf` (NM >= 1.20) with `systemctl reload
 //! NetworkManager.service` fallback. Verify via `nmcli -t -f
@@ -89,7 +89,7 @@ impl From<io::Error> for ApplyNmError {
     }
 }
 
-/// Renders the d2b-owned NM `conf.d` snippet body.
+/// Renders the d2b-owned NM `conf. d` snippet body.
 pub fn render_nm_conf(entries: &[NmUnmanagedEntry]) -> String {
     let mut out = String::new();
     out.push_str("# d2b-managed begin\n");

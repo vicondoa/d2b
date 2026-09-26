@@ -38,7 +38,7 @@ pub struct ListItemOutputV2 {
     pub runner_parity_ok: Option<bool>,
     /// Canonical realm-native workload target address (`<workload>.<realm>.d2b`).
     /// Present when the daemon has associated this entry with a realm workload
-    /// identity. Absent for classical `d2b.vms` entries not yet adopted into
+    /// identity. Absent for classical `d2b. vms` entries not yet adopted into
     /// a realm. Additive - old CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_target: Option<String>,
@@ -540,6 +540,68 @@ mod tests {
             .unwrap()
             .insert("autoUpgrade_commits_lockX".to_owned(), json!(true));
         assert!(serde_json::from_value::<AuditOutputV2>(drifted).is_err());
+    }
+
+    /// The live services DTO has no in-tree consumer, so this pin is the only
+    /// thing standing behind its wire shape. It pins the asymmetry that is
+    /// easiest to drift silently: only `qemu_media` skips a `None`, while
+    /// `gpu`, `video`, `snd`, and `swtpm` serialize an explicit `null`.
+    #[test]
+    fn status_services_output_v2_pins_its_exact_wire_keys() {
+        let services = StatusServicesOutputV2 {
+            d2b: "running".to_owned(),
+            microvm: "running".to_owned(),
+            virtiofsd: "running".to_owned(),
+            qemu_media: Some("stopped".to_owned()),
+            gpu: Some("stopped".to_owned()),
+            video: None,
+            snd: Some("running".to_owned()),
+            swtpm: None,
+        };
+
+        let value = serde_json::to_value(&services).unwrap();
+        let object = value.as_object().unwrap();
+
+        // Populated fields keep their camelCase keys.
+        for key in ["d2b", "microvm", "virtiofsd", "qemuMedia", "gpu", "snd"] {
+            assert!(object.contains_key(key), "missing wire key {key}: {value}");
+        }
+
+        // Only `qemu_media` may be omitted when absent.
+        let without_media = serde_json::to_value(StatusServicesOutputV2 {
+            qemu_media: None,
+            ..services.clone()
+        })
+        .unwrap();
+        assert!(
+            !without_media
+                .as_object()
+                .unwrap()
+                .contains_key("qemuMedia"),
+            "qemuMedia must be omitted when None: {without_media}"
+        );
+
+        // The four sidecar fields emit an explicit null rather than vanishing.
+        for key in ["video", "swtpm"] {
+            assert_eq!(
+                object.get(key),
+                Some(&json!(null)),
+                "{key} must serialize as an explicit null: {value}"
+            );
+        }
+
+        assert_eq!(
+            serde_json::from_value::<StatusServicesOutputV2>(value).unwrap(),
+            services
+        );
+
+        // `deny_unknown_fields`: a drifted sibling key must fail to decode.
+        let mut drifted = serde_json::to_value(&services).unwrap();
+        drifted
+            .as_object_mut()
+            .unwrap()
+            .insert("d2bX".to_owned(), json!("running"));
+        assert!(serde_json::from_value::<StatusServicesOutputV2>(drifted).is_err());
     }
 }
 

@@ -1,5 +1,3 @@
-# `w4-03-contracts-store-digests-errors.md`
-
 ### Fixed
 
 - The store-contract payload digests (`StoredResource.payload_digest`,

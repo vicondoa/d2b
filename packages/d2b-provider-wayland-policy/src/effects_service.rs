@@ -597,7 +597,7 @@ fn envelope_spec_document(value: &Value) -> Value {
     }
 }
 
-/// The base spec with `spec.providerRef` re-inserted (the typed audio specs
+/// The base spec with `spec. providerRef` re-inserted (the typed audio specs
 /// carry the field; old `AudioResourceRuntime::decode_spec` re-inserted it
 /// after the envelope split).
 fn spec_with_provider_ref(
@@ -703,7 +703,7 @@ fn map_audio_effect_error(error: AudioResourceRuntimeError) -> InteractionEffect
     }
 }
 
-/// The old `status.resource` projection for a display session (old
+/// The old `status. resource` projection for a display session (old
 /// `display_resource_projection`): the two worker Process references and the
 /// private Endpoint with its committed generation.
 fn display_projection(

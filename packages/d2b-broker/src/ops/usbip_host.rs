@@ -175,7 +175,7 @@ pub struct UsbipHostDeviceInspection {
     pub bus_number: u16,
     /// The physical port chain under the bus, root-first.
     pub port_chain: Vec<u8>,
-    /// The device node (e.g. `/dev/bus/usb/...`) the device exposes.
+    /// The device node (e. g. `/dev/bus/usb/...`) the device exposes.
     pub device_node: PathBuf,
     /// Which kernel driver currently binds the device's interface.
     pub driver: UsbipDriverBinding,

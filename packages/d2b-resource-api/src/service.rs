@@ -43,7 +43,7 @@ use crate::{
 /// use d2b_resource_api::service::TrustedRequest;
 ///
 /// fn forge<T>(request: &TrustedRequest<T>) {
-///     let _ = &request.subject;
+///     let _ = &request. subject;
 /// }
 /// ```
 #[derive(Clone)]

@@ -994,7 +994,7 @@ impl ProviderRuntime {
             })?
     }
 
-    /// (Re)publish one effect service row on the zone's supervisor, taking
+    /// (Re) publish one effect service row on the zone's supervisor, taking
     /// effect at the composition point the plane publishes declared
     /// services. A republish of a live service bumps the generational
     /// binding revision and rebuilds the actor from the new row (KTD5).

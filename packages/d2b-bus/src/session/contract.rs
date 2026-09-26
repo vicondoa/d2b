@@ -765,7 +765,7 @@ impl RuntimeRouteAdmissionAuthority {
 /// use d2b_bus::session::contract::RouteAdmissionEvidence;
 ///
 /// fn forge(mut value: RouteAdmissionEvidence) {
-///     value.body = todo!();
+///     value. body = todo!();
 /// }
 /// ```
 pub struct RouteAdmissionEvidence {
@@ -881,7 +881,7 @@ impl RouteAdmissionIssuer {
     #[allow(dead_code)]
     // Route admission authority state is read/updated in brief non-suspending
     // critical sections behind synchronized admission flows and the sync
-    // ZoneLinkSession guard surface (admit/is_open/revalidate);no async form.
+    // ZoneLinkSession guard surface (admit/is_open/revalidate); no async form.
     #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     pub(crate) fn issue(
         &self,
