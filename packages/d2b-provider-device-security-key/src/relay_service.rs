@@ -296,9 +296,16 @@ impl Drop for SkAcceptAbort {
 /// One registered VM relay: its ceremony state and its accept-loop handle.
 pub struct SkAcceptHandle {
     /// The VM's relay ceremony state, shared with the connection loop.
-    pub state: Arc<parking_lot::Mutex<SecurityKeyState>>,
+    state: Arc<parking_lot::Mutex<SecurityKeyState>>,
     /// The accept loop's stop handle.
     pub abort: SkAcceptAbort,
+}
+
+impl SkAcceptHandle {
+    /// The VM's relay ceremony state, shared with the connection loop.
+    pub fn state(&self) -> &parking_lot::Mutex<SecurityKeyState> {
+        &self.state
+    }
 }
 
 #[derive(Debug, Default)]

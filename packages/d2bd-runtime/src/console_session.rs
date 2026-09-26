@@ -73,11 +73,6 @@ impl ConsoleRing {
     pub fn base_offset(&self) -> u64 {
         self.ring.base_offset()
     }
-
-    /// The wake handle waiters park on.
-    pub fn notify(&self) -> &Arc<tokio::sync::Notify> {
-        &self.notify
-    }
 }
 
 impl Default for ConsoleRing {
@@ -119,7 +114,7 @@ impl ConsoleSession {
     }
 
     /// Shared ring buffer for this session's console output.
-    pub fn ring(&self) -> &Arc<tokio::sync::Mutex<ConsoleRing>> {
+    pub fn ring(&self) -> &tokio::sync::Mutex<ConsoleRing> {
         &self.ring
     }
 
@@ -314,7 +309,7 @@ impl ConsoleSessionTable {
                 return None;
             };
             let snap = guard.read_at(offset, max_len);
-            let notify = Arc::clone(guard.notify());
+            let notify = Arc::clone(&guard.notify);
             (snap, notify)
         };
         Some(ConsoleReadOutput {
@@ -362,7 +357,7 @@ impl ConsoleSessionTable {
         let Ok(guard) = session.ring().try_lock() else {
             return None;
         };
-        Some(Arc::clone(guard.notify()))
+        Some(Arc::clone(&guard.notify))
     }
 }
 
