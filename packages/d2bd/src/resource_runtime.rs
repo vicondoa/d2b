@@ -37,7 +37,7 @@ use d2b_contracts_resource::v3::identity::{
 use d2b_contracts_resource::v3::{
     CanonicalJsonValue, ControllerGeneration, DEFAULT_REQUEST_DEADLINE_MS, DesiredLifecycle,
     PlacementTargetKind, ResourceBundleGenerationId, ResourceEnvelope, ResourceGeneration,
-    ResourceErrorKind, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid,
+    ResourceErrorKind, ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, StateDigest,
     ZoneId, ZoneRevision,
     process::ProcessSpec,
     volume::VolumeSpec,
@@ -65,8 +65,9 @@ use d2b_provider_zone::{
 };
 use d2b_provider_clipboard_wayland::Policy as ClipboardPolicy;
 use d2b_provider_credential::{
-    AgentReadyFuture, CredentialDependencyFacts, CredentialLeaseFacts, CredentialRuntime,
-    CredentialSession, is_credential_provider_ref,
+    AgentReadyFuture, CredentialDependencyFacts, CredentialLeaseFacts,
+    CredentialResourceRuntimeError, CredentialRuntime, CredentialSession,
+    is_credential_provider_ref,
 };
 use d2b_provider_display_wayland::WaylandSessionSpec;
 use d2b_provider_network_local::{
@@ -366,22 +367,31 @@ async fn credential_dependency_facts(
     plane: &dyn ControllerPlaneView,
     provider_ref: &ResourceRef,
     execution_ref: &ResourceRef,
-) -> Option<CredentialDependencyFacts> {
-    let provider = credential_dependency_row(plane, provider_ref).await?;
-    let execution = credential_dependency_row(plane, execution_ref).await?;
-    Some(CredentialDependencyFacts {
+) -> Result<Option<CredentialDependencyFacts>, ResourceRuntimeError> {
+    let Some(provider) = credential_dependency_row(plane, provider_ref).await? else {
+        return Ok(None);
+    };
+    let Some(execution) = credential_dependency_row(plane, execution_ref).await? else {
+        return Ok(None);
+    };
+    Ok(Some(CredentialDependencyFacts {
         provider_uid: provider.uid.as_str().to_owned(),
         provider_generation: provider.generation.get(),
         provider_ready: credential_row_ready(&provider),
         execution_ready: credential_row_ready(&execution),
-    })
+    }))
 }
 
+/// One credential dependency row read from its authority (the manager).
+///
+/// A manager RPC failure is an error - never reported as absence
+/// (`bridge_manager_row`'s contract); `Ok(None)` is the honest
+/// not-committed answer.
 async fn credential_dependency_row(
     plane: &dyn ControllerPlaneView,
     target: &ResourceRef,
-) -> Option<StoredResource> {
-    bridge_manager_row(plane, target).await.ok().flatten()
+) -> Result<Option<StoredResource>, ResourceRuntimeError> {
+    bridge_manager_row(plane, target).await
 }
 
 
@@ -1550,7 +1560,7 @@ fn stored_resource_from_wire(resource: &wire::ResourceEnvelopeBytes) -> Option<S
         generation,
         revision,
         canonical_json: resource.canonical_json.clone(),
-        payload_digest: resource.payload_digest.clone(),
+        payload_digest: StateDigest::parse(resource.payload_digest.clone()).ok()?,
     })
 }
 
@@ -4101,7 +4111,7 @@ impl ZoneResourceRuntime {
             || envelope
                 .digest()
                 .map_err(|_| ResourceRuntimeError::RequestInvalid)?
-                != guest.payload_digest
+                != guest.payload_digest.as_str()
         {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
@@ -4130,7 +4140,7 @@ impl ZoneResourceRuntime {
             || provider_envelope
                 .digest()
                 .map_err(|_| ResourceRuntimeError::RequestInvalid)?
-                != provider.payload_digest
+                != provider.payload_digest.as_str()
         {
             return Err(ResourceRuntimeError::RequestInvalid);
         }
@@ -4472,8 +4482,21 @@ impl ZoneResourceRuntime {
                 let provider_ref = provider_ref.clone();
                 let execution_ref = execution_ref.clone();
                 Box::pin(async move {
-                    let plane = published_plane_view(&planes, &zone)?;
-                    credential_dependency_facts(plane.as_ref(), &provider_ref, &execution_ref).await
+                    let Some(plane) = published_plane_view(&planes, &zone) else {
+                        return Ok(None);
+                    };
+                    credential_dependency_facts(plane.as_ref(), &provider_ref, &execution_ref)
+                        .await
+                        .map_err(|error| {
+                            tracing::debug!(
+                                zone = %zone,
+                                provider = %provider_ref,
+                                execution = %execution_ref,
+                                error = %error,
+                                "credential dependency facts: manager read failed",
+                            );
+                            CredentialResourceRuntimeError::DependencyFacts
+                        })
                 })
             }),
             lease: Arc::new(|_credential_ref: &ResourceRef| Box::pin(async { None })),
@@ -6003,7 +6026,7 @@ impl CredentialRuntime for ProductionCredentialRuntime {
         &self,
         provider_ref: &ResourceRef,
         execution_ref: &ResourceRef,
-    ) -> Option<CredentialDependencyFacts> {
+    ) -> Result<Option<CredentialDependencyFacts>, CredentialResourceRuntimeError> {
         (self.facts)(provider_ref, execution_ref).await
     }
 
@@ -8955,7 +8978,7 @@ fn committed_wayland_session_spec(
         || envelope
             .digest()
             .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         tracing::error!(
             zone = %zone.as_str(),
@@ -9162,7 +9185,7 @@ fn validate_committed_resource(
         || envelope
             .digest()
             .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
@@ -9349,7 +9372,7 @@ fn validate_assignment_row(
         || envelope.metadata().revision() != stored.revision
         || envelope.digest().map_err(|_| {
             ControllerAssignmentRefreshError::Failed(ResourceRuntimeError::AuthorizationUnavailable)
-        })? != stored.payload_digest
+        })? != stored.payload_digest.as_str()
     {
         return Err(ControllerAssignmentRefreshError::Failed(
             ResourceRuntimeError::AuthorizationUnavailable,
@@ -9636,7 +9659,7 @@ fn committed_provider_spec(
         || envelope
             .digest()
             .map_err(|_| ResourceRuntimeError::InteractionConfigurationUnavailable)?
-            != resource.payload_digest
+            != resource.payload_digest.as_str()
     {
         return Err(ResourceRuntimeError::InteractionConfigurationUnavailable);
     }
@@ -9654,7 +9677,7 @@ fn committed_provider_spec(
         resource.uid.clone(),
         resource.generation,
         resource.revision,
-        resource.payload_digest.clone(),
+        resource.payload_digest.as_str().to_owned(),
     ))
 }
 
@@ -12979,7 +13002,8 @@ mod tests {
             generation,
             revision: ZoneRevision::new(generation.get()),
             canonical_json: envelope.canonical_bytes().expect("canonical bytes"),
-            payload_digest: envelope.digest().expect("envelope digest"),
+            payload_digest: StateDigest::parse(envelope.digest().expect("envelope digest"))
+                .expect("a canonical envelope digest is a valid state digest"),
         }
     }
 
@@ -13178,7 +13202,11 @@ mod tests {
             generation: ResourceGeneration::new(1).expect("generation"),
             revision: ZoneRevision::new(revision),
             canonical_json: Vec::new(),
-            payload_digest: String::new(),
+            payload_digest: d2b_contracts_resource::v3::StateDigest::parse(format!(
+                "sha256:{}",
+                "0".repeat(64)
+            ))
+            .unwrap(),
         }
     }
 }

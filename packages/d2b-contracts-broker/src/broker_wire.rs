@@ -9,8 +9,7 @@
 //! the opaque IDs to look up the typed intent in its own trusted bundle
 //! copy. See `d2b_contracts::types` for the newtype set.
 
-use d2b_contracts::audit_wire::validate_audit_page;
-pub use d2b_contracts::audit_wire::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
+use d2b_contracts::audit_wire::{validate_audit_page, AuditExportCursor, AuditExportEntry};
 use d2b_contracts::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,

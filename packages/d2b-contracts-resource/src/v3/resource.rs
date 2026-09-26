@@ -815,6 +815,15 @@ impl<'de> Deserialize<'de> for ResourceEnvelope {
     }
 }
 
+impl From<&ResourceEnvelope> for ResourceRef {
+    fn from(envelope: &ResourceEnvelope) -> Self {
+        Self::new(
+            envelope.resource_type().clone(),
+            envelope.metadata().name().clone(),
+        )
+    }
+}
+
 fn validate_provider_binding(
     resource_type: &ResourceTypeName,
     spec: &ResourceSpec,

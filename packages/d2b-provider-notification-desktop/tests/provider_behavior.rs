@@ -2,7 +2,7 @@ use d2b_contracts_resource::v3::{ResourceRef, ZoneId};
 use d2b_provider_notification_desktop::{
     ActionNonceStore, ActionSpec, Category, GuestSourceConfig, NotificationController,
     NotificationProviderConfig, NotificationProviderDescriptor, NotificationRequest,
-    NotificationUrgency,
+    NotificationUrgency, ProviderError,
 };
 
 #[test]
@@ -108,14 +108,14 @@ fn notification_source_configuration_rejects_capacity_duplicates_and_bad_binding
     };
     assert_eq!(
         NotificationProviderConfig::new(vec![source("one"), source("one")]),
-        Err("notification-source-duplicate")
+        Err(ProviderError::SourceDuplicate)
     );
     let too_many = (0..17)
         .map(|index| source(format!("guest-{index}").as_str()))
         .collect();
     assert_eq!(
         NotificationProviderConfig::new(too_many),
-        Err("notification-source-capacity")
+        Err(ProviderError::SourceCapacity)
     );
     assert_eq!(
         NotificationProviderConfig::new(vec![source("one")])
@@ -124,7 +124,7 @@ fn notification_source_configuration_rejects_capacity_duplicates_and_bad_binding
                 ResourceRef::parse("Guest/not-a-host").unwrap(),
                 ResourceRef::parse("User/alice").unwrap(),
             ),
-        Err("notification-host-binding-invalid")
+        Err(ProviderError::HostBindingInvalid)
     );
 }
 

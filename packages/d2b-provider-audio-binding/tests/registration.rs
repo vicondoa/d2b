@@ -197,8 +197,8 @@ fn a_foreign_row_is_refused() {
         .downcast::<InteractionSpecEnvelope>()
         .expect("the decoder yields the family envelope");
     let behavior = AudioBinding::new(Arc::new(ProviderChildren));
-    assert_eq!(
+    assert!(matches!(
         behavior.validate(&envelope),
-        Err(InteractionEffectError::InvalidResource)
-    );
+        Err(InteractionEffectError::InvalidSpec(_))
+    ));
 }

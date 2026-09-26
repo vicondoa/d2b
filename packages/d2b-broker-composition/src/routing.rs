@@ -14,7 +14,9 @@
 //! registers its handler through [`crate::seam`]; this module is the
 //! single place the admission predicate lives.
 
-use d2b_broker::catalog::{BrokerOperationRow, OperationOwner, PayloadProvenance};
+use d2b_broker::catalog::{
+    BrokerOperationRow, OperationOwner, PayloadProvenance, SecretAccess,
+};
 
 /// Why one operation was refused admission to the in-broker table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +97,7 @@ pub fn route_row(row: &BrokerOperationRow) -> RoutingVerdict {
         // (and therefore the in-broker leg) does not carry them.
         return RoutingVerdict::Forward(RefusalClass::NotGeneric);
     }
-    if row.authz.destructive || row.authz.secret_access != "None" || row.max_fds != 0 {
+    if row.authz.destructive || row.authz.secret_access != SecretAccess::None || row.max_fds != 0 {
         // A committed effect facet: destructive mutation, secret exposure,
         // or descriptor minting. Effects run on the forward carrier.
         return RoutingVerdict::Forward(RefusalClass::Effectful);
@@ -129,7 +131,8 @@ pub fn catalog_admitted_operations() -> Vec<&'static str> {
 mod tests {
     use super::*;
     use d2b_broker::catalog::{
-        BrokerAuthzFacets, BrokerProfileId, CellDurability, OperationOwner, PayloadProvenance,
+        AuditMode, BrokerAuthzFacets, BrokerProfileId, BrokerRequirement, CellDurability,
+        OperationOwner, PayloadProvenance,
     };
 
     /// A minimal pure, generic, provider-declared row (the shape a future
@@ -153,9 +156,9 @@ mod tests {
             scope: "per-zone",
             allowed_groups: &["d2bd"],
             destructive: false,
-            secret_access: "None",
-            broker_required: "No",
-            audit_mode: "Yes",
+            secret_access: SecretAccess::None,
+            broker_required: BrokerRequirement::No,
+            audit_mode: AuditMode::Yes,
         },
         payload_provenance: PayloadProvenance::Request,
         payload_fields: &["echo"],
@@ -234,7 +237,7 @@ mod tests {
     #[test]
     fn a_secret_exposing_row_is_refused_as_effectful() {
         let mut row = PURE_ROW;
-        row.authz.secret_access = "RedactedOnly";
+        row.authz.secret_access = SecretAccess::RedactedOnly;
         assert_eq!(
             route_row(&row),
             RoutingVerdict::Forward(RefusalClass::Effectful)

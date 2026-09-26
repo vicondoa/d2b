@@ -538,7 +538,6 @@ mod tests {
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::ResourceProvenance;
     use d2b_resource_runtime::spec_store::{EnsureOutcome, StoredDesiredResource};
-    use d2b_resource_runtime::target::TargetHandle;
     use tokio::sync::mpsc;
 
     use super::*;
@@ -705,7 +704,6 @@ mod tests {
         let (watch_tx, _watch_rx) = mpsc::unbounded_channel();
         let ctx = ResourceContext::new(
             row,
-            TargetHandle::Host,
             telemetry_service_spec_decoder(),
             Arc::clone(&manager) as Arc<dyn ManagerEndpoint>,
             Arc::clone(&requeue) as Arc<dyn RequeueScheduler>,

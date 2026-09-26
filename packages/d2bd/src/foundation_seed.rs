@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use d2b_contracts_resource::v3::{ PayloadSchema, ResourceRef, canonical_json_bytes };
 use d2b_provider_command::command::{ CommandSpec };
 use d2b_provider_operation::operation::{ OperationSpec };
-use d2b_provider_seccomp_profile::seccomp_profile::{ SECCOMP_PROFILE_RESOURCE_TYPE, SeccompProfileSpec };
+use d2b_provider_seccomp_profile::{ SECCOMP_PROFILE_RESOURCE_TYPE, SeccompProfileSpec };
 use d2b_contracts_zone_session::v3::{RoleBindingSpec, RoleResourceVerb, RoleSpec};
 use d2b_resource_runtime::identity::ResourceTypeName;
 use d2b_resource_runtime::manager::{
@@ -1088,7 +1088,7 @@ impl std::error::Error for SeedError {}
 mod tests {
     use super::*;
     use d2b_provider_command::command::{ CommandArgvSlot, CommandExec, CommandIntent };
-use d2b_provider_seccomp_profile::seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, SeccompDeviceAccess, SeccompNamespaces };
+use d2b_provider_seccomp_profile::{ DeviceBind, DeviceNodeKind, SeccompCgroups, SeccompDeviceAccess, SeccompNamespaces };
     use d2b_contracts_resource::v3::{BoundedText, BoundedToken};
     use serde_json::json;
 

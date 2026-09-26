@@ -50,7 +50,7 @@ use d2b_contracts_resource::v3::{
     ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneRevision,
 };
 use d2b_controller_toolkit::{
-    DependencySnapshot, ResourceKey as CoreResourceKey, ResourceSnapshot,
+    DependencySnapshot, OwnerIdentity, ResourceKey as CoreResourceKey, ResourceSnapshot,
 };
 use d2b_resource_runtime::context::{ResourceContext, SpecDecoder, typed_spec_decoder};
 use d2b_resource_runtime::driver::{
@@ -545,7 +545,10 @@ impl ProviderDriver {
                 canonical,
                 view.deleting,
             )
-            .with_owner_identity(Some(provider_uid.clone()), Some(provider_generation)),
+            .with_owner_identity(Some(OwnerIdentity::new(
+                provider_uid.clone(),
+                provider_generation,
+            ))),
         ))
     }
 }
@@ -718,7 +721,6 @@ mod tests {
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
 
     use crate::test_support::RecordingEffects;
 
@@ -924,7 +926,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             target,
-            TargetHandle::Host,
             provider_spec_decoder(),
             manager,
             Arc::new(RecordingRequeue),

@@ -1135,7 +1135,6 @@ mod tests {
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
         BindingDriverArgs, BindingDriverFactory, BindingDriverStatus, binding_spec_decoder,
@@ -1433,7 +1432,6 @@ mod tests {
         let requeue = RecordingRequeue::new();
         let ctx = ResourceContext::new(
             row,
-            TargetHandle::Host,
             binding_spec_decoder(),
             Arc::new(manager.clone()),
             Arc::new(requeue.clone()),

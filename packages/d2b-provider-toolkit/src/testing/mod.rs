@@ -31,7 +31,7 @@ pub mod fixture;
 
 pub use fakes::{
     FakeBus, FakeCoreClient, FakeEffectPort, FakePortError, FakeResourceStore, FakeSupervisor,
-    FaultPlan, MAX_RECORDED_CALLS,
+    FaultPlan, MAX_RECORDED_CALLS, SharedLog,
 };
 pub use fixture::{
     DeterministicClock, FIXTURE_NOW_UNIX_MS, FakeProvider, Fixture, SampleLeaseRequest,
@@ -527,7 +527,7 @@ impl<P: ProviderBase> TestHarness<P> {
     ///
     /// The clock is the harness's own, so a test advances time explicitly
     /// instead of waiting for it.
-    pub fn clock(&self) -> &Arc<DeterministicClock> {
+    pub fn clock(&self) -> &DeterministicClock {
         &self.clock
     }
 

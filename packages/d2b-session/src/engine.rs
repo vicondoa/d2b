@@ -674,7 +674,7 @@ pub async fn establish_initiator(
         &mut self,
         policy: &EndpointPolicy,
     ) -> Result<crate::handshake::EstablishedAuthentication> {
-        if self.offer != HandshakeOffer::from(policy.clone()) {
+        if self.offer != HandshakeOffer::from(policy) {
             return Err(SessionError::new(SessionErrorCode::PolicyDenied));
         }
         self.authentication

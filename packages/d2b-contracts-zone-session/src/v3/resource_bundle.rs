@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use d2b_contracts_provider::v3::{ArtifactDigest, BinaryRef};
 use d2b_contracts_resource::v3::{
@@ -98,30 +98,28 @@ impl core::fmt::Debug for BundleResourceMetadata {
     }
 }
 
-impl<'de> Deserialize<'de> for BundleResourceMetadata {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            name: d2b_contracts_resource::v3::ResourceName,
-            zone: ZoneId,
-            #[serde(default)]
-            owner_ref: Option<ResourceRef>,
-            #[serde(default)]
-            labels: BTreeMap<String, String>,
-            #[serde(default)]
-            annotations: BTreeMap<String, String>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Ok(Self::new(
-            wire.name,
-            wire.zone,
-            wire.owner_ref,
-            wire.labels,
-            wire.annotations,
-        ))
-    }
-}
+wire_deserialize!(
+    BundleResourceMetadata,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        name: d2b_contracts_resource::v3::ResourceName,
+        zone: ZoneId,
+        #[serde(default)]
+        owner_ref: Option<ResourceRef>,
+        #[serde(default)]
+        labels: BTreeMap<String, String>,
+        #[serde(default)]
+        annotations: BTreeMap<String, String>,
+    },
+    wire,
+    Ok(Self::new(
+        wire.name,
+        wire.zone,
+        wire.owner_ref,
+        wire.labels,
+        wire.annotations,
+    ))
+);
 
 /// One desired-state resource item in a Zone bundle.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -182,26 +180,27 @@ impl core::fmt::Debug for BundleResource {
     }
 }
 
-impl<'de> Deserialize<'de> for BundleResource {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            api_version: String,
-            #[serde(rename = "type")]
-            resource_type: ResourceTypeName,
-            metadata: BundleResourceMetadata,
-            spec: CanonicalJsonObject,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    BundleResource,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        api_version: String,
+        #[serde(rename = "type")]
+        resource_type: ResourceTypeName,
+        metadata: BundleResourceMetadata,
+        spec: CanonicalJsonObject,
+    },
+    wire,
+    {
         if wire.api_version != d2b_contracts_resource::v3::resource::RESOURCE_API_VERSION {
             return Err(serde::de::Error::custom(
                 "bundle resource apiVersion mismatch",
             ));
         }
-        Self::new(wire.resource_type, wire.metadata, wire.spec).map_err(serde::de::Error::custom)
+        Self::new(wire.resource_type, wire.metadata, wire.spec)
+            .map_err(serde::de::Error::custom)
     }
-}
+);
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -456,40 +455,38 @@ impl core::fmt::Debug for ProcessTemplateBinding {
     }
 }
 
-impl<'de> Deserialize<'de> for ProcessTemplateBinding {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            process_ref: ResourceRef,
-            owner_ref: ResourceRef,
-            execution_ref: ResourceRef,
-            template: BoundedToken,
-            artifact_id: ArtifactId,
-            binary_ref: BinaryRef,
-            artifact_digest: ArtifactDigest,
-            binary_path: String,
-            #[serde(default)]
-            dynamic: bool,
-            #[serde(default)]
-            launch_args: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new_inner(
-            wire.process_ref,
-            wire.owner_ref,
-            wire.execution_ref,
-            wire.template,
-            wire.artifact_id,
-            wire.binary_ref,
-            wire.artifact_digest,
-            wire.binary_path,
-            wire.dynamic,
-            wire.launch_args,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ProcessTemplateBinding,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        process_ref: ResourceRef,
+        owner_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        template: BoundedToken,
+        artifact_id: ArtifactId,
+        binary_ref: BinaryRef,
+        artifact_digest: ArtifactDigest,
+        binary_path: String,
+        #[serde(default)]
+        dynamic: bool,
+        #[serde(default)]
+        launch_args: bool,
+    },
+    wire,
+    Self::new_inner(
+        wire.process_ref,
+        wire.owner_ref,
+        wire.execution_ref,
+        wire.template,
+        wire.artifact_id,
+        wire.binary_ref,
+        wire.artifact_digest,
+        wire.binary_path,
+        wire.dynamic,
+        wire.launch_args,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Private integrity metadata carried alongside the public resource array.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

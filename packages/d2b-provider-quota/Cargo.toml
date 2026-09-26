@@ -24,3 +24,8 @@ serde.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "registration"
+path = "tests/registration.rs"
+required-features = ["test-support"]

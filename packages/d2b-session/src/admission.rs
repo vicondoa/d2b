@@ -590,7 +590,7 @@ impl<C> SessionAcceptor<C> {
             + Send
             + 'static,
     {
-        HandshakeOffer::from(policy.clone())
+        HandshakeOffer::from(&policy)
             .validate()
             .map_err(SessionError::from)?;
         Ok(Self {

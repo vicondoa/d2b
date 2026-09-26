@@ -711,7 +711,7 @@ pub fn guest_descriptor(args: GuestDriverArgs) -> DriverDescriptor {
 #[derive(Clone)]
 pub struct GuestDriverArgs {
     /// The zone the plane serves.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds (KTD7).
     pub controller_generation: ControllerGeneration,
     /// The daemon-supplied facet set the family's effects implementation is
@@ -785,12 +785,12 @@ impl GuestDriver {
     /// survives driver recreation; the construction site holds no
     /// externally built port (R2)).
     pub fn new(
-        zone: String,
+        zone: ZoneId,
         controller_generation: ControllerGeneration,
         effects: Arc<dyn GuestDriverEffects>,
     ) -> Self {
         Self {
-            zone: ZoneId::parse(zone).expect("driver zone was validated at construction"),
+            zone,
             controller_generation,
             effects,
             watched: Vec::new(),
@@ -1501,7 +1501,7 @@ fn aca_child_ensures(
 mod tests {
     use std::sync::Arc;
 
-    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
+    use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
     use d2b_resource_runtime::context::{
         ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
         WatchRegistration,
@@ -1514,7 +1514,6 @@ mod tests {
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::resource::ResourceStatus;
     use d2b_resource_runtime::spec_store::EnsureOutcome;
-    use d2b_resource_runtime::target::TargetHandle;
 
     use super::{
         GUEST_REGISTRATIONS, GUEST_TYPE_NAME, GuestDriver, GuestDriverArgs, GuestDriverFactory,
@@ -1847,7 +1846,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             target,
-            TargetHandle::Host,
             guest_spec_decoder(),
             manager,
             requeue,
@@ -1858,7 +1856,7 @@ mod tests {
 
     fn driver(effects: Arc<ScriptedEffects>) -> GuestDriver {
         GuestDriver::new(
-            "work".to_owned(),
+            ZoneId::parse("work").expect("zone"),
             ControllerGeneration::new(3).expect("generation"),
             effects,
         )
@@ -1914,7 +1912,7 @@ mod tests {
     #[test]
     fn factory_registers_the_guest_type() {
         let factory = GuestDriverFactory::new(GuestDriverArgs {
-            zone: "work".to_owned(),
+            zone: ZoneId::parse("work").expect("zone"),
             controller_generation: ControllerGeneration::new(1).expect("generation"),
             facets: crate::test_support::ScriptedFacets::new().facet_set(),
         });
@@ -2013,7 +2011,7 @@ mod tests {
             d2b_contracts_resource::v3::identity::ReconnectGeneration::new(2).unwrap(),
         ));
         let factory = GuestDriverFactory::new(GuestDriverArgs {
-            zone: "work".to_owned(),
+            zone: ZoneId::parse("work").expect("zone"),
             controller_generation: ControllerGeneration::new(3).expect("generation"),
             facets: facets.facet_set(),
         });

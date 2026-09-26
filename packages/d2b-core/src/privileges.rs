@@ -43,7 +43,7 @@ pub struct OperationAuthz {
 }
 
 /// Secret exposure class for an authorization row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SecretAccess {
     None,
@@ -56,7 +56,7 @@ pub enum SecretAccess {
 }
 
 /// Broker-use class for an authorization row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum BrokerRequirement {
     No,
@@ -78,7 +78,7 @@ pub struct AuditPolicy {
 }
 
 /// Audit mode for compact policy rows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuditMode {
     DenyOnly,

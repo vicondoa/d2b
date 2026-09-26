@@ -246,7 +246,6 @@ mod tests {
     };
     use crate::manager::ResourceView;
     use crate::spec_store::EnsureOutcome;
-    use crate::target::TargetHandle;
 
     use serde_json::json;
 
@@ -396,7 +395,6 @@ mod tests {
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
         ResourceContext::new(
             target,
-            TargetHandle::Host,
             metadata_spec_decoder(),
             manager,
             Arc::new(NullRequeue),

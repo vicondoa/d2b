@@ -56,11 +56,12 @@ fn next_zone_link_handler_owner() -> u64 {
     }
 }
 
-/// Default absolute lifetime of one allocator-issued bootstrap PSK.
-pub const BOOTSTRAP_PSK_TTL_MS_DEFAULT: u64 = 300_000;
-
-/// Default maximum lifetime of one enrolled KK session.
-pub const KK_SESSION_MAX_LIFETIME_MS_DEFAULT: u64 = 86_400_000;
+// The cryptoperiod defaults live in `d2b_contracts_zone_session`; this module
+// re-exports them so the child-local handler and the bus-side enrollment
+// machine cannot drift apart on the values.
+pub use d2b_contracts_zone_session::v3::zone_session::{
+    BOOTSTRAP_PSK_TTL_MS_DEFAULT, KK_SESSION_MAX_LIFETIME_MS_DEFAULT,
+};
 
 /// Admission ceiling for `spec.limits.maxPendingIntents`.
 pub const MAX_PENDING_LOCAL_INTENTS: u32 = 1024;

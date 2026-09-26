@@ -19,6 +19,10 @@
 //! Gated behind the `test-support` Cargo feature (available automatically
 //! under `cargo test`), so production consumers never pull it in. The plane
 //! tests in `d2bd` reach it through the same public surface.
+//!
+//! The doubles' ordered call recorder is the toolkit's `SharedLog`
+//! (`d2b_provider_toolkit::testing`), the canonical recorder shape every
+//! family crate's test-support module shares.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +33,7 @@ use d2b_provider_system_core::{
     DiscoveredUser, SystemCoreError, UserBinding, UserDiscoveryCondition, UserDiscoveryEffectPort,
     UserIdentityDigest, UserObservation, UserStatusReport,
 };
+use d2b_provider_toolkit::testing::SharedLog;
 
 use crate::driver::UserDriverEffects;
 use crate::facets::UserEffectFacets;
@@ -38,7 +43,7 @@ use crate::facets::UserEffectFacets;
 /// Scripted discovery port: records every call order-preservingly and can
 /// fail discovery.
 pub struct RecordingEffects {
-    calls: parking_lot::Mutex<Vec<String>>,
+    calls: SharedLog,
     phase: parking_lot::Mutex<ResourcePhase>,
     /// Script whether the next discovery refuses.
     pub fail: AtomicBool,
@@ -49,7 +54,7 @@ impl RecordingEffects {
     /// calls.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            calls: parking_lot::Mutex::new(Vec::new()),
+            calls: SharedLog::new(),
             phase: parking_lot::Mutex::new(ResourcePhase::Ready),
             fail: AtomicBool::new(false),
         })
@@ -57,7 +62,7 @@ impl RecordingEffects {
 
     /// The observed call labels in arrival order.
     pub fn call_order(&self) -> Vec<String> {
-        self.calls.lock().clone()
+        self.calls.entries()
     }
 
     /// Script the phase the next discovery reports.
@@ -73,7 +78,7 @@ impl UserDriverEffects for RecordingEffects {
         user_ref: &ResourceRef,
         _spec: &UserSpec,
     ) -> Result<UserStatusReport, String> {
-        self.calls.lock().push("observe-user".to_owned()); // async-gate-allow: test-support recorder lock
+        self.calls.record("observe-user".to_owned());
         if self.fail.load(Ordering::Relaxed) {
             return Err("the scripted discovery refused".to_owned());
         }

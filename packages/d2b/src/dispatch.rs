@@ -19,7 +19,7 @@ use crate::{
     provider, resource, share, shell, zone,
 };
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use d2b_contracts_broker::broker_wire::AuditExportCursor;
+use d2b_contracts_broker::AuditExportCursor;
 use d2b_contracts_control::{
     cli_output::{AuthDeniedSubcommandV2, AuthRoleV2, AuthSocketStatusV2, AuthStatusOutputV2},
     public_wire::{self, AuditFormat as IpcAuditFormat, AuditRequest as IpcAuditRequest},

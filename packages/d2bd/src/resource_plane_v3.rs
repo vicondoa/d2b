@@ -2851,7 +2851,7 @@ impl ResourcePlaneV3 {
             // The Network family: the driver builds its effects from the
             // declared facets; no externally built port appears here (R2).
             "network-local" => vec![network_descriptor(NetworkDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.network_facets.clone(),
             })],
@@ -2907,7 +2907,7 @@ impl ResourcePlaneV3 {
             // The Guest family: the descriptor builds its effects from the
             // declared facets; no externally built port appears here (R2).
             "guest" => vec![guest_descriptor(GuestDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.guest_facets.clone(),
             })],
@@ -2917,17 +2917,17 @@ impl ResourcePlaneV3 {
             // two USB and two security-key types through their own
             // declarations.
             "device-usbip" => Vec::from(usbip_descriptors(UsbipDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.usbip_facets.clone(),
             })),
             "device-security-key" => Vec::from(security_key_descriptors(SecurityKeyDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.security_key_facets.clone(),
             })),
             "device" => vec![device_descriptor(DeviceDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 controller_generation: inputs.authority.controller_generation,
                 facets: inputs.device_facets.clone(),
             })],

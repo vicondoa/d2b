@@ -9222,7 +9222,7 @@ fn resolve_console_provider_kind(
 /// For qemu-media, requires a pre-provisioned socketpair fd from the broker;
 /// returns ConsoleNotRunning if no live fd is available.
 fn create_console_session_for_vm(
-    _state: &ServerState,
+    state: &ServerState,
     vm: &str,
     provider_kind: public_wire::ConsoleProviderKind,
 ) -> Result<console_session::ConsoleSession, TypedError> {
@@ -9231,8 +9231,12 @@ fn create_console_session_for_vm(
             // Cloud Hypervisor serial socket path.
             let socket_path = format!("/run/d2b/vms/{vm}/console.sock");
             // The path may not exist yet if CH hasn't started, but the
-            // drainer will reconnect automatically.
-            Ok(console_session::create_ch_session(socket_path))
+            // drainer will reconnect automatically. The drainer task runs
+            // on the daemon-owned runtime handle.
+            Ok(console_session::create_ch_session(
+                &state.runtime_handle,
+                socket_path,
+            ))
         }
         public_wire::ConsoleProviderKind::QemuMedia => {
             // qemu-media console requires the broker to create a
@@ -13509,7 +13513,6 @@ fn run_typed_shell_owner(
         );
         let mut control_sequence = established.initial_control_sequence;
         let close_result = match established
-            .backend
             .close_attachment(rt.handle(), &mut control_sequence)
         {
             Ok(_) => d2bd_runtime::daemon_audit::ShellAuditResult::Closed,
@@ -13566,7 +13569,7 @@ fn run_typed_shell_owner(
     {
         let mut control_sequence = established.initial_control_sequence;
         d2bd_runtime::shell_backend::best_effort_cancel(
-            established.backend.as_ref(),
+            &established,
             rt.handle(),
             &mut control_sequence,
         );
@@ -13622,9 +13625,7 @@ fn run_typed_shell_owner(
                 | public_wire::NamedProcessStreamRequest::Cancel
         );
         if close {
-            let result = established
-                .backend
-                .close_attachment(rt.handle(), &mut control_sequence);
+            let result = established.close_attachment(rt.handle(), &mut control_sequence);
             match result {
                 Ok(_) => {
                     close_result = Some(d2bd_runtime::daemon_audit::ShellAuditResult::Closed);
@@ -13730,10 +13731,7 @@ fn run_typed_shell_owner(
             public_wire::NamedProcessStreamRequest::Close
             | public_wire::NamedProcessStreamRequest::Cancel => unreachable!(),
         };
-        let response = match established
-            .backend
-            .handle_op(rt.handle(), &mut control_sequence, op)
-        {
+        let response = match established.handle_op(rt.handle(), &mut control_sequence, op) {
             Ok(Some(d2bd_runtime::shell_backend::ShellTerminalResponse::WriteStdin(result))) => {
                 if close_stdin {
                     public_wire::NamedProcessStreamResponse::Closed(public_wire::ExecCloseResult {
@@ -13783,7 +13781,7 @@ fn run_typed_shell_owner(
     }
     let close_result = close_result.unwrap_or_else(|| {
         d2bd_runtime::shell_backend::best_effort_cancel(
-            established.backend.as_ref(),
+            &established,
             rt.handle(),
             &mut control_sequence,
         )
@@ -13839,18 +13837,18 @@ async fn establish_shell_backend(
             )
             .await
             .map_err(|_| shell_transport_failed())?;
-            Ok(d2bd_runtime::shell_backend::EstablishedShell {
-                backend: Arc::new(backend),
-                attach: public_wire::ShellAttachResult {
+            Ok(d2bd_runtime::shell_backend::EstablishedShell::new(
+                Arc::new(backend),
+                public_wire::ShellAttachResult {
                     session: public_session,
                     resolved_name,
                     state: public_wire::ShellSessionState::Attached,
                     force_evicted: false,
                 },
-                target: vm,
-                operation_digest: None,
-                initial_control_sequence: 0,
-            })
+                vm,
+                None,
+                0,
+            ))
         }
         ShellRoute::CapabilityUnavailable { provider } => {
             Err(TypedError::RuntimeCapabilityUnsupported {
@@ -20909,7 +20907,7 @@ fn dispatch_list(
             .public_status_read_model
             .load_list(state.pidfd_table.generation())
     {
-        return Ok(cached);
+        return Ok(cached.value().clone());
     }
     let before = cacheable
         .then(|| public_artifact_fingerprint(state).ok())
@@ -21044,7 +21042,7 @@ fn dispatch_status_as(
             .public_status_read_model
             .load_status(state.pidfd_table.generation())
     {
-        return Ok(cached);
+        return Ok(cached.value().clone());
     }
     let before = cacheable
         .then(|| public_artifact_fingerprint(state).ok())

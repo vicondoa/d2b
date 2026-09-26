@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::v3::{ResourceUid, RetryClass, ZoneId};
+use crate::v3::{ResourceErrorKind, ResourceUid, RetryClass, ZoneId};
 
 use super::{
     AdmittedAuthorization, PolicySnapshot, PreparedStoreMutation, StoreOperationContext, StoreSlot,
@@ -210,7 +210,7 @@ impl MutationSealAcceptor {
 
     fn integrity(&self, reason_code: &'static str) -> StoreError {
         StoreError::new(
-            StoreErrorKind::InternalIntegrityFailure,
+            StoreErrorKind::Resource(ResourceErrorKind::InternalIntegrityFailure),
             None,
             None,
             RetryClass::Never,

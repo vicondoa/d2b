@@ -92,7 +92,7 @@ impl NotificationTelemetryFrame {
     /// Validate a collector frame and reject identity/content fields.
     pub fn validate_collector_fields(
         fields: impl IntoIterator<Item = NotificationTelemetryField>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::ProviderError> {
         let forbidden = [
             "summary",
             "body",
@@ -112,25 +112,25 @@ impl NotificationTelemetryFrame {
                 || field.value.contains('\n')
                 || field.value.len() > 128
             {
-                return Err("notification-telemetry-field-rejected");
+                return Err(crate::ProviderError::TelemetryFieldRejected);
             }
             match field.key {
                 "d2b.provider" if field.value != "notification-desktop" => {
-                    return Err("notification-telemetry-field-rejected");
+                    return Err(crate::ProviderError::TelemetryFieldRejected);
                 }
                 "category"
                     if !crate::Category::ALL
                         .iter()
                         .any(|category| category.as_str() == field.value) =>
                 {
-                    return Err("notification-telemetry-field-rejected");
+                    return Err(crate::ProviderError::TelemetryFieldRejected);
                 }
                 "outcome"
                     if !NotificationOutcome::ALL
                         .iter()
                         .any(|outcome| outcome.as_str() == field.value) =>
                 {
-                    return Err("notification-telemetry-field-rejected");
+                    return Err(crate::ProviderError::TelemetryFieldRejected);
                 }
                 _ => {}
             }

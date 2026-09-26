@@ -321,8 +321,9 @@ pub struct StateCellHandle<'a> {
 mod tests {
     use super::*;
     use d2b_broker::catalog::{
-        BROKER_OPERATION_CATALOG, BrokerAuthzFacets, BrokerProfileId, CellDurability,
-        DeadlineTier, OperationOwner, PayloadProvenance,
+        AuditMode, BROKER_OPERATION_CATALOG, BrokerAuthzFacets, BrokerProfileId,
+        BrokerRequirement, CellDurability, DeadlineTier, OperationOwner, PayloadProvenance,
+        SecretAccess,
     };
     use d2b_broker::envelope::{
         BrokerEnvelope, CallerAuthority, DispatchFailure, DispatchOutcome, HANDLER_REFUSED,
@@ -350,9 +351,9 @@ mod tests {
             scope: "per-zone",
             allowed_groups: &["d2bd"],
             destructive: false,
-            secret_access: "None",
-            broker_required: "No",
-            audit_mode: "Yes",
+            secret_access: SecretAccess::None,
+            broker_required: BrokerRequirement::No,
+            audit_mode: AuditMode::Yes,
         },
         payload_provenance: PayloadProvenance::Request,
         payload_fields: &["echo"],

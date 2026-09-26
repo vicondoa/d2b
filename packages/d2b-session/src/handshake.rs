@@ -140,7 +140,7 @@ impl fmt::Debug for NegotiatedOffer {
 /// Returns the preface or canonical-encoding error when the policy cannot
 /// be rendered on the wire.
 pub fn encode_offer(policy: &EndpointPolicy) -> Result<([u8; PREFACE_LEN], Vec<u8>)> {
-    let offer = HandshakeOffer::from(policy.clone());
+    let offer = HandshakeOffer::from(policy);
     let canonical = offer.encode_canonical()?;
     let preface = ComponentSessionPreface::new(canonical.len())
         .map_err(preface_error)?
@@ -221,7 +221,7 @@ pub fn accept_generation_discovery_request(
     identity
         .validate_exact(policy)
         .map_err(SessionError::from)?;
-    HandshakeOffer::from(policy.clone())
+    HandshakeOffer::from(policy)
         .validate()
         .map_err(SessionError::from)?;
     Ok(Sha256::digest(bytes).into())

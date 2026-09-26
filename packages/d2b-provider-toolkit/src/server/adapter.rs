@@ -330,17 +330,18 @@ where
             let request = codec.decode_request(&frame).inspect_err(|e| {
                 warn!(zone = ?route.zone(), reason = %e, "provider frame decode failed; closing session");
             })?;
+            let ProviderRequest {
+                request_id,
+                zone,
+                provider_ref,
+                method,
+                payload,
+            } = request;
             let response = self
-                .dispatch_for_route(
-                    &route,
-                    request.zone().clone(),
-                    request.provider_ref().clone(),
-                    request.method().clone(),
-                    request.payload().clone(),
-                )
+                .dispatch_for_route(&route, zone, provider_ref, method, payload)
                 .await?;
             let encoded = codec
-                .encode_response(request.request_id(), &response)
+                .encode_response(&request_id, &response)
                 .inspect_err(|e| {
                     warn!(zone = ?route.zone(), reason = %e, "provider response encode failed; closing session");
                 })?;

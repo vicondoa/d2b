@@ -12,7 +12,7 @@
 //! can be inferred from the schema is not a secret.
 
 use schemars::{JsonSchema, r#gen::SchemaGenerator, schema};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
 /// Maximum serialized bytes of one payload schema document.
@@ -27,9 +27,21 @@ pub const MAX_PAYLOAD_PROPERTY_NAME_BYTES: usize = 63;
 const WRITE_ONLY_VALUE_KEYS: [&str; 4] = ["default", "enum", "const", "examples"];
 
 /// A validated payload JSON Schema document.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct PayloadSchema(Value);
+
+impl<'de> Deserialize<'de> for PayloadSchema {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // The wire shape is the document itself; every admission gate of
+        // [`Self::parse`] applies, so a wire schema can never bypass the
+        // closed-object or writeOnly validation the authored path enforces.
+        Self::parse(Value::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
 
 impl PayloadSchema {
     /// Validate one authored payload schema.
@@ -469,6 +481,34 @@ mod tests {
             PayloadSchema::parse(nested),
             Err(PayloadSchemaError::OpenProperties)
         );
+    }
+
+    #[test]
+    fn deserialize_applies_the_same_gates_as_parse() {
+        // A wire schema must not bypass the closed-object or writeOnly
+        // validation the authored path enforces.
+        for rejected in [
+            json!({ "type": "object", "additionalProperties": true, "properties": {} }),
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "token": { "type": "string", "writeOnly": true, "default": "x" }
+                }
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<PayloadSchema>(rejected.clone()).is_err(),
+                "{rejected} must be refused on the wire"
+            );
+        }
+        let schema = serde_json::from_value::<PayloadSchema>(object_schema())
+            .expect("a closed schema deserializes");
+        assert_eq!(
+            schema.property_names().collect::<Vec<_>>(),
+            vec!["socketPath", "supervisorToken", "workerCount"]
+        );
+        assert!(schema.is_write_only("supervisorToken"));
     }
 
     #[test]

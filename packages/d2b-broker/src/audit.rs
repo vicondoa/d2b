@@ -25,10 +25,8 @@ use crate::{
     sys::path_safe,
 };
 use d2b_audit::evidence_chain::ChainRecord;
-use d2b_contracts_broker::broker_wire::{
-    AuditExportCursor, AuditExportEntry, AuditExportErrorCode, BrokerAuditFilter,
-    BrokerAuditSeverity, ExportBrokerAuditResponse,
-};
+use d2b_contracts_broker::broker_wire::{BrokerAuditFilter, BrokerAuditSeverity, ExportBrokerAuditResponse};
+use d2b_contracts_broker::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
 
 /// Broker semantic version embedded in every [`OpAuditRecord`].
 /// Picked up at compile time from `Cargo.toml`.

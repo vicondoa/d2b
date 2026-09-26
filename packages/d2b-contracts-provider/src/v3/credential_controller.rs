@@ -56,6 +56,11 @@ const FORBIDDEN_AMBIENT_CREDENTIAL_KEYS: &[&str] = &[
 ///
 /// Values are intentionally never inspected. Provider processes must acquire
 /// credentials only through their injected client and authenticated session.
+///
+/// # Errors
+///
+/// Returns [`CredentialControllerError::OperationDenied`] when any key is one
+/// of the forbidden ambient credential-chain names.
 pub fn reject_ambient_credential_chain(
     keys: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> Result<(), CredentialControllerError> {
@@ -101,6 +106,11 @@ pub struct CredentialIdempotencyKey([u8; 32]);
 impl CredentialIdempotencyKey {
     /// Derive a stable key from Credential UID, rotation generation, and the
     /// method-derived operation class. No resource name or secret is accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialControllerError::InvalidInput`] when the rotation
+    /// generation is zero.
     pub fn derive(
         credential_uid: &ResourceUid,
         rotation_generation: u64,
@@ -152,6 +162,14 @@ pub struct CredentialControllerCall {
 impl CredentialControllerCall {
     /// Build a call only when both policy and the exact `use-credential`
     /// Role subresource admit the method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialControllerError::DeadlineExceeded`] when the
+    /// deadline is zero or already elapsed, [`CredentialControllerError::OperationDenied`]
+    /// when the Role subresource or the allowed operation set does not admit
+    /// the method, and [`CredentialControllerError::InvalidInput`] when the
+    /// call generation is zero.
     pub fn authorize(
         credential_uid: &ResourceUid,
         rotation_generation: u64,
@@ -295,6 +313,11 @@ pub struct CredentialRetryState {
 
 impl CredentialRetryState {
     /// Construct a non-empty bounded retry position.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialControllerError::InvalidInput`] when `attempt` or
+    /// `max_attempts` is zero or `attempt` exceeds `max_attempts`.
     pub fn new(attempt: u16, max_attempts: u16) -> Result<Self, CredentialControllerError> {
         if attempt == 0 || max_attempts == 0 || attempt > max_attempts {
             return Err(CredentialControllerError::InvalidInput);
@@ -331,6 +354,12 @@ pub struct CredentialReconcileInput {
 
 impl CredentialReconcileInput {
     /// Construct one validated reconcile snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialControllerError::InvalidInput`] when the rotation
+    /// generation is zero, `active_leases` exceeds the local ceiling, the
+    /// provider lease limit is out of range, or an operation repeats.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         credential_uid: ResourceUid,
@@ -400,6 +429,11 @@ pub struct CredentialObserveInput {
 
 impl CredentialObserveInput {
     /// Construct one observe snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialControllerError::InvalidInput`] when the rotation
+    /// generation is zero.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         credential_uid: ResourceUid,
@@ -454,6 +488,11 @@ pub struct CredentialRevocationInput {
 
 impl CredentialRevocationInput {
     /// Construct one revocation snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialControllerError::InvalidInput`] when the rotation
+    /// generation is zero.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         credential_uid: ResourceUid,
@@ -520,6 +559,11 @@ pub enum CredentialControllerHealthState {
 
 impl CredentialControllerHealth {
     /// Derive health while enforcing the global active-lease ceiling.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialControllerError::InvalidInput`] when `active_leases`
+    /// exceeds the global ceiling.
     pub fn derive(
         provider_process_reachable: bool,
         active_leases: u32,
@@ -582,6 +626,14 @@ pub trait CredentialControllerHandlers {
 }
 
 /// Apply the shared Credential reconcile state machine.
+///
+/// # Errors
+///
+/// Returns [`CredentialControllerError::InvalidInput`] when the next rotation
+/// generation overflows, and propagates the [`CredentialControllerCall::authorize`]
+/// failures ([`CredentialControllerError::DeadlineExceeded`],
+/// [`CredentialControllerError::OperationDenied`], or
+/// [`CredentialControllerError::InvalidInput`]) for the planned call.
 pub fn reconcile_credential(
     input: &CredentialReconcileInput,
 ) -> Result<CredentialControllerDecision, CredentialControllerError> {
@@ -688,6 +740,14 @@ pub fn reconcile_credential(
 }
 
 /// Apply the fixed scheduled-observe policy.
+///
+/// # Errors
+///
+/// Propagates the [`CredentialControllerCall::authorize`] failures
+/// ([`CredentialControllerError::DeadlineExceeded`],
+/// [`CredentialControllerError::OperationDenied`], or
+/// [`CredentialControllerError::InvalidInput`]) when an observe call is
+/// planned.
 pub fn observe_credential(
     input: &CredentialObserveInput,
 ) -> Result<CredentialControllerDecision, CredentialControllerError> {
@@ -729,6 +789,14 @@ pub fn observe_credential(
 }
 
 /// Apply one owner-delete or Provider-generation revocation policy.
+///
+/// # Errors
+///
+/// Propagates the [`CredentialControllerCall::authorize`] failures
+/// ([`CredentialControllerError::DeadlineExceeded`],
+/// [`CredentialControllerError::OperationDenied`], or
+/// [`CredentialControllerError::InvalidInput`]) when a revocation call is
+/// planned.
 pub fn revoke_credential(
     input: &CredentialRevocationInput,
 ) -> Result<CredentialControllerDecision, CredentialControllerError> {
@@ -815,6 +883,11 @@ impl CredentialSingleFlight {
     }
 
     /// Enter one Credential handler or reject a concurrent duplicate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialControllerError::AlreadyRunning`] when the same
+    /// Credential UID is already being handled.
     pub fn try_enter(
         &self,
         credential_uid: ResourceUid,
@@ -1019,6 +1092,11 @@ pub struct CredentialAuditDigest(String);
 
 impl CredentialAuditDigest {
     /// Parse exactly `sha256:` followed by 64 lowercase hexadecimal digits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialObservabilityError::InvalidAuditRecord`] when the
+    /// value is not exactly `sha256:` followed by 64 lowercase hex digits.
     pub fn parse(value: impl Into<String>) -> Result<Self, CredentialObservabilityError> {
         let value = value.into();
         if valid_sha256(&value) {
@@ -1073,6 +1151,13 @@ pub struct CredentialAuditRecord {
 impl CredentialAuditRecord {
     /// Emit one caller-initiated service record only after authorization.
     /// Denial returns no identity-bearing record and does not inspect identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialObservabilityError::InvalidAuditRecord`] when a
+    /// digest is malformed or the rotation generation is zero, and
+    /// [`CredentialObservabilityError::ForbiddenTelemetryField`] when the zone
+    /// is not a valid telemetry zone.
     #[allow(clippy::too_many_arguments)]
     pub fn authorized_service(
         authorized: bool,
@@ -1115,6 +1200,13 @@ impl CredentialAuditRecord {
     }
 
     /// Emit one controller-owned event with no caller subject field.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialObservabilityError::InvalidAuditRecord`] when the
+    /// rotation generation or a prior rotation generation is zero, and
+    /// [`CredentialObservabilityError::ForbiddenTelemetryField`] when the zone
+    /// is not a valid telemetry zone.
     #[allow(clippy::too_many_arguments)]
     pub fn controller_event(
         provider: CredentialProviderKind,
@@ -1345,6 +1437,11 @@ pub struct CredentialLeaseAggregate {
 
 impl CredentialLeaseAggregate {
     /// Aggregate active lease expiries without accepting any Credential identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialObservabilityError::ForbiddenTelemetryField`] when
+    /// the active count overflows or exceeds the local ceiling.
     pub fn from_active_expiries(
         provider: CredentialProviderKind,
         placement: PlacementBinding,
@@ -1394,6 +1491,12 @@ pub struct CredentialTelemetryFrame {
 
 impl CredentialTelemetryFrame {
     /// Build one frame entirely from trusted closed values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialObservabilityError::ForbiddenTelemetryField`] when
+    /// the rotation generation is zero, the zone is not a valid telemetry
+    /// zone, or any field fails collector validation.
     pub fn new(
         provider: CredentialProviderKind,
         zone: impl Into<String>,
@@ -1474,6 +1577,12 @@ impl CredentialTelemetryFrame {
 
     /// Reject a complete frame when any key or value is outside its closed
     /// semantic domain. The whole frame is rejected, not field-filtered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialObservabilityError::ForbiddenTelemetryField`] when
+    /// any key is forbidden, any value carries a sensitive shape, or a value is
+    /// outside its closed domain.
     pub fn validate_collector_fields(
         fields: impl IntoIterator<Item = CredentialTelemetryField>,
     ) -> Result<(), CredentialObservabilityError> {
