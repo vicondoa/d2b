@@ -35,12 +35,14 @@ impl FakeActivationEffects {
     }
 
     /// The host-generation handoff dispatches recorded so far, in call order.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn dispatches(&self) -> Vec<(ResourceRef, HostGenerationHandoffIntent)> {
         self.dispatches.lock().clone()
     }
 }
 
 #[async_trait::async_trait]
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 impl ActivationDriverEffects for FakeActivationEffects {
     async fn apply_host_generation_handoff(
         &self,
@@ -90,11 +92,13 @@ impl RecordingBrokerDispatch {
     }
 
     /// The host-generation handoffs dispatched so far, in call order.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn requests(&self) -> Vec<ApplyHostGenerationHandoff> {
         self.requests.lock().clone()
     }
 }
 
+#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 impl ActivationBrokerDispatch for RecordingBrokerDispatch {
     fn dispatch_handoff(
         &self,
