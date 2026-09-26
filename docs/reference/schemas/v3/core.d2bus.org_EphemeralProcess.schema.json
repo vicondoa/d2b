@@ -59,7 +59,7 @@
         "targetGeneration": {
           "allOf": [
             {
-              "$ref": "#/definitions/NixosGenerationOrdinal"
+              "$ref": "#/definitions/ConfigurationGeneration"
             }
           ],
           "description": "Target generation ordinal bound to the owning `NixosGeneration`."
@@ -175,6 +175,10 @@
         "kill"
       ],
       "type": "string"
+    },
+    "ConfigurationGeneration": {
+      "minimum": 1.0,
+      "type": "integer"
     },
     "CountBudget": {
       "additionalProperties": false,
@@ -404,10 +408,6 @@
         "ports"
       ],
       "type": "object"
-    },
-    "NixosGenerationOrdinal": {
-      "minimum": 1.0,
-      "type": "integer"
     },
     "PortProtocol": {
       "description": "Transport protocol of one declared port.",

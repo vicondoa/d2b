@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ArtifactId, NixosGenerationOrdinal, ObservedGeneration, ResourceRef, ResourceTypeName,
+    ArtifactId, ConfigurationGeneration, ObservedGeneration, ResourceRef, ResourceTypeName,
     execution_policy::require_execution_ref,
 };
 use d2b_contracts::wire_deserialize;
@@ -43,7 +43,7 @@ pub struct ActivationRunnerInput {
     /// Private-catalog artifact identifier.
     pub system_artifact_id: ArtifactId,
     /// Target generation ordinal bound to the owning `NixosGeneration`.
-    pub target_generation: NixosGenerationOrdinal,
+    pub target_generation: ConfigurationGeneration,
     /// Closed activation mode.
     pub activation_mode: ActivationMode,
 }
@@ -52,7 +52,7 @@ impl ActivationRunnerInput {
     /// Construct one runner input.
     pub fn new(
         system_artifact_id: ArtifactId,
-        target_generation: NixosGenerationOrdinal,
+        target_generation: ConfigurationGeneration,
         activation_mode: ActivationMode,
     ) -> Self {
         Self {
