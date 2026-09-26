@@ -6,7 +6,7 @@ use schemars::{
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
-use crate::contract_id::{ContractId, ContractStringError, PathTemplate};
+use d2b_contracts::contract_id::{ContractId, ContractStringError, PathTemplate};
 use d2b_contracts_resource::v3::ZoneId;
 
 pub const MAX_ALLOCATOR_REALM_PATH_BYTES: usize = 255;

@@ -26,12 +26,15 @@ use d2b_contracts_control::cli_output::{
 use d2b_contracts_control::public_wire;
 use d2b_contracts_control::unsafe_local_wire::UnsafeLocalHelperWireSchema;
 use d2b_contracts_resource::v3::storage::ZoneStoreStorageRow;
+use d2b_contracts::{
+    error::Error,
+    unsafe_local_workloads::UnsafeLocalWorkloadsJson,
+};
 use d2b_core::{
-    allocator_config::AllocatorJson, bundle::Bundle, closures::ClosureMetadata, error::Error,
+    allocator_config::AllocatorJson, bundle::Bundle, closures::ClosureMetadata,
     host::HostJson, manifest_v04::ManifestV04, sandbox_profile::SandboxProfile,
     privileges::PrivilegesJson, processes::ProcessesJson, site::SiteJson,
     storage::StorageJson, storage_lifecycle::StorageLifecycleReport, sync::SyncJson,
-    unsafe_local_workloads::UnsafeLocalWorkloadsJson,
 };
 mod diagnostic_redaction;
 use schemars::schema::RootSchema;

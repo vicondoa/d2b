@@ -74,7 +74,7 @@ use d2b_core::bundle_resolver::{
     intent_id_network_bridge_uids, intent_id_network_hosts_uids, intent_id_network_projection_uids,
     intent_id_network_route_uids, intent_id_network_sysctl_uids,
 };
-use d2b_core::error::BundleError;
+use d2b_contracts::error::BundleError;
 use d2b_core::host::{HostJson, QemuMediaSourceIntent};
 use d2b_core::manifest_v04::ManifestV04;
 use d2b_core::processes::{ProcessNode, ProcessRole, ProcessesJson, ReadinessPredicate};
@@ -7924,7 +7924,7 @@ fn prepare_workload_launch(
     state: &ServerState,
     requester_uid: u32,
     catalog: &workload_dispatch::WorkloadCatalog,
-    private: Option<&d2b_core::unsafe_local_workloads::UnsafeLocalWorkloadsJson>,
+    private: Option<&d2b_contracts::unsafe_local_workloads::UnsafeLocalWorkloadsJson>,
     args: &public_wire::LauncherExecArgs,
 ) -> Result<
     (
@@ -8437,8 +8437,6 @@ mod workload_observability_tests {
         launcher::LauncherWorkloadSummary,
         realm::RealmPath,
         workload_identity::{WorkloadIdentity, WorkloadTarget},
-    };
-    use d2b_core::{
         configured_argv::ConfiguredArgv,
         contract_id::ContractId,
         unsafe_local_workloads::{
@@ -9589,7 +9587,7 @@ fn dispatch_broker_usbip_probe(
 ) -> Result<Value, TypedError> {
     let resolver =
         BundleResolver::load(&state.config.artifacts.bundle_path).map_err(|err| match err {
-            d2b_core::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
+            d2b_contracts::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
                 TypedError::BundleTampered { path, reason }
             }
             other => TypedError::InternalIo {
@@ -14224,9 +14222,9 @@ pub(crate) async fn load_bundle_resolver_on_worker(
     loaded.map_err(bundle_resolver_load_error)
 }
 
-fn bundle_resolver_load_error(err: d2b_core::error::Error) -> TypedError {
+fn bundle_resolver_load_error(err: d2b_contracts::error::Error) -> TypedError {
     match err {
-        d2b_core::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
+        d2b_contracts::error::Error::Bundle(BundleError::Tampered { path, reason }) => {
             TypedError::BundleTampered { path, reason }
         }
         other => TypedError::InternalIo {

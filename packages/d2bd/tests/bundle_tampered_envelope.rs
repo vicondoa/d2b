@@ -12,7 +12,7 @@
 //! is introduced via mode 0o644 (world-readable; policy requires 0o640).
 
 use d2b_core::bundle_resolver::{BundleResolver, BundleVerifyPolicy};
-use d2b_core::error::{BundleError, Error as CoreError};
+use d2b_contracts::error::{BundleError, Error as CoreError};
 use d2bd_runtime::typed_error::TypedError;
 use std::fs;
 use std::io::Write as _;

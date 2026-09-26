@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::contract_id::{ContractId, ContractText, PathTemplate};
+use d2b_contracts::contract_id::{ContractId, ContractText, PathTemplate};
 use crate::storage_lifecycle::StorageValidationError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

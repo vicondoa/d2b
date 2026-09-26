@@ -15,7 +15,7 @@
 //! SHA-256 self-hash), which the loader verifies before sibling artifacts.
 
 use d2b_core::bundle_resolver::{BundleResolver, BundleVerifyPolicy};
-use d2b_core::error::{BundleError, Error};
+use d2b_contracts::error::{BundleError, Error};
 use sha2::Digest as _;
 use std::fs;
 use std::io::Write as _;

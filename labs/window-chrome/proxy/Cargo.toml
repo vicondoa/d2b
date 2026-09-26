@@ -26,6 +26,7 @@ path = "src/lib.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 d2b-chrome-engine = { path = "../chrome-engine" }
+d2b-contracts = { path = "../../../packages/d2b-contracts" }
 d2b-core = { path = "../../../packages/d2b-core" }
 libc = "0.2"
 log = "0.4"
