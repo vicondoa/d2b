@@ -17,7 +17,7 @@ use std::{
 
 use tokio::sync::Mutex;
 
-use d2b_contracts_broker::broker_wire::BrokerCallerRole;
+use d2b_contracts_broker::broker_wire::{BrokerCallerRole, DEFAULT_CONTEXT_DEADLINE_MS};
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts_resource::v3::{
     ControllerGeneration, ResourceGeneration, ResourceRef, ResourceSpec, ResourceUid,
@@ -858,6 +858,29 @@ impl std::fmt::Debug for ProductionProcessProviders {
     }
 }
 
+/// The io budget the daemon's Process clients poll the broker under.
+///
+/// It is the Process family's own declared per-call deadline: every
+/// Process-family row (`SpawnRunner`, and the `spawn_process` kernel it
+/// forwards to) declares `DeadlineTier::Standard`, the carrier mints that
+/// budget for the call, and both execution legs serve it as their handler
+/// deadline. A client poll shorter than the budget it wraps abandons a call
+/// the broker is still entitled to serve, and an abandoned spawn is not
+/// inert: the broker has already created the child and holds its runner
+/// registration, so `reserve_runner_id_for_spawn` refuses every relaunch as
+/// a duplicate and the Process wedges with no recovery.
+///
+/// Measured 2026-09-25 (`runtime-cloud-hypervisor-guest-preflight`, gate
+/// head `dc995602c`): a flat 10s poll abandoned one volume-local controller
+/// spawn at t=16.9s; the controller child the broker had created then looped
+/// its session handshake every 5.5s for 145s, the next ten relaunches were
+/// refused (`handler-refused`), and the fixture's 180s wait expired with the
+/// row still `Pending` at t=202s. Every green run of the same check reports
+/// zero `handler-refused` lines and establishes all three controller
+/// sessions by t=10s; its `reply timeout`s are all on `observe` legs, which
+/// register no runner and are simply re-probed.
+const BROKER_IO_TIMEOUT: Duration = Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS);
+
 impl ProductionProcessProviders {
     /// Construct both fixed process Providers over the authenticated broker.
     pub fn new(
@@ -895,13 +918,13 @@ impl ProductionProcessProviders {
         let daemon_uid = caller_uid(&caller_role);
         let resolver = BundleBackedLaunchResolver::new(bundle.clone()).with_observation_socket(
             broker_socket.clone(),
-            Duration::from_secs(10),
+            BROKER_IO_TIMEOUT,
             caller_role.clone(),
         );
         let mut minijail_backend = BrokerProcessBackend::with_socket_profile_and_role(
             resolver.clone(),
             broker_socket.clone(),
-            Duration::from_secs(10),
+            BROKER_IO_TIMEOUT,
             mode.broker_profile(),
             caller_role.clone(),
         );
@@ -916,7 +939,7 @@ impl ProductionProcessProviders {
         let systemd_owner = BrokerSystemdEffectOwner::with_socket_and_role(
             resolver,
             broker_socket,
-            Duration::from_secs(10),
+            BROKER_IO_TIMEOUT,
             caller_role,
         );
         let fixed_effect = FixedEffectAdapter::for_mode(mode, fixed_socket, daemon_uid);
