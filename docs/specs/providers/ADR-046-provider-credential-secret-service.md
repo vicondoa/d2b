@@ -997,6 +997,7 @@ status layer.
 | `credential-invariant-failure` | Port returned a response failing invariant checks |
 | `credential-schema-invalid` | `sign-challenge` requested (unsupported); or spec fails validation |
 | `credential-queue-pressure` | Lease table at capacity (`maxLeases`) |
+| `credential-already-running` | The same Credential is already being handled by this controller |
 
 All error messages are bounded (max 240 UTF-8 chars), stripped of control
 characters, and must not contain token bytes, URLs, UUIDs, provider diagnostics,

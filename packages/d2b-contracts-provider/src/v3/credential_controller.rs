@@ -92,7 +92,7 @@ impl fmt::Display for CredentialControllerError {
             Self::InvalidInput => "credential-invariant-failure",
             Self::OperationDenied => "credential-operation-denied",
             Self::DeadlineExceeded => "deadline-exceeded",
-            Self::AlreadyRunning => "credential-queue-pressure",
+            Self::AlreadyRunning => "credential-already-running",
         })
     }
 }
@@ -1080,7 +1080,7 @@ impl CredentialAuditOutcome {
             Self::ProviderUnavailable => "provider-unavailable",
             Self::AlreadyRevoked => "already-revoked",
             Self::RotationFailed => "rotation-failed",
-            Self::QueuePressure => "queue-pressure",
+            Self::QueuePressure => "credential-queue-pressure",
             Self::InvariantFailure => "invariant-failure",
         }
     }
@@ -1353,7 +1353,7 @@ impl CredentialTelemetryOutcome {
             Self::LeaseExpired => "lease-expired",
             Self::LeaseRevoked => "lease-revoked",
             Self::RotationFailed => "rotation-failed",
-            Self::QueuePressure => "queue-pressure",
+            Self::QueuePressure => "credential-queue-pressure",
             Self::InvariantFailure => "invariant-failure",
         }
     }
@@ -1744,7 +1744,7 @@ fn allowed_telemetry_value(key: &str, value: &str) -> bool {
                 | "lease-expired"
                 | "lease-revoked"
                 | "rotation-failed"
-                | "queue-pressure"
+                | "credential-queue-pressure"
                 | "invariant-failure"
         ),
         "d2b.credential.rotation_generation" => {
