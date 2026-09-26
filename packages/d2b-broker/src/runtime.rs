@@ -1743,6 +1743,8 @@ async fn answer_request(
 ) -> io::Result<RequestOutcome> {
     #[cfg(feature = "layer1-bootstrap")]
     let _ = &request_fds; // the bootstrap wire carries no request descriptors
+    #[cfg(feature = "layer1-bootstrap")]
+    let _ = peer_uid; // the profile-refusal audit that names the kernel uid is production-wire only
     // Load the bundle resolver from the configured `bundle_path` for every
     // request. The broker is socket-activated but can remain alive across
     // `nixos-rebuild switch`; treating the bundle as process-lifetime
