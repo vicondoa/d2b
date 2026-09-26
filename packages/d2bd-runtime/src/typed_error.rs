@@ -676,6 +676,20 @@ pub enum TypedError {
         workload_id: String,
         detail: String,
     },
+    /// An audio mutation (`set-volume` / `mute`) named a VM that is not
+    /// declared in the public manifest. The status path reports the same class
+    /// per VM as `AudioErrorKind::VmNotFound`, so a mutation caller
+    /// distinguishes a bad target from an internal I/O failure by `kind` /
+    /// exit code instead of by matching the message text (RS-0537).
+    AudioVmNotFound {
+        vm: String,
+    },
+    /// An audio mutation (`set-volume` / `mute`) named a VM whose manifest
+    /// entry does not declare audio. The status path reports the same class
+    /// per VM as `AudioErrorKind::AudioNotEnabled` (RS-0537).
+    AudioNotEnabled {
+        vm: String,
+    },
 }
 
 /// Classify the detail string for a lock-parent validation failure into
@@ -753,6 +767,8 @@ impl TypedError {
             Self::ConsoleSessionTableFull { .. } => "console-session-table-full",
             Self::WorkloadTargetNotFound { .. } => "workload-target-not-found",
             Self::WorkloadAliasConflict { .. } => "workload-alias-conflict",
+            Self::AudioVmNotFound { .. } => "audio-vm-not-found",
+            Self::AudioNotEnabled { .. } => "audio-not-enabled",
         }
     }
 
@@ -814,6 +830,13 @@ impl TypedError {
             // Ambiguous alias is an operator error (wrong invocation),
             // not a runtime or internal failure.
             Self::WorkloadAliasConflict { .. } => 2,
+            // Audio mutation refusals share the "target not found" convention
+            // with ConsoleVmNotFound and WorkloadTargetNotFound above.
+            Self::AudioVmNotFound { .. } => 2,
+            // A VM whose manifest entry does not declare audio is a
+            // configuration refusal of the same class as GuestShellDisabled and
+            // RuntimeCapabilityUnsupported.
+            Self::AudioNotEnabled { .. } => 70,
         }
     }
 
@@ -955,6 +978,12 @@ impl TypedError {
                      use the canonical target (e.g. {workload_id}.realm.d2b) to disambiguate"
                 )
             }
+            Self::AudioVmNotFound { vm } => {
+                format!("audio: VM '{vm}' not found in the public manifest")
+            }
+            Self::AudioNotEnabled { vm } => {
+                format!("audio: VM '{vm}' does not declare audio in its manifest entry")
+            }
         }
     }
 
@@ -1092,6 +1121,15 @@ impl TypedError {
                      select the specific workload unambiguously"
                 )
             }
+            Self::AudioVmNotFound { vm } => {
+                format!(
+                    "verify that '{vm}' is declared in the d2b configuration and the bundle is up to date"
+                )
+            }
+            Self::AudioNotEnabled { .. } => {
+                "enable d2b.vms.<vm>.audio.enable for this VM, rebuild the bundle, and retry"
+                    .to_owned()
+            }
         }
     }
 
@@ -1203,6 +1241,20 @@ impl TypedError {
                     "usbip explicit attach rejected: active claim conflict"
                 );
             }
+            Self::AudioVmNotFound { vm } => {
+                tracing::warn!(
+                    kind = self.kind(),
+                    vm = %vm,
+                    "audio mutation refused: VM not declared in the public manifest"
+                );
+            }
+            Self::AudioNotEnabled { vm } => {
+                tracing::warn!(
+                    kind = self.kind(),
+                    vm = %vm,
+                    "audio mutation refused: audio not enabled for this VM"
+                );
+            }
             // Remaining variants already carry only safe values in
             // their public messages (UIDs, version ranges, frame
             // sizes, field names) - no extra logging needed.
@@ -1250,7 +1302,9 @@ impl TypedError {
             | Self::ConsoleSessionStale
             | Self::ConsoleSessionTableFull { .. }
             | Self::WorkloadTargetNotFound { .. }
-            | Self::WorkloadAliasConflict { .. } => "internalError",
+            | Self::WorkloadAliasConflict { .. }
+            | Self::AudioVmNotFound { .. }
+            | Self::AudioNotEnabled { .. } => "internalError",
         }
     }
 }
@@ -1632,12 +1686,60 @@ mod tests {
                 },
                 "host-kernel-modules-missing",
             ),
+            (
+                TypedError::AudioVmNotFound {
+                    vm: "work".to_owned(),
+                },
+                "audio-vm-not-found",
+            ),
+            (
+                TypedError::AudioNotEnabled {
+                    vm: "work".to_owned(),
+                },
+                "audio-not-enabled",
+            ),
         ];
         for (err, expected_kind) in &cases {
             assert_eq!(err.kind(), *expected_kind, "kind mismatch for {err:?}");
             let envelope = err.to_envelope();
             assert_eq!(envelope.kind, *expected_kind);
         }
+    }
+
+    #[test]
+    fn audio_mutation_refusals_are_structured_and_leak_free() {
+        // RS-0537: an audio mutation must not report a user-input refusal as
+        // the `internal-io` class, so a caller can tell the two apart without
+        // matching the message text.
+        let not_found = TypedError::AudioVmNotFound {
+            vm: "work".to_owned(),
+        };
+        assert_eq!(not_found.kind(), "audio-vm-not-found");
+        assert_eq!(not_found.exit_code(), 2);
+        let envelope = not_found.to_envelope();
+        assert_eq!(envelope.kind, "audio-vm-not-found");
+        assert_eq!(envelope.exit_code, 2);
+        assert!(envelope.message.contains("work"));
+        assert!(!envelope.remediation.is_empty());
+        assert_no_path_leak("AudioVmNotFound", &envelope.message);
+        assert_no_path_leak("AudioVmNotFound", &envelope.remediation);
+
+        let not_enabled = TypedError::AudioNotEnabled {
+            vm: "work".to_owned(),
+        };
+        assert_eq!(not_enabled.kind(), "audio-not-enabled");
+        assert_eq!(not_enabled.exit_code(), 70);
+        let envelope = not_enabled.to_envelope();
+        assert_eq!(envelope.kind, "audio-not-enabled");
+        assert_eq!(envelope.exit_code, 70);
+        assert!(envelope.message.contains("work"));
+        assert!(!envelope.remediation.is_empty());
+        assert_no_path_leak("AudioNotEnabled", &envelope.message);
+        assert_no_path_leak("AudioNotEnabled", &envelope.remediation);
+
+        assert_ne!(not_found.kind(), not_enabled.kind());
+        assert_ne!(not_found.kind(), "internal-io");
+        assert_ne!(not_enabled.kind(), "internal-io");
     }
 
     #[test]
