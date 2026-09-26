@@ -281,6 +281,7 @@ impl<'a> DeclaredWorkerGpuPort<'a> {
 }
 
 impl GpuLifecycleEffectPort for DeclaredWorkerGpuPort<'_> {
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn reserve_authority(
         &mut self,
         admission: &crate::authority::GpuAuthorityAdmission,
@@ -434,6 +435,7 @@ impl GpuLifecycleEffectPort for DeclaredWorkerGpuPort<'_> {
         ))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
     fn release_authority(
         &mut self,
         lease: crate::authority::GpuAuthorityLease,

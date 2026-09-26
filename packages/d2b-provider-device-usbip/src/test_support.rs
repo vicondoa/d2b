@@ -31,6 +31,7 @@ pub struct RecordingEffects {
 
 impl RecordingEffects {
     /// Snapshot of the effect-method invocation order.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn call_order(&self) -> Vec<&'static str> {
         self.calls.lock().clone()
     }
@@ -38,6 +39,7 @@ impl RecordingEffects {
 
 #[async_trait]
 impl UsbipDriverEffects for RecordingEffects {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn reconcile_usbip(
         &self,
         component: UsbipComponent,
@@ -50,6 +52,7 @@ impl UsbipDriverEffects for RecordingEffects {
         ))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn finalize(
         &self,
         component: UsbipComponent,
@@ -74,6 +77,7 @@ pub struct RecordingRuntime {
 
 #[async_trait]
 impl UsbipRuntime for RecordingRuntime {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn reconcile_usbip(
         &self,
         component: UsbipComponent,
@@ -85,6 +89,7 @@ impl UsbipRuntime for RecordingRuntime {
         ))
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn finalize(
         &self,
         component: UsbipComponent,
