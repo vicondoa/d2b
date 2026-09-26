@@ -500,8 +500,6 @@ impl ConfigurationGeneration {
     }
 }
 
-nonzero_generation!(NixosGenerationOrdinal, IdentityClass::NixosGenerationOrdinal);
-
 /// The latest generation a controller has observed, with zero meaning none.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,

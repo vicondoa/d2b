@@ -34,9 +34,9 @@ pub use execution_policy::*;
 pub use host::*;
 pub use identity::{
     ConfigurationGeneration, ControllerGeneration, IdentityClass, IdentityError,
-    NixosGenerationOrdinal, ObservedGeneration, ResourceBundleGenerationId, ResourceGeneration,
-    ResourceName, ResourceTypeName, ResourceUid, SchemaFingerprint, Timestamp,
-    V3_CONVERTED_RESOURCE_TYPES, ZoneId, ZoneResourceIdentity, ZoneRevision,
+    ObservedGeneration, ResourceBundleGenerationId, ResourceGeneration, ResourceName,
+    ResourceTypeName, ResourceUid, SchemaFingerprint, Timestamp, V3_CONVERTED_RESOURCE_TYPES,
+    ZoneId, ZoneResourceIdentity, ZoneRevision,
 };
 pub mod ifname {
     pub use d2b_contracts::v3::ifname::*;
