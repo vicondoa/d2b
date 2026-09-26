@@ -298,8 +298,7 @@ impl WorkloadCatalog {
         realm_controllers: Option<&RealmControllersJson>,
     ) -> Result<Self, CatalogError> {
         let public = resolver
-            .realm_workloads_launcher_v2
-            .as_ref()
+            .realm_workloads_launcher_v2()
             .ok_or(CatalogError::ArtifactsUnavailable)?;
         let mut entries = BTreeMap::new();
         let mut visible = std::collections::BTreeSet::new();
@@ -343,7 +342,7 @@ impl WorkloadCatalog {
         Ok(Self {
             entries,
             visible,
-            known_local_vms: resolver.manifest.vms.keys().cloned().collect(),
+            known_local_vms: resolver.manifest().vms.keys().cloned().collect(),
         })
     }
 

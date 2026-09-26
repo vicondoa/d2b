@@ -473,14 +473,14 @@ impl OperationHandler for ApplyNftablesHandler {
             &ctx,
             "apply-nftables",
             serde_json::json!({
-                "family": bundle.host.nftables.family,
-                "table": bundle.host.nftables.table,
+                "family": bundle.host().nftables.family,
+                "table": bundle.host().nftables.table,
                 "scriptBody": intent.script_body,
                 "ownershipId": intent.ownership_id,
                 "destroy": request.destroy,
                 "desiredHash": request.desired_hash,
-                "tableHashAfterApply": bundle.host.nftables.table_hash_after_apply,
-                "coexistencePolicy": bundle.host.firewall_coexistence_policy,
+                "tableHashAfterApply": bundle.host().nftables.table_hash_after_apply,
+                "coexistencePolicy": bundle.host().firewall_coexistence_policy,
             }),
             Vec::new(),
         )

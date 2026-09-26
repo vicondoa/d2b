@@ -484,7 +484,7 @@ pub(crate) fn resolver_with_swtpm_state_row(guest: &str) -> BundleResolver {
     // Storage travels on the same resolver: the production loader carries both
     // artifacts, and this fixture needs the trusted row and the Device scope
     // to resolve together.
-    resolver.storage = Some(storage);
+    resolver.set_storage(storage);
     resolver
 }
 

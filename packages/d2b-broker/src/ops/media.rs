@@ -694,7 +694,7 @@ fn resolve_boot_source<'a>(
     vm: &str,
 ) -> Result<&'a QemuMediaSourceIntent, MediaOpError> {
     resolver
-        .host
+        .host()
         .qemu_media
         .as_ref()
         .and_then(|qemu_media| {
@@ -930,7 +930,7 @@ fn select_unique_declared_physical_source<'a>(
     identity: &UsbPhysicalIdentity,
     attached_refs: Option<&BTreeSet<String>>,
 ) -> Result<&'a QemuMediaSourceIntent, MediaOpError> {
-    let Some(qemu_media) = resolver.host.qemu_media.as_ref() else {
+    let Some(qemu_media) = resolver.host().qemu_media.as_ref() else {
         return Err(MediaOpError::MissingBundlePolicy);
     };
     select_unique_declared_physical_source_from_sources(
@@ -2108,7 +2108,7 @@ async fn image_has_loop_backing(sysfs_root: &Path, image_path: &Path) -> Result<
 
 fn registry_dir(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
     resolver
-        .host
+        .host()
         .qemu_media
         .as_ref()
         .map(|media| PathBuf::from(&media.registry_dir))
@@ -2117,7 +2117,7 @@ fn registry_dir(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
 
 fn rules_path(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
     resolver
-        .host
+        .host()
         .qemu_media
         .as_ref()
         .map(|media| PathBuf::from(&media.runtime_rules_path))

@@ -3690,7 +3690,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 .and_then(|zones| committed_zone_topology(&resolver, &zones).ok())
                 .map(|topology| topology.root);
             let provider_ready = match provider_root.as_ref() {
-                Some(_) if resolver.bundle.schema_version == "v3" => {
+                Some(_) if resolver.bundle().schema_version == "v3" => {
                     let process_providers =
                         Arc::new(process_provider_runtime::ProductionProcessProviders::new(
                             resolver.clone(),
@@ -3713,7 +3713,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 }
                 Some(_) => {
                     tracing::error!(
-                        schema = %resolver.bundle.schema_version,
+                        schema = %resolver.bundle().schema_version,
                         "Provider composition refused: only v3 bundles are supported",
                     );
                     false
@@ -3907,7 +3907,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             let report = storage_lifecycle::run_startup_contract_check(&resolver);
             if report.has_only_legacy_contract_issue() {
                 tracing::info!(
-                    bundle_version = resolver.bundle.bundle_version,
+                    bundle_version = resolver.bundle().bundle_version,
                     report_kind = "storage-lifecycle",
                     "storage-lifecycle: legacy bundle lacks storage/sync contracts; rebuild host configuration to enable startup contract checks",
                 );
@@ -7389,7 +7389,7 @@ pub(crate) fn resolve_network_effect_context(
         sysctl_ids,
         generation,
         projection_digest,
-        resolver.host.site.allow_unsafe_east_west,
+        resolver.host().site.allow_unsafe_east_west,
     )
     .with_additional_bridge_intent(BundleOpId::new(uplink_bridge_id)))
 }
@@ -9305,7 +9305,7 @@ fn dispatch_broker_usbip_bind(
     }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
-        resolver.manifest.vms.get(&request.vm),
+        resolver.manifest().vms.get(&request.vm),
         &request.vm,
         RuntimeCapabilityGate::UsbHotplug,
         VERB,
@@ -9347,7 +9347,7 @@ fn dispatch_broker_usbip_unbind(
     }
     let resolver = load_bundle_resolver(state)?;
     ensure_manifest_entry_runtime_capability(
-        resolver.manifest.vms.get(&request.vm),
+        resolver.manifest().vms.get(&request.vm),
         &request.vm,
         RuntimeCapabilityGate::UsbHotplug,
         VERB,
@@ -9439,7 +9439,7 @@ fn refresh_qemu_media_registry_index_if_needed_as(
     resolver: &BundleResolver,
     caller_role: BrokerCallerRole,
 ) -> Result<(), TypedError> {
-    if resolver.host.qemu_media.is_none() {
+    if resolver.host().qemu_media.is_none() {
         return Ok(());
     }
     match dispatch_broker_request_as(
@@ -9925,7 +9925,7 @@ fn qemu_media_probe_entries(
     state: &ServerState,
     resolver: &BundleResolver,
 ) -> Vec<public_wire::UsbipProbeEntry> {
-    let Some(qemu_media) = resolver.host.qemu_media.as_ref() else {
+    let Some(qemu_media) = resolver.host().qemu_media.as_ref() else {
         return Vec::new();
     };
     const MAX_QEMU_MEDIA_PROBE_CANDIDATES: usize = 16;
@@ -12579,7 +12579,7 @@ fn guest_shell_session(
     let resolver = load_bundle_resolver(state)?;
     let entry =
         resolver
-            .manifest
+            .manifest()
             .vms
             .get(vm)
             .ok_or_else(|| TypedError::WorkloadTargetNotFound {
@@ -12698,7 +12698,7 @@ fn configured_shell_targets(state: &ServerState) -> Result<Vec<String>, TypedErr
     let mut targets = std::collections::BTreeSet::new();
     targets.extend(
         resolver
-            .manifest
+            .manifest()
             .vms
             .iter()
             .filter(|(_, vm)| vm.shell.as_ref().is_some_and(|shell| shell.enabled))
@@ -14176,14 +14176,14 @@ fn host_nft_kernel_payload(
         .find_nft_intent(intent_ref)
         .ok_or_else(|| "host nft intent missing".to_owned())?;
     Ok(serde_json::json!({
-        "family": resolver.host.nftables.family,
-        "table": resolver.host.nftables.table,
+        "family": resolver.host().nftables.family,
+        "table": resolver.host().nftables.table,
         "scriptBody": intent.script_body,
         "ownershipId": intent.ownership_id,
         "destroy": destroy,
         "desiredHash": serde_json::Value::Null,
-        "tableHashAfterApply": resolver.host.nftables.table_hash_after_apply,
-        "coexistencePolicy": serde_json::to_value(&resolver.host.firewall_coexistence_policy).ok(),
+        "tableHashAfterApply": resolver.host().nftables.table_hash_after_apply,
+        "coexistencePolicy": serde_json::to_value(&resolver.host().firewall_coexistence_policy).ok(),
     }))
 }
 
@@ -19503,7 +19503,7 @@ fn dispatch_broker_vm_start_inner(
             // the timeout into a typed `otel-host-bridge-readiness-timeout`
             // refusal envelope (exit code 65). See
             // `docs/reference/otel-host-bridge-readiness.md`.
-            let obs_meta = &resolver.manifest.observability;
+            let obs_meta = &resolver.manifest().observability;
             if obs_meta.enabled && obs_meta.vm_name == request.vm {
                 let cfg =
                     d2bd_runtime::otel_host_bridge_readiness::ReadinessWaitConfig::for_dispatch();

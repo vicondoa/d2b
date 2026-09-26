@@ -105,10 +105,10 @@ use std::path::{Path, PathBuf};
 /// contract.
 #[derive(Clone)]
 pub struct BundleResolver {
-    pub bundle: Bundle,
+    bundle: Bundle,
     zone_topology: Option<AllocatorZoneTopology>,
-    pub host: HostJson,
-    pub processes: ProcessesJson,
+    host: HostJson,
+    processes: ProcessesJson,
     zone_resource_bundles: BTreeMap<String, Vec<u8>>,
     /// Parsed zone-tagged v3 resource bundles keyed by canonical Zone id.
     parsed_zone_resources: BTreeMap<String, ResourceBundle>,
@@ -117,12 +117,12 @@ pub struct BundleResolver {
     guest_vmm_intents: BTreeMap<String, BTreeMap<String, ResolvedRunnerIntent>>,
     guest_vmm_zone_uids: BTreeMap<String, BTreeMap<String, ResourceUid>>,
     zone_storage_rows: BTreeMap<String, ZoneStoreStorageRow>,
-    pub storage: Option<StorageJson>,
+    storage: Option<StorageJson>,
     /// Trusted site-runtime contract (`site.json`); `None` for a bundle that
     /// predates the artifact, which leaves its consumers unbound.
-    pub site: Option<SiteJson>,
-    pub realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
-    pub manifest: ManifestV04,
+    site: Option<SiteJson>,
+    realm_workloads_launcher_v2: Option<RealmWorkloadsLauncherV2Json>,
+    manifest: ManifestV04,
     audit_bundle_version: String,
     audit_bundle_hash: String,
     installed_generation_identity: Option<ResolvedInstalledGenerationIdentity>,
@@ -1608,6 +1608,49 @@ impl BundleResolver {
 
     pub fn audit_bundle_version(&self) -> &str {
         &self.audit_bundle_version
+    }
+
+    /// The trusted `bundle.json` document.
+    pub fn bundle(&self) -> &Bundle {
+        &self.bundle
+    }
+
+    /// The parsed `host.json` artifact.
+    pub fn host(&self) -> &HostJson {
+        &self.host
+    }
+
+    /// The parsed processes contract.
+    pub fn processes(&self) -> &ProcessesJson {
+        &self.processes
+    }
+
+    /// The storage contract, when the bundle carries one.
+    pub fn storage(&self) -> Option<&StorageJson> {
+        self.storage.as_ref()
+    }
+
+    /// The trusted site-runtime contract (`site.json`), when the bundle
+    /// carries one.
+    pub fn site(&self) -> Option<&SiteJson> {
+        self.site.as_ref()
+    }
+
+    /// The realm-workloads launcher v2 contract, when the bundle carries one.
+    pub fn realm_workloads_launcher_v2(&self) -> Option<&RealmWorkloadsLauncherV2Json> {
+        self.realm_workloads_launcher_v2.as_ref()
+    }
+
+    /// The parsed v4 manifest.
+    pub fn manifest(&self) -> &ManifestV04 {
+        &self.manifest
+    }
+
+    /// Replace the storage contract. The broker reconciles the storage
+    /// scope against the declared contract and writes the resolved
+    /// contract back onto the loaded resolver.
+    pub fn set_storage(&mut self, storage: StorageJson) {
+        self.storage = Some(storage);
     }
 
     /// Return the sealed Zone topology, when the allocator artifact carries it.
@@ -6984,13 +7027,12 @@ mod tests {
         let resolver =
             BundleResolver::load_with_policy(&bundle_path, &current_user_bundle_policy())
                 .expect("Zone-native bundle index loads");
-        assert_eq!(resolver.bundle.bundle_version, 1);
-        assert_eq!(resolver.bundle.schema_version, "v3");
+        assert_eq!(resolver.bundle().bundle_version, 1);
+        assert_eq!(resolver.bundle().schema_version, "v3");
         assert!(resolver.zone_resource_bundles.is_empty());
         assert_eq!(
             resolver
-                .site
-                .as_ref()
+                .site()
                 .and_then(|site| site.wayland_socket()),
             Some("/run/user/1000/wayland-0"),
             "the declared site artifact is the projected Wayland socket"
@@ -7412,8 +7454,9 @@ mod tests {
     #[test]
     fn resolves_macvtap_intents_from_process_contract() {
         let root = test_root("macvtap-intents");
-        let mut resolver = build_personal_dev_bundle(&root);
-        resolver.processes.vms[0].nodes.push(ProcessNode {
+        let resolver = build_personal_dev_bundle(&root);
+        let mut processes = resolver.processes().clone();
+        processes.vms[0].nodes.push(ProcessNode {
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
@@ -7462,6 +7505,13 @@ mod tests {
                 },
             ],
         });
+        let mut resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+            resolver.bundle().clone(),
+            resolver.host().clone(),
+            processes,
+            resolver.manifest().clone(),
+            BTreeMap::new(),
+        );
 
         let intents = resolver
             .resolve_macvtap_intents("personal-dev", "cloud-hypervisor")
@@ -7471,7 +7521,7 @@ mod tests {
         assert_eq!(intents[0].parent_ifname.as_str(), "eno1");
         assert_eq!(intents[0].mode, ProcessMacvtapMode::Bridge);
         assert_eq!(intents[0].fd, 10);
-        resolver.runner_intents = build_runner_intents(&resolver.processes);
+        resolver.runner_intents = build_runner_intents(resolver.processes());
         assert!(
             resolver
                 .find_runner_intent_for_process_in_vm(
@@ -7561,8 +7611,9 @@ mod tests {
     #[test]
     fn v3_tap_resolution_ignores_legacy_env_and_manifest_names() {
         let root = test_root("tap-resolution-uid-authority");
-        let mut resolver = build_personal_dev_bundle(&root);
-        resolver.processes.vms[0].nodes.push(ProcessNode {
+        let resolver = build_personal_dev_bundle(&root);
+        let mut processes = resolver.processes().clone();
+        processes.vms[0].nodes.push(ProcessNode {
             execution_ref: None,
             execution_domain: None,
             user_ref: None,
@@ -7582,6 +7633,13 @@ mod tests {
             plan_ops: Vec::new(),
             network_interfaces: Vec::new(),
         });
+        let resolver = BundleResolver::from_artifacts_with_zone_resource_bundles(
+            resolver.bundle().clone(),
+            resolver.host().clone(),
+            processes,
+            resolver.manifest().clone(),
+            BTreeMap::new(),
+        );
         let zone_uid =
             ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").expect("zone uid");
         let network_uid =
@@ -7606,9 +7664,22 @@ mod tests {
                 attachment_uid.clone(),
             )
             .expect("v3 TAP intent");
-        resolver.host.environments[0].env = "attacker".to_owned();
-        resolver.manifest.vms.get_mut("personal-dev").unwrap().env = Some("attacker".to_owned());
-        let second = resolver
+        let mut attacker_host = resolver.host().clone();
+        attacker_host.environments[0].env = "attacker".to_owned();
+        let mut attacker_manifest = resolver.manifest().clone();
+        attacker_manifest
+            .vms
+            .get_mut("personal-dev")
+            .unwrap()
+            .env = Some("attacker".to_owned());
+        let mutated = BundleResolver::from_artifacts_with_zone_resource_bundles(
+            resolver.bundle().clone(),
+            attacker_host,
+            resolver.processes().clone(),
+            attacker_manifest,
+            BTreeMap::new(),
+        );
+        let second = mutated
             .resolve_tap_intent("personal-dev", "ch", provenance, attachment_uid)
             .expect("v3 TAP intent after legacy mutation");
         assert_eq!(first, second);

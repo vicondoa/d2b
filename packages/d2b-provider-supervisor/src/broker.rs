@@ -387,7 +387,7 @@ impl BundleBackedLaunchResolver {
     fn zone_for_launch_vm(&self, vm: &str) -> Option<String> {
         if let Some(environment) = self
             .bundle
-            .manifest
+            .manifest()
             .vms
             .get(vm)
             .and_then(|entry| entry.env.as_deref())
@@ -867,7 +867,7 @@ impl BundleBackedLaunchResolver {
             generation: ticket.resource_generation().get(),
             resource_ref: ticket.process_ref().clone(),
             resource_uid: ticket.process_uid().clone(),
-            bundle_content_identity: self.bundle.bundle.bundle_hash.clone().ok_or_else(|| {
+            bundle_content_identity: self.bundle.bundle().bundle_hash.clone().ok_or_else(|| {
                 warn!(
                         provider = "supervisor",
                         resource = %ticket.process_ref().to_canonical_string(),
