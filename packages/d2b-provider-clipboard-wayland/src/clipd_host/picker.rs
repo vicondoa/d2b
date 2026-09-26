@@ -113,7 +113,7 @@ pub trait PickerSpawner {
     fn spawn(&mut self, launch: PickerLaunch) -> Result<Self::Process, PickerIpcError>;
 }
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum PickerIpcError {
     #[error("picker is not configured")]
     NotConfigured,
@@ -125,8 +125,16 @@ pub enum PickerIpcError {
     Spawn(String),
     #[error("picker fd flag update failed: {0}")]
     FdFlags(String),
+    /// The picker socket read failed; the io error stays the source.
     #[error("picker frame error: {0}")]
-    Frame(String),
+    Read(#[source] std::io::Error),
+    /// Frame decoding refused the picker's bytes; the framing class stays
+    /// the source instead of collapsing into its Display text.
+    #[error("picker frame error: {0}")]
+    Frame(#[from] FramingError),
+    /// The picker closed its socket with a partial frame buffered.
+    #[error("picker frame error: picker closed with incomplete frame")]
+    ClosedMidFrame,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -265,36 +273,28 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
             match active.parent_socket.read(&mut buf) {
                 Ok(0) if active.read_buffer.is_empty() => return Ok(PickerPoll::Closed),
                 Ok(0) => {
-                    return Err(PickerIpcError::Frame(
-                        "picker closed with incomplete frame".to_owned(),
-                    ));
+                    return Err(PickerIpcError::ClosedMidFrame);
                 }
                 Ok(n) => {
                     active.read_buffer.extend_from_slice(&buf[..n]);
                     if let Some(newline) = active.read_buffer.iter().position(|byte| *byte == b'\n')
                     {
                         if newline > max_frame_bytes {
-                            return Err(PickerIpcError::Frame(
-                                FramingError::FrameTooLong {
-                                    max: max_frame_bytes,
-                                }
-                                .to_string(),
-                            ));
+                            return Err(PickerIpcError::Frame(FramingError::FrameTooLong {
+                                max: max_frame_bytes,
+                            }));
                         }
                         break;
                     }
                     if active.read_buffer.len() > max_frame_bytes {
-                        return Err(PickerIpcError::Frame(
-                            FramingError::FrameTooLong {
-                                max: max_frame_bytes,
-                            }
-                            .to_string(),
-                        ));
+                        return Err(PickerIpcError::Frame(FramingError::FrameTooLong {
+                            max: max_frame_bytes,
+                        }));
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(PickerIpcError::Frame(error.to_string())),
+                Err(error) => return Err(PickerIpcError::Read(error)),
             }
         }
 
@@ -320,16 +320,12 @@ impl<S: PickerSpawner> PickerSupervisor<S> {
             return Ok(PickerPoll::Incomplete);
         };
         if newline > max_frame_bytes {
-            return Err(PickerIpcError::Frame(
-                FramingError::FrameTooLong {
-                    max: max_frame_bytes,
-                }
-                .to_string(),
-            ));
+            return Err(PickerIpcError::Frame(FramingError::FrameTooLong {
+                max: max_frame_bytes,
+            }));
         }
         let frame = active.read_buffer.drain(..=newline).collect::<Vec<_>>();
-        let message = decode_frame::<PickerToDaemonMessage>(&frame, max_frame_bytes)
-            .map_err(|err| PickerIpcError::Frame(err.to_string()))?;
+        let message = decode_frame::<PickerToDaemonMessage>(&frame, max_frame_bytes)?;
         Ok(PickerPoll::Message(message))
     }
 
@@ -688,5 +684,35 @@ mod tests {
                 .expect("first frame remains valid"),
             PickerPoll::Message(PickerToDaemonMessage::Cancel(_))
         ));
+    }
+
+    #[test]
+    fn frame_failures_keep_the_diagnostic_text_and_the_typed_source() {
+        let too_long = PickerIpcError::Frame(FramingError::FrameTooLong { max: 4096 });
+        assert_eq!(
+            too_long.to_string(),
+            "picker frame error: ndjson frame exceeds 4096 bytes"
+        );
+        assert_eq!(
+            std::error::Error::source(&too_long).map(ToString::to_string),
+            Some("ndjson frame exceeds 4096 bytes".to_owned())
+        );
+
+        let closed = PickerIpcError::ClosedMidFrame;
+        assert_eq!(
+            closed.to_string(),
+            "picker frame error: picker closed with incomplete frame"
+        );
+        assert!(std::error::Error::source(&closed).is_none());
+
+        let read = PickerIpcError::Read(std::io::Error::other("picker socket read failed"));
+        assert_eq!(
+            read.to_string(),
+            "picker frame error: picker socket read failed"
+        );
+        assert_eq!(
+            std::error::Error::source(&read).map(ToString::to_string),
+            Some("picker socket read failed".to_owned())
+        );
     }
 }

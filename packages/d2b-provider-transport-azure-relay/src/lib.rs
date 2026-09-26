@@ -25,7 +25,7 @@ pub use guest_credential::{
 };
 pub use guest_zone_link::{
     GatewayGuestZoneLinkError, GatewayGuestZoneLinkRuntime,
-    GatewayGuestZoneLinkTransportConfig, RelayCarriageRequest,
+    GatewayGuestZoneLinkTransportConfig, RelayCarriageRequest, ZoneLinkCredentialRefusal,
 };
 pub use relay_transport::{
     AzureRelaySocketConnector, AzureRelayTransportProvider, MAX_RELAY_CA_BYTES,
