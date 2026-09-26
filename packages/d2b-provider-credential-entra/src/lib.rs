@@ -15,6 +15,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use d2b_contracts_provider::v3::credential::{
