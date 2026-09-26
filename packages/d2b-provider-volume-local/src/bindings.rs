@@ -88,7 +88,7 @@ pub fn desired_binding_intents(
         if attachment.transport() != AttachmentTransport::Virtiofs {
             continue;
         }
-        let name = derive_binding_name(&volume_ref, attachment)?;
+        let name = derive_binding_name(volume_ref, attachment)?;
         intents.push(BindingIntent {
             name,
             owner_ref: volume_ref.clone(),
