@@ -1097,16 +1097,19 @@ mod tests {
             })
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn with_child(log: Log, child: StoredDesiredResource) -> Arc<Self> {
             let manager = Self::new(log);
             manager.children.lock().push(child);
             manager
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn ensured(&self) -> Vec<ChildEnsure> {
             self.ensured.lock().clone()
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn children(&self) -> Vec<StoredDesiredResource> {
             self.children.lock().clone()
         }
@@ -1114,6 +1117,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ManagerEndpoint for RecordingManager {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn ensure_child(
             &self,
             parent: &ResourceKey,
@@ -1151,6 +1155,7 @@ mod tests {
             }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn get(
             &self,
             key: &ResourceKey,
@@ -1175,6 +1180,7 @@ mod tests {
             Ok(None)
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.log
                 .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
@@ -1187,6 +1193,7 @@ mod tests {
             Ok(())
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn list_owned(
             &self,
             _owner_uid: [u8; 16],

@@ -62,26 +62,31 @@ impl FakeEffects {
 
     /// The calls recorded so far, in order (the shared log also carries the
     /// manager endpoint's `ensure`/`get`/`delete`/`list-owned` entries).
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn call_order(&self) -> Vec<String> {
         self.log.lock().clone()
     }
 
     /// Script the Provider + execution-target facts.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn set_facts(&self, value: Option<CredentialDependencyFacts>) {
         *self.facts.lock() = value;
     }
 
     /// Script the provider-side lease facts.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn set_lease(&self, value: Option<CredentialLeaseFacts>) {
         *self.lease.lock() = value;
     }
 
     /// Script whether the managed-identity agent Process is live.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn set_agent_ready(&self, value: bool) {
         *self.agent_ready.lock() = value;
     }
 
     /// Script the session the delete path binds for the revocation call.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn set_session(&self, value: Option<Arc<dyn CredentialSession>>) {
         *self.session.lock() = value;
     }
@@ -89,6 +94,7 @@ impl FakeEffects {
 
 #[async_trait::async_trait]
 impl CredentialDriverEffects for FakeEffects {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn dependency_facts(
         &self,
         _provider_ref: &ResourceRef,
@@ -98,16 +104,19 @@ impl CredentialDriverEffects for FakeEffects {
         Ok(self.facts.lock().clone()) // async-gate-allow: test-support recorder lock
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn lease_facts(&self, _credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
         self.log.lock().push("lease-facts".to_owned()); // async-gate-allow: test-support recorder lock
         *self.lease.lock() // async-gate-allow: test-support recorder lock
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn agent_ready(&self, _agent_ref: &ResourceRef) -> bool {
         self.log.lock().push("agent-ready".to_owned()); // async-gate-allow: test-support recorder lock
         *self.agent_ready.lock() // async-gate-allow: test-support recorder lock
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn session(&self, _provider_ref: &ResourceRef) -> Option<Arc<dyn CredentialSession>> {
         self.log.lock().push("session".to_owned());
         self.session.lock().clone()
@@ -149,6 +158,7 @@ impl CredentialSession for RecordingSession {
         self.generation
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn revoke_credential(
         &self,
         request: &CredentialRevocationRequest,
@@ -197,26 +207,31 @@ impl RecordingRuntime {
     }
 
     /// The calls recorded so far, in order.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn call_order(&self) -> Vec<String> {
         self.log.lock().clone()
     }
 
     /// Script the Provider + execution-target facts.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn set_facts(&self, value: Option<CredentialDependencyFacts>) {
         *self.facts.lock() = value;
     }
 
     /// Script the provider-side lease facts.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn set_lease(&self, value: Option<CredentialLeaseFacts>) {
         *self.lease.lock() = value;
     }
 
     /// Script whether the managed-identity agent Process is live.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn set_agent_ready(&self, value: bool) {
         *self.agent_ready.lock() = value;
     }
 
     /// Script the session the delete path binds for the revocation call.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     pub fn set_session(&self, value: Option<Arc<dyn CredentialSession>>) {
         *self.session.lock() = value;
     }
@@ -224,6 +239,7 @@ impl RecordingRuntime {
 
 #[async_trait]
 impl CredentialRuntime for RecordingRuntime {
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn dependency_facts(
         &self,
         _provider_ref: &ResourceRef,
@@ -233,16 +249,19 @@ impl CredentialRuntime for RecordingRuntime {
         Ok(self.facts.lock().clone()) // async-gate-allow: test-support recorder lock
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn lease_facts(&self, _credential_ref: &ResourceRef) -> Option<CredentialLeaseFacts> {
         self.log.lock().push("lease-facts".to_owned()); // async-gate-allow: test-support recorder lock
         *self.lease.lock() // async-gate-allow: test-support recorder lock
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     async fn agent_ready(&self, _agent_ref: &ResourceRef) -> bool {
         self.log.lock().push("agent-ready".to_owned()); // async-gate-allow: test-support recorder lock
         *self.agent_ready.lock() // async-gate-allow: test-support recorder lock
     }
 
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn session(&self, _provider_ref: &ResourceRef) -> Option<Arc<dyn CredentialSession>> {
         self.log.lock().push("session".to_owned());
         self.session.lock().clone()

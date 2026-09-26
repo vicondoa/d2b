@@ -452,6 +452,7 @@ mod tests {
             Some(ReconnectGeneration::new(7).expect("recording session generation"))
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn revoke_credential(
             &self,
             request: &CredentialRevocationRequest,
