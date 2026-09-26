@@ -1013,12 +1013,12 @@
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 26472,
+      "line": 26622,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-      "line": 26869,
+      "line": 27019,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
