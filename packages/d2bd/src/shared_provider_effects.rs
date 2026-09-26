@@ -1628,7 +1628,7 @@ impl ProductionSharedProviderEffects {
             })?;
         let mut controller = {
             let mut controllers = state
-                .tpm_controllers
+                .tpm_controllers()
                 .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .map_err(|_| SharedProviderEffectError::Unavailable)?;
             match controllers.remove(&request.uid) {
@@ -1676,7 +1676,7 @@ impl ProductionSharedProviderEffects {
             Ok(outcome) => {
                 {
                     let mut controllers = state
-                        .tpm_controllers
+                        .tpm_controllers()
                         .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
@@ -1701,7 +1701,7 @@ impl ProductionSharedProviderEffects {
             Err(error) => {
                 {
                     let mut controllers = state
-                        .tpm_controllers
+                        .tpm_controllers()
                         .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
@@ -2132,7 +2132,7 @@ impl ProductionSharedProviderEffects {
             ));
         }
         let (_runtime, admission, tokens, settings, holder_ref) = self.gpu_admission(request).await?;
-        let mut controllers = state.gpu_controllers
+        let mut controllers = state.gpu_controllers()
             .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let mut controller = match controllers.remove(&request.uid) {
@@ -2163,7 +2163,7 @@ impl ProductionSharedProviderEffects {
             d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortArgs::new(
                 d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortDeps::new(
                     Arc::clone(&gpu_facets.runtime),
-                    Arc::clone(&state.gpu_authority_leases),
+                    Arc::clone(state.gpu_authority_leases()),
                     tokio::runtime::Handle::current(),
                     request.children,
                 ),
@@ -2521,7 +2521,7 @@ impl ProductionSharedProviderEffects {
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let mut controller = {
             let mut controllers = state
-                .tpm_controllers
+                .tpm_controllers()
                 .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .map_err(|_| SharedProviderEffectError::Unavailable)?;
             controllers
@@ -2554,7 +2554,7 @@ impl ProductionSharedProviderEffects {
             Err(error) => {
                 {
                     let mut controllers = state
-                        .tpm_controllers
+                        .tpm_controllers()
                         .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
@@ -2610,7 +2610,7 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
         state: &DeviceResourceState,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        let mut controllers = state.gpu_controllers
+        let mut controllers = state.gpu_controllers()
             .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let admission = controllers
@@ -2629,7 +2629,7 @@ impl ProductionSharedProviderEffects {
             d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortArgs::new(
                 d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortDeps::new(
                     Arc::clone(&gpu_facets.runtime),
-                    Arc::clone(&state.gpu_authority_leases),
+                    Arc::clone(state.gpu_authority_leases()),
                     tokio::runtime::Handle::current(),
                     request.children,
                 ),
