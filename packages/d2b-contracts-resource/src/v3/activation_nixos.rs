@@ -1,13 +1,12 @@
 //! Contracts for the activation-nixos Provider.
 
-use schemars::{
-    JsonSchema,
-    r#gen::SchemaGenerator,
-    schema::{Schema, SchemaObject},
-};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{ArtifactId, ResourceRef, ResourceTypeName, execution_policy::require_execution_ref};
+use super::{
+    ArtifactId, NixosGenerationOrdinal, ObservedGeneration, ResourceRef, ResourceTypeName,
+    execution_policy::require_execution_ref,
+};
 use d2b_contracts::wire_deserialize;
 
 /// The canonical activation generation ResourceType.
@@ -44,48 +43,23 @@ pub struct ActivationRunnerInput {
     /// Private-catalog artifact identifier.
     pub system_artifact_id: ArtifactId,
     /// Target generation ordinal bound to the owning `NixosGeneration`.
-    #[schemars(schema_with = "nonzero_u64_schema")]
-    pub target_generation: u64,
+    pub target_generation: NixosGenerationOrdinal,
     /// Closed activation mode.
     pub activation_mode: ActivationMode,
 }
 
-fn nonzero_u64_schema(generator: &mut SchemaGenerator) -> Schema {
-    let mut schema: SchemaObject = <u64>::json_schema(generator).into();
-    schema.number.get_or_insert_with(Default::default).minimum = Some(1.0);
-    schema.into()
-}
-
-/// Validation failure for a typed activation-runner input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActivationRunnerInputError {
-    /// Target generation ordinal was zero.
-    GenerationInvalid,
-}
-
-impl core::fmt::Display for ActivationRunnerInputError {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("activation-runner-generation-invalid")
-    }
-}
-
-impl std::error::Error for ActivationRunnerInputError {}
-
 impl ActivationRunnerInput {
-    /// Construct and validate one runner input.
+    /// Construct one runner input.
     pub fn new(
         system_artifact_id: ArtifactId,
-        target_generation: u64,
+        target_generation: NixosGenerationOrdinal,
         activation_mode: ActivationMode,
-    ) -> Result<Self, ActivationRunnerInputError> {
-        if target_generation == 0 {
-            return Err(ActivationRunnerInputError::GenerationInvalid);
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             system_artifact_id,
             target_generation,
             activation_mode,
-        })
+        }
     }
 }
 
@@ -281,5 +255,29 @@ pub struct NixosGenerationStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<ActivationOutcomeCode>,
     /// Store generation revision observed by the controller.
-    pub observed_generation: u64,
+    pub observed_generation: ObservedGeneration,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runner_input_refuses_a_zero_target_generation() {
+        let input = |target_generation: u64| {
+            serde_json::json!({
+                "systemArtifactId": "system-artifact",
+                "targetGeneration": target_generation,
+                "activationMode": "switch",
+            })
+        };
+        assert!(
+            serde_json::from_value::<ActivationRunnerInput>(input(1)).is_ok(),
+            "a nonzero target generation decodes"
+        );
+        assert!(
+            serde_json::from_value::<ActivationRunnerInput>(input(0)).is_err(),
+            "a zero target generation is refused at decode"
+        );
+    }
 }

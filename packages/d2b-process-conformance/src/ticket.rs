@@ -761,11 +761,7 @@ impl LaunchTicket {
                 || !matches!(
                     self.execution_ref.resource_type().as_str(),
                     "Host" | "Guest"
-                )
-                || self
-                    .activation_input
-                    .as_ref()
-                    .is_some_and(|input| input.target_generation == 0))
+                ))
         {
             return Err(ProcessConformanceError::InvalidTicket);
         }
@@ -882,7 +878,6 @@ impl LaunchTicket {
                 self.execution_ref.resource_type().as_str(),
                 "Host" | "Guest"
             )
-            || input.target_generation == 0
         {
             return Err(ProcessConformanceError::InvalidTicket);
         }

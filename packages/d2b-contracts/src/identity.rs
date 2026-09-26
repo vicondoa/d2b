@@ -248,6 +248,7 @@ pub enum IdentityClass {
     ReconnectGeneration,
     ControllerGeneration,
     ConfigurationGeneration,
+    NixosGenerationOrdinal,
 }
 
 /// Reason a canonical identity could not be constructed.

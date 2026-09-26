@@ -57,10 +57,12 @@
           "description": "Private-catalog artifact identifier."
         },
         "targetGeneration": {
-          "description": "Target generation ordinal bound to the owning `NixosGeneration`.",
-          "format": "uint64",
-          "minimum": 1.0,
-          "type": "integer"
+          "allOf": [
+            {
+              "$ref": "#/definitions/NixosGenerationOrdinal"
+            }
+          ],
+          "description": "Target generation ordinal bound to the owning `NixosGeneration`."
         }
       },
       "required": [
@@ -402,6 +404,10 @@
         "ports"
       ],
       "type": "object"
+    },
+    "NixosGenerationOrdinal": {
+      "minimum": 1.0,
+      "type": "integer"
     },
     "PortProtocol": {
       "description": "Transport protocol of one declared port.",

@@ -2,7 +2,8 @@
 
 use d2b_contracts_resource::v3::{
     ActivationMode, ActivationOutcomeCode, ActivationRunnerInput, ArtifactId, EnvironmentClass,
-    ExecutionDomain, IdentityError, NixosGenerationSpec, ResourceName, ResourcePhase, ResourceRef,
+    ExecutionDomain, IdentityError, NixosGenerationOrdinal, NixosGenerationSpec, ResourceName,
+    ResourcePhase, ResourceRef,
     process::{EphemeralProcessSpec, ExecutionSpec, NamespaceClass, ProcessClass, SandboxSpec},
 };
 use ring::signature;
@@ -384,14 +385,12 @@ pub fn activation_runner_spec(request: &RunnerRequest) -> EphemeralProcessSpec {
         false,
     )
     .expect("static activation runner process");
-    spec.with_activation_input(
-        ActivationRunnerInput::new(
-            request.system_artifact_id.clone(),
-            request.target_generation,
-            request.activation_mode,
-        )
-        .expect("activation runner generation is nonzero"),
-    )
+    spec.with_activation_input(ActivationRunnerInput::new(
+        request.system_artifact_id.clone(),
+        NixosGenerationOrdinal::new(request.target_generation)
+            .expect("activation runner generation is nonzero"),
+        request.activation_mode,
+    ))
     .expect("activation runner accepts its typed input")
 }
 
