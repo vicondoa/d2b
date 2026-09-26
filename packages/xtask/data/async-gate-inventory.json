@@ -717,51 +717,6 @@
       "reason": "test-support recorder lock"
     },
     {
-      "file": "packages/d2b-provider-user/src/driver.rs",
-      "line": 503,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-user/src/driver.rs",
-      "line": 511,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-user/src/driver.rs",
-      "line": 519,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-user/src/driver.rs",
-      "line": 524,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-user/src/driver.rs",
-      "line": 525,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-user/src/driver.rs",
-      "line": 547,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-user/src/driver.rs",
-      "line": 552,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-user/src/test_support.rs",
-      "line": 88,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-user/src/test_support.rs",
-      "line": 156,
-      "reason": "test-support recorder lock"
-    },
-    {
       "file": "packages/d2b-provider-volume-binding/src/driver.rs",
       "line": 1243,
       "reason": "synchronous lock acquisition, no await while the guard is held"

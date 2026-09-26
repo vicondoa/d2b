@@ -461,21 +461,21 @@ mod tests {
     /// any unexpected manager call fails the test loudly through the recorded
     /// call list.
     struct RecordingManager {
-        calls: parking_lot::Mutex<Vec<&'static str>>,
-        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
+        calls: tokio::sync::Mutex<Vec<&'static str>>,
+        owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
     }
 
     impl RecordingManager {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
-                owned: parking_lot::Mutex::new(Vec::new()),
+                calls: tokio::sync::Mutex::new(Vec::new()),
+                owned: tokio::sync::Mutex::new(Vec::new()),
             })
         }
 
         /// Seed one owned child row (the finalize gate's input).
         fn seed_owned(&self, key: ResourceKey) {
-            self.owned.lock().push(StoredDesiredResource {
+            self.owned.try_lock().expect("uncontended test mutex").push(StoredDesiredResource {
                 key,
                 uid: [0x77; 16],
                 generation: 1,
@@ -489,7 +489,7 @@ mod tests {
         }
 
         fn call_order(&self) -> Vec<&'static str> {
-            self.calls.lock().clone()
+            self.calls.try_lock().expect("uncontended test mutex").clone()
         }
     }
 
@@ -500,7 +500,7 @@ mod tests {
             _parent: &ResourceKey,
             _child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
-            self.calls.lock().push("ensure-child"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.lock().await.push("ensure-child");
             Err(ResourceError::ManagerRejected { reason: "unexpected ensure_child".into() })
         }
 
@@ -508,7 +508,7 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push("get"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.lock().await.push("get");
             Ok(None)
         }
 
@@ -516,13 +516,13 @@ mod tests {
             &self,
             _key: &ResourceKey,
         ) -> Result<Option<d2b_resource_runtime::manager::ResourceView>, ResourceError> {
-            self.calls.lock().push("view"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.lock().await.push("view");
             Err(ResourceError::ManagerRejected { reason: "unexpected view".into() })
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.calls.lock().push("delete"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            let mut owned = self.owned.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.lock().await.push("delete");
+            let mut owned = self.owned.lock().await;
             if owned.iter().any(|row| row.key == *key) {
                 owned.retain(|row| row.key != *key);
                 Ok(())
@@ -535,8 +535,8 @@ mod tests {
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            self.calls.lock().push("list-owned");
-            Ok(self.owned.lock().clone())
+            self.calls.lock().await.push("list-owned");
+            Ok(self.owned.lock().await.clone())
         }
 
         async fn register_watch(
@@ -544,40 +544,40 @@ mod tests {
             _subscriber: &ResourceKey,
             _registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
-            self.calls.lock().push("register-watch"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.lock().await.push("register-watch");
             Ok(WatchId(1))
         }
 
         async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            self.calls.lock().push("cancel-watch"); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.calls.lock().await.push("cancel-watch");
             Ok(())
         }
     }
 
     struct RecordingRequeue {
-        calls: parking_lot::Mutex<Vec<u64>>,
+        calls: tokio::sync::Mutex<Vec<u64>>,
     }
 
     impl RecordingRequeue {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                calls: parking_lot::Mutex::new(Vec::new()),
+                calls: tokio::sync::Mutex::new(Vec::new()),
             })
         }
 
         fn call_count(&self) -> usize {
-            self.calls.lock().len()
+            self.calls.try_lock().expect("uncontended test mutex").len()
         }
 
         /// The scheduled delays in milliseconds, in arrival order.
         fn calls(&self) -> Vec<u64> {
-            self.calls.lock().clone()
+            self.calls.try_lock().expect("uncontended test mutex").clone()
         }
     }
 
     impl RequeueScheduler for RecordingRequeue {
         fn schedule(&self, _key: ResourceKey, after: std::time::Duration) -> RequeueId {
-            self.calls.lock().push(after.as_millis() as u64);
+            self.calls.try_lock().expect("uncontended test mutex").push(after.as_millis() as u64);
             RequeueId(0)
         }
 

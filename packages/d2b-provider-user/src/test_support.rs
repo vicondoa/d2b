@@ -22,7 +22,12 @@
 //!
 //! The doubles' ordered call recorder is the toolkit's `SharedLog`
 //! (`d2b_provider_toolkit::testing`), the canonical recorder shape every
-//! family crate's test-support module shares.
+//! family crate's test-support module shares. The state the doubles keep
+//! themselves - the scripted phase and the requested usernames - lives in
+//! `tokio::sync::Mutex`: the effect methods that write it await the lock,
+//! and the synchronous accessors that read or script it take a
+//! non-blocking `try_lock`, so no double parks an executor worker on a
+//! lock.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,7 +49,7 @@ use crate::facets::UserEffectFacets;
 /// fail discovery.
 pub struct RecordingEffects {
     calls: SharedLog,
-    phase: parking_lot::Mutex<ResourcePhase>,
+    phase: tokio::sync::Mutex<ResourcePhase>,
     /// Script whether the next discovery refuses.
     pub fail: AtomicBool,
 }
@@ -55,7 +60,7 @@ impl RecordingEffects {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             calls: SharedLog::new(),
-            phase: parking_lot::Mutex::new(ResourcePhase::Ready),
+            phase: tokio::sync::Mutex::new(ResourcePhase::Ready),
             fail: AtomicBool::new(false),
         })
     }
@@ -67,7 +72,7 @@ impl RecordingEffects {
 
     /// Script the phase the next discovery reports.
     pub fn set_phase(&self, phase: ResourcePhase) {
-        *self.phase.lock() = phase;
+        *self.phase.try_lock().expect("uncontended test mutex") = phase;
     }
 }
 
@@ -85,7 +90,7 @@ impl UserDriverEffects for RecordingEffects {
         Ok(UserStatusReport {
             user_ref: user_ref.clone(),
             provider: "system-core",
-            phase: *self.phase.lock(), // async-gate-allow: test-support recorder lock
+            phase: *self.phase.lock().await,
             discovery: UserDiscoveryCondition::Discovered,
             identity: None,
         })
@@ -110,7 +115,7 @@ pub struct ScriptedProbe {
 
 struct ScriptedCore {
     /// The usernames discovery was requested for, in arrival order.
-    calls: parking_lot::Mutex<Vec<OsUsername>>,
+    calls: tokio::sync::Mutex<Vec<OsUsername>>,
     /// Whether the next discovery resolves no local record.
     absent: AtomicBool,
     /// Whether the next discovery refuses.
@@ -123,7 +128,7 @@ impl ScriptedProbe {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             core: Arc::new(ScriptedCore {
-                calls: parking_lot::Mutex::new(Vec::new()),
+                calls: tokio::sync::Mutex::new(Vec::new()),
                 absent: AtomicBool::new(false),
                 failing: AtomicBool::new(false),
             }),
@@ -132,7 +137,11 @@ impl ScriptedProbe {
 
     /// The usernames discovery was requested for, in arrival order.
     pub fn discovered_names(&self) -> Vec<OsUsername> {
-        self.core.calls.lock().clone()
+        self.core
+            .calls
+            .try_lock()
+            .expect("uncontended test mutex")
+            .clone()
     }
 
     /// Script whether the next discovery resolves no local record.
@@ -153,7 +162,7 @@ impl UserDiscoveryEffectPort for ScriptedProbe {
         user_ref: &ResourceRef,
         spec: &UserSpec,
     ) -> Result<Option<DiscoveredUser>, SystemCoreError> {
-        self.core.calls.lock().push(spec.os_username().clone()); // async-gate-allow: test-support recorder lock
+        self.core.calls.lock().await.push(spec.os_username().clone());
         if self.core.failing.load(Ordering::Relaxed) {
             return Err(SystemCoreError::DiscoveryUnavailable);
         }
