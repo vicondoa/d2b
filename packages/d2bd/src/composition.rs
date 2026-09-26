@@ -9468,12 +9468,6 @@ fn dispatch_broker_qemu_media_attach(
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb attach";
-    if let Err(err) = d2b_host::media::validate_usb_busid(&request.bus_id) {
-        return Ok(invalid_request_response(
-            VERB,
-            format!("invalid USB busid selector: {err}"),
-        ));
-    }
     match dispatch_broker_request_as(
         state,
         BrokerRequest::QemuMediaAttach(BrokerQemuMediaHotplugRequest {
@@ -9512,12 +9506,6 @@ fn dispatch_broker_qemu_media_detach(
     caller_role: BrokerCallerRole,
 ) -> Result<Value, TypedError> {
     const VERB: &str = "usb detach";
-    if let Err(err) = d2b_host::media::validate_usb_busid(&request.bus_id) {
-        return Ok(invalid_request_response(
-            VERB,
-            format!("invalid USB busid selector: {err}"),
-        ));
-    }
     match dispatch_broker_request_as(
         state,
         BrokerRequest::QemuMediaDetach(BrokerQemuMediaHotplugRequest {

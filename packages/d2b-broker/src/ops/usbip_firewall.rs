@@ -45,7 +45,7 @@ pub fn bind_firewall_rule(
     Ok(UsbipBindFirewallRuleDecision {
         batch,
         audit: UsbipBindFirewallRuleAudit {
-            busid: bus_id.0.clone(),
+            busid: bus_id.as_str().to_owned(),
             rule_hash,
         },
     })
@@ -98,9 +98,10 @@ mod tests {
 
     #[test]
     fn bind_firewall_rule_produces_audit_with_busid_and_hash() {
+        let bus_id = BusId::new("1-1.4").expect("busid");
         let decision = bind_firewall_rule(
             d2b_host::nftables::build_inet_d2b_chains(),
-            &BusId::new("1-1.4"),
+            &bus_id,
             "iifname \"br-work-up\" tcp dport 3240 accept",
         )
         .unwrap();
@@ -115,9 +116,10 @@ mod tests {
 
     #[test]
     fn carveout_ordering_invariant_via_op() {
+        let bus_id = BusId::new("2-3.1").expect("busid");
         let decision = bind_firewall_rule(
             d2b_host::nftables::build_inet_d2b_chains(),
-            &BusId::new("2-3.1"),
+            &bus_id,
             "iifname \"br-work-up\" tcp dport 3240 accept",
         )
         .unwrap();
