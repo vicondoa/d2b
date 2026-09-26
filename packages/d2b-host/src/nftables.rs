@@ -65,10 +65,10 @@ impl fmt::Display for Sha256 {
 
 /// Errors returned by the s3 nftables surface. Discriminants are
 /// kebab-case to match the broker audit log + the wider
-/// `d2b-core::error` taxonomy. The [`Self::as_kebab_case`] helper
+/// `d2b_contracts::error` taxonomy. The [`Self::as_kebab_case`] helper
 /// is the canonical mapping consumed by
-/// [`d2b_core::error::Error::internal_io`] when an error needs to
-/// surface through the broker wire as a typed [`d2b_core::error`].
+/// [`d2b_contracts::error::Error::internal_io`] when an error needs to
+/// surface through the broker wire as a typed [`d2b_contracts::error`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NftError {
     /// A foreign nft rule sits above the `inet d2b` chains at a
@@ -101,13 +101,13 @@ impl NftError {
         }
     }
 
-    /// Map to a `d2b-core::error::Error` via the
-    /// [`d2b_core::error::Error::internal_io`] constructor. The
+    /// Map to a `d2b_contracts::error::Error` via the
+    /// [`d2b_contracts::error::Error::internal_io`] constructor. The
     /// stable kebab-case discriminant is the opaque reason; the
     /// broker audit log records the structured variant separately so
     /// no operator-visible message loses the typed detail.
-    pub fn to_core_error(&self) -> d2b_core::error::Error {
-        d2b_core::error::Error::internal_io(self.as_kebab_case())
+    pub fn to_core_error(&self) -> d2b_contracts::error::Error {
+        d2b_contracts::error::Error::internal_io(self.as_kebab_case())
     }
 }
 
@@ -1120,7 +1120,7 @@ mod tests {
         let core = err.to_core_error();
         assert_eq!(
             core.kind(),
-            d2b_core::error::Kind::InternalIo,
+            d2b_contracts::error::Kind::InternalIo,
             "broker maps via InternalIo for now; ADR records the longer-term plan"
         );
     }

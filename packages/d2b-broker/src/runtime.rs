@@ -1302,7 +1302,7 @@ pub(crate) fn try_load_resolver_with_policy(
     bundle_path: &Path,
     policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
 ) -> BundleSlot {
-    use d2b_core::error::{BundleError, Error as CoreError};
+    use d2b_contracts::error::{BundleError, Error as CoreError};
     // Per the tracing contract, span attributes MUST NOT include
     // filesystem paths (high cardinality + can leak host layout). The
     // bundle path is bounded operational context handled by the typed

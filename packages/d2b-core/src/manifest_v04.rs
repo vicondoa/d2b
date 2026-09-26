@@ -6,7 +6,7 @@
 //! camelCase wire shape with `deny_unknown_fields` admission, and the
 //! parser accepts the current and legacy-compat manifest versions.
 
-use crate::error::Error;
+use d2b_contracts::error::Error;
 use schemars::{
     JsonSchema,
     r#gen::SchemaGenerator,

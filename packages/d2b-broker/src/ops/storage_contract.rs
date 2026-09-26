@@ -347,7 +347,7 @@ mod tests {
     use d2b_contracts::types::BundleOpId;
     use d2b_core::bundle::Bundle;
     use d2b_core::bundle_resolver::BundleResolver;
-    use d2b_core::contract_id::{ContractId, ContractText, PathTemplate};
+    use d2b_contracts::contract_id::{ContractId, ContractText, PathTemplate};
     use d2b_core::host::HostJson;
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::ProcessesJson;

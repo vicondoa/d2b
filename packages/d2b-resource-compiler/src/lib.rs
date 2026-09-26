@@ -6,7 +6,7 @@
 //! traits below it. [`linux`] contains the production Linux adapter, while
 //! tests can provide an in-memory adapter without creating a Nix store.
 //!
-//! A compiler diagnostic is a stable `d2b_core::error::Kind` plus a bounded
+//! A compiler diagnostic is a stable `d2b_contracts::error::Kind` plus a bounded
 //! message. It never contains the selected store path, manifest bytes, config
 //! bytes, key material, or process data.
 //!
@@ -37,8 +37,8 @@ use d2b_contracts_resource::v3::{
     process::{ExecutionSpec, ProcessClass, ProcessSpec, SandboxSpec, TelemetrySpec},
 };
 use d2b_contracts_zone_session::v3::resource_bundle::ProcessTemplateBinding;
+use d2b_contracts::error::Kind;
 use d2b_core::{
-    error::Kind,
     provider_artifact::{
         AnchoredDir, Argv, Envp, LaunchError, LayoutDir, LayoutError, LayoutPath, ProcessLauncher,
         ReadableFile,

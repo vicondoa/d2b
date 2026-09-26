@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::contract_id::{ContractId, PathTemplate};
+use d2b_contracts::contract_id::{ContractId, PathTemplate};
 use crate::storage::{ActorRef, DegradeScope, DegradedReason};
 use crate::storage_lifecycle::SyncValidationError;
 

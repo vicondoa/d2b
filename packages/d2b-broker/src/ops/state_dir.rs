@@ -371,7 +371,7 @@ fn fixture_content_hash(resources: &[serde_json::Value]) -> String {
 #[cfg(test)]
 pub(crate) fn resolver_with_swtpm_state_row(guest: &str) -> BundleResolver {
     use d2b_core::bundle::{Bundle, BundleGeneration};
-    use d2b_core::contract_id::{ContractId, PathTemplate};
+    use d2b_contracts::contract_id::{ContractId, PathTemplate};
     use d2b_core::host::HostJson;
     use d2b_core::manifest_v04::ManifestV04;
     use d2b_core::processes::ProcessesJson;

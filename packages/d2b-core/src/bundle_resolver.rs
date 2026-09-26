@@ -65,7 +65,7 @@
 
 use crate::allocator_config::AllocatorZoneTopology;
 use crate::bundle::{Bundle, BundleGeneration};
-use crate::error::Error;
+use d2b_contracts::error::Error;
 use crate::host::{
     ChNetHandoffMode, HostJson, HostsFileOwnership, ModuleRequirement, NetEnv,
     NetworkManagerUnmanaged, NftablesModel, OwnershipRule, QemuMediaSourceIntent, SitePolicy,
@@ -952,7 +952,7 @@ fn lookup_group_gid(name: &str) -> Option<u32> {
 /// return the file's raw bytes.
 ///
 /// Returns [`Error::Bundle`] wrapping
-/// [`crate::error::BundleError::Tampered`] with a short `reason` slug
+/// [`d2b_contracts::error::BundleError::Tampered`] with a short `reason` slug
 /// on any security check failure:
 /// - `"symlink"` - `open` returned `ELOOP` (path is a symlink).
 /// - `"not-regular-file"` - `fstat` shows it is not a regular file.
