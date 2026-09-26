@@ -42,15 +42,24 @@ impl StorageLifecycleReport {
     }
 }
 
+// The published schema must name these fields the way `serde` writes them.
+// schemars 0.8 reads `rename_all` on a variant, where it renames that
+// variant's fields, but not the container-level `rename_all_fields`, so every
+// struct variant repeats the field casing as a `schemars` attribute. Dropping
+// one of them leaves the published schema requiring a key the daemon never
+// writes; the schema-vs-bytes test in `tests/storage_lifecycle_schema.rs` is
+// what makes that loss fail loudly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case", rename_all_fields = "camelCase", tag = "kind")]
 pub enum StorageLifecycleIssue {
     MissingStorageContract,
     MissingSyncContract,
+    #[schemars(rename_all = "camelCase")]
     LegacyBundleContractsUnavailable {
         bundle_version: u32,
     },
     BundleResolverUnavailable,
+    #[schemars(rename_all = "camelCase")]
     StorageContractInvalid {
         contract_id: String,
         reason: StorageContractValidationReason,
@@ -58,6 +67,7 @@ pub enum StorageLifecycleIssue {
         #[serde(default)]
         offending_id: Option<String>,
     },
+    #[schemars(rename_all = "camelCase")]
     SyncContractInvalid {
         contract_id: String,
         reason: SyncContractValidationReason,
@@ -65,10 +75,12 @@ pub enum StorageLifecycleIssue {
         #[serde(default)]
         offending_id: Option<String>,
     },
+    #[schemars(rename_all = "camelCase")]
     MissingRestartPolicy {
         vm: String,
         role_id: String,
     },
+    #[schemars(rename_all = "camelCase")]
     AdoptableMissingCgroupLeaf {
         vm: String,
         role_id: String,
