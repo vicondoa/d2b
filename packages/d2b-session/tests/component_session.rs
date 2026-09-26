@@ -383,13 +383,13 @@ fn fixed_negotiation_and_all_noise_profiles_are_strict() {
     let mut remote_nn = policy(&original);
     remote_nn.transport_binding.locality = Locality::Remote;
     assert_eq!(
-        HandshakeOffer::from(remote_nn).validate().unwrap_err(),
+        HandshakeOffer::from(&remote_nn).validate().unwrap_err(),
         d2b_session::contract::ContractError::IdentityEvidenceMismatch
     );
     let mut wrong_bootstrap = policy(&original);
     wrong_bootstrap.purpose = EndpointPurpose::Bootstrap;
     assert_eq!(
-        HandshakeOffer::from(wrong_bootstrap)
+        HandshakeOffer::from(&wrong_bootstrap)
             .validate()
             .unwrap_err(),
         d2b_session::contract::ContractError::IdentityEvidenceMismatch
@@ -397,7 +397,7 @@ fn fixed_negotiation_and_all_noise_profiles_are_strict() {
     let mut sensitive_nn = policy(&original);
     sensitive_nn.purpose = EndpointPurpose::SensitiveCredential;
     assert_eq!(
-        HandshakeOffer::from(sensitive_nn).validate().unwrap_err(),
+        HandshakeOffer::from(&sensitive_nn).validate().unwrap_err(),
         d2b_session::contract::ContractError::IdentityEvidenceMismatch
     );
 }
