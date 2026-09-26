@@ -26,10 +26,10 @@ mod metrics;
 mod rbac;
 mod redact;
 mod runtime;
-mod stream_admission;
 mod types;
 
 pub use action_nonce::{ActionNonce, ActionNonceError, ActionNonceStore};
+pub use admission::{AdmissionError, AdmissionPurpose, SessionEvidence, TransportClass};
 pub use audit::{NotificationAuditKind, NotificationAuditRecord};
 pub use controller::{
     DisplayDependencyEvidence, DisplayDependencyState, GuestSourceConfig, NotificationController,
@@ -56,7 +56,6 @@ pub use runtime::{
     NotificationFinalizationReport, NotificationProcessEffectPort, NotificationRuntime,
     NotificationRuntimeError,
 };
-pub use stream_admission::{AdmissionError, AdmissionPurpose, SessionEvidence, TransportClass};
 pub use types::{
     ActionSpec, Category, MAX_ACTIONS, MAX_BODY_CHARS, MAX_SUMMARY_CHARS, NotificationError,
     NotificationRequest, NotificationUrgency,

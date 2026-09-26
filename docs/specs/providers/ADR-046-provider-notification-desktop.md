@@ -73,7 +73,7 @@ packages/d2b-provider-notification-desktop/
     host_sink.rs              # host-side sink process - consumes stream, calls D-Bus,
                               #   manages observer projection
     action_nonce.rs           # bounded single-use action capability store
-    stream_admission.rs       # ComponentSession admission checks
+    admission.rs              # ComponentSession admission checks
     redact.rs                 # sanitize() - strip/cap notification text before use
     error.rs                  # typed stable error enum; no content in messages
   tests/
@@ -668,9 +668,9 @@ NN is allowed for the observer because:
 KK is required for the Guest→Host sink because the guest-source crosses a Zone
 boundary (Host Zone ← Guest Zone vsock transport).
 
-### 6.5 Admission checks - stream_admission.rs
+### 6.5 Admission checks - admission.rs
 
-`stream_admission.rs` checks on every session establishment:
+`admission.rs` checks on every session establishment:
 
 1. Session is established and authenticated (`is_established() && is_authenticated()`).
 2. Service package exactly equals `d2b.notification.v3`.
@@ -1350,7 +1350,7 @@ are candidates for copy/adapt:
 | `packages/d2b-notify/src/nonce.rs` - `ActionNonce`, `ActionNonceStore`, `NONCE_BYTES`, `NONCE_TTL_SECS`, `MAX_STORE_SIZE`, `notification_action_key`, `parse_notification_action_key` | copy/adapt | `packages/d2b-provider-notification-desktop/src/action_nonce.rs` |
 | `packages/d2b-notify/src/events.rs` - event enum, field bounds, `SecurityKeyEvent` | extract/adapt; generalize from security-key to generic category | `packages/d2b-provider-notification-desktop/src/types.rs` |
 | `packages/d2b-notify/src/state.rs` - `CeremonySummary`, `SkNotifyState`, bound constants | adapt; generalize | `packages/d2b-provider-notification-desktop/src/types.rs` |
-| `packages/d2b-notify/src/services/mod.rs` - `EstablishedDesktopSession`, `DesktopServices`, session evidence mapping, `DesktopStartupError` | copy/adapt | `packages/d2b-provider-notification-desktop/src/stream_admission.rs` |
+| `packages/d2b-notify/src/services/mod.rs` - `EstablishedDesktopSession`, `DesktopServices`, session evidence mapping, `DesktopStartupError` | copy/adapt | `packages/d2b-provider-notification-desktop/src/admission.rs` |
 | `packages/d2b-notify/src/services/actions.rs` - `ActionService`, `ActionSession`, `ActionOffer`, `InvokeActionRequest` | copy/adapt | `packages/d2b-provider-notification-desktop/src/action_nonce.rs` (client side) |
 | `packages/d2b-notify/src/services/observer.rs` - `ObserverService`, `ObserverSession`, projection logic | adapt | `packages/d2b-provider-notification-desktop/src/host_sink.rs` (observer projection) |
 | `packages/d2b-contracts/src/generated_v2_services/notify_ttrpc.rs` - `NotifyServiceClient`, `NotifyService` ttrpc shape | replace with v3 protobuf/ttrpc regenerated under `d2b.notification.v3` | `packages/d2b-provider-notification-desktop/src/` (generated) |
@@ -1387,7 +1387,7 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Dependency/owner | ADR046-session-001, ADR046-bus-001; session/bus wiring |
 | Current source | `packages/d2b-notify/src/services/` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-notification-desktop/src/stream_admission.rs` |
+| Destination | `packages/d2b-provider-notification-desktop/src/admission.rs` |
 | Detailed design | Session admission checks, Noise profile enforcement, transport class validation Primary reuse disposition: `adapt`. Preserved source-plan detail: copy/adapt. |
 | Integration | ComponentSession/d2b-bus |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
