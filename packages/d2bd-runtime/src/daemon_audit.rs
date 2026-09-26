@@ -156,6 +156,20 @@ pub enum ResourcePlaneResult {
     Error,
 }
 
+/// Split-readiness mode for the api-ready wait phase of a VM start.
+///
+/// Closed, two-value state mirroring the run executor's split-readiness
+/// mode; serializes to the exact kebab-case strings used by the
+/// daemon-events JSONL shape (`"strict"` / `"no-wait-api"`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApiReadyMode {
+    /// Wait for both process-alive and api-ready; fail-closed on timeout.
+    Strict,
+    /// Skip the api-ready probe; pending is expected during cold boot.
+    NoWaitApi,
+}
+
 /// Whether a daemon audit event is part of an operation's authority boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonAuditAuthority {
@@ -190,8 +204,8 @@ pub enum DaemonEvent {
         runner: String,
         /// Configured timeout that elapsed, in whole seconds.
         elapsed_secs: u64,
-        /// Split-readiness mode: `"strict"` or `"no-wait-api"`.
-        mode: String,
+        /// Split-readiness mode (serializes as `"strict"` / `"no-wait-api"`).
+        mode: ApiReadyMode,
     },
     /// Emitted when an authenticated `vm exec` owner session is established
     /// (after admin authz + capability negotiation, before any op proxy).
@@ -1937,7 +1951,7 @@ mod tests {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 60,
-            mode: "strict".to_owned(),
+            mode: ApiReadyMode::Strict,
         })
         .expect("write api-ready-timeout event");
 
@@ -2028,6 +2042,32 @@ mod tests {
             disk_record.get("record_hash").and_then(|v| v.as_str()),
             Some(record_hash),
             "disk and captured records must carry the same record hash",
+        );
+    }
+
+    #[test]
+    fn api_ready_mode_roundtrips_and_rejects_invalid_strings() {
+        // The two closed modes serialize to the legacy JSONL kebab-case
+        // strings, so the daemon-events shape is unchanged.
+        assert_eq!(
+            serde_json::to_string(&ApiReadyMode::Strict).expect("serialize strict"),
+            "\"strict\"",
+        );
+        assert_eq!(
+            serde_json::to_string(&ApiReadyMode::NoWaitApi).expect("serialize no-wait-api"),
+            "\"no-wait-api\"",
+        );
+        assert_eq!(
+            serde_json::from_str::<ApiReadyMode>("\"strict\"").expect("parse strict"),
+            ApiReadyMode::Strict,
+        );
+        assert_eq!(
+            serde_json::from_str::<ApiReadyMode>("\"no-wait-api\"").expect("parse no-wait-api"),
+            ApiReadyMode::NoWaitApi,
+        );
+        assert!(
+            serde_json::from_str::<ApiReadyMode>("\"not-a-mode\"").is_err(),
+            "an unknown mode string must be rejected on deserialize",
         );
     }
 
@@ -2373,7 +2413,7 @@ mod tests {
                 vm: "vm-a".to_owned(),
                 runner: "ch-runner".to_owned(),
                 elapsed_secs: 30,
-                mode: "strict".to_owned(),
+                mode: ApiReadyMode::Strict,
             })
             .expect_err("blocked destination must return an io error");
         assert_eq!(error.kind(), io::ErrorKind::Other);
@@ -2413,7 +2453,7 @@ mod tests {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 30,
-            mode: "strict".to_owned(),
+            mode: ApiReadyMode::Strict,
         })
         .expect("no-op write should not error");
 
@@ -2519,7 +2559,7 @@ mod tests {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 60,
-            mode: "strict".to_owned(),
+            mode: ApiReadyMode::Strict,
         })
         .await
         .expect("async best-effort append");
