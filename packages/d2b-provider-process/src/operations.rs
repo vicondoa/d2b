@@ -2503,12 +2503,6 @@ impl OperationHandler for SpawnRunnerHandler {
         }
         match (&request.activation_input, request.role) {
             (Some(input), RunnerRole::ActivationNixos) => {
-                if input.target_generation == 0 {
-                    return Err(OperationFailure::with_detail(
-                        INTENT_MISMATCH,
-                        "activation_input.target_generation: 0 vs nonzero".to_owned(),
-                    ));
-                }
                 if request.generation.is_none() {
                     return Err(OperationFailure::with_detail(
                         INTENT_MISMATCH,
