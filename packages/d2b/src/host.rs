@@ -272,12 +272,8 @@ fn mutation(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     if !args.dry_run && !args.apply {
-        return Err(context.failure(
-            "ref-invalid",
-            "host mutation requires --dry-run or --apply",
-            mode,
-            2,
-        ));
+        let verb = format!("host {operation}");
+        return emit_host_error(&missing_mutation_flag_envelope(&verb), mode.is_json());
     }
     let value = context.invoke(
         "Reconcile",
@@ -301,12 +297,10 @@ fn reconcile(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     if !args.dry_run && !args.apply {
-        return Err(context.failure(
-            "ref-invalid",
-            "host reconcile requires --dry-run or --apply",
-            mode,
-            78,
-        ));
+        return emit_host_error(
+            &missing_mutation_flag_envelope("host reconcile"),
+            mode.is_json(),
+        );
     }
     if !args.network {
         return Err(context.failure("ref-invalid", "host reconcile requires --network", mode, 78));
