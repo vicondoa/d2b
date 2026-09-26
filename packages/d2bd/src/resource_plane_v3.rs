@@ -4603,7 +4603,7 @@ HOST_EFFECTS_SERVICE.id,
                         },
                     },
                     "enforcementPosture": "None",
-                    "lastSetApplied": "OfflineOnly",
+                    "lastSetApplied": "NotApplied",
                 }],
             }))
             .expect("canonical payload"),

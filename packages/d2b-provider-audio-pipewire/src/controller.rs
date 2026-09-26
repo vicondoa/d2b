@@ -140,7 +140,7 @@ pub enum AudioLastSetApplied {
     /// Applied to the guest only.
     GuestOnly,
     /// No setting was applied in the current reconcile.
-    OfflineOnly,
+    NotApplied,
 }
 
 /// Typed AudioBinding status projection.
@@ -591,7 +591,7 @@ impl<M: AudioMediator> AudioBindingController<M> {
             (true, true) => AudioLastSetApplied::HostAndGuest,
             (true, false) => AudioLastSetApplied::HostOnly,
             (false, true) => AudioLastSetApplied::GuestOnly,
-            (false, false) => AudioLastSetApplied::OfflineOnly,
+            (false, false) => AudioLastSetApplied::NotApplied,
         };
         Ok(AudioReconcileResult {
             status: AudioBindingStatus {

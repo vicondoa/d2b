@@ -121,7 +121,7 @@ pub(crate) fn audio_binding_status_value(status: AudioBindingStatus) -> serde_js
             AudioLastSetApplied::HostAndGuest => "HostAndGuest",
             AudioLastSetApplied::HostOnly => "HostOnly",
             AudioLastSetApplied::GuestOnly => "GuestOnly",
-            AudioLastSetApplied::OfflineOnly => "OfflineOnly",
+            AudioLastSetApplied::NotApplied => "NotApplied",
         },
     })
 }
@@ -481,7 +481,7 @@ fn unavailable_status(
             },
         },
         enforcement_posture: AudioEnforcementPosture::None,
-        last_set_applied: AudioLastSetApplied::OfflineOnly,
+        last_set_applied: AudioLastSetApplied::NotApplied,
     }
 }
 
@@ -711,7 +711,7 @@ mod tests {
         assert_eq!(status["channels"]["mic"]["grant"], "off");
         assert_eq!(status["channels"]["mic"]["arbitrationState"], "inactive");
         assert_eq!(status["enforcementPosture"], "None");
-        assert_eq!(status["lastSetApplied"], "OfflineOnly");
+        assert_eq!(status["lastSetApplied"], "NotApplied");
     }
 
     #[test]
@@ -751,7 +751,7 @@ mod tests {
         assert_eq!(projection["channels"]["speaker"]["grant"], "off");
         assert_eq!(projection["channels"]["mic"]["grant"], "off");
         assert_eq!(projection["enforcementPosture"], "None");
-        assert_eq!(projection["lastSetApplied"], "OfflineOnly");
+        assert_eq!(projection["lastSetApplied"], "NotApplied");
     }
 
     #[test]
