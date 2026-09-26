@@ -13,7 +13,7 @@
 
 use d2b_core::bundle_resolver::{BundleResolver, BundleVerifyPolicy};
 use d2b_core::error::{BundleError, Error as CoreError};
-use d2bd_runtime::typed_error::TypedError;
+use d2bd_runtime::typed_error::{TypedError, error_source};
 use std::fs;
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt;
@@ -84,6 +84,7 @@ fn map_core_error(err: CoreError) -> TypedError {
         other => TypedError::InternalIo {
             context: "load bundle resolver".to_owned(),
             detail: other.to_string(),
+            source: error_source(other),
         },
     }
 }

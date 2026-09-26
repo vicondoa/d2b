@@ -15,7 +15,7 @@ use nix::unistd;
 use serde::Serialize;
 use socket2::{SockAddr, Socket};
 
-use crate::typed_error::TypedError;
+use crate::typed_error::{TypedError, error_source};
 
 const REJECTION_DRAIN_DEADLINE: Duration = Duration::from_millis(10);
 
@@ -33,14 +33,17 @@ pub fn connect_seqpacket(path: &Path) -> Result<OwnedFd, TypedError> {
     .map_err(|err| TypedError::InternalIo {
         context: format!("create seqpacket socket {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     let address = UnixAddr::new(path).map_err(|err| TypedError::InternalIo {
         context: format!("encode seqpacket socket path {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     connect(fd.as_raw_fd(), &address).map_err(|err| TypedError::InternalBrokerUnavailable {
         path: path.to_path_buf(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     Ok(fd)
 }
@@ -73,16 +76,19 @@ pub fn connect_seqpacket_with_timeout(
     .map_err(|err| TypedError::InternalIo {
         context: "create seqpacket socket".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     let address = SockAddr::unix(path).map_err(|err| TypedError::InternalIo {
         context: "encode seqpacket socket path".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     let socket = Socket::from(fd);
     socket.connect_timeout(&address, timeout).map_err(|err| {
         TypedError::InternalBrokerUnavailable {
             path: path.to_path_buf(),
             detail: err.to_string(),
+            source: error_source(err),
         }
     })?;
     Ok(OwnedFd::from(socket))
@@ -111,6 +117,7 @@ where
     let bytes = serde_json::to_vec(value).map_err(|err| TypedError::InternalIo {
         context: "serialize JSON frame".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     write_frame_with_fds(socket, &bytes, fds)
 }
@@ -189,11 +196,13 @@ pub fn write_frame_with_fds(
     .map_err(|err| TypedError::InternalIo {
         context: "send seqpacket frame".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     if written != frame.len() {
         return Err(TypedError::InternalIo {
             context: "send seqpacket frame".to_owned(),
             detail: format!("short write: {written} of {}", frame.len()),
+            source: None,
         });
     }
     Ok(())
@@ -209,12 +218,14 @@ pub fn read_frame(socket: &impl AsRawFd) -> Result<Vec<u8>, TypedError> {
         TypedError::InternalIo {
             context: "recv seqpacket frame".to_owned(),
             detail: err.to_string(),
+            source: error_source(err),
         }
     })?;
     if read == 0 {
         return Err(TypedError::InternalIo {
             context: "recv seqpacket frame".to_owned(),
             detail: "peer closed the socket".to_owned(),
+            source: None,
         });
     }
     if read < 4 {
@@ -238,11 +249,13 @@ pub fn mark_fd_cloexec(fd: RawFd, context: &str) -> Result<(), TypedError> {
     let current = fcntl(fd, FcntlArg::F_GETFD).map_err(|err| TypedError::InternalIo {
         context: context.to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     let flags = FdFlag::from_bits_truncate(current) | FdFlag::FD_CLOEXEC;
     fcntl(fd, FcntlArg::F_SETFD(flags)).map_err(|err| TypedError::InternalIo {
         context: context.to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     Ok(())
 }
@@ -252,18 +265,21 @@ pub fn duplicate_fd_cloexec(fd: RawFd, context: &str) -> Result<OwnedFd, TypedEr
         TypedError::InternalIo {
             context: context.to_owned(),
             detail: "current pid is invalid".to_owned(),
+            source: None,
         }
     })?;
     let self_pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
         .map_err(|err| TypedError::InternalIo {
             context: context.to_owned(),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     let duplicated =
         rustix::process::pidfd_getfd(&self_pidfd, fd, rustix::process::PidfdGetfdFlags::empty())
             .map_err(|err| TypedError::InternalIo {
                 context: context.to_owned(),
                 detail: err.to_string(),
+                source: error_source(err),
             })?;
     if let Err(error) = mark_fd_cloexec(duplicated.as_raw_fd(), context) {
         drop(duplicated);
@@ -289,6 +305,7 @@ pub fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>
     .map_err(|err| TypedError::InternalIo {
         context: "recv seqpacket frame with fds".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     let read = message.bytes;
     let received_fds: Vec<RawFd> = message
@@ -296,6 +313,7 @@ pub fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>
         .map_err(|err| TypedError::InternalIo {
             context: "recv seqpacket frame with fds".to_owned(),
             detail: err.to_string(),
+            source: error_source(err),
         })?
         .filter_map(|cmsg| match cmsg {
             ControlMessageOwned::ScmRights(fds) => Some(fds),
@@ -323,6 +341,7 @@ pub fn read_frame_with_fds(socket: &impl AsRawFd) -> Result<(Vec<u8>, Vec<RawFd>
         return Err(TypedError::InternalIo {
             context: "recv seqpacket frame with fds".to_owned(),
             detail: "peer closed the socket".to_owned(),
+            source: None,
         });
     }
     if read < 4 {
@@ -357,6 +376,7 @@ pub fn io_wrap(context: &'static str) -> impl FnOnce(nix::errno::Errno) -> Typed
     move |err| TypedError::InternalIo {
         context: context.to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     }
 }
 

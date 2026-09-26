@@ -6,7 +6,7 @@ use crate::daemon_config::{
     DaemonConfig, ServeOptions, TestClientOptions, effective_daemon_state_dir,
 };
 use crate::supervisor::state::{FilesystemSnapshotStore, SnapshotStore, SystemProcReader};
-use crate::typed_error::TypedError;
+use crate::typed_error::{TypedError, error_source};
 use crate::unix_transport::{connect_seqpacket, round_trip};
 
 pub fn run_test_client(options: TestClientOptions) -> Result<u8, TypedError> {
@@ -55,14 +55,17 @@ pub fn maybe_write_state_restore_report(options: &ServeOptions) -> Result<(), Ty
     let snapshots = SnapshotStore::list(&store).map_err(|err| TypedError::InternalIo {
         context: "enumerate daemon state snapshots".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     let report = crate::supervisor::state::reconcile(&snapshots, &SystemProcReader);
     let rendered = serde_json::to_vec_pretty(&report).map_err(|err| TypedError::InternalIo {
         context: "serialize daemon state report".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     fs::write(report_path, rendered).map_err(|err| TypedError::InternalIo {
         context: "write daemon state report".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })
 }

@@ -39,7 +39,7 @@ use d2b_provider_audio_pipewire::{
 use serde_json::Value;
 
 use crate::ServerState;
-use crate::TypedError;
+use crate::{TypedError, error_source};
 use crate::audio_host_controller::{
     HostAudioController, PipeWireHostController, QemuAudioController,
 };
@@ -498,11 +498,13 @@ fn dispatch_audio_set_volume(
         .ok_or_else(|| TypedError::InternalIo {
             context: format!("audio set-volume {vm_name}"),
             detail: "VM not present in public manifest".to_owned(),
+            source: None,
         })?;
 
     let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::InternalIo {
         context: format!("audio set-volume {vm_name}"),
         detail: "audio not enabled for this VM".to_owned(),
+        source: None,
     })?;
 
     let state_dir = std::path::PathBuf::from(&vm.state_dir);
@@ -513,10 +515,12 @@ fn dispatch_audio_set_volume(
         acquire_audio_state_lock(&lock_path, true).map_err(|e| TypedError::InternalIo {
             context: "acquire audio state lock".to_owned(),
             detail: e.to_string(),
+            source: error_source(e),
         })?;
     let current = read_audio_state_unlocked(&state_path).map_err(|e| TypedError::InternalIo {
         context: "read audio state".to_owned(),
         detail: e.to_string(),
+        source: error_source(e),
     })?;
 
     let old_level = match channel {
@@ -537,6 +541,7 @@ fn dispatch_audio_set_volume(
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
+                source: error_source(e),
             }
         })?;
     }
@@ -547,6 +552,7 @@ fn dispatch_audio_set_volume(
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
                 detail: "host level enforcement failed; state not updated".to_owned(),
+                source: None,
             });
         }
         result
@@ -559,6 +565,7 @@ fn dispatch_audio_set_volume(
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
+                source: error_source(e),
             }
         })?;
     }
@@ -605,11 +612,13 @@ fn dispatch_audio_mute(
         .ok_or_else(|| TypedError::InternalIo {
             context: format!("audio mute {vm_name}"),
             detail: "VM not present in public manifest".to_owned(),
+            source: None,
         })?;
 
     let cap = audio_capability_for_vm(vm).ok_or_else(|| TypedError::InternalIo {
         context: format!("audio mute {vm_name}"),
         detail: "audio not enabled for this VM".to_owned(),
+        source: None,
     })?;
 
     let state_dir = std::path::PathBuf::from(&vm.state_dir);
@@ -620,10 +629,12 @@ fn dispatch_audio_mute(
         acquire_audio_state_lock(&lock_path, true).map_err(|e| TypedError::InternalIo {
             context: "acquire audio state lock".to_owned(),
             detail: e.to_string(),
+            source: error_source(e),
         })?;
     let current = read_audio_state_unlocked(&state_path).map_err(|e| TypedError::InternalIo {
         context: "read audio state".to_owned(),
         detail: e.to_string(),
+        source: error_source(e),
     })?;
 
     let grant = if mute {
@@ -644,6 +655,7 @@ fn dispatch_audio_mute(
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
+                source: error_source(e),
             }
         })?;
     }
@@ -654,6 +666,7 @@ fn dispatch_audio_mute(
             return Err(TypedError::InternalIo {
                 context: "audio host enforcement".to_owned(),
                 detail: "host grant enforcement failed; state not updated".to_owned(),
+                source: None,
             });
         }
         result
@@ -666,6 +679,7 @@ fn dispatch_audio_mute(
             TypedError::InternalIo {
                 context: "write audio state".to_owned(),
                 detail: e.to_string(),
+                source: error_source(e),
             }
         })?;
     }

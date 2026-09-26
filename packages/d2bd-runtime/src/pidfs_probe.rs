@@ -133,6 +133,7 @@ pub(crate) fn enforce_probe_outcome_with(
                 Err(TypedError::InternalIo {
                     context: "pidfs-runtime-probe".to_owned(),
                     detail: "pidfd_open unsupported (kernel < 6.9)".to_owned(),
+                    source: None,
                 })
             }
         }
@@ -151,6 +152,7 @@ pub(crate) fn enforce_probe_outcome_with(
                 Err(TypedError::InternalIo {
                     context: "pidfs-runtime-probe".to_owned(),
                     detail: format!("pidfs absent (st_dev={st_dev})"),
+                    source: None,
                 })
             }
         }
