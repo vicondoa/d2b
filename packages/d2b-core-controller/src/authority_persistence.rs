@@ -337,7 +337,9 @@ async fn validated_recovery_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authority::{AuthorityOwnerProof, AuthorityRequest, claim_digest};
+    use crate::authority::{
+        AuthorityOwnerProof, AuthorityRequest, claim_digest, test_nonce_for_operation,
+    };
     use d2b_contracts_resource::v3::{ResourceGeneration, ResourceUid};
 
     const OP_ID: &str = "recovered-helper-operation";
@@ -371,9 +373,12 @@ mod tests {
             claim_digest,
             store_binding_digest: store_binding_digest.clone(),
         };
-        let prepared =
-            PreparedAuthorityOperation::new(operation_id.to_owned(), store_binding_digest, 7)
-                .unwrap();
+        let prepared = PreparedAuthorityOperation::new(
+            operation_id.to_owned(),
+            store_binding_digest,
+            test_nonce_for_operation(operation_id),
+        )
+        .unwrap();
         (operation, prepared, request)
     }
 
@@ -400,7 +405,7 @@ mod tests {
         let prepared = PreparedAuthorityOperation::new(
             OP_ID.to_owned(),
             STORE_BINDING_DIGEST.to_owned(),
-            7,
+            test_nonce_for_operation(OP_ID),
         )
         .expect("prepared operation");
         AuthorityRecoveryData::new(

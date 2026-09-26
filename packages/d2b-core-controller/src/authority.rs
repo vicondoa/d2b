@@ -37,7 +37,7 @@ const OPTIONAL_PROVIDER_REF: &str = "Provider/observability-otel";
 static NEXT_AUTHORITY_INDEX_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
-fn test_nonce_for_operation(operation_id: &str) -> u64 {
+pub(crate) fn test_nonce_for_operation(operation_id: &str) -> u64 {
     loop {
         let nonce = RandomState::new().hash_one(operation_id);
         if nonce != 0 {
