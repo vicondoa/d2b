@@ -509,7 +509,10 @@ impl<P: FocusedWindowProvider> HostClipboardAttributor<P> {
                 quality: AttributionQuality::FocusedWindowGuess,
             },
             Err(e) => {
-                log::debug!("d2b-clipd: niri focused-window probe failed; falling back to stale cache for attribution: {e:?}");
+                tracing::debug!(
+                    error = ?e,
+                    "d2b-clipd: niri focused-window probe failed; falling back to stale cache for attribution"
+                );
                 self.cache.mark_stale();
                 HostSelectionAttribution {
                     window: self.cache.focused_window(),
