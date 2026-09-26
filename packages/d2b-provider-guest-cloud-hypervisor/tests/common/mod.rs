@@ -3,13 +3,12 @@
 //! Harness shared by the Cloud Hypervisor controller test binaries.
 
 use d2b_contracts_provider::v3::ArtifactDigest;
-use d2b_contracts_provider::v3::credential::OpaqueAzureRef;
 use d2b_contracts_resource::v3::{
     ArtifactId, ResourceGeneration, ResourceRef, SchemaFingerprint, SchemaVersion,
 };
 use d2b_provider_guest_cloud_hypervisor::{
     BootstrapHandoff, CloudHypervisorConfig, DescriptorSignature, GuestSeedContract,
-    GuestSetupDescriptor, GuestSetupDescriptorVerifier, SignatureAlgorithm,
+    GuestSetupDescriptor, GuestSetupDescriptorVerifier, MachineType, SignatureAlgorithm,
     VerifiedGuestSetupDescriptor,
 };
 
@@ -67,7 +66,7 @@ pub fn config() -> CloudHypervisorConfig {
         controller_execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
         default_vcpus: 2,
         default_memory_mb: 512,
-        default_machine_type: OpaqueAzureRef::parse("q35").unwrap(),
+        default_machine_type: MachineType::Q35,
         watchdog: true,
         adoption_window_ms: 30_000,
         health_check_interval_ms: 30_000,
