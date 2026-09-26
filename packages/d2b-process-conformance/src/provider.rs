@@ -2,7 +2,6 @@
 
 use std::collections::BTreeSet;
 use std::os::fd::OwnedFd;
-use std::{future::Future, future::ready};
 
 use d2b_contracts_resource::v3::execution_policy::{BoundedToken, ExecutionDomain};
 
@@ -88,53 +87,52 @@ pub enum AdoptionOutcome {
 }
 
 /// The provider-neutral Process Provider controller surface.
+#[allow(async_fn_in_trait)]
 pub trait ProcessProvider: Send + Sync {
     /// Borrow this Provider's declared conformance profile.
     fn profile(&self) -> &ProcessProviderProfile;
 
     /// Validate the ticket and launch through the injected effect port.
-    fn launch(
+    async fn launch(
         &self,
         ticket: &LaunchTicket,
-    ) -> impl Future<Output = Result<ProcessStatusReport, ProcessConformanceError>> + Send;
+    ) -> Result<ProcessStatusReport, ProcessConformanceError>;
 
     /// Launch with owned descriptors for a Provider-specific child bootstrap.
     ///
     /// Providers that do not own a descriptor-bearing launch path reject a
     /// non-empty vector by default, preserving the ordinary launch contract.
-    fn launch_with_inherited_fds(
+    async fn launch_with_inherited_fds(
         &self,
         ticket: &LaunchTicket,
         inherited_fds: Vec<OwnedFd>,
-    ) -> impl Future<Output = Result<ProcessStatusReport, ProcessConformanceError>> + Send {
-        async move {
-            if inherited_fds.is_empty() {
-                self.launch(ticket).await
-            } else {
-                drop(inherited_fds);
-                Err(ProcessConformanceError::InvalidTicket)
-            }
+    ) -> Result<ProcessStatusReport, ProcessConformanceError> {
+        if inherited_fds.is_empty() {
+            self.launch(ticket).await
+        } else {
+            drop(inherited_fds);
+            Err(ProcessConformanceError::InvalidTicket)
         }
     }
 
     /// Re-establish ownership of an already running process after a
     /// controller restart, verifying identity before any pidfd is opened.
-    fn adopt(
+    async fn adopt(
         &self,
         ticket: &LaunchTicket,
-    ) -> impl Future<Output = Result<AdoptionOutcome, ProcessConformanceError>> + Send;
+    ) -> Result<AdoptionOutcome, ProcessConformanceError>;
 
     /// Stop exactly one verified process identity.
     ///
     /// The default is deliberately unavailable: a Provider must opt into the
     /// provider-specific stop proof rather than silently pretending that a
     /// generic signal completed teardown.
-    fn stop(
+    async fn stop(
         &self,
         _identity: &crate::identity::ProcessIdentityDigest,
         _class: StopClass,
-    ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send {
-        ready(Err(ProcessConformanceError::StopUnavailable))
+    ) -> Result<(), ProcessConformanceError> {
+        Err(ProcessConformanceError::StopUnavailable)
     }
 
     /// Stop and reap one uniquely identified stale process before replacement.
@@ -142,10 +140,10 @@ pub trait ProcessProvider: Send + Sync {
     /// Providers must keep this path narrow: the candidate's exact identity
     /// evidence is supplied by the effect adapter, and ambiguity is never
     /// converted into a stop request.
-    fn stop_stale(
+    async fn stop_stale(
         &self,
         _candidate: &crate::port::AdoptionCandidate,
-    ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send {
-        ready(Err(ProcessConformanceError::StopUnavailable))
+    ) -> Result<(), ProcessConformanceError> {
+        Err(ProcessConformanceError::StopUnavailable)
     }
 }

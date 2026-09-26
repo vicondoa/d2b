@@ -6167,7 +6167,9 @@ fn run_effect<T, F, Fut>(operation: F) -> Result<T, WorkerEffectError>
 where
     T: Send + 'static,
     F: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = Result<T, WorkerEffectError>> + Send + 'static,
+    // The future is driven on the calling thread by `block_on` below, never
+    // spawned, so it does not need to be Send.
+    Fut: Future<Output = Result<T, WorkerEffectError>> + 'static,
 {
     let permit = EFFECT_ADMISSION
         .try_acquire()

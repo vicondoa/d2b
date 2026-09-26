@@ -8,7 +8,6 @@
 //! effect owner, and the broker stays the sole privileged executor and
 //! independent audit owner of the mutation.
 
-use std::future::Future;
 use std::os::fd::OwnedFd;
 
 use crate::error::ProcessConformanceError;
@@ -105,40 +104,39 @@ pub enum StopClass {
 /// doubles. Every method acts on exactly one process identity; there is no
 /// broad sweep, no reuse, and no operation that names anything but the
 /// ticket and the derived opaque identity.
+#[allow(async_fn_in_trait)]
 pub trait ProcessLaunchEffectPort: Send + Sync {
     /// Launch the ticket's process and return its verified identity and
     /// mandatory pidfd evidence.
-    fn launch(
+    async fn launch(
         &self,
         ticket: &LaunchTicket,
-    ) -> impl Future<Output = Result<LaunchedProcess, ProcessConformanceError>> + Send;
+    ) -> Result<LaunchedProcess, ProcessConformanceError>;
 
     /// Launch with owned descriptors that must be inherited by the child.
     ///
     /// Descriptor-bearing launches are opt-in at the concrete effect owner.
     /// Existing test doubles and descriptor-free owners reject a non-empty
     /// vector without changing their ordinary launch behavior.
-    fn launch_with_inherited_fds(
+    async fn launch_with_inherited_fds(
         &self,
         ticket: &LaunchTicket,
         inherited_fds: Vec<OwnedFd>,
-    ) -> impl Future<Output = Result<LaunchedProcess, ProcessConformanceError>> + Send {
-        async move {
-            if inherited_fds.is_empty() {
-                self.launch(ticket).await
-            } else {
-                drop(inherited_fds);
-                Err(ProcessConformanceError::InvalidTicket)
-            }
+    ) -> Result<LaunchedProcess, ProcessConformanceError> {
+        if inherited_fds.is_empty() {
+            self.launch(ticket).await
+        } else {
+            drop(inherited_fds);
+            Err(ProcessConformanceError::InvalidTicket)
         }
     }
 
     /// Observe whether a process for this ticket is already running,
     /// without opening a pidfd for it.
-    fn observe(
+    async fn observe(
         &self,
         ticket: &LaunchTicket,
-    ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send;
+    ) -> Result<Option<AdoptionCandidate>, ProcessConformanceError>;
 
     /// Probe whether the exact process is present without retaining any
     /// adoption handle or staged observation.
@@ -146,25 +144,24 @@ pub trait ProcessLaunchEffectPort: Send + Sync {
     /// The default delegates to [`Self::observe`] for test ports and simple
     /// effect owners. Production adapters override it when adoption
     /// observation is stateful.
-    fn probe(
+    async fn probe(
         &self,
         ticket: &LaunchTicket,
-    ) -> impl Future<Output = Result<Option<AdoptionCandidate>, ProcessConformanceError>> + Send
-    {
-        self.observe(ticket)
+    ) -> Result<Option<AdoptionCandidate>, ProcessConformanceError> {
+        self.observe(ticket).await
     }
 
     /// Open a verified pidfd for a candidate whose identity the caller has
     /// already fully verified.
-    fn open_pidfd(
+    async fn open_pidfd(
         &self,
         candidate: &AdoptionCandidate,
-    ) -> impl Future<Output = Result<PidfdEvidence, ProcessConformanceError>> + Send;
+    ) -> Result<PidfdEvidence, ProcessConformanceError>;
 
     /// Stop exactly the named identity.
-    fn stop(
+    async fn stop(
         &self,
         identity: &ProcessIdentityDigest,
         class: StopClass,
-    ) -> impl Future<Output = Result<(), ProcessConformanceError>> + Send;
+    ) -> Result<(), ProcessConformanceError>;
 }
