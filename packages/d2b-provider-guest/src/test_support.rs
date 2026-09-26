@@ -23,6 +23,11 @@
 //! The doubles' ordered call recorders are the toolkit's `SharedLog`
 //! (`d2b_provider_toolkit::testing`), the canonical recorder shape every
 //! family crate's test-support module shares.
+//!
+//! Every other recorded field is behind a lock: the async lock
+//! (`tokio::sync::Mutex`, awaited) where only async methods touch it, and
+//! the blocking lock (`std::sync::Mutex`) with its recorded per-site
+//! exception where the facet trait's synchronous accessors read it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -64,11 +69,11 @@ pub struct ScriptedEffects {
     calls: SharedLog,
     /// Optional shared order log (the recording manager's), so tests can
     /// compare the provider stage against the child mutations.
-    shared: Option<Arc<parking_lot::Mutex<Vec<String>>>>,
-    observations: parking_lot::Mutex<Vec<EffectObservation>>,
-    phase: parking_lot::Mutex<GuestEffectPhase>,
-    projection: parking_lot::Mutex<Option<serde_json::Value>>,
-    finalize: parking_lot::Mutex<GuestFinalizeStage>,
+    shared: Option<SharedLog>,
+    observations: tokio::sync::Mutex<Vec<EffectObservation>>,
+    phase: tokio::sync::Mutex<GuestEffectPhase>,
+    projection: tokio::sync::Mutex<Option<serde_json::Value>>,
+    finalize: tokio::sync::Mutex<GuestFinalizeStage>,
 }
 
 impl ScriptedEffects {
@@ -78,17 +83,17 @@ impl ScriptedEffects {
         Arc::new(Self {
             calls: SharedLog::new(),
             shared: None,
-            observations: parking_lot::Mutex::new(Vec::new()),
-            phase: parking_lot::Mutex::new(GuestEffectPhase::Ready),
-            projection: parking_lot::Mutex::new(None),
-            finalize: parking_lot::Mutex::new(GuestFinalizeStage::Complete),
+            observations: tokio::sync::Mutex::new(Vec::new()),
+            phase: tokio::sync::Mutex::new(GuestEffectPhase::Ready),
+            projection: tokio::sync::Mutex::new(None),
+            finalize: tokio::sync::Mutex::new(GuestFinalizeStage::Complete),
         })
     }
 
     /// Construct a double that appends every recorded call to `log` as well
     /// as its own call log, so the provider stage can be compared against
     /// the child mutations of the recording manager that owns the log.
-    pub fn with_shared_log(log: Arc<parking_lot::Mutex<Vec<String>>>) -> Arc<Self> {
+    pub fn with_shared_log(log: SharedLog) -> Arc<Self> {
         let mut effects = Arc::into_inner(Self::new()).expect("fresh effects");
         effects.shared = Some(log);
         Arc::new(effects)
@@ -96,24 +101,24 @@ impl ScriptedEffects {
 
     fn record(&self, entry: String) {
         if let Some(shared) = &self.shared {
-            shared.lock().push(entry.clone());
+            shared.record(entry.clone());
         }
         self.calls.record(entry);
     }
 
     /// Script the phase the next `reconcile` reports.
-    pub fn set_phase(&self, phase: GuestEffectPhase) {
-        *self.phase.lock() = phase;
+    pub async fn set_phase(&self, phase: GuestEffectPhase) {
+        *self.phase.lock().await = phase;
     }
 
     /// Script the `status.resource` projection the next `reconcile` reports.
-    pub fn set_projection(&self, projection: Option<serde_json::Value>) {
-        *self.projection.lock() = projection;
+    pub async fn set_projection(&self, projection: Option<serde_json::Value>) {
+        *self.projection.lock().await = projection;
     }
 
     /// Script the finalize stage the next `finalize` reports.
-    pub fn set_finalize(&self, stage: GuestFinalizeStage) {
-        *self.finalize.lock() = stage;
+    pub async fn set_finalize(&self, stage: GuestFinalizeStage) {
+        *self.finalize.lock().await = stage;
     }
 
     /// The observed call labels in arrival order.
@@ -122,8 +127,8 @@ impl ScriptedEffects {
     }
 
     /// The recorded `reconcile` observations in arrival order.
-    pub fn observations(&self) -> Vec<EffectObservation> {
-        self.observations.lock().clone()
+    pub async fn observations(&self) -> Vec<EffectObservation> {
+        self.observations.lock().await.clone()
     }
 }
 
@@ -136,7 +141,7 @@ impl GuestDriverEffects for ScriptedEffects {
     ) -> Result<GuestEffectOutcome, GuestEffectError> {
         self.record(format!("reconcile:{}", kind.effect_id()));
         let children = request.children.owned().await?;
-        self.observations.lock().push(EffectObservation { // async-gate-allow: test-support recorder lock
+        self.observations.lock().await.push(EffectObservation {
             kind,
             provider_spec: request.provider_spec.clone(),
             status: request.status.clone(),
@@ -152,8 +157,8 @@ impl GuestDriverEffects for ScriptedEffects {
                 .collect(),
         });
         Ok(GuestEffectOutcome {
-            phase: *self.phase.lock(), // async-gate-allow: test-support recorder lock
-            resource_projection: self.projection.lock().clone(), // async-gate-allow: test-support recorder lock
+            phase: *self.phase.lock().await,
+            resource_projection: self.projection.lock().await.clone(),
         })
     }
 
@@ -163,7 +168,7 @@ impl GuestDriverEffects for ScriptedEffects {
         _request: &GuestEffectRequest<'_>,
     ) -> Result<GuestFinalizeStage, GuestEffectError> {
         self.record(format!("finalize:{}", kind.effect_id()));
-        Ok(*self.finalize.lock()) // async-gate-allow: test-support recorder lock
+        Ok(*self.finalize.lock().await)
     }
 }
 
@@ -174,11 +179,11 @@ impl GuestDriverEffects for ScriptedEffects {
 pub struct ScriptedFacets {
     zone: ZoneId,
     controller_generation: ControllerGeneration,
-    rows: parking_lot::Mutex<HashMap<ResourceKey, ResourceView>>,
-    committed: parking_lot::Mutex<BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>>,
-    session_generation: parking_lot::Mutex<Option<ReconnectGeneration>>,
-    cloud_hypervisor_outcome: parking_lot::Mutex<GuestCloudHypervisorOutcome>,
-    fail_reads: parking_lot::Mutex<bool>,
+    rows: tokio::sync::Mutex<HashMap<ResourceKey, ResourceView>>,
+    committed: std::sync::Mutex<BTreeMap<ResourceRef, (ResourceUid, ResourceGeneration)>>,
+    session_generation: std::sync::Mutex<Option<ReconnectGeneration>>,
+    cloud_hypervisor_outcome: tokio::sync::Mutex<GuestCloudHypervisorOutcome>,
+    fail_reads: std::sync::Mutex<bool>,
     calls: SharedLog,
 }
 
@@ -190,11 +195,11 @@ impl ScriptedFacets {
         Arc::new(Self {
             zone: ZoneId::parse("work").expect("zone"),
             controller_generation: ControllerGeneration::new(3).expect("generation"),
-            rows: parking_lot::Mutex::new(HashMap::new()),
-            committed: parking_lot::Mutex::new(BTreeMap::new()),
-            session_generation: parking_lot::Mutex::new(None),
-            cloud_hypervisor_outcome: parking_lot::Mutex::new(GuestCloudHypervisorOutcome::Ready),
-            fail_reads: parking_lot::Mutex::new(false),
+            rows: tokio::sync::Mutex::new(HashMap::new()),
+            committed: std::sync::Mutex::new(BTreeMap::new()),
+            session_generation: std::sync::Mutex::new(None),
+            cloud_hypervisor_outcome: tokio::sync::Mutex::new(GuestCloudHypervisorOutcome::Ready),
+            fail_reads: std::sync::Mutex::new(false),
             calls: SharedLog::new(),
         })
     }
@@ -210,8 +215,8 @@ impl ScriptedFacets {
     }
 
     /// Seed one manager row the effects read.
-    pub fn add_row(&self, row: ResourceView) {
-        self.rows.lock().insert(row.key.clone(), row);
+    pub async fn add_row(&self, row: ResourceView) {
+        self.rows.lock().await.insert(row.key.clone(), row);
     }
 
     /// Seed one committed Provider identity (KTD7).
@@ -221,25 +226,35 @@ impl ScriptedFacets {
         uid: ResourceUid,
         generation: ResourceGeneration,
     ) {
-        self.committed
-            .lock()
-            .insert(provider_ref, (uid, generation));
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        {
+            self.committed
+                .lock()
+                .unwrap()
+                .insert(provider_ref, (uid, generation));
+        }
     }
 
     /// Enroll (or clear) the live controller-session generation.
     pub fn set_session_generation(&self, generation: Option<ReconnectGeneration>) {
-        *self.session_generation.lock() = generation;
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        {
+            *self.session_generation.lock().unwrap() = generation;
+        }
     }
 
     /// Script the Cloud Hypervisor reconcile outcome.
-    pub fn set_cloud_hypervisor_outcome(&self, outcome: GuestCloudHypervisorOutcome) {
-        *self.cloud_hypervisor_outcome.lock() = outcome;
+    pub async fn set_cloud_hypervisor_outcome(&self, outcome: GuestCloudHypervisorOutcome) {
+        *self.cloud_hypervisor_outcome.lock().await = outcome;
     }
 
     /// Script the manager view as unanswerable: every read refuses, the
     /// same fail-closed surface the effects treat as `Unavailable`.
     pub fn set_fail_reads(&self, fail: bool) {
-        *self.fail_reads.lock() = fail;
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        {
+            *self.fail_reads.lock().unwrap() = fail;
+        }
     }
 
     /// The observed read labels in arrival order.
@@ -252,10 +267,11 @@ impl ScriptedFacets {
 impl GuestManagerView for ScriptedFacets {
     async fn row_view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ()> {
         self.calls.record(format!("row:{key}"));
-        if *self.fail_reads.lock() { // async-gate-allow: test-support recorder lock
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        if *self.fail_reads.lock().unwrap() { // async-gate-allow: test-support recorder lock
             return Err(());
         }
-        Ok(self.rows.lock().get(key).cloned()) // async-gate-allow: test-support recorder lock
+        Ok(self.rows.lock().await.get(key).cloned())
     }
 
     fn committed_provider_identity(
@@ -264,18 +280,22 @@ impl GuestManagerView for ScriptedFacets {
     ) -> Result<Option<(ResourceUid, ResourceGeneration)>, ()> {
         self.calls
             .record(format!("committed:{}", provider_ref.to_canonical_string()));
-        if *self.fail_reads.lock() {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        if *self.fail_reads.lock().unwrap() {
             return Err(());
         }
-        Ok(self.committed.lock().get(provider_ref).cloned())
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        Ok(self.committed.lock().unwrap().get(provider_ref).cloned())
     }
 
     fn controller_session_generation(&self) -> Result<Option<ReconnectGeneration>, ()> {
         self.calls.record("session-generation".to_owned());
-        if *self.fail_reads.lock() {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        if *self.fail_reads.lock().unwrap() {
             return Err(());
         }
-        Ok(*self.session_generation.lock())
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        Ok(*self.session_generation.lock().unwrap())
     }
 }
 
@@ -294,7 +314,7 @@ impl CloudHypervisorGuestRuntime for ScriptedFacets {
     ) -> Result<GuestCloudHypervisorOutcome, String> {
         self.calls
             .record(format!("reconcile-ch:{}", guest_ref.to_canonical_string()));
-        Ok(*self.cloud_hypervisor_outcome.lock()) // async-gate-allow: test-support recorder lock
+        Ok(*self.cloud_hypervisor_outcome.lock().await)
     }
 }
 

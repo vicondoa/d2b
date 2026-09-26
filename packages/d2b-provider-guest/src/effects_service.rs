@@ -1438,10 +1438,10 @@ impl GuestEffectsService {
                 );
                 GuestEffectError::Unavailable
             })?;
-        #[allow(clippy::disallowed_methods, reason = "synchronous path")]
         let published = request
             .status_sink
-            .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            .lock()
+            .await
             .clone()
             .or_else(|| request.status.clone());
         let phase = match published.as_ref().and_then(|status| status.get("phase")).and_then(Value::as_str) {
@@ -2111,13 +2111,15 @@ mod tests {
     #[tokio::test]
     async fn guest_phase_answers_the_live_phase_of_a_held_row() {
         let facets = ScriptedFacets::new();
-        facets.add_row(row_fixture(
-            "work",
-            "Guest",
-            "worker",
-            json!({ "providerRef": "Provider/runtime-qemu-media" }),
-            ResourceStatus::Ready,
-        ));
+        facets
+            .add_row(row_fixture(
+                "work",
+                "Guest",
+                "worker",
+                json!({ "providerRef": "Provider/runtime-qemu-media" }),
+                ResourceStatus::Ready,
+            ))
+            .await;
         let service = super::GuestEffectsService::new(facets.facet_set());
         let payload = guest_phase_payload();
         let mut resources = d2b_resource_runtime::context::ServiceResourceContext::fail_closed();
@@ -2170,13 +2172,15 @@ mod tests {
     #[tokio::test]
     async fn cloud_hypervisor_reconcile_drives_the_controller_session_facets() {
         let facets = ScriptedFacets::new();
-        facets.add_row(row_fixture(
-            "work",
-            "Provider",
-            "runtime-cloud-hypervisor",
-            json!({ "config": {} }),
-            ResourceStatus::Ready,
-        ));
+        facets
+            .add_row(row_fixture(
+                "work",
+                "Provider",
+                "runtime-cloud-hypervisor",
+                json!({ "config": {} }),
+                ResourceStatus::Ready,
+            ))
+            .await;
         facets.add_committed_provider(
             ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider"),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").expect("uid"),
@@ -2185,14 +2189,14 @@ mod tests {
         facets.set_session_generation(Some(
             d2b_contracts_resource::v3::identity::ReconnectGeneration::new(2).expect("generation"),
         ));
-        facets.set_cloud_hypervisor_outcome(
-            crate::facets::GuestCloudHypervisorOutcome::Ready,
-        );
+        facets
+            .set_cloud_hypervisor_outcome(crate::facets::GuestCloudHypervisorOutcome::Ready)
+            .await;
         let service = super::GuestEffectsService::new(facets.facet_set());
         let request = cloud_hypervisor_request();
         // The controller session's status write is captured into the sink
         // before the pass, exactly as the driver's effect call observes it.
-        *request.status_sink.lock() = Some(json!({ "phase": "Ready" })); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+        *request.status_sink.lock().await = Some(json!({ "phase": "Ready" }));
 
         let outcome = service
             .reconcile(crate::driver::GuestKind::CloudHypervisor, &request)
@@ -2224,13 +2228,15 @@ mod tests {
     #[tokio::test]
     async fn cloud_hypervisor_finalize_completes_through_the_controller_session() {
         let facets = ScriptedFacets::new();
-        facets.add_row(row_fixture(
-            "work",
-            "Provider",
-            "runtime-cloud-hypervisor",
-            json!({ "config": {} }),
-            ResourceStatus::Ready,
-        ));
+        facets
+            .add_row(row_fixture(
+                "work",
+                "Provider",
+                "runtime-cloud-hypervisor",
+                json!({ "config": {} }),
+                ResourceStatus::Ready,
+            ))
+            .await;
         facets.add_committed_provider(
             ResourceRef::parse("Provider/runtime-cloud-hypervisor").expect("provider"),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").expect("uid"),

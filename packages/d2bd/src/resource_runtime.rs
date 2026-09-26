@@ -2478,10 +2478,7 @@ impl AuthenticatedResourceSession for CloudHypervisorResourceSession {
                 // Endpoint drivers' `Ready` is the only publication, and
                 // writing one here as well would be a dual-write.
                 if let Some(sink) = self.status_sink.as_ref() {
-                    #[allow(clippy::disallowed_methods, reason = "synchronous path")]
-                    {
-                        *sink.lock() = Some(desired_status); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                    }
+                    *sink.lock().await = Some(desired_status);
                 } else {
                     tracing::debug!(
                         zone = %self.zone.as_str(),

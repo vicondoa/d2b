@@ -513,107 +513,37 @@
     },
     {
       "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1619,
+      "line": 1634,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1626,
+      "line": 1647,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1638,
+      "line": 1649,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1639,
+      "line": 1685,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1674,
+      "line": 1719,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1701,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1707,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1714,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1720,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1727,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1754,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/driver.rs",
-      "line": 1762,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/effects_service.rs",
-      "line": 1444,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/effects_service.rs",
-      "line": 2195,
+      "line": 1734,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-provider-guest/src/test_support.rs",
-      "line": 139,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/test_support.rs",
-      "line": 155,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/test_support.rs",
-      "line": 156,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/test_support.rs",
-      "line": 166,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/test_support.rs",
-      "line": 255,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/test_support.rs",
-      "line": 258,
-      "reason": "test-support recorder lock"
-    },
-    {
-      "file": "packages/d2b-provider-guest/src/test_support.rs",
-      "line": 297,
+      "line": 271,
       "reason": "test-support recorder lock"
     },
     {
@@ -1098,17 +1028,12 @@
     },
     {
       "file": "packages/d2bd/src/resource_runtime.rs",
-      "line": 2483,
+      "line": 7500,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/resource_runtime.rs",
-      "line": 7503,
-      "reason": "synchronous lock acquisition, no await while the guard is held"
-    },
-    {
-      "file": "packages/d2bd/src/resource_runtime.rs",
-      "line": 8654,
+      "line": 8651,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
