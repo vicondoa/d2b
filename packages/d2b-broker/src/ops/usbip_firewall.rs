@@ -11,7 +11,8 @@
 //! explicit fail-closed handler used by the broker dispatch table when
 //! one of those live-routing variants is invoked before support.
 
-use d2b_host::nftables::{BusId, ChainHook, NftBatch, NftError, Sha256};
+use d2b_host::media::BusId;
+use d2b_host::nftables::{ChainHook, NftBatch, NftError, Sha256};
 use serde::{Deserialize, Serialize};
 
 /// Audit-event payload for `UsbipBindFirewallRule`. Combined with the

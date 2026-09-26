@@ -929,7 +929,7 @@ mod tests {
 
     fn usbip_script() -> (String, String) {
         let mut batch = build_inet_d2b_chains();
-        let bus_id = d2b_host::nftables::BusId::new("1-1.2").expect("busid");
+        let bus_id = d2b_host::media::BusId::new("1-1.2").expect("busid");
         batch.add_usbip_carveout(&bus_id).expect("carveout");
         let script = batch.render_nft_script();
         let hash = batch.canonical_hash().to_string();
