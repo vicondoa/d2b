@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::daemon_config::{DEFAULT_SERVER_VERSION, DaemonConfig};
-use crate::typed_error::TypedError;
+use crate::typed_error::{TypedError, error_source};
 use crate::unix_transport::io_wrap;
 use nix::fcntl::{FcntlArg, fcntl};
 #[cfg(test)]
@@ -57,11 +57,13 @@ pub fn resolve_runtime_identity(
         .map_err(io_wrap("lookup daemon user"))?
         .ok_or_else(|| TypedError::InternalConfig {
             detail: format!("daemon user {} does not exist", config.daemon_user),
+            source: None,
         })?;
     let daemon_group = Group::from_name(&config.daemon_group)
         .map_err(io_wrap("lookup daemon group"))?
         .ok_or_else(|| TypedError::InternalConfig {
             detail: format!("daemon group {} does not exist", config.daemon_group),
+            source: None,
         })?;
     let public_group = Group::from_name(&config.public_socket_group)
         .map_err(io_wrap("lookup public socket group"))?
@@ -70,6 +72,7 @@ pub fn resolve_runtime_identity(
                 "public socket group {} does not exist",
                 config.public_socket_group
             ),
+            source: None,
         })?;
     let unsafe_local_helper_socket_gid = match (
         config.unsafe_local_helper_socket_path.as_ref(),
@@ -80,6 +83,7 @@ pub fn resolve_runtime_identity(
                 .map_err(io_wrap("lookup unsafe-local helper socket group"))?
                 .ok_or_else(|| TypedError::InternalConfig {
                     detail: format!("unsafe-local helper socket group {group_name} does not exist"),
+                    source: None,
                 })?
                 .gid,
         ),
@@ -88,6 +92,7 @@ pub fn resolve_runtime_identity(
             return Err(TypedError::InternalConfig {
                 detail: "unsafe-local helper socket path and group must be configured together"
                     .to_owned(),
+                source: None,
             });
         }
     };
@@ -110,12 +115,14 @@ pub fn resolve_unsafe_local_helper_uids(
             .map_err(io_wrap("lookup unsafe-local helper user"))?
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "configured unsafe-local helper user does not exist".to_owned(),
+                source: None,
             })?;
         let uid = user.uid.as_raw();
         if uid == 0 || uid == daemon_uid.as_raw() {
             return Err(TypedError::InternalConfig {
                 detail: "unsafe-local helper users must be non-root and distinct from d2bd"
                     .to_owned(),
+                source: None,
             });
         }
         uids.insert(uid);
@@ -200,11 +207,13 @@ pub fn ensure_locks_dir(path: &Path, identity: &RuntimeIdentity) -> Result<(), T
     fs::create_dir_all(path).map_err(|err| TypedError::InternalIo {
         context: format!("create locks dir {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o750)).map_err(|err| {
         TypedError::InternalIo {
             context: format!("chmod locks dir {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         }
     })?;
     if identity.expect_root_owned_parent && unistd::geteuid().is_root() {
@@ -225,11 +234,13 @@ pub fn acquire_state_lock(path: &Path, identity: &RuntimeIdentity) -> Result<Fil
         .map_err(|err| TypedError::InternalIo {
             context: format!("open daemon lock {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o640)).map_err(|err| {
         TypedError::InternalIo {
             context: format!("chmod daemon lock {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         }
     })?;
     if identity.expect_root_owned_parent && unistd::geteuid().is_root() {
@@ -254,6 +265,7 @@ pub fn acquire_state_lock(path: &Path, identity: &RuntimeIdentity) -> Result<Fil
         Err(err) => Err(TypedError::InternalIo {
             context: format!("acquire OFD lock {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         }),
     }
 }
@@ -265,11 +277,13 @@ pub fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Soc
             fs::remove_file(path).map_err(|err| TypedError::InternalIo {
                 context: format!("remove stale socket {}", path.display()),
                 detail: err.to_string(),
+                source: error_source(err),
             })?;
         } else {
             return Err(TypedError::InternalIo {
                 context: format!("bind public socket {}", path.display()),
                 detail: "existing path is not a socket".to_owned(),
+                source: None,
             });
         }
     }
@@ -278,6 +292,7 @@ pub fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Soc
         fs::create_dir_all(parent).map_err(|err| TypedError::InternalIo {
             context: format!("create public socket parent {}", parent.display()),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     }
 
@@ -286,32 +301,38 @@ pub fn bind_public_socket(path: &Path, identity: &RuntimeIdentity) -> Result<Soc
             TypedError::InternalIo {
                 context: format!("create public seqpacket socket {}", path.display()),
                 detail: err.to_string(),
+                source: error_source(err),
             }
         })?;
     let address = SockAddr::unix(path).map_err(|err| TypedError::InternalIo {
         context: format!("encode public socket path {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     socket
         .bind(&address)
         .map_err(|err| TypedError::InternalIo {
             context: format!("bind public socket {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     socket.listen(128).map_err(|err| TypedError::InternalIo {
         context: format!("listen on public socket {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     socket
         .set_nonblocking(true)
         .map_err(|err| TypedError::InternalIo {
             context: format!("set public socket {} nonblocking", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o660)).map_err(|err| {
         TypedError::InternalIo {
             context: format!("chmod public socket {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         }
     })?;
     // Always chgrp the socket to `public_socket_gid` (i.e. `d2b` in

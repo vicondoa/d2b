@@ -1,4 +1,4 @@
-use crate::typed_error::{ErrorEnvelope, TypedError};
+use crate::typed_error::{ErrorEnvelope, TypedError, error_source};
 use d2b_contracts::{FeatureFlag, Hello, HelloOk, HelloRejected, HelloRejectedReason, Version};
 use d2b_contracts_broker::broker_wire::ExportBrokerAuditResponse;
 use d2b_contracts_control::public_wire::{self, AuditResponse, AuthStatusResponse};
@@ -395,10 +395,12 @@ pub fn negotiate_version(
     let accepted_req =
         VersionReq::parse(accepted_range).map_err(|err| TypedError::InternalConfig {
             detail: format!("bad acceptedClientVersionRange {accepted_range}: {err}"),
+            source: error_source(err),
         })?;
     let server =
         SemverVersion::parse(server_version).map_err(|err| TypedError::InternalConfig {
             detail: format!("bad serverVersion {server_version}: {err}"),
+            source: error_source(err),
         })?;
     if client_req.matches(&server) && accepted_req.matches(&server) {
         Ok(server.to_string())
@@ -421,11 +423,13 @@ pub fn hello_ok(
             server_version: Version::new(server_version).map_err(|err| {
                 TypedError::InternalConfig {
                     detail: format!("bad serverVersion {server_version}: {err}"),
+                    source: error_source(err),
                 }
             })?,
             selected_version: Version::new(selected_version).map_err(|err| {
                 TypedError::InternalConfig {
                     detail: format!("bad selectedVersion {selected_version}: {err}"),
+                    source: error_source(err),
                 }
             })?,
             capabilities: capabilities.to_vec(),

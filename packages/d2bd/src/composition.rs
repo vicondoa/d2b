@@ -404,7 +404,7 @@ pub mod provider_effects;
 pub mod provider_registry;
 pub mod provider_shutdown;
 pub mod resource_runtime;
-use d2bd_runtime::typed_error::TypedError;
+use d2bd_runtime::typed_error::{TypedError, error_source};
 
 const VM_RUNNER_ROLE_ID: &str = "ch-runner";
 const VM_STOP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -3502,11 +3502,13 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         .map_err(|error| TypedError::InternalIo {
             context: "install SIGTERM shutdown handler".to_owned(),
             detail: error.to_string(),
+            source: error_source(error),
         })?;
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
         .map_err(|error| TypedError::InternalIo {
             context: "install SIGINT shutdown handler".to_owned(),
             detail: error.to_string(),
+            source: error_source(error),
         })?;
     let unsafe_local_helper_uids =
         resolve_unsafe_local_helper_uids(&config, runtime_identity.daemon_uid)?;
@@ -3516,6 +3518,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 .unsafe_local_helper_socket_gid
                 .ok_or_else(|| TypedError::InternalConfig {
                     detail: "unsafe-local helper socket path requires a socket group".to_owned(),
+                    source: None,
                 })?;
             Some(
                 d2bd_runtime::unsafe_local_helper::bind_helper_socket(
@@ -3526,6 +3529,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                 .map_err(|error| TypedError::InternalIo {
                     context: "bind unsafe-local helper socket".to_owned(),
                     detail: format!("{error:?}"),
+                    source: None,
                 })?,
             )
         } else {
@@ -3571,6 +3575,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         |err| TypedError::InternalIo {
             context: format!("restore pidfd table {}", pidfd_table_path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         },
     )?);
     pidfd_table.set_broker_reap_log(Arc::clone(&broker_reap_log));
@@ -3677,6 +3682,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             .map_err(|error| TypedError::InternalIo {
                 context: "spawn unsafe-local helper listener".to_owned(),
                 detail: error.to_string(),
+                source: error_source(error),
             })?;
     }
     refresh_activation_marker_metrics_on_startup(&state).await;
@@ -3756,6 +3762,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                 TypedError::InternalIo {
                                     context: "authoritative resource-plane start audit".to_owned(),
                                     detail: error.to_string(),
+                                    source: error_source(error),
                                 }
                             })?;
                         }
@@ -3893,6 +3900,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                                         context: "authoritative resource-plane refusal audit"
                                             .to_owned(),
                                         detail: audit_error.to_string(),
+                                        source: error_source(audit_error),
                                     }
                                 })?;
                             }
@@ -4076,6 +4084,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
                         let accept_error = TypedError::InternalIo {
                             context: "accept public seqpacket client".to_owned(),
                             detail: error.to_string(),
+                            source: error_source(error),
                         };
                         if let Err(cleanup_error) = finalize_daemon_interactions(&state).await {
                             tracing::error!(
@@ -4096,6 +4105,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
             .map_err(|error| TypedError::InternalIo {
                 context: "set accepted public socket blocking".to_owned(),
                 detail: error.to_string(),
+                source: error_source(error),
             })?;
 
         // The `once` test path stays fully synchronous/inline so unit
@@ -4251,6 +4261,7 @@ fn validate_gateway_guest_observation_path(
     if path != Path::new(GATEWAY_GUEST_OPEN_OBSERVATION_PATH) {
         return Err(TypedError::InternalConfig {
             detail: "Guest gateway observation path is invalid".to_owned(),
+            source: None,
         });
     }
     Ok(Some(path))
@@ -4270,20 +4281,24 @@ async fn load_gateway_guest_zone_link_options(
         Err(_) => {
             return Err(TypedError::InternalConfig {
                 detail: "Guest gateway configuration unavailable".to_owned(),
+                source: None,
             });
         }
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(TypedError::InternalConfig {
             detail: "Guest gateway configuration is not a regular file".to_owned(),
+            source: None,
         });
     }
     let bytes = tokio::fs::read(config_path).await.map_err(|_| TypedError::InternalConfig {
         detail: "Guest gateway configuration unavailable".to_owned(),
+        source: None,
     })?;
     let config: GatewayGuestConfigFile =
         serde_json::from_slice(&bytes).map_err(|_| TypedError::InternalConfig {
             detail: "Guest gateway configuration is invalid".to_owned(),
+            source: None,
         })?;
     let observation_path = validate_gateway_guest_observation_path(config.observation_path)?;
     let namespace = config
@@ -4291,25 +4306,30 @@ async fn load_gateway_guest_zone_link_options(
         .namespace
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Relay namespace is unavailable".to_owned(),
+            source: None,
         })?;
     let entity = config
         .relay
         .entity
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Relay entity is unavailable".to_owned(),
+            source: None,
         })?;
     let settings =
         RelayTransportSettings::new(namespace, entity).map_err(|_| TypedError::InternalConfig {
             detail: "Guest Relay settings are invalid".to_owned(),
+            source: None,
         })?;
     let bundle_bytes = bundle
         .zone_resource_bundle_bytes(identity.zone().as_str())
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Zone resource bundle is unavailable".to_owned(),
+            source: None,
         })?;
     let zone_bundle =
         ResourceBundle::from_json(bundle_bytes).map_err(|_| TypedError::InternalConfig {
             detail: "Guest Zone resource bundle is invalid".to_owned(),
+            source: None,
         })?;
     let providers = zone_bundle
         .resources
@@ -4326,17 +4346,20 @@ async fn load_gateway_guest_zone_link_options(
     let [provider] = providers.as_slice() else {
         return Err(TypedError::InternalConfig {
             detail: "Guest Relay Provider assignment is unavailable".to_owned(),
+            source: None,
         });
     };
     let provider_spec = serde_json::from_slice::<Value>(&provider.spec().to_canonical_bytes())
         .map_err(|_| TypedError::InternalConfig {
             detail: "Guest Relay Provider configuration is invalid".to_owned(),
+            source: None,
         })?;
     let provider_config = provider_spec
         .get("config")
         .and_then(Value::as_object)
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Relay Provider configuration is unavailable".to_owned(),
+            source: None,
         })?;
     let execution_ref = provider_config
         .get("executionRef")
@@ -4344,6 +4367,7 @@ async fn load_gateway_guest_zone_link_options(
         .and_then(|value| ResourceRef::parse(value).ok())
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Relay execution assignment is invalid".to_owned(),
+            source: None,
         })?;
     let network_ref = provider_config
         .get("networkRef")
@@ -4351,6 +4375,7 @@ async fn load_gateway_guest_zone_link_options(
         .and_then(|value| ResourceRef::parse(value).ok())
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "Guest Relay network assignment is invalid".to_owned(),
+            source: None,
         })?;
     if execution_ref != *identity.guest_ref()
         || execution_ref.resource_type().as_str() != "Guest"
@@ -4358,6 +4383,7 @@ async fn load_gateway_guest_zone_link_options(
     {
         return Err(TypedError::InternalConfig {
             detail: "Guest Relay Provider placement is invalid".to_owned(),
+            source: None,
         });
     }
     Ok(Some(GatewayGuestZoneLinkOptions {
@@ -4437,6 +4463,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     if !options.state_dir.is_absolute() || !options.broker_socket_path.is_absolute() {
         return Err(TypedError::InternalConfig {
             detail: "guest mode requires absolute state and broker paths".to_owned(),
+            source: None,
         });
     }
     // The production path is sealed to the kernel's boot-id file. A custom
@@ -4450,32 +4477,39 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     let boot = d2bd_runtime::guest_mode::BootIdentity::read(&boot_id_path).map_err(|_| {
         TypedError::InternalConfig {
             detail: "guest kernel boot identity unavailable".to_owned(),
+            source: None,
         }
     })?;
     let guest_ref =
         ResourceRef::parse(&options.guest_ref).map_err(|_| TypedError::InternalConfig {
             detail: "guest identity reference is invalid".to_owned(),
+            source: None,
         })?;
     let guest_uid = kernel_guest_uid().await.unwrap_or(options.guest_uid);
     let guest_uid = ResourceUid::parse(guest_uid).map_err(|_| TypedError::InternalConfig {
         detail: "guest identity UID is invalid".to_owned(),
+        source: None,
     })?;
     let zone = ZoneId::parse(options.zone).map_err(|_| TypedError::InternalConfig {
         detail: "guest Zone identity is invalid".to_owned(),
+        source: None,
     })?;
     let purpose = d2b_contracts_resource::v3::identity::SessionPurpose::parse(options.purpose)
         .map_err(|_| TypedError::InternalConfig {
             detail: "guest session purpose is invalid".to_owned(),
+            source: None,
         })?;
     let schema = SchemaFingerprint::parse(options.schema_fingerprint).map_err(|_| {
         TypedError::InternalConfig {
             detail: "guest session schema fingerprint is invalid".to_owned(),
+            source: None,
         }
     })?;
     let reconnect_generation =
         ReconnectGeneration::new(options.reconnect_generation).map_err(|_| {
             TypedError::InternalConfig {
                 detail: "guest reconnect generation is invalid".to_owned(),
+                source: None,
             }
         })?;
     let identity = d2bd_runtime::guest_mode::GuestIdentity::new(
@@ -4492,6 +4526,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     )
     .map_err(|error| TypedError::InternalConfig {
         detail: error.to_string(),
+        source: error_source(error),
     })?;
     if options.validate_only {
         return Ok(());
@@ -4502,6 +4537,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         .await
         .map_err(|_| TypedError::InternalConfig {
             detail: "guest state root unavailable".to_owned(),
+            source: None,
         })?;
     let runtime = d2bd_runtime::guest_mode::GuestRuntime::new(
         identity.clone(),
@@ -4512,6 +4548,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
     .await
     .map_err(|error| TypedError::InternalConfig {
         detail: error.to_string(),
+        source: error_source(error),
     })?;
     let bundle = BundleResolver::load_on_loader_worker(&options.bundle_path)
         .await
@@ -4523,6 +4560,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         })
         .map_err(|_| TypedError::InternalConfig {
             detail: "guest process bundle unavailable".to_owned(),
+            source: None,
         })?;
     let gateway_zone_link = load_gateway_guest_zone_link_options(
         options.gateway_zone_link_config_path.as_deref(),
@@ -4546,6 +4584,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         )
         .map_err(|error| TypedError::InternalConfig {
             detail: error.code().to_owned(),
+            source: None,
         })?;
         Ok::<_, TypedError>((runtime, observation_path))
     })
@@ -4562,18 +4601,21 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             .local_private_key_path
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "guest ComponentSession private key is unavailable".to_owned(),
+                source: None,
             })?;
     let parent_public_path =
         options
             .parent_public_key_path
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "parent Zone ComponentSession key is unavailable".to_owned(),
+                source: None,
             })?;
     let parent_public = read_public_key32(&parent_public_path).await?;
     let mut listener = runtime
         .bind_listener()
         .map_err(|error| TypedError::InternalConfig {
             detail: error.to_string(),
+            source: error_source(error),
         })?;
     tracing::info!(
         port = d2bd_runtime::guest_mode::GUEST_COMPONENT_SESSION_PORT,
@@ -4584,6 +4626,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
             .write_open_observation(observation_path)
             .map_err(|error| TypedError::InternalConfig {
                 detail: error.code().to_owned(),
+                source: None,
             })?;
     }
     // Guest target-control (U13 guest half): one target runtime per Guest,
@@ -4596,6 +4639,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         d2b_resource_runtime::target::TargetRef::guest(identity.guest_ref().name().as_str())
             .map_err(|error| TypedError::InternalConfig {
                 detail: error.to_string(),
+                source: error_source(error),
             })?;
     let target_service = std::sync::Arc::new(
         d2b_provider_guest::GuestTargetService::new(
@@ -4615,11 +4659,13 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
         .map_err(|_| TypedError::InternalIo {
             context: "install Guest SIGTERM handler".to_owned(),
             detail: "signal handler unavailable".to_owned(),
+            source: None,
         })?;
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
         .map_err(|_| TypedError::InternalIo {
             context: "install Guest SIGINT handler".to_owned(),
             detail: "signal handler unavailable".to_owned(),
+            source: None,
         })?;
     let mut active: Option<(
         tokio::task::JoinHandle<Result<(), d2b_session::SessionServerError>>,
@@ -4721,6 +4767,7 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
                     if options.once {
                         return Err(TypedError::InternalConfig {
                             detail: error.to_string(),
+                            source: error_source(error),
                         });
                     }
                     tracing::warn!(error = %error, "Guest ComponentSession handshake refused");
@@ -4801,25 +4848,31 @@ pub async fn serve_guest(options: GuestServeOptions) -> Result<(), TypedError> {
 async fn read_secret32(path: &Path) -> Result<d2b_session::Secret32, TypedError> {
     let bytes = tokio::fs::read(path).await.map_err(|_| TypedError::InternalConfig {
         detail: "guest ComponentSession private key unavailable".to_owned(),
+        source: None,
     })?;
     let bytes: [u8; 32] = bytes.try_into().map_err(|_| TypedError::InternalConfig {
         detail: "guest ComponentSession private key has invalid length".to_owned(),
+        source: None,
     })?;
     d2b_session::Secret32::new(bytes).map_err(|_| TypedError::InternalConfig {
         detail: "guest ComponentSession private key is invalid".to_owned(),
+        source: None,
     })
 }
 
 async fn read_public_key32(path: &Path) -> Result<[u8; 32], TypedError> {
     let bytes = tokio::fs::read(path).await.map_err(|_| TypedError::InternalConfig {
         detail: "parent Zone ComponentSession key unavailable".to_owned(),
+        source: None,
     })?;
     let bytes: [u8; 32] = bytes.try_into().map_err(|_| TypedError::InternalConfig {
         detail: "parent Zone ComponentSession key has invalid length".to_owned(),
+        source: None,
     })?;
     if bytes == [0; 32] {
         return Err(TypedError::InternalConfig {
             detail: "parent Zone ComponentSession key is invalid".to_owned(),
+            source: None,
         });
     }
     Ok(bytes)
@@ -4873,6 +4926,7 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
             Some(TypedError::InternalIo {
                 context: "interaction Provider finalization".to_owned(),
                 detail: error.to_string(),
+                source: error_source(error),
             })
         } else {
             None
@@ -4897,6 +4951,7 @@ async fn finalize_daemon_interactions(state: &ServerState) -> Result<(), TypedEr
     resource_result.map_err(|error| TypedError::InternalIo {
         context: "authoritative resource-plane shutdown audit".to_owned(),
         detail: error.to_string(),
+        source: error_source(error),
     })
 }
 
@@ -5059,6 +5114,7 @@ async fn adopt_orphaned_runners_on_startup_with(
         TypedError::InternalIo {
             context: "enumerate daemon runner snapshots".to_owned(),
             detail: err.to_string(),
+            source: error_source(err),
         }
     })?;
     if snapshots.is_empty() {
@@ -5145,6 +5201,7 @@ async fn adopt_orphaned_runners_on_startup_with(
                         return Err(TypedError::InternalIo {
                             context: "register adopted pidfd".to_owned(),
                             detail: error.to_string(),
+                            source: error_source(error),
                         });
                     }
                 }
@@ -5177,6 +5234,7 @@ async fn adopt_orphaned_runners_on_startup_with(
                 .map_err(|err| TypedError::InternalIo {
                     context: "remove missing runner snapshot".to_owned(),
                     detail: err.to_string(),
+                    source: error_source(err),
                 })?;
                 tracing::info!(
                     vm = %adopt.vm,
@@ -5204,6 +5262,7 @@ async fn adopt_orphaned_runners_on_startup_with(
                 .map_err(|err| TypedError::InternalIo {
                     context: "remove raced runner snapshot".to_owned(),
                     detail: err.to_string(),
+                    source: error_source(err),
                 })?;
                 tracing::warn!(
                     vm = %adopt.vm,
@@ -5231,6 +5290,7 @@ async fn adopt_orphaned_runners_on_startup_with(
         .map_err(|err| TypedError::InternalIo {
             context: "persist adopted pidfd table".to_owned(),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     Ok(())
 }
@@ -5610,6 +5670,7 @@ fn handle_connection_authorized(
                     return Err(TypedError::InternalIo {
                         context: "spawn typed shell owner handler".to_owned(),
                         detail: err.to_string(),
+                        source: error_source(err),
                     });
                 }
             }
@@ -5646,6 +5707,7 @@ fn handle_connection_authorized(
                     return Err(TypedError::InternalIo {
                         context: "spawn Process resource owner".to_owned(),
                         detail: err.to_string(),
+                        source: error_source(err),
                     });
                 }
             }
@@ -5657,6 +5719,7 @@ fn handle_connection_authorized(
                     .map_err(|err| TypedError::InternalIo {
                         context: "serialize error response".to_owned(),
                         detail: err.to_string(),
+                        source: error_source(err),
                     })?,
             };
         write_json_frame(&stream, &response)?;
@@ -6198,13 +6261,16 @@ fn dispatch_config_nixos_service_request(
         .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
+            source: None,
         })?
         .clone()
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
+            source: None,
         })?;
     let runtime = plane.zone(&zone).map_err(|_| TypedError::InternalConfig {
         detail: "config-nixos Zone runtime unavailable".to_owned(),
+        source: None,
     })?;
     let guest_lookup = json!({
         "zoneRef": format!("Zone/{}", zone.as_str()),
@@ -6215,6 +6281,7 @@ fn dispatch_config_nixos_service_request(
     let guest = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&guest_lookup, peer.uid))
         .map_err(|_| TypedError::InternalConfig {
             detail: "config-nixos Guest lookup failed".to_owned(),
+            source: None,
         })?;
     if guest.get("kind").is_some() {
         return Err(TypedError::AuthzNotAdmin {
@@ -6243,6 +6310,7 @@ fn dispatch_config_nixos_service_request(
                 .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
+                    source: None,
                 })?
                 .stage(
                     d2b_provider_config_nixos::ConfigCaller::Admin,
@@ -6264,6 +6332,7 @@ fn dispatch_config_nixos_service_request(
                 .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
+                    source: None,
                 })?
                 .diff(d2b_provider_config_nixos::ConfigCaller::Admin, &zone, &diff)
                 .map_err(config_nixos_wire_error)?;
@@ -6281,6 +6350,7 @@ fn dispatch_config_nixos_service_request(
                 .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
+                    source: None,
                 })?
                 .approve(
                     d2b_provider_config_nixos::ConfigCaller::Admin,
@@ -6302,6 +6372,7 @@ fn dispatch_config_nixos_service_request(
                 .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
+                    source: None,
                 })?
                 .reject(
                     d2b_provider_config_nixos::ConfigCaller::Admin,
@@ -6323,6 +6394,7 @@ fn dispatch_config_nixos_service_request(
                 .try_lock()
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "config staging state unavailable".to_owned(),
+                    source: None,
                 })?
                 .status(
                     d2b_provider_config_nixos::ConfigCaller::Admin,
@@ -8345,6 +8417,7 @@ fn record_workload_launch_result(
         .map_err(|_| TypedError::InternalIo {
             context: "authoritative workload audit".to_owned(),
             detail: "daemon audit unavailable".to_owned(),
+            source: None,
         })
 }
 
@@ -9012,6 +9085,7 @@ fn console_sessions_table<'a>(
         .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "console session table unavailable".to_owned(),
+            source: None,
         })
 }
 
@@ -9076,6 +9150,7 @@ fn dispatch_console(
                 .attach(vm, peer.uid)
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "console: failed to allocate secure session handle".to_owned(),
+                    source: None,
                 })?;
             match attach_result {
                 Some((handle, kind, start_offset)) => {
@@ -9451,6 +9526,7 @@ fn refresh_qemu_media_registry_index_if_needed_as(
         BrokerResponse::Error(error) => Err(TypedError::InternalIo {
             context: "refresh qemu-media registry index".to_owned(),
             detail: format!("{}:{}", error.operation, error.kind),
+            source: None,
         }),
         other => Err(TypedError::InternalIo {
             context: "refresh qemu-media registry index".to_owned(),
@@ -9458,6 +9534,7 @@ fn refresh_qemu_media_registry_index_if_needed_as(
                 "unexpected broker response {}",
                 broker_response_kind(&other)
             ),
+            source: None,
         }),
     }
 }
@@ -9581,6 +9658,7 @@ fn dispatch_broker_usbip_probe(
             other => TypedError::InternalIo {
                 context: "load bundle resolver".to_owned(),
                 detail: other.to_string(),
+                source: error_source(other),
             },
         })?;
     refresh_qemu_media_registry_index_if_needed_as(state, &resolver, caller_role.clone())?;
@@ -13985,6 +14063,7 @@ fn dispatch_broker_request_as(
         serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
             path: socket_path,
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     Ok(decoded)
 }
@@ -14218,6 +14297,7 @@ fn bundle_resolver_load_error(err: d2b_contracts::error::Error) -> TypedError {
         other => TypedError::InternalIo {
             context: "load bundle resolver".to_owned(),
             detail: other.to_string(),
+            source: error_source(other),
         },
     }
 }
@@ -15337,10 +15417,12 @@ fn acquire_vm_start_lock(state: &ServerState, vm: &str) -> Result<Flock<File>, T
         .map_err(|err| TypedError::InternalIo {
             context: format!("open VM start lock {}", path.display()),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     Flock::lock(file, FlockArg::LockExclusive).map_err(|(_file, err)| TypedError::InternalIo {
         context: format!("lock VM start lock {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })
 }
 
@@ -16872,6 +16954,7 @@ fn dispatch_raw_broker_value_with_timeout(
         .map_err(|err| TypedError::InternalIo {
             context: format!("set raw broker write timeout to {remaining:?}"),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     write_json_frame(&socket, &envelope)?;
     let remaining = broker_remaining_before_op(deadline, &socket_path)?;
@@ -16880,11 +16963,13 @@ fn dispatch_raw_broker_value_with_timeout(
         .map_err(|err| TypedError::InternalIo {
             context: format!("set raw broker read timeout to {remaining:?}"),
             detail: err.to_string(),
+            source: error_source(err),
         })?;
     let response = read_frame(&socket)?;
     serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
         path: socket_path,
         detail: err.to_string(),
+        source: error_source(err),
     })
 }
 
@@ -17110,6 +17195,7 @@ async fn raw_broker_round_trip_async(
     let envelope_bytes = serde_json::to_vec(&envelope).map_err(|err| TypedError::InternalIo {
         context: "serialize raw broker request".to_owned(),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     let remaining = broker_remaining_before_op(deadline, &socket_path)?;
     packet.write_frame(&envelope_bytes, remaining).await?;
@@ -17118,6 +17204,7 @@ async fn raw_broker_round_trip_async(
     serde_json::from_slice(&response).map_err(|err| TypedError::InternalBrokerUnavailable {
         path: socket_path,
         detail: err.to_string(),
+        source: error_source(err),
     })
 }
 
@@ -18993,6 +19080,7 @@ fn provider_lifecycle_authorization(
     let target =
         ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| TypedError::InternalConfig {
             detail: "Guest lifecycle target is invalid".to_owned(),
+            source: None,
         })?;
     let zone = drive_sync(&state.runtime_handle, d2bd_runtime::zone_authority::authoritative_zone_for_vm(
         &state.zone_coordinator,
@@ -19000,12 +19088,14 @@ fn provider_lifecycle_authorization(
     ))
     .map_err(|_| TypedError::InternalConfig {
         detail: "Guest lifecycle Zone identity is unavailable".to_owned(),
+        source: None,
     })?;
     let plane = state
         .resource_plane
         .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "Guest lifecycle resource plane is unavailable".to_owned(),
+            source: None,
         })?
         .clone();
     let runtime = plane.as_ref().and_then(|plane| plane.zone(&zone).ok());
@@ -19024,6 +19114,7 @@ fn provider_lifecycle_authorization(
                 )
                 .map_err(|_| TypedError::InternalConfig {
                     detail: "Host shutdown lifecycle lease is invalid".to_owned(),
+                    source: None,
                 });
             }
             return Ok(provider_effects::LifecycleAuthorization::for_test(
@@ -19039,6 +19130,7 @@ fn provider_lifecycle_authorization(
         {
             return Err(TypedError::InternalConfig {
                 detail: "Guest lifecycle resource runtime is unavailable".to_owned(),
+                source: None,
             });
         }
     };
@@ -19047,6 +19139,7 @@ fn provider_lifecycle_authorization(
             drive_sync(&state.runtime_handle, runtime.admit_internal_guest_lifecycle(target.clone(), operation_id))
                 .map_err(|_| TypedError::InternalConfig {
                 detail: "internal Guest lifecycle authorization is unavailable".to_owned(),
+                source: None,
             })?;
         return provider_effects::LifecycleAuthorization::from_lease(
             admission.lease,
@@ -19057,12 +19150,14 @@ fn provider_lifecycle_authorization(
         )
         .map_err(|_| TypedError::InternalConfig {
             detail: "internal Guest lifecycle authorization lease is invalid".to_owned(),
+            source: None,
         });
     }
     let (zone_uid, guest_uid, guest_generation, provider_generation) =
         drive_sync(&state.runtime_handle, runtime.guest_lifecycle_identity(&target)).map_err(|_| {
             TypedError::InternalConfig {
                 detail: "Guest lifecycle identity is unavailable".to_owned(),
+                source: None,
             }
         })?;
     if matches!(caller_role, BrokerCallerRole::HostShutdownUid { .. }) {
@@ -19077,6 +19172,7 @@ fn provider_lifecycle_authorization(
         )
         .map_err(|_| TypedError::InternalConfig {
             detail: "Host shutdown lifecycle lease is invalid".to_owned(),
+            source: None,
         });
     }
     let admission = drive_sync(&state.runtime_handle, runtime.admit_guest_lifecycle(
@@ -19086,11 +19182,13 @@ fn provider_lifecycle_authorization(
     ))
     .map_err(|_| TypedError::InternalConfig {
         detail: "Guest lifecycle authorization is unavailable".to_owned(),
+        source: None,
     })?;
     provider_effects::LifecycleAuthorization::from_lease(
         admission.lease,
         ResourceRef::parse(&format!("Guest/{guest}")).map_err(|_| TypedError::InternalConfig {
             detail: "Guest lifecycle target is invalid".to_owned(),
+            source: None,
         })?,
         admission.guest_uid,
         admission.guest_generation,
@@ -19098,6 +19196,7 @@ fn provider_lifecycle_authorization(
     )
     .map_err(|_| TypedError::InternalConfig {
         detail: "Guest lifecycle authorization lease is invalid".to_owned(),
+        source: None,
     })
 }
 
@@ -19175,6 +19274,7 @@ fn dispatch_broker_vm_start_inner(
         .map_err(|error| TypedError::InternalIo {
             context: format!("load process DAG for {}", request.vm),
             detail: error.kind().to_owned(),
+            source: error_source(error),
         })?
         .vms
         .into_iter()
@@ -19182,6 +19282,7 @@ fn dispatch_broker_vm_start_inner(
         .ok_or_else(|| TypedError::InternalIo {
             context: format!("load process DAG for {}", request.vm),
             detail: "VM not present in processes.json".to_owned(),
+            source: None,
         })?;
 
     let runner = VmStartRunner {
@@ -20047,6 +20148,7 @@ fn dispatch_broker_host_prepare_as(
         TypedError::InternalBrokerUnavailable {
             path: broker_socket_path(state),
             detail: format!("host nft intent resolution failed: {reason}"),
+            source: None,
         }
     })?;
     if let Err(response) = dispatch_broker_kernel_ack(
@@ -20066,6 +20168,7 @@ fn dispatch_broker_host_prepare_as(
             .ok_or(TypedError::InternalBrokerUnavailable {
                 path: broker_socket_path(state),
                 detail: "installed generation unavailable for Network effect context".to_owned(),
+                source: None,
             })?;
     let context = d2b_provider_network_local::broker::NetworkEffectContext::for_host_nm(
         ScopeId::new("host"),
@@ -20074,6 +20177,7 @@ fn dispatch_broker_host_prepare_as(
             .map_err(|_| TypedError::InternalBrokerUnavailable {
                 path: broker_socket_path(state),
                 detail: "installed generation invalid for Network effect context".to_owned(),
+                source: None,
             })?,
     );
     // U14: the kernel-invoking adapter is the declaring crate's own
@@ -20126,6 +20230,7 @@ fn dispatch_broker_host_destroy_as(
         .ok_or(TypedError::InternalBrokerUnavailable {
             path: broker_socket_path(state),
             detail: "host nm-unmanaged intent missing".to_owned(),
+            source: None,
         })?
         .clone();
     let nm_payload = serde_json::json!({
@@ -20153,6 +20258,7 @@ fn dispatch_broker_host_destroy_as(
         TypedError::InternalBrokerUnavailable {
             path: broker_socket_path(state),
             detail: format!("host nft intent resolution failed: {reason}"),
+            source: None,
         }
     })?;
     if let Err(response) = dispatch_broker_kernel_ack(
@@ -20204,6 +20310,7 @@ fn dispatch_broker_host_reconcile_as(
         TypedError::InternalBrokerUnavailable {
             path: broker_socket_path(state),
             detail: format!("host nft intent resolution failed: {reason}"),
+            source: None,
         }
     })?;
     if let Err(response) = dispatch_broker_kernel_ack(
@@ -20505,18 +20612,22 @@ fn dispatch_live_guest_activation_resource(
         .try_lock()
         .map_err(|_| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
+            source: None,
         })?
         .clone()
         .ok_or_else(|| TypedError::InternalConfig {
             detail: "resource plane unavailable".to_owned(),
+            source: None,
         })?;
     let runtime = plane.zone(zone).map_err(|_| TypedError::InternalConfig {
         detail: "activation Zone runtime unavailable".to_owned(),
+        source: None,
     })?;
     let guest_ref_text = format!("Guest/{}", request.vm);
     let guest_ref =
         ResourceRef::parse(&guest_ref_text).map_err(|_| TypedError::InternalConfig {
             detail: "activation Guest reference invalid".to_owned(),
+            source: None,
         })?;
     let guest_ref_canonical = guest_ref.to_canonical_string();
     let get_guest = json!({
@@ -20528,10 +20639,12 @@ fn dispatch_live_guest_activation_resource(
     let guest = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&get_guest, peer_uid))
         .map_err(|_| TypedError::InternalConfig {
             detail: "activation Guest resource unavailable".to_owned(),
+            source: None,
         })?;
     if guest.get("kind").is_some() {
         return Err(TypedError::InternalConfig {
             detail: "activation Guest resource unavailable".to_owned(),
+            source: None,
         });
     }
     let list = json!({
@@ -20545,12 +20658,14 @@ fn dispatch_live_guest_activation_resource(
     let resources = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&list, peer_uid))
         .map_err(|_| TypedError::InternalConfig {
             detail: "activation generations unavailable".to_owned(),
+            source: None,
         })?;
     let (ordinal, artifact) = if mode == DaemonActivationMode::Rollback{
         let target_ordinal = request
             .to_generation
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "rollback target generation unavailable".to_owned(),
+                source: None,
             })?;
         let artifact = resources
             .get("resources")
@@ -20577,6 +20692,7 @@ fn dispatch_live_guest_activation_resource(
             })
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "rollback target generation is not retained".to_owned(),
+                source: None,
             })?;
         (target_ordinal, artifact.to_owned())
     } else {
@@ -20612,6 +20728,7 @@ fn dispatch_live_guest_activation_resource(
             .and_then(Value::as_str)
             .ok_or_else(|| TypedError::InternalConfig {
                 detail: "activation system artifact unavailable".to_owned(),
+                source: None,
             })?;
         (ordinal, artifact.to_owned())
     };
@@ -20636,6 +20753,7 @@ fn dispatch_live_guest_activation_resource(
         drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&create, peer_uid)).map_err(|_| {
             TypedError::InternalConfig {
                 detail: "activation resource create failed".to_owned(),
+                source: None,
             }
         })?;
     if created
@@ -20645,6 +20763,7 @@ fn dispatch_live_guest_activation_resource(
     {
         return Err(TypedError::InternalConfig {
             detail: "activation resource create refused".to_owned(),
+            source: None,
         });
     }
     let deadline = Instant::now() + live_activation_timeout_for(state, &request.vm);
@@ -20669,6 +20788,7 @@ fn dispatch_live_guest_activation_resource(
         let current = drive_sync(&state.runtime_handle, runtime.dispatch_public_cli_request(&get, peer_uid))
             .map_err(|_| TypedError::InternalConfig {
                 detail: "activation resource status unavailable".to_owned(),
+                source: None,
             })?;
         let current_spec = current.get("spec");
         if current_spec.and_then(|spec| spec.get("executionRef")) != spec.get("executionRef")
@@ -21440,7 +21560,8 @@ mod public_status_tests {
         test_state_with_config(DaemonConfig::default())
     }
 
-    fn test_state_with_config(config: DaemonConfig) -> (ServerState, tempfile::TempDir) {
+    /// Shared with sibling test modules that need a bare daemon state.
+    pub(super) fn test_state_with_config(config: DaemonConfig) -> (ServerState, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("temp daemon state");
         let broker_reap_log = BrokerReapLog::new();
         let state = ServerState {
@@ -22905,16 +23026,19 @@ fn dispatch_audit(
                 TypedError::InternalIo {
                     context: "serialize audit response".to_owned(),
                     detail: err.to_string(),
+                    source: error_source(err),
                 }
             })
         }
         BrokerResponse::Error(error) => Err(TypedError::InternalBrokerUnavailable {
             path: state.config.broker_socket_path.clone(),
             detail: error.kind,
+            source: None,
         }),
         _ => Err(TypedError::InternalBrokerUnavailable {
             path: state.config.broker_socket_path.clone(),
             detail: "broker returned an unexpected audit response".to_owned(),
+            source: None,
         }),
     }
 }
@@ -30218,7 +30342,7 @@ mod loader_worker_refusal_tests {
 
     fn assert_bundle_loader_refusal(error: TypedError, name: &str) {
         match error {
-            TypedError::InternalIo { context, detail } => {
+            TypedError::InternalIo { context, detail, .. } => {
                 assert_eq!(context, "load bundle resolver");
                 assert!(
                     detail.contains(name),
@@ -30291,5 +30415,113 @@ mod loader_worker_refusal_tests {
                 String::from_utf8_lossy(&output.stderr),
             );
         }
+    }
+}
+
+/// The daemon's typed refusals carry the error they were raised from: the
+/// public envelope keeps rendering the same strings, while
+/// `std::error::Error::source()` still reaches the origin so the chain
+/// survives to the logging boundary.
+#[cfg(test)]
+mod typed_error_source_tests {
+    use super::*;
+
+    /// A real call site: the VM-start lock open fails, and the refusal keeps
+    /// the `io::Error` behind its operator-visible `detail` string.
+    #[test]
+    fn vm_start_lock_failure_carries_the_origin_error() {
+        let locks_dir = tempfile::tempdir().expect("temp locks dir");
+        let missing_locks_dir = locks_dir.path().join("absent");
+        let (state, _state_dir) = public_status_tests::test_state_with_config(DaemonConfig {
+            locks_dir: missing_locks_dir.clone(),
+            ..DaemonConfig::default()
+        });
+
+        let error = acquire_vm_start_lock(&state, "alpha").expect_err("lock directory is absent");
+
+        assert_eq!(error.kind(), "internal-io");
+        assert_eq!(error.message(), "internal I/O failure");
+        let TypedError::InternalIo {
+            context,
+            detail,
+            source,
+        } = &error
+        else {
+            panic!("expected an internal-io refusal, got {error:?}");
+        };
+        let expected_path = missing_locks_dir.join("vm-start-alpha.lock");
+        assert_eq!(
+            context,
+            &format!("open VM start lock {}", expected_path.display())
+        );
+        assert!(source.is_some(), "the call site attaches the origin error");
+
+        let origin = std::error::Error::source(&error).expect("origin error on the chain");
+        assert_eq!(origin.to_string(), *detail);
+        let io = origin
+            .downcast_ref::<std::io::Error>()
+            .expect("the origin is the fs open failure");
+        assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// The daemon wire error surface is `kind`/`exitCode`/`message`/
+    /// `remediation`: attaching an origin renders byte-identically to a
+    /// variant without one.
+    #[test]
+    fn error_envelope_is_byte_identical_with_an_attached_origin() {
+        let detail = "No such file or directory (os error 2)".to_owned();
+        let without_origin = TypedError::InternalIo {
+            context: "read daemon config".to_owned(),
+            detail: detail.clone(),
+            source: None,
+        };
+        let with_origin = TypedError::InternalIo {
+            context: "read daemon config".to_owned(),
+            detail,
+            source: error_source(std::io::Error::from_raw_os_error(libc::ENOENT)),
+        };
+
+        let without =
+            serde_json::to_string(&without_origin.to_envelope_value()).expect("render the envelope");
+        let with =
+            serde_json::to_string(&with_origin.to_envelope_value()).expect("render the envelope");
+        assert_eq!(without, with);
+        assert!(without.contains("\"kind\":\"internal-io\""), "{without}");
+    }
+
+    /// The chain is what the daemon logs, not just its first link.
+    #[test]
+    fn origin_chain_reaches_the_root_cause() {
+        #[derive(Debug)]
+        struct ReadOnlyVolume {
+            cause: std::io::Error,
+        }
+
+        impl std::fmt::Display for ReadOnlyVolume {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("cannot write daemon config")
+            }
+        }
+
+        impl std::error::Error for ReadOnlyVolume {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.cause)
+            }
+        }
+
+        let error = TypedError::InternalConfig {
+            detail: ReadOnlyVolume {
+                cause: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "read-only volume"),
+            }
+            .to_string(),
+            source: error_source(ReadOnlyVolume {
+                cause: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "read-only volume"),
+            }),
+        };
+
+        let origin = std::error::Error::source(&error).expect("origin error on the chain");
+        assert_eq!(origin.to_string(), "cannot write daemon config");
+        let root = origin.source().expect("the origin keeps its own cause");
+        assert_eq!(root.to_string(), "read-only volume");
     }
 }

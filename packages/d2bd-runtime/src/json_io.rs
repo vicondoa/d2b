@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::typed_error::TypedError;
+use crate::typed_error::{TypedError, error_source};
 
 /// Resolve a bundle-relative artifact path within `base_dir`.
 ///
@@ -37,10 +37,12 @@ where
     let bytes = fs::read(path).map_err(|err| TypedError::InternalIo {
         context: format!("read {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })?;
     serde_json::from_slice(&bytes).map_err(|err| TypedError::InternalIo {
         context: format!("decode {}", path.display()),
         detail: err.to_string(),
+        source: error_source(err),
     })
 }
 
@@ -60,6 +62,7 @@ pub fn load_manifest(
         .ok_or_else(|| TypedError::InternalIo {
             context: format!("decode manifest {}", path.display()),
             detail: "manifest must be a JSON object".to_owned(),
+            source: None,
         })
 }
 
@@ -73,5 +76,6 @@ pub fn read_trimmed_file(path: &Path, context: &str) -> Result<String, TypedErro
         .map_err(|err| TypedError::InternalIo {
             context: context.to_owned(),
             detail: err.to_string(),
+            source: error_source(err),
         })
 }
