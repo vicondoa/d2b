@@ -86,8 +86,15 @@ d2b_rust_test(
     name = "d2b_resource_compiler_test",
     compile_data = ["Cargo.toml"],
     crate = ":d2b_resource_compiler",
-    data = [":d2b-resource-compiler"],
-    env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
+    data = [
+        ":d2b-resource-compiler",
+        # The committed Publisher artifact trio the signature test reads.
+        # Declaring it as data both stages the files into the runfiles tree
+        # and makes Bazel re-run this test when any of them changes.
+        "//packages/d2b-provider-guest-cloud-hypervisor:provider-manifest.json",
+        "//packages/d2b-provider-guest-cloud-hypervisor:provider-manifest.json.sig",
+        "//packages/d2b-provider-guest-cloud-hypervisor:publisher-public-key.pem",
+    ],
     rustc_env = {"CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)"},
     deps = ["//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
@@ -101,6 +108,10 @@ d2b_rust_test(
         ":d2b-resource-compiler",
         "//:d2b_resource_schemas_v3",
         "//:docs/reference/schemas/v3/audio.d2bus.org_AudioBinding.schema.json",
+        # The committed Publisher artifact trio the signature test reads.
+        "//packages/d2b-provider-guest-cloud-hypervisor:provider-manifest.json",
+        "//packages/d2b-provider-guest-cloud-hypervisor:provider-manifest.json.sig",
+        "//packages/d2b-provider-guest-cloud-hypervisor:publisher-public-key.pem",
     ],
     env = {
         "CARGO_BIN_EXE_d2b-resource-compiler": "$(rootpath :d2b-resource-compiler)",
