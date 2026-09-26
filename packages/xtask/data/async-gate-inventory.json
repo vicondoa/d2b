@@ -803,22 +803,22 @@
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 914,
+      "line": 916,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1180,
+      "line": 1185,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1208,
+      "line": 1213,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2b-resource-runtime/src/context.rs",
-      "line": 1217,
+      "line": 1222,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {

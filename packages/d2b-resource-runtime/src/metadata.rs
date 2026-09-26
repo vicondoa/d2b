@@ -162,9 +162,10 @@ impl ResourceDriver for MetadataDriver {
 // ---------------------------------------------------------------------------
 
 /// The stored spec object fence every declaration-only metadata type shares:
-/// the manager's decode hook must have produced a JSON object, which is
-/// exactly what the old `validate_spec` required of the canonical row JSON.
-fn spec_object(ctx: &ResourceContext, op: DriverOp) -> Result<Value, DriverFailure> {
+/// validates that the manager's decode hook produced a JSON object - exactly
+/// what the old `validate_spec` required of the canonical row JSON - without
+/// materializing the decoded value.
+fn spec_object(ctx: &ResourceContext, op: DriverOp) -> Result<(), DriverFailure> {
     let spec = ctx.spec::<Value>().map_err(|error| {
         DriverFailure::refused(op, FailureKinds::CORE_SPEC_INVALID)
             .with_detail(FailureDetail::at("spec/decode").with_note(error.to_string()))
@@ -188,7 +189,7 @@ fn spec_object(ctx: &ResourceContext, op: DriverOp) -> Result<Value, DriverFailu
             ),
         );
     }
-    Ok(spec.clone())
+    Ok(())
 }
 
 /// The child-first drain: every owned child is nudged through its own

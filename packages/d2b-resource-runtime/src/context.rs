@@ -891,6 +891,7 @@ pub(crate) mod test_support {
         }
 
         /// Child keys the manager was asked to delete, in order.
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub(crate) fn deleted_keys(&self) -> Vec<ResourceKey> {
             self.deleted.lock().clone()
         }
@@ -910,6 +911,7 @@ pub(crate) mod test_support {
             Err(ResourceError::ManagerRejected { reason: "unexpected view".into() })
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
             self.deleted.lock().push(key.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             Ok(())
@@ -961,6 +963,7 @@ pub(crate) mod test_support {
             }
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         pub(crate) fn take_receiver(&self) -> mpsc::UnboundedReceiver<RequeueId> {
             self.inner
                 .delivered_rx
@@ -971,6 +974,7 @@ pub(crate) mod test_support {
     }
 
     impl RequeueScheduler for TokioRequeue {
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn schedule(&self, _key: ResourceKey, after: std::time::Duration) -> RequeueId {
             let id = self.inner.next.fetch_add(1, Ordering::SeqCst);
             let tx = self.inner.delivered_tx.clone();
@@ -982,6 +986,7 @@ pub(crate) mod test_support {
             RequeueId(id)
         }
 
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fn cancel(&self, id: RequeueId) {
             if let Some(handle) = self.inner.pending.lock().remove(&id.0) {
                 handle.abort();

@@ -150,15 +150,18 @@ impl CompletedOperationLedger {
         self.completed
             .insert(operation_id, (expires_at_unix_ms, phase, sequence));
         while self.completed.len() > capacity {
-            let Some(oldest) = self
+            let Some(oldest_sequence) = self
                 .completed
-                .iter()
-                .min_by_key(|(_, (_, _, sequence))| *sequence)
-                .map(|(operation_id, _)| operation_id.clone())
+                .values()
+                .map(|(_, _, sequence)| *sequence)
+                .min()
             else {
                 break;
             };
-            self.completed.remove(&oldest);
+            // `next_sequence` increments per insert, so a sequence identifies
+            // exactly one entry: this retain evicts exactly the oldest one.
+            self.completed
+                .retain(|_, (_, _, sequence)| *sequence != oldest_sequence);
         }
     }
 
@@ -960,5 +963,43 @@ where
             self.config.network_ref().cloned(),
             self.config.sandbox_transport_alias().clone(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AcaPhase, CompletedOperationLedger};
+    use crate::AcaOperationId;
+
+    fn operation(name: &str) -> AcaOperationId {
+        AcaOperationId::parse(name).expect("valid operation identifier")
+    }
+
+    /// Eviction follows record order, not key order: the alphabetically
+    /// smallest identifier is recorded before the larger ones, so an
+    /// eviction that walked the map instead of the sequence would drop the
+    /// wrong entry.
+    #[test]
+    fn ledger_evicts_the_oldest_operation_first() {
+        let mut ledger = CompletedOperationLedger::default();
+        ledger.record(operation("operation-c"), 1_000, AcaPhase::Ready, 2);
+        ledger.record(operation("operation-a"), 1_000, AcaPhase::Ready, 2);
+        ledger.record(operation("operation-b"), 1_000, AcaPhase::Ready, 2);
+        assert_eq!(
+            ledger.get(&operation("operation-c")),
+            None,
+            "the first recorded operation is evicted at capacity"
+        );
+        assert_eq!(ledger.get(&operation("operation-a")), Some(AcaPhase::Ready));
+        assert_eq!(ledger.get(&operation("operation-b")), Some(AcaPhase::Ready));
+
+        ledger.record(operation("operation-d"), 1_000, AcaPhase::Ready, 2);
+        assert_eq!(
+            ledger.get(&operation("operation-a")),
+            None,
+            "the next eviction takes the oldest survivor"
+        );
+        assert_eq!(ledger.get(&operation("operation-b")), Some(AcaPhase::Ready));
+        assert_eq!(ledger.get(&operation("operation-d")), Some(AcaPhase::Ready));
     }
 }
