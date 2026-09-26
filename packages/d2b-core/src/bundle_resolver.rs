@@ -1400,7 +1400,7 @@ impl BundleResolver {
                 manifest,
             },
             false,
-        );
+        )?;
         resolver.zone_topology = zone_topology;
         Ok(resolver)
     }
@@ -1438,7 +1438,29 @@ impl BundleResolver {
                     .unwrap_or_default()
             })
             .collect();
-        Self::from_parsed_artifacts(
+        let resource_network_intents =
+            match build_resource_network_intents(&zone_resource_bundles, true) {
+                Ok(maps) => maps,
+                Err(error) => {
+                    debug_assert!(
+                        false,
+                        "zone resource bundle Network spec parse failed: {error}"
+                    );
+                    // Documented precondition violation (verified per-Zone
+                    // resource-bundle bytes): release builds treat the
+                    // violation as absent data rather than panicking, so the
+                    // resource network intents degrade to empty maps.
+                    (
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                    )
+                }
+            };
+        Self::from_parsed_artifacts_with_network_intents(
             bundle,
             bundle_hash,
             ParsedBundleArtifacts {
@@ -1458,6 +1480,7 @@ impl BundleResolver {
                 manifest,
             },
             true,
+            resource_network_intents,
         )
     }
 
@@ -1466,6 +1489,27 @@ impl BundleResolver {
         bundle_hash: String,
         artifacts: ParsedBundleArtifacts,
         include_fixture_network_intents: bool,
+    ) -> Result<Self, Error> {
+        let resource_network_intents = build_resource_network_intents(
+            &artifacts.zone_resource_bundles,
+            include_fixture_network_intents,
+        )?;
+        Ok(Self::from_parsed_artifacts_with_network_intents(
+            bundle,
+            bundle_hash,
+            artifacts,
+            include_fixture_network_intents,
+            resource_network_intents,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_parsed_artifacts_with_network_intents(
+        bundle: Bundle,
+        bundle_hash: String,
+        artifacts: ParsedBundleArtifacts,
+        include_fixture_network_intents: bool,
+        resource_network_intents: ResolvedNetworkIntentMaps,
     ) -> Self {
         let ParsedBundleArtifacts {
             host,
@@ -1531,7 +1575,7 @@ impl BundleResolver {
             resource_route_intents,
             resource_sysctl_intents,
             resource_hosts_intents,
-        ) = build_resource_network_intents(&zone_resource_bundles, include_fixture_network_intents);
+        ) = resource_network_intents;
         let mut nft_projection_intents = nft_projection_intents;
         nft_projection_intents.extend(resource_nft_projection_intents);
         let mut ownership_marker_intents = ownership_marker_intents;
@@ -1718,28 +1762,41 @@ impl BundleResolver {
     }
 
     /// Resolve a Network bridge row from an admitted UID-bound reference.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     pub fn resolve_network_bridge_intent(
         &self,
         id: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedBridgeIntent> {
-        let parts = parse_network_intent_ref(id)?;
+    ) -> Result<Option<ResolvedBridgeIntent>, Error> {
+        let Some(parts) = parse_network_intent_ref(id) else {
+            return Ok(None);
+        };
         if parts.kind != NetworkIntentKind::Bridge
             || parts.zone_uid != *provenance.zone_uid()
             || parts.network_uid != *provenance.network_uid()
         {
-            return None;
+            return Ok(None);
         }
-        let spec = self.find_network_spec(&parts)?;
-        let role = match parts.variant.as_deref() {
-            Some("uplink") => NetworkIfRole::UplinkBridge,
-            Some("lan") => NetworkIfRole::LanBridge,
-            _ => return None,
+        let Some(spec) = self.find_network_spec(&parts)? else {
+            return Ok(None);
         };
-        let bridge_ifname =
-            derive_network_ifname(provenance.zone_uid(), provenance.network_uid(), role, None)
-                .ok()?;
-        let variant = parts.variant.as_deref()?;
+        let Some(role) = (match parts.variant.as_deref() {
+            Some("uplink") => Some(NetworkIfRole::UplinkBridge),
+            Some("lan") => Some(NetworkIfRole::LanBridge),
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+        let Some(bridge_ifname) =
+            derive_network_ifname(provenance.zone_uid(), provenance.network_uid(), role, None).ok()
+        else {
+            return Ok(None);
+        };
+        let Some(variant) = parts.variant.as_deref() else {
+            return Ok(None);
+        };
         let ownership_marker = format!(
             "d2b managed: {}",
             d2b_contracts_resource::v3::derive_network_ownership_marker(
@@ -1747,7 +1804,7 @@ impl BundleResolver {
                 &format!("bridge:{variant}"),
             )
         );
-        Some(ResolvedBridgeIntent {
+        Ok(Some(ResolvedBridgeIntent {
             intent_id: id.to_owned(),
             scope_label: network_scope(provenance),
             bridge_ifname,
@@ -1764,53 +1821,70 @@ impl BundleResolver {
             },
             provenance: Some(provenance.clone()),
             ownership_marker: Some(ownership_marker),
-        })
+        }))
     }
 
     /// Resolve a Network ownership marker row from an admitted reference.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     pub fn resolve_network_marker_intent(
         &self,
         id: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedOwnershipMarkerIntent> {
-        let parts = parse_network_intent_ref(id)?;
+    ) -> Result<Option<ResolvedOwnershipMarkerIntent>, Error> {
+        let Some(parts) = parse_network_intent_ref(id) else {
+            return Ok(None);
+        };
         if parts.kind != NetworkIntentKind::Marker
             || parts.zone_uid != *provenance.zone_uid()
             || parts.network_uid != *provenance.network_uid()
         {
-            return None;
+            return Ok(None);
         }
-        self.find_network_spec(&parts)?;
+        if self.find_network_spec(&parts)?.is_none() {
+            return Ok(None);
+        }
         let marker =
             d2b_contracts_resource::v3::derive_network_ownership_marker(provenance, "firewall");
-        Some(ResolvedOwnershipMarkerIntent {
+        Ok(Some(ResolvedOwnershipMarkerIntent {
             intent_id: id.to_owned(),
             marker,
             provenance: Some(provenance.clone()),
-        })
+        }))
     }
 
     /// Resolve a Network firewall projection from an admitted reference.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     pub fn resolve_network_projection_intent(
         &self,
         id: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedNftablesProjectionIntent> {
-        let parts = parse_network_intent_ref(id)?;
+    ) -> Result<Option<ResolvedNftablesProjectionIntent>, Error> {
+        let Some(parts) = parse_network_intent_ref(id) else {
+            return Ok(None);
+        };
         if parts.kind != NetworkIntentKind::Firewall
             || parts.zone_uid != *provenance.zone_uid()
             || parts.network_uid != *provenance.network_uid()
         {
-            return None;
+            return Ok(None);
         }
-        self.find_network_spec(&parts)?;
-        let uplink = derive_network_ifname(
+        if self.find_network_spec(&parts)?.is_none() {
+            return Ok(None);
+        }
+        let Some(uplink) = derive_network_ifname(
             provenance.zone_uid(),
             provenance.network_uid(),
             NetworkIfRole::UplinkBridge,
             None,
         )
-        .ok()?;
+        .ok()
+        else {
+            return Ok(None);
+        };
         let marker_id = format!(
             "network-marker:{}:{}:{}",
             provenance.zone_uid().as_str(),
@@ -1824,31 +1898,40 @@ impl BundleResolver {
             "table inet d2b {{\n  chain \"{chain}\" {{ comment \"d2b managed: {marker}\";\n    ct state established,related accept comment \"d2b managed: {marker}\";\n    iifname \"{}\" ct state new accept comment \"d2b managed: {marker}\";\n  }}\n}}\n",
             uplink.as_str()
         );
-        Some(ResolvedNftablesProjectionIntent {
+        Ok(Some(ResolvedNftablesProjectionIntent {
             intent_id: id.to_owned(),
             scope_label: network_scope(provenance),
             desired_hash: stable_digest(&script_body),
             script_body,
             ownership_marker_intent_ref: marker_id,
             provenance: Some(provenance.clone()),
-        })
+        }))
     }
 
     /// Resolve a Network route row from an admitted UID-bound reference.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     pub fn resolve_network_route_intent(
         &self,
         id: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedRouteIntent> {
-        let parts = parse_network_intent_ref(id)?;
+    ) -> Result<Option<ResolvedRouteIntent>, Error> {
+        let Some(parts) = parse_network_intent_ref(id) else {
+            return Ok(None);
+        };
         if parts.kind != NetworkIntentKind::Route
             || parts.zone_uid != *provenance.zone_uid()
             || parts.network_uid != *provenance.network_uid()
         {
-            return None;
+            return Ok(None);
         }
-        let spec = self.find_network_spec(&parts)?;
-        let index = parts.index?;
+        let Some(spec) = self.find_network_spec(&parts)? else {
+            return Ok(None);
+        };
+        let Some(index) = parts.index else {
+            return Ok(None);
+        };
         let destinations = if spec.routing().host_blocklist().is_empty() {
             vec![spec.lan_cidr().as_str().to_owned()]
         } else {
@@ -1858,14 +1941,19 @@ impl BundleResolver {
                 .map(|cidr| cidr.as_str().to_owned())
                 .collect::<Vec<_>>()
         };
-        let destination = destinations.get(index)?.clone();
-        let bridge = derive_network_ifname(
+        let Some(destination) = destinations.get(index).cloned() else {
+            return Ok(None);
+        };
+        let Some(bridge) = derive_network_ifname(
             provenance.zone_uid(),
             provenance.network_uid(),
             NetworkIfRole::UplinkBridge,
             None,
         )
-        .ok()?;
+        .ok()
+        else {
+            return Ok(None);
+        };
         let via = network_cidr_host_address(spec.uplink_cidr().as_str(), 2);
         let route_spec = format!(
             "{destination}{} dev {} table main",
@@ -1883,7 +1971,7 @@ impl BundleResolver {
                 &format!("route:{route_name}"),
             )
         );
-        Some(ResolvedRouteIntent {
+        Ok(Some(ResolvedRouteIntent {
             intent_id: id.to_owned(),
             route_spec,
             destination,
@@ -1894,42 +1982,57 @@ impl BundleResolver {
             route_name: Some(route_name),
             provenance: Some(provenance.clone()),
             ownership_marker: Some(marker),
-        })
+        }))
     }
 
     /// Resolve a Network sysctl row from an admitted UID-bound reference.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     pub fn resolve_network_sysctl_intent(
         &self,
         id: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedSysctlIntent> {
-        let parts = parse_network_intent_ref(id)?;
+    ) -> Result<Option<ResolvedSysctlIntent>, Error> {
+        let Some(parts) = parse_network_intent_ref(id) else {
+            return Ok(None);
+        };
         if parts.kind != NetworkIntentKind::Sysctl
             || parts.zone_uid != *provenance.zone_uid()
             || parts.network_uid != *provenance.network_uid()
         {
-            return None;
+            return Ok(None);
         }
-        self.find_network_spec(&parts)?;
-        let role = match parts.variant.as_deref() {
-            Some("lan") => NetworkIfRole::LanBridge,
-            Some("uplink") => NetworkIfRole::UplinkBridge,
-            _ => return None,
+        if self.find_network_spec(&parts)?.is_none() {
+            return Ok(None);
+        }
+        let Some(role) = (match parts.variant.as_deref() {
+            Some("lan") => Some(NetworkIfRole::LanBridge),
+            Some("uplink") => Some(NetworkIfRole::UplinkBridge),
+            _ => None,
+        }) else {
+            return Ok(None);
         };
-        let ifname =
-            derive_network_ifname(provenance.zone_uid(), provenance.network_uid(), role, None)
-                .ok()?;
-        let key = parts.key.as_deref()?;
-        let value = match key {
-            "disable-ipv6" => "1",
-            "accept-ra" | "autoconf" => "0",
-            _ => return None,
+        let Some(ifname) =
+            derive_network_ifname(provenance.zone_uid(), provenance.network_uid(), role, None).ok()
+        else {
+            return Ok(None);
+        };
+        let Some(key) = parts.key.as_deref() else {
+            return Ok(None);
+        };
+        let Some(value) = (match key {
+            "disable-ipv6" => Some("1"),
+            "accept-ra" | "autoconf" => Some("0"),
+            _ => None,
+        }) else {
+            return Ok(None);
         };
         let marker = d2b_contracts_resource::v3::derive_network_ownership_marker(
             provenance,
             &format!("sysctl:{key}"),
         );
-        Some(ResolvedSysctlIntent {
+        Ok(Some(ResolvedSysctlIntent {
             intent_id: id.to_owned(),
             key: format!(
                 "net.ipv6.conf.{}.{}",
@@ -1939,23 +2042,30 @@ impl BundleResolver {
             value: value.to_owned(),
             provenance: Some(provenance.clone()),
             ownership_marker: Some(marker),
-        })
+        }))
     }
 
     /// Resolve a Network hosts projection from an admitted reference.
+    ///
+    /// Returns `Ok(None)` when the reference does not name a trusted intent
+    /// and `Err` when the trusted Network spec fails to parse.
     pub fn resolve_network_hosts_intent(
         &self,
         id: &str,
         provenance: &NetworkProvenance,
-    ) -> Option<ResolvedHostsIntent> {
-        let parts = parse_network_intent_ref(id)?;
+    ) -> Result<Option<ResolvedHostsIntent>, Error> {
+        let Some(parts) = parse_network_intent_ref(id) else {
+            return Ok(None);
+        };
         if parts.kind != NetworkIntentKind::Hosts
             || parts.zone_uid != *provenance.zone_uid()
             || parts.network_uid != *provenance.network_uid()
         {
-            return None;
+            return Ok(None);
         }
-        let spec = self.find_network_spec(&parts)?;
+        let Some(spec) = self.find_network_spec(&parts)? else {
+            return Ok(None);
+        };
         let marker =
             d2b_contracts_resource::v3::derive_network_ownership_marker(provenance, "hosts");
         let managed_block = format!(
@@ -1964,7 +2074,7 @@ impl BundleResolver {
             spec.lan_cidr().as_str(),
             spec.uplink_cidr().as_str()
         );
-        Some(ResolvedHostsIntent {
+        Ok(Some(ResolvedHostsIntent {
             intent_id: id.to_owned(),
             path: PathBuf::from("/etc/hosts"),
             managed_block,
@@ -1973,15 +2083,18 @@ impl BundleResolver {
             mode: 0o644,
             provenance: Some(provenance.clone()),
             ownership_marker: Some(marker),
-        })
+        }))
     }
 
-    fn find_network_spec(&self, parts: &ParsedNetworkIntentRef) -> Option<NetworkSpec> {
-        self.parsed_zone_resources.values().find_map(|bundle| {
+    fn find_network_spec(
+        &self,
+        parts: &ParsedNetworkIntentRef,
+    ) -> Result<Option<NetworkSpec>, Error> {
+        for bundle in self.parsed_zone_resources.values() {
             if bundle.zone_uid.as_ref() != Some(&parts.zone_uid) {
-                return None;
+                continue;
             }
-            let resource = bundle.resources.iter().find(|resource| {
+            let Some(resource) = bundle.resources.iter().find(|resource| {
                 resource.resource_type().as_str() == "Network"
                     && network_name_token(resource.metadata().name().as_str()) == parts.network_name
                     && resource
@@ -1995,14 +2108,30 @@ impl BundleResolver {
                                 .map(d2b_contracts_resource::v3::ResourceUid::as_str)
                                 == Some(parts.network_uid.as_str())
                         })
+            }) else {
+                continue;
+            };
+            let mut value = serde_json::to_value(resource.spec()).map_err(|error| {
+                Error::manifest_parse_error("resource-bundle.json", error.to_string())
             })?;
-            let mut value = serde_json::to_value(resource.spec()).ok()?;
-            let object = value.as_object_mut()?;
+            let object = value.as_object_mut().ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "resource-bundle.json",
+                    "Network resource spec is not an object",
+                )
+            })?;
             for field in ["providerRef", "updatePolicy", "provider"] {
                 object.remove(field);
             }
-            serde_json::from_value(value).ok()
-        })
+            let spec = serde_json::from_value(value).map_err(|error| {
+                Error::manifest_parse_error(
+                    "resource-bundle.json",
+                    format!("Network resource spec is invalid: {error}"),
+                )
+            })?;
+            return Ok(Some(spec));
+        }
+        Ok(None)
     }
 
     pub fn find_nm_unmanaged_intent(&self, id: &str) -> Option<&ResolvedNmUnmanagedIntent> {
@@ -3366,19 +3495,19 @@ type ResolvedNetworkIntentMaps = (
 fn build_resource_network_intents(
     bundles: &BTreeMap<String, Vec<u8>>,
     include_fixture_network_intents: bool,
-) -> ResolvedNetworkIntentMaps {
+) -> Result<ResolvedNetworkIntentMaps, Error> {
     // Live bundle loading resolves Network rows only after d2bd supplies the
     // committed resource UID and generation. Test-only parsed fixtures may
     // carry a `networkUid` annotation for exercising the row builder.
     if !include_fixture_network_intents {
-        return (
+        return Ok((
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeMap::new(),
             BTreeMap::new(),
-        );
+        ));
     }
     let mut nft_projections = BTreeMap::new();
     let mut markers = BTreeMap::new();
@@ -3409,17 +3538,24 @@ fn build_resource_network_intents(
                 continue;
             };
             let name = resource.metadata().name().as_str();
-            let mut spec_value =
-                serde_json::to_value(resource.spec()).unwrap_or_else(|_| serde_json::json!({}));
-            let Some(spec_object) = spec_value.as_object_mut() else {
-                continue;
-            };
+            let mut spec_value = serde_json::to_value(resource.spec()).map_err(|error| {
+                Error::manifest_parse_error("resource-bundle.json", error.to_string())
+            })?;
+            let spec_object = spec_value.as_object_mut().ok_or_else(|| {
+                Error::manifest_parse_error(
+                    "resource-bundle.json",
+                    "Network resource spec is not an object",
+                )
+            })?;
             for field in ["providerRef", "updatePolicy", "provider"] {
                 spec_object.remove(field);
             }
-            let Ok(spec) = serde_json::from_value::<NetworkSpec>(spec_value) else {
-                continue;
-            };
+            let spec = serde_json::from_value::<NetworkSpec>(spec_value).map_err(|error| {
+                Error::manifest_parse_error(
+                    "resource-bundle.json",
+                    format!("Network resource spec is invalid: {error}"),
+                )
+            })?;
             let Some(lan_bridge) =
                 derive_network_ifname(&zone_uid, &network_uid, NetworkIfRole::LanBridge, None).ok()
             else {
@@ -3621,7 +3757,7 @@ fn build_resource_network_intents(
         }
     }
 
-    (nft_projections, markers, bridges, routes, sysctls, hosts)
+    Ok((nft_projections, markers, bridges, routes, sysctls, hosts))
 }
 
 // ---------------------------------------------------------------
@@ -6925,6 +7061,7 @@ mod tests {
             },
             include_fixture_network_intents,
         )
+        .expect("fixture network intents parse")
     }
 
     fn current_user_bundle_policy() -> BundleVerifyPolicy {
@@ -7644,6 +7781,22 @@ mod tests {
             BoundedToken::parse("net-vm-base").unwrap(),
         )
         .unwrap();
+        network_resource_bundle_bytes_with_spec(
+            zone,
+            zone_uid,
+            network_uid,
+            network_name,
+            serde_json::to_value(&spec).unwrap(),
+        )
+    }
+
+    fn network_resource_bundle_bytes_with_spec(
+        zone: &str,
+        zone_uid: &ResourceUid,
+        network_uid: &ResourceUid,
+        network_name: &str,
+        spec: serde_json::Value,
+    ) -> Vec<u8> {
         let mut annotations = BTreeMap::new();
         annotations.insert("networkUid".to_owned(), network_uid.as_str().to_owned());
         let resource = BundleResource::new(
@@ -7757,13 +7910,15 @@ mod tests {
         let lan_id = intent_id_network_bridge_uids(&zone_uid, &network_uid, "work-net", false);
         let lan = resolver
             .resolve_network_bridge_intent(&lan_id, &provenance)
-            .expect("resolved LAN bridge");
+            .expect("resolved LAN bridge")
+            .expect("LAN bridge intent present");
         assert_eq!(lan.ipv4_address, None, "the LAN bridge carries no address");
 
         let uplink_id = intent_id_network_bridge_uids(&zone_uid, &network_uid, "work-net", true);
         let uplink = resolver
             .resolve_network_bridge_intent(&uplink_id, &provenance)
-            .expect("resolved uplink bridge");
+            .expect("resolved uplink bridge")
+            .expect("uplink bridge intent present");
         assert_eq!(
             uplink.ipv4_address.as_ref().map(Ipv4Cidr::as_str),
             Some("192.0.2.1/30"),
@@ -7773,7 +7928,8 @@ mod tests {
         let route_id = intent_id_network_route_uids(&zone_uid, &network_uid, "work-net", 0);
         let route = resolver
             .resolve_network_route_intent(&route_id, &provenance)
-            .expect("resolved Network route");
+            .expect("resolved Network route")
+            .expect("route intent present");
         assert_eq!(
             route.via.as_deref(),
             Some("192.0.2.2"),
@@ -7783,6 +7939,60 @@ mod tests {
             route.device.as_deref(),
             Some(uplink.bridge_ifname.as_str()),
             "the route step rides the uplink bridge that now carries the address"
+        );
+        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn network_spec_parse_failure_surfaces_as_manifest_parse_error() {
+        let root = test_root("network-spec-parse-error");
+        let zone_uid =
+            ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("zone uid");
+        let network_uid =
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("network uid");
+        let provenance = NetworkProvenance::new(
+            zone_uid.clone(),
+            network_uid.clone(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(4).unwrap(),
+            d2b_contracts_resource::v3::ResourceGeneration::new(7).unwrap(),
+            d2b_contracts_resource::v3::ResourceBundleGenerationId::parse(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
+        );
+        let mut resolver = build_personal_dev_bundle(&root);
+        // A Network row whose spec is not a valid NetworkSpec is a
+        // producer-side drift: the resolver must refuse with the typed
+        // manifest-parse-error instead of reporting the intent as absent.
+        let bytes = network_resource_bundle_bytes_with_spec(
+            "work",
+            &zone_uid,
+            &network_uid,
+            "work-net",
+            serde_json::json!({ "lanCidr": "not-a-cidr" }),
+        );
+        resolver
+            .zone_resource_bundles
+            .insert("work".to_owned(), bytes.clone());
+        resolver.parsed_zone_resources.insert(
+            "work".to_owned(),
+            ResourceBundle::from_json(&bytes).expect("zone bundle parses"),
+        );
+
+        let lan_id = intent_id_network_bridge_uids(&zone_uid, &network_uid, "work-net", false);
+        let error = resolver
+            .resolve_network_bridge_intent(&lan_id, &provenance)
+            .expect_err("a malformed Network spec must refuse, not report the intent absent");
+        assert_eq!(
+            error.kind(),
+            d2b_contracts::error::Kind::ManifestParseError,
+            "the refusal must carry the manifest-parse-error kind"
+        );
+        assert_eq!(
+            error.code(),
+            40,
+            "the refusal must carry the manifest-parse-error exit code"
         );
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(root);
@@ -7820,7 +8030,8 @@ mod tests {
                 ),
             ),
         ]);
-        let (_, _, bridges, routes, _, _) = build_resource_network_intents(&bundles, true);
+        let (_, _, bridges, routes, _, _) =
+            build_resource_network_intents(&bundles, true).expect("fixture network intents parse");
         let first_bridge_id =
             intent_id_network_bridge_uids(&zone_a, &network_a, "same-name", false);
         let second_bridge_id =
@@ -7897,7 +8108,8 @@ mod tests {
         let bridge_id = intent_id_network_bridge_uids(&zone_uid, &network_uid, "work-net", false);
         let bridge = resolver
             .resolve_network_bridge_intent(&bridge_id, &provenance)
-            .expect("resolved Network bridge");
+            .expect("resolved Network bridge")
+            .expect("bridge intent present");
         assert_eq!(bridge.provenance.as_ref(), Some(&provenance));
         assert_eq!(
             bridge.ownership_marker.as_deref(),
@@ -7916,7 +8128,8 @@ mod tests {
         let route_id = intent_id_network_route_uids(&zone_uid, &network_uid, "work-net", 0);
         let route = resolver
             .resolve_network_route_intent(&route_id, &provenance)
-            .expect("resolved Network route");
+            .expect("resolved Network route")
+            .expect("route intent present");
         assert_eq!(route.provenance.as_ref(), Some(&provenance));
         assert_eq!(
             route.ownership_marker.as_deref(),
@@ -7936,7 +8149,8 @@ mod tests {
             intent_id_network_ownership_marker_uids(&zone_uid, &network_uid, "work-net");
         let marker = resolver
             .resolve_network_marker_intent(&marker_id, &provenance)
-            .expect("resolved Network ownership marker");
+            .expect("resolved Network ownership marker")
+            .expect("ownership marker intent present");
         assert_eq!(marker.provenance.as_ref(), Some(&provenance));
         assert_eq!(
             marker.marker,

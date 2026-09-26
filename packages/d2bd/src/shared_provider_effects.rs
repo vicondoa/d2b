@@ -3103,7 +3103,7 @@ mod tests {
             );
             let intent = effects.intents.resolve_bridge_intent("bridge-0", &provenance);
             assert!(
-                intent.is_none(),
+                matches!(intent, Ok(None)),
                 "a tampered bundle yields no intent:the effect refuses closed",
             );
         });
