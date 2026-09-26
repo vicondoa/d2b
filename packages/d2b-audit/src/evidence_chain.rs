@@ -47,7 +47,7 @@ pub const NESTED_DEPTH_EXCEEDED: &str = "nested-depth-exceeded";
 /// one invocation always key on the same id. The identities are the
 /// invoking principals, ordered from the initiating principal at index
 /// zero to the invoking handler of the leg itself at the end.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EvidenceChain {
     /// The invocation identifier the root call was minted under; every
     /// nested leg of the invocation carries the same id.
@@ -55,6 +55,29 @@ pub struct EvidenceChain {
     /// The ordered identities, root first. Never empty: a chain always
     /// starts with the initiating principal.
     identities: Vec<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for EvidenceChain {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Wire {
+            root_invocation_id: String,
+            identities: Vec<String>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.identities.is_empty() {
+            return Err(serde::de::Error::custom(
+                "evidence-chain-empty-identities",
+            ));
+        }
+        Ok(Self {
+            root_invocation_id: wire.root_invocation_id,
+            identities: wire.identities,
+        })
+    }
 }
 
 impl EvidenceChain {
@@ -365,5 +388,35 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         assert_eq!(root_record_count(&only_nested, "invocation-1"), 0);
+    }
+
+    #[test]
+    fn an_evidence_chain_round_trips_through_the_wire_shape() {
+        let chain = EvidenceChain::root("invocation-1", "provider-alpha")
+            .nested("provider-beta");
+        let json = serde_json::to_value(&chain).expect("the chain serializes");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "root_invocation_id": "invocation-1",
+                "identities": ["provider-alpha", "provider-beta"],
+            })
+        );
+        let parsed: EvidenceChain =
+            serde_json::from_value(json).expect("the chain deserializes");
+        assert_eq!(parsed, chain);
+    }
+
+    #[test]
+    fn an_empty_identities_chain_is_refused_at_the_admission_gate() {
+        let err = serde_json::from_value::<EvidenceChain>(serde_json::json!({
+            "root_invocation_id": "invocation-1",
+            "identities": [],
+        }))
+        .expect_err("an empty identities list is not a legal chain");
+        assert!(
+            err.to_string().contains("evidence-chain-empty-identities"),
+            "the refusal names the admission gate: {err}"
+        );
     }
 }
