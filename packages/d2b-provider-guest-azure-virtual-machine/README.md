@@ -21,8 +21,8 @@ inside the effect adapter and are represented externally only by digests.
 ## Controllers / services / workers / binaries
 
 `AzureVmController` implements non-blocking LRO provisioning, bootstrap
-delivery, restart adoption, and finalization. `BootstrapService` performs the
-one-time PSK admission transition to enrolled KK.
+delivery, restart adoption on reconcile, and finalization. `BootstrapService`
+performs the one-time PSK admission transition to enrolled KK.
 
 ## Placement and dependencies
 
@@ -42,8 +42,9 @@ implementations. Bootstrap PSKs are zeroized and single-use.
 
 ## State and telemetry
 
-Guest status stores only bounded lifecycle and digest projections. ARM LRO
-polling is requeue-driven.
+The controller keeps bounded non-secret lifecycle state for restart recovery;
+the framework Guest adapter owns the published Guest status. ARM LRO polling is
+requeue-driven.
 
 ## Build and test
 

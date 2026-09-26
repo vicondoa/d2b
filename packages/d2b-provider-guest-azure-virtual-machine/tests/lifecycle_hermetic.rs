@@ -6,7 +6,7 @@ use d2b_contracts::{OpaqueAzureRef, ResourceRef};
 use d2b_provider_guest_azure_virtual_machine::{
     AzureAccessToken, AzureCredentialPort, AzureEffectPort, AzureOperationHandle, AzureVmConfig,
     AzureVmController, AzureVmError, AzureVmGuestSettings, AzureVmHandle, AzureVmPhase,
-    AzureVmReconcileOutcome, AzureVmRecoveryState, AzureVmState, AzureVmUpdate, BootstrapAdmission,
+    AzureVmReconcileOutcome, AzureVmRecoveryState, AzureVmState, BootstrapAdmission,
     BootstrapPsk, BootstrapPskDelivery, BootstrapService, DiskSku, LroStatus, PskExtensionPayload,
     TagDigest,
 };
@@ -265,26 +265,6 @@ fn azure_wire_enums_use_adr_values() {
     );
 }
 
-#[test]
-fn azure_vm_update_resize_round_trips_with_the_plain_string_wire_shape() {
-    let update = AzureVmUpdate::Resize {
-        size: OpaqueAzureRef::parse("standard-d8").unwrap(),
-    };
-    let encoded = serde_json::to_value(&update).unwrap();
-    assert_eq!(
-        encoded,
-        serde_json::json!({ "resize": { "size": "standard-d8" } })
-    );
-    assert_eq!(
-        serde_json::from_value::<AzureVmUpdate>(encoded).unwrap(),
-        update
-    );
-    assert!(
-        serde_json::from_str::<AzureVmUpdate>(r#"{"resize":{"size":""}}"#).is_err(),
-        "the size SKU is validated at the deserialization boundary"
-    );
-}
-
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
 async fn absent_vm_starts_non_blocking_provision() {
@@ -425,7 +405,7 @@ async fn recovery_state_restores_opaque_lro_without_secret_material() {
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
-async fn restart_adopts_only_tagged_running_vm() {
+async fn restart_converges_only_tagged_running_vm() {
     let (provider, settings) = config();
     let state = Arc::new(Mutex::new(FakeState {
         state: AzureVmState::Running,
@@ -440,11 +420,15 @@ async fn restart_adopts_only_tagged_running_vm() {
         .unwrap()
         .with_bootstrap_service(enrolled_service());
     assert_eq!(
-        controller.adopt().await.unwrap(),
+        controller.reconcile("zone", "guest", 1).await.unwrap(),
         AzureVmReconcileOutcome::Converged
     );
     assert_eq!(controller.phase(), AzureVmPhase::Ready);
-    assert!(!format!("{:?}", controller.status()).contains("opaque-vm"));
+    assert_eq!(
+        state.lock().await.calls,
+        Vec::<&str>::new(),
+        "a running tagged VM is converged in place, never provisioned again"
+    );
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -462,7 +446,7 @@ async fn delete_keeps_finalizer_until_lro_completion() {
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
-    controller.adopt().await.unwrap();
+    controller.reconcile("zone", "guest", 1).await.unwrap();
     assert!(matches!(
         controller.finalize("zone", "guest", 1).await.unwrap(),
         AzureVmReconcileOutcome::Progressing { .. }
@@ -499,60 +483,14 @@ async fn running_vm_waits_for_authenticated_enrollment() {
         AzureVmReconcileOutcome::Retry { .. }
     ));
     assert_eq!(controller.phase(), AzureVmPhase::Bootstrapping);
-    assert!(controller.status().identity_digest().is_none());
 }
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
-async fn ready_vm_accepts_typed_resize_and_commits_after_lro() {
+async fn failed_lro_honors_pending_delete_intent() {
     let (provider, settings) = config();
     let state = Arc::new(Mutex::new(FakeState {
-        state: AzureVmState::Running,
-        handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
-        tags: Some(expected_tag_digest()),
-        polls: vec![LroStatus::Succeeded],
-        ..FakeState::default()
-    }));
-    let effect = FakeEffect {
-        state: Arc::clone(&state),
-    };
-    let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
-        .unwrap()
-        .with_bootstrap_service(enrolled_service());
-    controller.adopt().await.unwrap();
-    assert!(matches!(
-        controller
-            .update(
-                "zone",
-                "guest",
-                1,
-                AzureVmUpdate::Resize {
-                    size: OpaqueAzureRef::parse("standard-d8").unwrap(),
-                },
-            )
-            .await
-            .unwrap(),
-        AzureVmReconcileOutcome::Progressing { .. }
-    ));
-    assert_eq!(controller.phase(), AzureVmPhase::Reconfiguring);
-    assert_eq!(
-        controller
-            .poll_operation(AzureOperationHandle::from_core(b"resize").unwrap())
-            .await
-            .unwrap(),
-        AzureVmReconcileOutcome::Converged
-    );
-    assert_eq!(controller.phase(), AzureVmPhase::Ready);
-}
-
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-#[tokio::test]
-async fn failed_update_lro_honors_pending_delete_intent() {
-    let (provider, settings) = config();
-    let state = Arc::new(Mutex::new(FakeState {
-        state: AzureVmState::Running,
-        handle: Some(AzureVmHandle::from_core("opaque-vm").unwrap()),
-        tags: Some(expected_tag_digest()),
+        state: AzureVmState::Absent,
         polls: vec![
             LroStatus::Succeeded,
             LroStatus::Succeeded,
@@ -566,30 +504,18 @@ async fn failed_update_lro_honors_pending_delete_intent() {
     let mut controller = AzureVmController::new(provider, settings, effect, credential(), None)
         .unwrap()
         .with_bootstrap_service(enrolled_service());
-    controller.adopt().await.unwrap();
-    controller
-        .update(
-            "zone",
-            "guest",
-            1,
-            AzureVmUpdate::Resize {
-                size: OpaqueAzureRef::parse("standard-d8").unwrap(),
-            },
-        )
-        .await
-        .unwrap();
+    controller.reconcile("zone", "guest", 1).await.unwrap();
     controller.finalize("zone", "guest", 2).await.unwrap();
     assert_eq!(
         controller
-            .poll_operation(AzureOperationHandle::from_core(b"resize").unwrap())
+            .poll_operation(AzureOperationHandle::from_core(b"provision").unwrap())
             .await
             .unwrap(),
         AzureVmReconcileOutcome::Progressing { after_ms: 1_000 }
     );
     assert_eq!(controller.phase(), AzureVmPhase::Deleting);
     assert!(controller.finalizer_installed());
-    assert!(controller.recovery_state().pending_update.is_none());
-    assert_eq!(state.lock().await.calls, ["delete"]);
+    assert_eq!(state.lock().await.calls, ["provision", "delete"]);
     controller
         .poll_operation(AzureOperationHandle::from_core(b"delete").unwrap())
         .await
@@ -623,7 +549,6 @@ async fn restart_with_pending_delete_never_reprovisions_an_absent_vm() {
             bootstrap_started_at_unix_ms: None,
             psk_delivery_attempts: 0,
             operation_started_at_unix_ms: None,
-            pending_update: None,
             bootstrap_service_state: BootstrapService::default().state(),
             bootstrap_extension_present: false,
             child_cleanup_complete: false,
@@ -647,7 +572,7 @@ async fn restart_with_pending_delete_never_reprovisions_an_absent_vm() {
 
 #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
 #[tokio::test]
-async fn foreign_tags_are_not_adopted() {
+async fn foreign_tags_are_not_reconciled() {
     let (provider, settings) = config();
     let state = Arc::new(Mutex::new(FakeState {
         state: AzureVmState::Running,
@@ -660,7 +585,7 @@ async fn foreign_tags_are_not_adopted() {
         .unwrap()
         .with_bootstrap_service(enrolled_service());
     assert_eq!(
-        controller.adopt().await.unwrap_err(),
+        controller.reconcile("zone", "guest", 1).await.unwrap_err(),
         AzureVmError::ArmResourceConflict
     );
     assert_eq!(controller.phase(), AzureVmPhase::Failed);
@@ -866,7 +791,6 @@ async fn bootstrap_deadline_retries_failed_extension_cleanup() {
         bootstrap_started_at_unix_ms: Some(0),
         psk_delivery_attempts: 0,
         operation_started_at_unix_ms: None,
-        pending_update: None,
         bootstrap_service_state: BootstrapService::default().state(),
         bootstrap_extension_present: true,
         child_cleanup_complete: false,
