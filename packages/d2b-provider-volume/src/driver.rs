@@ -377,7 +377,7 @@ impl VolumeDriver {
         spec: &VolumeSpec,
         op: DriverOp,
     ) -> Result<Vec<DesiredBindingChild>, VolumeDriverError> {
-        let intents = desired_binding_intents(volume_ref.clone(), spec, false).map_err(|error| {
+        let intents = desired_binding_intents(volume_ref, spec, false).map_err(|error| {
             self.error(VolumeDriverErrorKind::ChildDerivation, op)
                 .with_detail(derivation_detail(error.code()))
         })?;

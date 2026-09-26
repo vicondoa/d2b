@@ -78,7 +78,7 @@ impl core::fmt::Debug for BindingIntent {
 /// and guest mount path -- never from the attachment index -- so reordering
 /// declared attachments never churns identities.
 pub fn desired_binding_intents(
-    volume_ref: ResourceRef,
+    volume_ref: &ResourceRef,
     spec: &VolumeSpec,
     supports_shared_write: bool,
 ) -> Result<Vec<BindingIntent>, VolumeLocalError> {
@@ -170,7 +170,7 @@ mod tests {
     fn every_virtiofs_attachment_becomes_a_stable_owned_intent() {
         let volume = ResourceRef::parse("Volume/work-state").unwrap();
         let intents =
-            desired_binding_intents(volume.clone(), &fixtures::attached_state_volume(), false)
+            desired_binding_intents(&volume, &fixtures::attached_state_volume(), false)
                 .expect("intent");
         assert_eq!(intents.len(), 1);
         assert_eq!(intents[0].owner_ref(), &volume);
@@ -178,7 +178,7 @@ mod tests {
         assert!(intents[0].name().as_str().starts_with("vol-binding-"));
         assert_eq!(
             intents[0].name(),
-            desired_binding_intents(volume, &fixtures::attached_state_volume(), false,).unwrap()[0]
+            desired_binding_intents(&volume, &fixtures::attached_state_volume(), false,).unwrap()[0]
                 .name()
         );
     }
@@ -187,13 +187,13 @@ mod tests {
     fn reordering_attachments_never_churns_binding_names() {
         let volume = ResourceRef::parse("Volume/work-state").unwrap();
         let spec = two_attachment_volume();
-        let forward = desired_binding_intents(volume.clone(), &spec, false).expect("intents");
+        let forward = desired_binding_intents(&volume, &spec, false).expect("intents");
         let mut reordered = serde_json::to_value(&spec).unwrap();
         let attachments = reordered["attachments"].as_array().unwrap().clone();
         let swapped: Vec<_> = attachments.into_iter().rev().collect();
         reordered["attachments"] = serde_json::Value::Array(swapped);
         let backward_spec: VolumeSpec = serde_json::from_value(reordered).unwrap();
-        let backward = desired_binding_intents(volume, &backward_spec, false).expect("intents");
+        let backward = desired_binding_intents(&volume, &backward_spec, false).expect("intents");
 
         assert_eq!(forward.len(), backward.len());
         for intent in &forward {
@@ -206,11 +206,11 @@ mod tests {
         let volume = ResourceRef::parse("Volume/work-state").unwrap();
         let mut value = serde_json::to_value(fixtures::attached_state_volume()).unwrap();
         let spec: VolumeSpec = serde_json::from_value(value.clone()).unwrap();
-        let controller = desired_binding_intents(volume.clone(), &spec, false).unwrap();
+        let controller = desired_binding_intents(&volume, &spec, false).unwrap();
         value["attachments"][0]["view"] = serde_json::json!("reader");
         value["attachments"][0]["access"] = serde_json::json!("read-only");
         let reader_spec: VolumeSpec = serde_json::from_value(value).unwrap();
-        let reader = desired_binding_intents(volume, &reader_spec, false).unwrap();
+        let reader = desired_binding_intents(&volume, &reader_spec, false).unwrap();
 
         assert_eq!(controller[0].execution_ref(), reader[0].execution_ref());
         assert_eq!(controller[0].mount_path(), reader[0].mount_path());
@@ -233,7 +233,7 @@ mod tests {
         let spec: VolumeSpec = serde_json::from_value(value).unwrap();
         assert!(
             desired_binding_intents(
-                ResourceRef::parse("Volume/work-state").unwrap(),
+                &ResourceRef::parse("Volume/work-state").unwrap(),
                 &spec,
                 false,
             )
