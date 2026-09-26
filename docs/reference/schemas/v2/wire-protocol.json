@@ -758,6 +758,18 @@
     "AuditExportEntry": {
       "description": "One typed audit export entry. Exactly one of `record` and `error` is populated by the broker.",
       "type": "object",
+      "oneOf": [
+        {
+          "required": [
+            "record"
+          ]
+        },
+        {
+          "required": [
+            "error"
+          ]
+        }
+      ],
       "required": [
         "sequence"
       ],

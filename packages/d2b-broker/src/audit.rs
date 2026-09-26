@@ -26,7 +26,9 @@ use crate::{
 };
 use d2b_audit::evidence_chain::ChainRecord;
 use d2b_contracts_broker::broker_wire::{BrokerAuditFilter, BrokerAuditSeverity, ExportBrokerAuditResponse};
-use d2b_contracts_broker::{AuditExportCursor, AuditExportEntry, AuditExportErrorCode};
+use d2b_contracts_broker::{
+    AuditExportCursor, AuditExportEntry, AuditExportEntryPayload, AuditExportErrorCode,
+};
 
 /// Broker semantic version embedded in every [`OpAuditRecord`].
 /// Picked up at compile time from `Cargo.toml`.
@@ -1751,8 +1753,9 @@ fn export_page_locked(
             Err(_) => {
                 let entry = AuditExportEntry {
                     sequence,
-                    record: None,
-                    error: Some(AuditExportErrorCode::ReadFailed),
+                    payload: AuditExportEntryPayload::Error {
+                        error: AuditExportErrorCode::ReadFailed,
+                    },
                 };
                 if !append_export_entry(
                     &mut output,
@@ -1797,8 +1800,9 @@ fn export_page_locked(
                     }
                     let entry = AuditExportEntry {
                         sequence,
-                        record: None,
-                        error: Some(AuditExportErrorCode::ReadFailed),
+                        payload: AuditExportEntryPayload::Error {
+                            error: AuditExportErrorCode::ReadFailed,
+                        },
                     };
                     if !append_export_entry(
                         &mut output,
@@ -1830,8 +1834,9 @@ fn export_page_locked(
                 Err(_) => {
                     let entry = AuditExportEntry {
                         sequence,
-                        record: None,
-                        error: Some(AuditExportErrorCode::ReadFailed),
+                        payload: AuditExportEntryPayload::Error {
+                            error: AuditExportErrorCode::ReadFailed,
+                        },
                     };
                     if !append_export_entry(
                         &mut output,
@@ -1872,13 +1877,15 @@ fn export_page_locked(
             let entry = match raw_record.map(sanitize_audit_value) {
                 Some(Value::Object(record)) => AuditExportEntry {
                     sequence,
-                    record: Some(Value::Object(record)),
-                    error: None,
+                    payload: AuditExportEntryPayload::Record {
+                        record: Value::Object(record),
+                    },
                 },
                 _ => AuditExportEntry {
                     sequence,
-                    record: None,
-                    error: Some(AuditExportErrorCode::RecordInvalid),
+                    payload: AuditExportEntryPayload::Error {
+                        error: AuditExportErrorCode::RecordInvalid,
+                    },
                 },
             };
             if !append_export_entry(
@@ -2602,13 +2609,14 @@ fn append_export_entry(
 }
 
 fn legacy_export_entry_line(entry: AuditExportEntry) -> io::Result<String> {
-    serde_json::to_string(&entry.record.or_else(|| {
-        Some(serde_json::json!({
-            "export_error": entry.error,
+    let line = match entry.payload {
+        AuditExportEntryPayload::Record { record } => record,
+        AuditExportEntryPayload::Error { error } => serde_json::json!({
+            "export_error": error,
             "sequence": entry.sequence,
-        }))
-    }))
-    .map_err(|error| io::Error::other(error.to_string()))
+        }),
+    };
+    serde_json::to_string(&line).map_err(|error| io::Error::other(error.to_string()))
 }
 
 fn cursor_is_after(previous: &AuditExportCursor, next: &AuditExportCursor) -> bool {
@@ -3075,7 +3083,12 @@ mod tests {
         assert_eq!(second.entries.len(), 1);
         assert_eq!(second.entries[0].sequence, 1);
         assert_eq!(second.next_cursor.as_ref().unwrap().sequence, 1);
-        assert!(second.entries.iter().all(|entry| entry.record.is_some()));
+        assert!(
+            second
+                .entries
+                .iter()
+                .all(|entry| matches!(entry.payload, AuditExportEntryPayload::Record { .. }))
+        );
         let third = log
             .export_page(None, None, second.next_cursor.as_ref(), 1)
             .expect("export completion page");
@@ -3383,7 +3396,7 @@ mod tests {
             .expect("retry unreadable file");
         assert_eq!(second.entries.len(), 1);
         assert_eq!(
-            second.entries[0].error,
+            second.entries[0].error(),
             Some(AuditExportErrorCode::ReadFailed)
         );
         assert!(second.complete);
@@ -3413,7 +3426,7 @@ mod tests {
             .expect("export oversized line");
         assert_eq!(first.entries.len(), 1);
         assert_eq!(
-            first.entries[0].error,
+            first.entries[0].error(),
             Some(AuditExportErrorCode::ReadFailed)
         );
         let cursor = first
@@ -3427,8 +3440,7 @@ mod tests {
         assert_eq!(second.entries.len(), 1);
         assert_eq!(
             second.entries[0]
-                .record
-                .as_ref()
+                .record()
                 .and_then(|record| record.get("op"))
                 .and_then(Value::as_str),
             Some("after-oversized")
@@ -3476,7 +3488,7 @@ mod tests {
             .expect("export truncated line");
         assert_eq!(page.entries.len(), 1);
         assert_eq!(
-            page.entries[0].error,
+            page.entries[0].error(),
             Some(AuditExportErrorCode::ReadFailed)
         );
         assert!(page.complete);
@@ -3607,8 +3619,7 @@ mod tests {
         assert_eq!(page.entries.len(), 1);
         assert_eq!(
             page.entries[0]
-                .record
-                .as_ref()
+                .record()
                 .and_then(|record| record.get("op"))
                 .and_then(Value::as_str),
             Some("Hello")
@@ -3647,7 +3658,7 @@ mod tests {
             .expect("export corruption");
         assert_eq!(first.entries.len(), 1);
         assert_eq!(
-            first.entries[0].error,
+            first.entries[0].error(),
             Some(AuditExportErrorCode::ReadFailed)
         );
         let cursor = first.next_cursor.as_ref().expect("cursor after failure");
@@ -3659,8 +3670,7 @@ mod tests {
         assert_eq!(second.entries.len(), 1);
         assert_eq!(
             second.entries[0]
-                .record
-                .as_ref()
+                .record()
                 .and_then(|record| record.get("op"))
                 .and_then(Value::as_str),
             Some("AfterCorruption")
@@ -3730,8 +3740,7 @@ mod tests {
         assert_eq!(page.entries.len(), 1);
         assert_eq!(
             page.entries[0]
-                .record
-                .as_ref()
+                .record()
                 .and_then(|record| record.get("vm"))
                 .and_then(Value::as_str),
             Some(opaque_digest("vm-a").as_str())
