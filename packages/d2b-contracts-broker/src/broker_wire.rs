@@ -303,6 +303,17 @@ pub const DEFAULT_CONTEXT_DEADLINE_MS: u64 = 25_000;
 /// oversized handler grant.
 pub const MAX_CONTEXT_DEADLINE_MS: u64 = 60_000;
 
+/// The failure kinds a broker pidfd dispatch reports.
+///
+/// The live handler mints one of these names for every failure of a
+/// pidfd dispatch, and the daemon side reads the same names when it
+/// classifies a failed pidfd leg. Declaring the vocabulary once, here,
+/// keeps the producer and the classifier from drifting apart on the
+/// spelling of a kind neither can derive from the other - a mismatch
+/// would make a handled failure look like an unclassified one.
+pub const PIDFD_DISPATCH_FAILURE_KINDS: [&str; 3] =
+    ["PidfdRace", "PidfdOpenFailed", "ProcStatReadFailed"];
+
 /// The broker-attested context block riding one forwarded request.
 ///
 /// The broker is the sole minter. The block names the authenticating value
@@ -1684,6 +1695,46 @@ pub struct ObserveRunnerResponse {
     pub start_time_ticks: u64,
     pub cgroup_verified: bool,
     pub executable_verified: bool,
+}
+
+/// Take the Provider-controller bootstrap escrow one live runner retained
+/// at launch.
+///
+/// A daemon adopting a still-running ProviderController after its own
+/// restart sends this for the runner it identified: the broker's
+/// spawn-process kernel retained the controller's bootstrap endpoint, and
+/// the controller's bootstrap sends have been landing in it, so the
+/// daemon's bootstrap wait consumes them from here and the session
+/// acceptor can establish the controller session. The take is one-time
+/// and keyed by the same runner identity every generic Process leg uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TakeControllerBootstrapRequest {
+    pub vm_id: VmId,
+    pub role_id: RoleId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ref: Option<ResourceRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_uid: Option<ResourceUid>,
+    /// Immutable Zone identity for typed Process adoption.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_uid: Option<ResourceUid>,
+    /// Broker-independent commitment to the private runtime scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_scope: Option<[u8; 32]>,
+}
+
+/// Response to [`TakeControllerBootstrapRequest`].
+///
+/// `taken` is `false` when the registry holds no escrow for the named
+/// identity: an absent escrow is an absent result, never a refusal. When
+/// it is `true`, the escrow itself is the sole SCM_RIGHTS attachment on
+/// the same frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TakeControllerBootstrapResponse {
+    /// Whether this take claimed the retained escrow.
+    pub taken: bool,
 }
 
 /// Audio channel selected by a broker-owned PipeWire effect.

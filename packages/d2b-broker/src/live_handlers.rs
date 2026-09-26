@@ -146,6 +146,40 @@ impl std::fmt::Display for LiveHandlerError {
 
 impl std::error::Error for LiveHandlerError {}
 
+impl LiveHandlerError {
+    /// The pidfd dispatch failure kind this error reports, when it is one
+    /// of the pidfd handler failures.
+    ///
+    /// The names are the shared vocabulary in
+    /// [`d2b_contracts_broker::broker_wire::PIDFD_DISPATCH_FAILURE_KINDS`],
+    /// which is what a pidfd dispatch labels a failure with and what a
+    /// caller classifying that failure reads: mapping the variants through
+    /// the shared constant keeps the two spellings one constant, never two
+    /// literals that can drift.
+    pub fn pidfd_dispatch_failure(&self) -> Option<&'static str> {
+        let [pidfd_race, pidfd_open_failed, proc_stat_read_failed] =
+            d2b_contracts_broker::broker_wire::PIDFD_DISPATCH_FAILURE_KINDS;
+        match self {
+            Self::PidfdRace { .. } => Some(pidfd_race),
+            Self::PidfdOpenFailed { .. } => Some(pidfd_open_failed),
+            Self::ProcStatReadFailed { .. } => Some(proc_stat_read_failed),
+            Self::SpawnPreflight(_)
+            | Self::SpawnFailed { .. }
+            | Self::ReconcileExec(_)
+            | Self::UsbipLock(_)
+            | Self::HostInstall(_)
+            | Self::Activation(_)
+            | Self::Gc(_)
+            | Self::KeysRotate(_)
+            | Self::HostKey(_)
+            | Self::NmReload(_)
+            | Self::NmFileOwnership(_)
+            | Self::NmOwnershipConflict
+            | Self::SwtpmDirHardening { .. } => None,
+        }
+    }
+}
+
 /// Result of [`live_open_pidfd`].
 #[derive(Debug)]
 pub struct OpenPidfdResult {
@@ -5613,6 +5647,41 @@ mod tests {
         assert!(
             calls.load(std::sync::atomic::Ordering::SeqCst) >= 2,
             "the retry must keep attempting until the deadline"
+        );
+    }
+
+    /// The pidfd handler failures report the shared vocabulary's kinds, one
+    /// per variant and in its order: this is the producer half of the
+    /// contract a caller classifying a failed pidfd dispatch reads, so a
+    /// reordered or respelled kind here is a silent misclassification
+    /// there.
+    #[test]
+    fn pidfd_handler_failures_report_the_shared_kinds() {
+        let race = LiveHandlerError::PidfdRace {
+            pid: 1,
+            expected_start_time_ticks: 2,
+            observed_start_time_ticks: Some(3),
+        };
+        let open_failed = LiveHandlerError::PidfdOpenFailed {
+            pid: 1,
+            detail: "ESRCH".to_owned(),
+        };
+        let read_failed = LiveHandlerError::ProcStatReadFailed {
+            pid: 1,
+            detail: "EIO".to_owned(),
+        };
+        assert_eq!(
+            [
+                race.pidfd_dispatch_failure(),
+                open_failed.pidfd_dispatch_failure(),
+                read_failed.pidfd_dispatch_failure(),
+            ],
+            d2b_contracts_broker::broker_wire::PIDFD_DISPATCH_FAILURE_KINDS.map(Some),
+        );
+        // A non-pidfd failure is never labelled as a pidfd dispatch failure.
+        assert_eq!(
+            LiveHandlerError::NmOwnershipConflict.pidfd_dispatch_failure(),
+            None
         );
     }
 }
