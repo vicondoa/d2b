@@ -428,7 +428,7 @@ pub trait InteractionType: Clone + Send + Sync + 'static {
 #[derive(Clone)]
 pub struct InteractionDriverArgs<T: InteractionType> {
     /// The driver's Zone.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The controller generation every effect call binds.
     pub controller_generation: ControllerGeneration,
     /// The Provider effect port the daemon implements.
@@ -471,48 +471,7 @@ impl<T: InteractionType> ResourceDriverFactory for InteractionDriverFactory<T> {
     }
 
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
-        match InteractionDriver::new(self.args.clone()) {
-            Ok(driver) => Box::new(driver),
-            Err(error) => Box::new(RefusedInteractionDriver { error }),
-        }
-    }
-}
-
-/// One driver that refuses every verb with a construction-time refusal.
-///
-/// The daemon validates the zone at plane construction, so `create` never
-/// sees a malformed zone in production; this arm keeps the factory
-/// infallible (R3) while the typed refusal surfaces through the actor's
-/// first verb instead of panicking.
-struct RefusedInteractionDriver {
-    error: InteractionDriverError,
-}
-
-#[async_trait]
-impl ResourceDriver for RefusedInteractionDriver {
-    type Error = InteractionDriverError;
-
-    fn classify_error(&self, error: &InteractionDriverError) -> DriverFailure {
-        classify_interaction_error(error)
-    }
-
-    async fn validate(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
-        Err(self.error)
-    }
-
-    async fn recover(&mut self, _ctx: &mut ResourceContext) -> Result<RecoveryOutcome, Self::Error> {
-        Err(self.error)
-    }
-
-    async fn reconcile(
-        &mut self,
-        _ctx: &mut ResourceContext,
-    ) -> Result<ReconcileOutcome, Self::Error> {
-        Err(self.error)
-    }
-
-    async fn delete(&mut self, _ctx: &mut ResourceContext) -> Result<(), Self::Error> {
-        Err(self.error)
+        Box::new(InteractionDriver::new(self.args.clone()))
     }
 }
 
@@ -537,24 +496,16 @@ pub struct InteractionDriver<T: InteractionType> {
 impl<T: InteractionType> InteractionDriver<T> {
     /// Build the driver for its declared type.
     ///
-    /// The zone token is parsed once at this boundary; a malformed token is
-    /// refused as a terminal [`InteractionDriverError`] instead of panicking.
-    ///
-    /// # Errors
-    ///
-    /// Returns the `SpecInvalid` refusal when `args.zone` is not a valid
-    /// [`ZoneId`].
-    pub fn new(args: InteractionDriverArgs<T>) -> Result<Self, InteractionDriverError> {
-        let zone = ZoneId::parse(args.zone).map_err(|_| {
-            InteractionDriverError::new(InteractionDriverErrorKind::SpecInvalid, DriverOp::Validate)
-        })?;
-        Ok(Self {
-            zone,
+    /// The zone arrives as a validated [`ZoneId`] from the daemon
+    /// construction boundary, so construction is infallible.
+    pub fn new(args: InteractionDriverArgs<T>) -> Self {
+        Self {
+            zone: args.zone,
             controller_generation: args.controller_generation,
             effects: args.effects,
             behavior: args.behavior,
             watched: Vec::new(),
-        })
+        }
     }
 
     fn error(&self, kind: InteractionDriverErrorKind, op: DriverOp) -> InteractionDriverError {
@@ -674,7 +625,7 @@ impl<T: InteractionType> InteractionDriver<T> {
             .children()
             .await
             .map_err(|_| self.error(InteractionDriverErrorKind::ChildMutation, op))?;
-        Ok(owned
+        owned
             .iter()
             .filter(|row| {
                 !row.deleting
@@ -682,11 +633,14 @@ impl<T: InteractionType> InteractionDriver<T> {
                         child.type_name.as_str() == row.key.type_name && child.name == row.key.name
                     })
             })
-            .map(|row| InteractionChild {
-                resource_ref: key_ref(&row.key),
-                generation: row.generation,
+            .map(|row| {
+                Ok(InteractionChild {
+                    resource_ref: key_ref(&row.key)
+                        .map_err(|_| self.error(InteractionDriverErrorKind::SpecInvalid, op))?,
+                    generation: row.generation,
+                })
             })
-            .collect())
+            .collect::<Result<Vec<_>, InteractionDriverError>>()
     }
 
     fn effect_error(&self, error: InteractionEffectError, op: DriverOp) -> InteractionDriverError {
@@ -892,9 +846,15 @@ impl<T: InteractionType> ResourceDriver for InteractionDriver<T> {
 }
 
 /// The resource reference of one manager key.
-pub fn key_ref(key: &ResourceKey) -> ResourceRef {
-    ResourceRef::parse(&format!("{}/{}", key.type_name, key.name))
-        .expect("manager keys carry canonical resource references")
+///
+/// # Errors
+///
+/// Returns the `SpecInvalid` refusal when the key does not carry a
+/// canonical resource reference.
+pub fn key_ref(key: &ResourceKey) -> Result<ResourceRef, InteractionDriverError> {
+    ResourceRef::parse(&format!("{}/{}", key.type_name, key.name)).map_err(|_| {
+        InteractionDriverError::new(InteractionDriverErrorKind::SpecInvalid, DriverOp::Validate)
+    })
 }
 
 /// Convert one durable 16-byte uid to its canonical identity (the manager

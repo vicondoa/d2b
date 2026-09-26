@@ -243,11 +243,8 @@ pub trait VolumeDriverEffects: Send + Sync + 'static {
 // ---------------------------------------------------------------------------
 
 /// Everything the plane must construct to instantiate the Volume driver
-/// factory for one zone: the declared facet set the effects run over plus
-/// the zone identity every derived row folds in (U7).
+/// factory for one zone: the declared facet set the effects run over (U7).
 pub struct VolumeDriverArgs {
-    /// The zone this driver's rows live in.
-    pub zone: String,
     /// The daemon-supplied facet set the family's effects implementation is
     /// built from. The composition supplies the objects; the driver never
     /// holds a daemon state type and no externally built port appears here
@@ -279,7 +276,6 @@ impl ResourceDriverFactory for VolumeDriverFactory {
 
     async fn create(&self, _key: &ResourceKey) -> Box<dyn DynResourceDriver> {
         Box::new(VolumeDriver::new(VolumeDriverArgs {
-            zone: self.args.zone.clone(),
             facets: self.args.facets.clone(),
         }))
     }
@@ -981,7 +977,6 @@ mod tests {
 
     async fn driver(runtime: Arc<RecordingRuntime>) -> Box<dyn DynResourceDriver> {
         let factory = VolumeDriverFactory::new(VolumeDriverArgs {
-            zone: "work".to_owned(),
             facets: recording_facets(runtime),
         });
         factory
@@ -1011,7 +1006,6 @@ mod tests {
     #[tokio::test]
     async fn factory_registers_only_the_volume_resource_type() {
         let factory = VolumeDriverFactory::new(VolumeDriverArgs {
-            zone: "work".to_owned(),
             facets: recording_facets(RecordingRuntime::new()),
         });
         assert_eq!(factory.resource_types().len(), 1);

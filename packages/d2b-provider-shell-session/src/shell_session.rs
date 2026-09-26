@@ -118,7 +118,9 @@ impl InteractionType for ShellSession {
             name: process_ref.name().as_str().to_owned(),
             spec: serde_json::to_vec(&process_spec).map_err(|_| invalid())?,
             metadata: serde_json::to_vec(&json!({
-                "ownerRef": key_ref(children.key).to_canonical_string(),
+                "ownerRef": key_ref(children.key)
+                    .map_err(|_| invalid())?
+                    .to_canonical_string(),
                 "labels": {},
                 "annotations": {},
             }))

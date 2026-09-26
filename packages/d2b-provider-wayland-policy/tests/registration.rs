@@ -2,7 +2,7 @@
 //! plane registers, and the registry serves this type's decoder and factory
 //! from it.
 
-use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef};
+use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
 use d2b_provider_wayland_policy::{
     InteractionDriverArgs, InteractionSpecEnvelope, InteractionType,
     WAYLAND_POLICY_PROVIDER_REF, WAYLAND_POLICY_RESYNC, WAYLAND_POLICY_TYPE, WaylandPolicy,
@@ -15,7 +15,7 @@ use d2b_resource_types::{AllowedSources, WellKnownType};
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     wayland_policy_descriptor(InteractionDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(3).expect("generation"),
         effects: ScriptedEffects::new(),
         behavior: WaylandPolicy,
