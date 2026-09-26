@@ -226,7 +226,7 @@ pub trait VmStarter: Send + Sync + 'static {
 /// skipped by [`execute_autostart`].
 pub fn build_autostart_plan(resolver: &BundleResolver) -> AutostartPlan {
     let (mut net_entries, mut workload_entries): (Vec<_>, Vec<_>) = resolver
-        .manifest
+        .manifest()
         .vms
         .iter()
         .map(|(name, vm)| VmAutostartEntry {

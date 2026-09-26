@@ -172,7 +172,7 @@ impl<'de> Deserialize<'de> for ResourceErrorReason {
 }
 
 /// Typed resource-plane domain error.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceError {
     kind: ResourceErrorKind,
@@ -267,6 +267,32 @@ impl core::fmt::Debug for ResourceError {
             .field("retry_class", &self.retry_class)
             .field("reason", &"<redacted>")
             .finish()
+    }
+}
+
+impl<'de> Deserialize<'de> for ResourceError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            kind: ResourceErrorKind,
+            current_revision: Option<ZoneRevision>,
+            retry_after_ms: Option<u32>,
+            retry_class: RetryClass,
+            reason: ResourceErrorReason,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(
+            wire.kind,
+            wire.current_revision,
+            wire.retry_after_ms,
+            wire.retry_class,
+            wire.reason,
+        )
+        .map_err(serde::de::Error::custom)
     }
 }
 
@@ -376,6 +402,46 @@ mod tests {
                 reason,
             ),
             Err(ResourceErrorValidation::InvalidRetryAfter)
+        );
+    }
+
+    #[test]
+    fn resource_error_round_trips_through_the_wire() {
+        let error = ResourceError::new(
+            ResourceErrorKind::ResourceConflict,
+            Some(ZoneRevision::new(4)),
+            None,
+            RetryClass::Reauthorize,
+            ResourceErrorReason::parse("revision changed").unwrap(),
+        )
+        .unwrap();
+        let encoded = serde_json::to_vec(&error).unwrap();
+        let decoded: ResourceError = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, error);
+    }
+
+    #[test]
+    fn resource_error_wire_admission_enforces_constructor_invariants() {
+        let revision_not_allowed = br#"{
+            "kind": "resource-not-found",
+            "currentRevision": 4,
+            "retryClass": "never",
+            "reason": "gone"
+        }"#;
+        assert!(
+            serde_json::from_slice::<ResourceError>(revision_not_allowed).is_err(),
+            "currentRevision must be refused for resource-not-found"
+        );
+
+        let inconsistent_retry = br#"{
+            "kind": "backpressure",
+            "retryAfterMs": 0,
+            "retryClass": "after-delay",
+            "reason": "slow down"
+        }"#;
+        assert!(
+            serde_json::from_slice::<ResourceError>(inconsistent_retry).is_err(),
+            "a zero retryAfterMs must be refused"
         );
     }
 }

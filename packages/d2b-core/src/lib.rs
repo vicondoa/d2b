@@ -5,10 +5,7 @@ pub mod base64_codec;
 pub mod bundle;
 pub mod bundle_resolver;
 pub mod closures;
-pub mod configured_argv;
 pub mod console_ring;
-pub mod contract_id;
-pub mod error;
 pub mod host;
 pub mod host_generation;
 pub mod host_w3;
@@ -17,7 +14,6 @@ pub mod loader_worker;
 pub mod manifest_v04;
 pub mod sandbox_profile;
 pub mod privileges;
-pub mod privileges_w3;
 pub mod processes;
 pub mod provider_artifact;
 pub mod provider_capabilities;
@@ -27,8 +23,6 @@ pub mod static_invariants;
 pub mod storage;
 pub mod storage_lifecycle;
 pub mod sync;
-pub mod unsafe_local_workloads;
-pub mod workload_identity;
 
 // `test_support` is needed both by external crates (which opt in via the
 // `test-support` feature) and by d2b-core's OWN tests. Gating on

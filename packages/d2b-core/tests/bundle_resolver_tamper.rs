@@ -15,7 +15,7 @@
 //! SHA-256 self-hash), which the loader verifies before sibling artifacts.
 
 use d2b_core::bundle_resolver::{BundleResolver, BundleVerifyPolicy};
-use d2b_core::error::{BundleError, Error};
+use d2b_contracts::error::{BundleError, Error};
 use sha2::Digest as _;
 use std::fs;
 use std::io::Write as _;
@@ -269,8 +269,8 @@ fn loads_correct() {
     let resolver = BundleResolver::load_with_policy(&bundle_path, &policy)
         .expect("all-correct bundle should load without error");
 
-    assert_eq!(resolver.bundle.bundle_version, 1);
-    assert_eq!(resolver.bundle.schema_version, "v3");
+    assert_eq!(resolver.bundle().bundle_version, 1);
+    assert_eq!(resolver.bundle().schema_version, "v3");
 }
 
 // ---------------------------------------------------------------

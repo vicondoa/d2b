@@ -9,7 +9,7 @@ use std::{
 };
 
 use clap::CommandFactory;
-use d2b_core::error::Error as CoreError;
+use d2b_contracts::error::Error as CoreError;
 use serde::Serialize;
 use serde_json::Value;
 

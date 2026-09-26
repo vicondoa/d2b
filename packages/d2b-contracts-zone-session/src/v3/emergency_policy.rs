@@ -1,5 +1,6 @@
 //! Zone-wide EmergencyPolicy contract.
 
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

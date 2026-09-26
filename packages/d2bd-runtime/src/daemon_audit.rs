@@ -156,6 +156,20 @@ pub enum ResourcePlaneResult {
     Error,
 }
 
+/// Split-readiness mode for the api-ready wait phase of a VM start.
+///
+/// Closed, two-value state mirroring the run executor's split-readiness
+/// mode; serializes to the exact kebab-case strings used by the
+/// daemon-events JSONL shape (`"strict"` / `"no-wait-api"`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApiReadyMode {
+    /// Wait for both process-alive and api-ready; fail-closed on timeout.
+    Strict,
+    /// Skip the api-ready probe; pending is expected during cold boot.
+    NoWaitApi,
+}
+
 /// Whether a daemon audit event is part of an operation's authority boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaemonAuditAuthority {
@@ -190,8 +204,8 @@ pub enum DaemonEvent {
         runner: String,
         /// Configured timeout that elapsed, in whole seconds.
         elapsed_secs: u64,
-        /// Split-readiness mode: `"strict"` or `"no-wait-api"`.
-        mode: String,
+        /// Split-readiness mode (serializes as `"strict"` / `"no-wait-api"`).
+        mode: ApiReadyMode,
     },
     /// Emitted when an authenticated `vm exec` owner session is established
     /// (after admin authz + capability negotiation, before any op proxy).
@@ -512,8 +526,10 @@ pub struct DaemonAuditLog {
     /// Queue into the appender thread. `None` only when the appender could
     /// not start, which fails every write closed.
     sink: Option<AuditSink>,
+    /// Capture-only seat of the audit lines this log accepted, shared with
+    /// the appender thread.
     #[cfg(any(test, feature = "test-support"))]
-    pub captured: Arc<Mutex<Vec<String>>>,
+    captured: Arc<Mutex<Vec<String>>>,
 }
 
 /// The appender's queue and its thread handle.
@@ -878,6 +894,15 @@ impl DaemonAuditLog {
     #[cfg(any(test, feature = "test-support"))]
     pub fn no_op_with_state_dir(state_dir: impl Into<PathBuf>) -> Self {
         Self::with_appender(Some(state_dir.into()), false, true)
+    }
+
+    /// The capture-only seat of the audit lines this log accepted.
+    ///
+    /// The lines are appended by the single appender thread, so the guard is
+    /// the only way to read a consistent set of them.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn captured(&self) -> &Mutex<Vec<String>> {
+        &self.captured
     }
 
     /// Start the single appender and return the handle over its queue.
@@ -1937,12 +1962,12 @@ mod tests {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 60,
-            mode: "strict".to_owned(),
+            mode: ApiReadyMode::Strict,
         })
         .expect("write api-ready-timeout event");
 
         // Assert the in-memory captured record has the expected fields.
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(
             records.len(),
             1,
@@ -2032,6 +2057,32 @@ mod tests {
     }
 
     #[test]
+    fn api_ready_mode_roundtrips_and_rejects_invalid_strings() {
+        // The two closed modes serialize to the legacy JSONL kebab-case
+        // strings, so the daemon-events shape is unchanged.
+        assert_eq!(
+            serde_json::to_string(&ApiReadyMode::Strict).expect("serialize strict"),
+            "\"strict\"",
+        );
+        assert_eq!(
+            serde_json::to_string(&ApiReadyMode::NoWaitApi).expect("serialize no-wait-api"),
+            "\"no-wait-api\"",
+        );
+        assert_eq!(
+            serde_json::from_str::<ApiReadyMode>("\"strict\"").expect("parse strict"),
+            ApiReadyMode::Strict,
+        );
+        assert_eq!(
+            serde_json::from_str::<ApiReadyMode>("\"no-wait-api\"").expect("parse no-wait-api"),
+            ApiReadyMode::NoWaitApi,
+        );
+        assert!(
+            serde_json::from_str::<ApiReadyMode>("\"not-a-mode\"").is_err(),
+            "an unknown mode string must be rejected on deserialize",
+        );
+    }
+
+    #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn exec_lifecycle_events_are_leak_safe() {
         // The exec establish + terminate audit events carry ONLY
@@ -2053,7 +2104,7 @@ mod tests {
         })
         .expect("write terminated event");
 
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(records.len(), 2, "expected two captured lifecycle records");
 
         for line in records.iter() {
@@ -2124,7 +2175,7 @@ mod tests {
         })
         .expect("write provider-neutral shell event");
 
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(records.len(), 1, "expected one unified shell record");
         for line in records.iter() {
             assert!(
@@ -2189,7 +2240,7 @@ mod tests {
         })
         .expect("write detached kill event");
 
-        let records = log.captured.lock().expect("lock captured");
+        let records = log.captured().lock().expect("lock captured");
         assert_eq!(records.len(), 2, "expected two detached audit records");
 
         for line in records.iter() {
@@ -2373,12 +2424,12 @@ mod tests {
                 vm: "vm-a".to_owned(),
                 runner: "ch-runner".to_owned(),
                 elapsed_secs: 30,
-                mode: "strict".to_owned(),
+                mode: ApiReadyMode::Strict,
             })
             .expect_err("blocked destination must return an io error");
         assert_eq!(error.kind(), io::ErrorKind::Other);
         assert_eq!(error.to_string(), "daemon audit unavailable");
-        assert!(log.captured.lock().expect("captured").is_empty());
+        assert!(log.captured().lock().expect("captured").is_empty());
     }
 
     #[test]
@@ -2413,7 +2464,7 @@ mod tests {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 30,
-            mode: "strict".to_owned(),
+            mode: ApiReadyMode::Strict,
         })
         .expect("no-op write should not error");
 
@@ -2437,7 +2488,7 @@ mod tests {
             DaemonAuditAuthority::Authoritative,
         );
         assert!(result.is_ok());
-        assert_eq!(log.captured.lock().unwrap().len(), 1);
+        assert_eq!(log.captured().lock().unwrap().len(), 1);
     }
 
     #[test]
@@ -2519,7 +2570,7 @@ mod tests {
             vm: "vm-a".to_owned(),
             runner: "ch-runner".to_owned(),
             elapsed_secs: 60,
-            mode: "strict".to_owned(),
+            mode: ApiReadyMode::Strict,
         })
         .await
         .expect("async best-effort append");
@@ -2652,7 +2703,7 @@ mod tests {
         };
         assert!(!format!("{event:?}").contains("target-secret-canary"));
         log.write_event(event).unwrap();
-        let line = log.captured.lock().unwrap().last().cloned().unwrap();
+        let line = log.captured().lock().unwrap().last().cloned().unwrap();
         for canary in [
             "target-secret-canary",
             "item-secret-canary",

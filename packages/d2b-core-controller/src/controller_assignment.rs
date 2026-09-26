@@ -20,7 +20,7 @@ use d2b_contracts_resource::v3::{
     PlacementTargetKind, ResourceEnvelope, ResourceGeneration, ResourceName, ResourceRef,
     ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
-use serde_json::{Map, Value, json};
+use serde::{Deserialize, Serialize};
 
 /// Maximum encoded assignment evidence carried by one scoped commit.
 pub const MAX_SCOPED_COMMIT_TRANSPORT_BYTES: usize = 64 * 1024;
@@ -481,16 +481,18 @@ impl ScopedCommitTransport {
 
     /// Encode the evidence as bounded canonical JSON bytes.
     pub fn encode(&self) -> Result<Vec<u8>, AssignmentTransportError> {
-        let value = json!({
-            "version": 1,
-            "assignment": encode_assignment(&self.assignment),
-            "mutations": self
-                .mutations
-                .iter()
-                .map(encode_mutation)
-                .collect::<Vec<_>>(),
-        });
-        encode_bounded_json(&value, MAX_SCOPED_COMMIT_TRANSPORT_BYTES)
+        encode_bounded_json(
+            &ScopedCommitEnvelope {
+                version: 1,
+                assignment: AssignmentEnvelope::from_identity(&self.assignment),
+                mutations: self
+                    .mutations
+                    .iter()
+                    .map(MutationEnvelope::from_mutation)
+                    .collect(),
+            },
+            MAX_SCOPED_COMMIT_TRANSPORT_BYTES,
+        )
     }
 
     /// Decode bounded evidence produced by [`Self::encode`].
@@ -499,62 +501,19 @@ impl ScopedCommitTransport {
             return Err(AssignmentTransportError::TooLarge);
         }
         CanonicalJsonValue::parse(bytes).map_err(|_| AssignmentTransportError::Malformed)?;
-        let value = serde_json::from_slice::<Value>(bytes)
+        let envelope = serde_json::from_slice::<ScopedCommitEnvelope>(bytes)
             .map_err(|_| AssignmentTransportError::Malformed)?;
-        let object = value
-            .as_object()
-            .ok_or(AssignmentTransportError::Malformed)?;
-        require_exact_keys(object, &["version", "assignment", "mutations"])?;
-        if object.get("version").and_then(Value::as_u64) != Some(1) {
+        if envelope.version != 1
+            || envelope.mutations.is_empty()
+            || envelope.mutations.len() > 128
+        {
             return Err(AssignmentTransportError::Malformed);
         }
-        let assignment = decode_assignment(
-            object
-                .get("assignment")
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )?;
-        let mutation_values = object
-            .get("mutations")
-            .and_then(Value::as_array)
-            .ok_or(AssignmentTransportError::Malformed)?;
-        if mutation_values.is_empty() || mutation_values.len() > 128 {
-            return Err(AssignmentTransportError::Malformed);
-        }
-        let mutations = mutation_values
-            .iter()
-            .map(|value| {
-                let object = value
-                    .as_object()
-                    .ok_or(AssignmentTransportError::Malformed)?;
-                let scope = match object.get("scope") {
-                    None => ScopedResourceScope::Primary,
-                    Some(scope) => decode_scoped_resource_scope(scope)?,
-                };
-                if matches!(scope, ScopedResourceScope::Primary) {
-                    require_exact_keys(object, &["target", "verb"])?;
-                } else {
-                    require_exact_keys(object, &["target", "verb", "scope"])?;
-                }
-                let target = ResourceRef::parse(
-                    object
-                        .get("target")
-                        .and_then(Value::as_str)
-                        .ok_or(AssignmentTransportError::Malformed)?,
-                )
-                .map_err(|_| AssignmentTransportError::Malformed)?;
-                let verb = decode_assignment_verb(
-                    object
-                        .get("verb")
-                        .and_then(Value::as_str)
-                        .ok_or(AssignmentTransportError::Malformed)?,
-                )?;
-                Ok(ScopedResourceMutation {
-                    assignment: assignment.clone(),
-                    target,
-                    verb,
-                    scope,
-                })
-            })
+        let assignment = envelope.assignment.into_identity()?;
+        let mutations = envelope
+            .mutations
+            .into_iter()
+            .map(|mutation| mutation.into_mutation(&assignment))
             .collect::<Result<Vec<_>, _>>()?;
         Self::new(assignment, mutations)
     }
@@ -597,112 +556,286 @@ impl fmt::Debug for ScopedCommitTransport {
     }
 }
 
-fn encode_assignment(identity: &AssignmentIdentity) -> Value {
-    let target = match identity.target() {
-        AssignmentTarget::Zone(zone) => json!({
-            "kind": "zone",
-            "zone": zone.as_str(),
-        }),
-        AssignmentTarget::Execution { kind, reference } => json!({
-            "kind": "execution",
-            "targetKind": match kind {
-                PlacementTargetKind::Host => "host",
-                PlacementTargetKind::Guest => "guest",
+/// Strict wire form of one assignment identity.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssignmentEnvelope {
+    resource_uid: String,
+    resource_revision: u64,
+    provider_ref: String,
+    provider_generation: u64,
+    controller_generation: u64,
+    controller_role: String,
+    target: AssignmentTargetEnvelope,
+    session_owner: String,
+    session_generation: u64,
+    epoch: u64,
+}
+
+impl AssignmentEnvelope {
+    fn from_identity(identity: &AssignmentIdentity) -> Self {
+        Self {
+            resource_uid: identity.resource_uid().as_str().to_owned(),
+            resource_revision: identity.resource_revision().get(),
+            provider_ref: identity.session_binding().provider_ref().to_canonical_string(),
+            provider_generation: identity.provider_generation().get(),
+            controller_generation: identity.controller_generation().get(),
+            controller_role: identity.controller_role().to_canonical_string(),
+            target: AssignmentTargetEnvelope::from_target(identity.target()),
+            session_owner: identity.session_owner().to_canonical_string(),
+            session_generation: identity.session_generation().get(),
+            epoch: identity.epoch().get(),
+        }
+    }
+
+    fn into_identity(self) -> Result<AssignmentIdentity, AssignmentTransportError> {
+        let provider_ref = ResourceRef::parse(&self.provider_ref)
+            .map_err(|_| AssignmentTransportError::Malformed)?;
+        let target = self.target.into_target()?;
+        let provider_generation = ResourceGeneration::new(self.provider_generation)
+            .map_err(|_| AssignmentTransportError::Malformed)?;
+        let controller_generation = ControllerGeneration::new(self.controller_generation)
+            .map_err(|_| AssignmentTransportError::Malformed)?;
+        let controller_role = ResourceRef::parse(&self.controller_role)
+            .map_err(|_| AssignmentTransportError::Malformed)?;
+        let session_owner = ResourceRef::parse(&self.session_owner)
+            .map_err(|_| AssignmentTransportError::Malformed)?;
+        let session_generation = ReconnectGeneration::new(self.session_generation)
+            .map_err(|_| AssignmentTransportError::Malformed)?;
+        let session = ControllerSessionBinding::new(
+            session_owner,
+            provider_ref,
+            controller_role,
+            target,
+            provider_generation,
+            controller_generation,
+            session_generation,
+        )
+        .map_err(|_| AssignmentTransportError::Malformed)?;
+        Ok(AssignmentIdentity::new(
+            ResourceUid::parse(&self.resource_uid)
+                .map_err(|_| AssignmentTransportError::Malformed)?,
+            ZoneRevision::new(self.resource_revision),
+            session,
+            AssignmentEpoch::new(self.epoch).map_err(|_| AssignmentTransportError::Malformed)?,
+        ))
+    }
+}
+
+/// Strict wire form of one assignment target.
+///
+/// Serde cannot apply `deny_unknown_fields` to an internally tagged enum, so
+/// the flat union is parsed strictly: variant fields are optional on the
+/// wire and rejected when they do not belong to the selected `kind`.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssignmentTargetEnvelope {
+    kind: String,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_non_null_string"
+    )]
+    zone: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_non_null_string"
+    )]
+    target_kind: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_non_null_string"
+    )]
+    reference: Option<String>,
+}
+
+/// Reject an explicit JSON `null` for an optional wire field: a variant
+/// field must be absent, not null, when it does not belong to the selected
+/// target kind.
+fn deserialize_non_null_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .ok_or_else(|| serde::de::Error::custom("expected a string field, found null"))
+        .map(Some)
+}
+
+impl AssignmentTargetEnvelope {
+    fn from_target(target: &AssignmentTarget) -> Self {
+        match target {
+            AssignmentTarget::Zone(zone) => Self {
+                kind: "zone".to_owned(),
+                zone: Some(zone.as_str().to_owned()),
+                target_kind: None,
+                reference: None,
             },
-            "reference": reference.to_canonical_string(),
-        }),
-    };
-    json!({
-        "resourceUid": identity.resource_uid().as_str(),
-        "resourceRevision": identity.resource_revision().get(),
-        "providerRef": identity.session_binding().provider_ref().to_canonical_string(),
-        "providerGeneration": identity.provider_generation().get(),
-        "controllerGeneration": identity.controller_generation().get(),
-        "controllerRole": identity.controller_role().to_canonical_string(),
-        "target": target,
-        "sessionOwner": identity.session_owner().to_canonical_string(),
-        "sessionGeneration": identity.session_generation().get(),
-        "epoch": identity.epoch().get(),
-    })
-}
-
-fn encode_mutation(mutation: &ScopedResourceMutation) -> Value {
-    let mut value = json!({
-        "target": mutation.target().to_canonical_string(),
-        "verb": encode_assignment_verb(mutation.verb()),
-    })
-    .as_object()
-    .cloned()
-    .expect("scoped mutation encoding is an object");
-    if let ScopedResourceScope::OwnerChild(scope) = mutation.scope() {
-        value.insert("scope".to_owned(), encode_owner_child_scope(scope));
+            AssignmentTarget::Execution { kind, reference } => Self {
+                kind: "execution".to_owned(),
+                zone: None,
+                target_kind: Some(
+                    match kind {
+                        PlacementTargetKind::Host => "host",
+                        PlacementTargetKind::Guest => "guest",
+                    }
+                    .to_owned(),
+                ),
+                reference: Some(reference.to_canonical_string()),
+            },
+        }
     }
-    Value::Object(value)
-}
 
-fn encode_owner_child_scope(scope: &OwnerChildScope) -> Value {
-    json!({
-        "kind": "owner-child",
-        "ownerRef": scope.owner_ref().to_canonical_string(),
-        "ownerUid": scope.owner_uid().as_str(),
-        "ownerRevision": scope.owner_revision().get(),
-        "ownerGeneration": scope.owner_generation().get(),
-    })
-}
-
-fn decode_scoped_resource_scope(
-    value: &Value,
-) -> Result<ScopedResourceScope, AssignmentTransportError> {
-    let object = value
-        .as_object()
-        .ok_or(AssignmentTransportError::Malformed)?;
-    require_exact_keys(
-        object,
-        &[
-            "kind",
-            "ownerRef",
-            "ownerUid",
-            "ownerRevision",
-            "ownerGeneration",
-        ],
-    )?;
-    if object.get("kind").and_then(Value::as_str) != Some("owner-child") {
-        return Err(AssignmentTransportError::Malformed);
+    fn into_target(self) -> Result<AssignmentTarget, AssignmentTransportError> {
+        match self.kind.as_str() {
+            "zone" => {
+                let Some(zone) = self.zone else {
+                    return Err(AssignmentTransportError::Malformed);
+                };
+                if self.target_kind.is_some() || self.reference.is_some() {
+                    return Err(AssignmentTransportError::Malformed);
+                }
+                Ok(AssignmentTarget::Zone(
+                    ZoneId::parse(&zone).map_err(|_| AssignmentTransportError::Malformed)?,
+                ))
+            }
+            "execution" => {
+                let (Some(target_kind), Some(reference)) = (self.target_kind, self.reference)
+                else {
+                    return Err(AssignmentTransportError::Malformed);
+                };
+                if self.zone.is_some() {
+                    return Err(AssignmentTransportError::Malformed);
+                }
+                let target_kind = match target_kind.as_str() {
+                    "host" => PlacementTargetKind::Host,
+                    "guest" => PlacementTargetKind::Guest,
+                    _ => return Err(AssignmentTransportError::Malformed),
+                };
+                let reference =
+                    ResourceRef::parse(&reference).map_err(|_| AssignmentTransportError::Malformed)?;
+                if (target_kind == PlacementTargetKind::Host
+                    && reference.resource_type().as_str() != "Host")
+                    || (target_kind == PlacementTargetKind::Guest
+                        && reference.resource_type().as_str() != "Guest")
+                {
+                    return Err(AssignmentTransportError::Malformed);
+                }
+                Ok(AssignmentTarget::Execution {
+                    kind: target_kind,
+                    reference,
+                })
+            }
+            _ => Err(AssignmentTransportError::Malformed),
+        }
     }
-    let owner_ref = ResourceRef::parse(
-        object
-            .get("ownerRef")
-            .and_then(Value::as_str)
-            .ok_or(AssignmentTransportError::Malformed)?,
-    )
-    .map_err(|_| AssignmentTransportError::Malformed)?;
-    let owner_uid = ResourceUid::parse(
-        object
-            .get("ownerUid")
-            .and_then(Value::as_str)
-            .ok_or(AssignmentTransportError::Malformed)?,
-    )
-    .map_err(|_| AssignmentTransportError::Malformed)?;
-    let owner_revision = ZoneRevision::new(
-        object
-            .get("ownerRevision")
-            .and_then(Value::as_u64)
-            .filter(|revision| *revision != 0)
-            .ok_or(AssignmentTransportError::Malformed)?,
-    );
-    let owner_generation = ResourceGeneration::new(
-        object
-            .get("ownerGeneration")
-            .and_then(Value::as_u64)
-            .ok_or(AssignmentTransportError::Malformed)?,
-    )
-    .map_err(|_| AssignmentTransportError::Malformed)?;
-    Ok(ScopedResourceScope::OwnerChild(OwnerChildScope {
-        owner_ref,
-        owner_uid,
-        owner_revision,
-        owner_generation,
-    }))
+}
+
+/// Strict wire form of one owner-child scope.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OwnerChildScopeEnvelope {
+    kind: String,
+    owner_ref: String,
+    owner_uid: String,
+    owner_revision: u64,
+    owner_generation: u64,
+}
+
+impl OwnerChildScopeEnvelope {
+    fn from_scope(scope: &OwnerChildScope) -> Self {
+        Self {
+            kind: "owner-child".to_owned(),
+            owner_ref: scope.owner_ref().to_canonical_string(),
+            owner_uid: scope.owner_uid().as_str().to_owned(),
+            owner_revision: scope.owner_revision().get(),
+            owner_generation: scope.owner_generation().get(),
+        }
+    }
+
+    fn into_scope(self) -> Result<ScopedResourceScope, AssignmentTransportError> {
+        if self.kind != "owner-child" || self.owner_revision == 0 {
+            return Err(AssignmentTransportError::Malformed);
+        }
+        Ok(ScopedResourceScope::OwnerChild(OwnerChildScope {
+            owner_ref: ResourceRef::parse(&self.owner_ref)
+                .map_err(|_| AssignmentTransportError::Malformed)?,
+            owner_uid: ResourceUid::parse(&self.owner_uid)
+                .map_err(|_| AssignmentTransportError::Malformed)?,
+            owner_revision: ZoneRevision::new(self.owner_revision),
+            owner_generation: ResourceGeneration::new(self.owner_generation)
+                .map_err(|_| AssignmentTransportError::Malformed)?,
+        }))
+    }
+}
+
+/// Strict wire form of one scoped mutation.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MutationEnvelope {
+    target: String,
+    verb: String,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_non_null_scope"
+    )]
+    scope: Option<OwnerChildScopeEnvelope>,
+}
+
+/// Reject an explicit JSON `null` for the optional scope: a mutation either
+/// omits the key (primary scope) or carries a full owner-child object.
+fn deserialize_non_null_scope<'de, D>(
+    deserializer: D,
+) -> Result<Option<OwnerChildScopeEnvelope>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<OwnerChildScopeEnvelope>::deserialize(deserializer)?
+        .ok_or_else(|| serde::de::Error::custom("expected an owner-child scope object, found null"))
+        .map(Some)
+}
+
+impl MutationEnvelope {
+    fn from_mutation(mutation: &ScopedResourceMutation) -> Self {
+        Self {
+            target: mutation.target().to_canonical_string(),
+            verb: encode_assignment_verb(mutation.verb()).to_owned(),
+            scope: match mutation.scope() {
+                ScopedResourceScope::Primary => None,
+                ScopedResourceScope::OwnerChild(scope) => {
+                    Some(OwnerChildScopeEnvelope::from_scope(scope))
+                }
+            },
+        }
+    }
+
+    fn into_mutation(
+        self,
+        assignment: &AssignmentIdentity,
+    ) -> Result<ScopedResourceMutation, AssignmentTransportError> {
+        let scope = match self.scope {
+            None => ScopedResourceScope::Primary,
+            Some(scope) => scope.into_scope()?,
+        };
+        Ok(ScopedResourceMutation {
+            assignment: assignment.clone(),
+            target: ResourceRef::parse(&self.target)
+                .map_err(|_| AssignmentTransportError::Malformed)?,
+            verb: decode_assignment_verb(&self.verb)?,
+            scope,
+        })
+    }
+}
+
+/// Strict wire form of one scoped commit transport envelope.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScopedCommitEnvelope {
+    version: u64,
+    assignment: AssignmentEnvelope,
+    mutations: Vec<MutationEnvelope>,
 }
 
 fn encode_assignment_verb(verb: AssignmentVerb) -> &'static str {
@@ -736,174 +869,13 @@ fn decode_assignment_verb(value: &str) -> Result<AssignmentVerb, AssignmentTrans
     }
 }
 
-fn decode_assignment(value: &Value) -> Result<AssignmentIdentity, AssignmentTransportError> {
-    let object = value
-        .as_object()
-        .ok_or(AssignmentTransportError::Malformed)?;
-    require_exact_keys(
-        object,
-        &[
-            "resourceUid",
-            "resourceRevision",
-            "providerRef",
-            "providerGeneration",
-            "controllerGeneration",
-            "controllerRole",
-            "target",
-            "sessionOwner",
-            "sessionGeneration",
-            "epoch",
-        ],
-    )?;
-    let provider_ref = ResourceRef::parse(
-        object
-            .get("providerRef")
-            .and_then(Value::as_str)
-            .ok_or(AssignmentTransportError::Malformed)?,
-    )
-    .map_err(|_| AssignmentTransportError::Malformed)?;
-    let target = decode_assignment_target(
-        object
-            .get("target")
-            .ok_or(AssignmentTransportError::Malformed)?,
-    )?;
-    let provider_generation = ResourceGeneration::new(
-        object
-            .get("providerGeneration")
-            .and_then(Value::as_u64)
-            .ok_or(AssignmentTransportError::Malformed)?,
-    )
-    .map_err(|_| AssignmentTransportError::Malformed)?;
-    let controller_generation = ControllerGeneration::new(
-        object
-            .get("controllerGeneration")
-            .and_then(Value::as_u64)
-            .ok_or(AssignmentTransportError::Malformed)?,
-    )
-    .map_err(|_| AssignmentTransportError::Malformed)?;
-    let controller_role = ResourceRef::parse(
-        object
-            .get("controllerRole")
-            .and_then(Value::as_str)
-            .ok_or(AssignmentTransportError::Malformed)?,
-    )
-    .map_err(|_| AssignmentTransportError::Malformed)?;
-    let session_owner = ResourceRef::parse(
-        object
-            .get("sessionOwner")
-            .and_then(Value::as_str)
-            .ok_or(AssignmentTransportError::Malformed)?,
-    )
-    .map_err(|_| AssignmentTransportError::Malformed)?;
-    let session_generation = ReconnectGeneration::new(
-        object
-            .get("sessionGeneration")
-            .and_then(Value::as_u64)
-            .ok_or(AssignmentTransportError::Malformed)?,
-    )
-    .map_err(|_| AssignmentTransportError::Malformed)?;
-    let session = ControllerSessionBinding::new(
-        session_owner,
-        provider_ref,
-        controller_role,
-        target,
-        provider_generation,
-        controller_generation,
-        session_generation,
-    )
-    .map_err(|_| AssignmentTransportError::Malformed)?;
-    Ok(AssignmentIdentity::new(
-        ResourceUid::parse(
-            object
-                .get("resourceUid")
-                .and_then(Value::as_str)
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )
-        .map_err(|_| AssignmentTransportError::Malformed)?,
-        ZoneRevision::new(
-            object
-                .get("resourceRevision")
-                .and_then(Value::as_u64)
-                .ok_or(AssignmentTransportError::Malformed)?,
-        ),
-        session,
-        AssignmentEpoch::new(
-            object
-                .get("epoch")
-                .and_then(Value::as_u64)
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )
-        .map_err(|_| AssignmentTransportError::Malformed)?,
-    ))
-}
-
-fn decode_assignment_target(value: &Value) -> Result<AssignmentTarget, AssignmentTransportError> {
-    let object = value
-        .as_object()
-        .ok_or(AssignmentTransportError::Malformed)?;
-    let kind = object
-        .get("kind")
-        .and_then(Value::as_str)
-        .ok_or(AssignmentTransportError::Malformed)?;
-    match kind {
-        "zone" => {
-            require_exact_keys(object, &["kind", "zone"])?;
-            Ok(AssignmentTarget::Zone(
-                ZoneId::parse(
-                    object
-                        .get("zone")
-                        .and_then(Value::as_str)
-                        .ok_or(AssignmentTransportError::Malformed)?,
-                )
-                .map_err(|_| AssignmentTransportError::Malformed)?,
-            ))
-        }
-        "execution" => {
-            require_exact_keys(object, &["kind", "targetKind", "reference"])?;
-            let reference = ResourceRef::parse(
-                object
-                    .get("reference")
-                    .and_then(Value::as_str)
-                    .ok_or(AssignmentTransportError::Malformed)?,
-            )
-            .map_err(|_| AssignmentTransportError::Malformed)?;
-            let target_kind = match object
-                .get("targetKind")
-                .and_then(Value::as_str)
-                .ok_or(AssignmentTransportError::Malformed)?
-            {
-                "host" => PlacementTargetKind::Host,
-                "guest" => PlacementTargetKind::Guest,
-                _ => return Err(AssignmentTransportError::Malformed),
-            };
-            if (target_kind == PlacementTargetKind::Host
-                && reference.resource_type().as_str() != "Host")
-                || (target_kind == PlacementTargetKind::Guest
-                    && reference.resource_type().as_str() != "Guest")
-            {
-                return Err(AssignmentTransportError::Malformed);
-            }
-            Ok(AssignmentTarget::Execution {
-                kind: target_kind,
-                reference,
-            })
-        }
-        _ => Err(AssignmentTransportError::Malformed),
-    }
-}
-
-fn require_exact_keys(
-    object: &Map<String, Value>,
-    expected: &[&str],
-) -> Result<(), AssignmentTransportError> {
-    if object.len() != expected.len() || expected.iter().any(|key| !object.contains_key(*key)) {
-        return Err(AssignmentTransportError::Malformed);
-    }
-    Ok(())
-}
-
+/// Serialize one typed envelope to bounded canonical JSON bytes.
+///
+/// Kept as the single bounded-canonical egress: the transport contract pins
+/// canonical bytes and a size ceiling, which typed serde alone does not
+/// enforce.
 fn encode_bounded_json(
-    value: &Value,
+    value: &impl Serialize,
     max_bytes: usize,
 ) -> Result<Vec<u8>, AssignmentTransportError> {
     let bytes = serde_json::to_vec(value).map_err(|_| AssignmentTransportError::Malformed)?;
@@ -1674,6 +1646,63 @@ pub struct ControllerAssignmentGrant {
     scopes: BTreeSet<AssignmentScope>,
 }
 
+/// Strict wire form of one controller assignment grant.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssignmentGrantEnvelope {
+    version: u64,
+    provider_ref: String,
+    assignment: AssignmentEnvelope,
+    resource_ref: String,
+    resource_generation: u64,
+    resource_types: Vec<String>,
+    primary_verbs: Vec<String>,
+    owner_child_process_verbs: Vec<String>,
+    scopes: Vec<String>,
+}
+
+impl AssignmentGrantEnvelope {
+    fn from_grant(grant: &ControllerAssignmentGrant) -> Self {
+        Self {
+            version: 1,
+            provider_ref: grant.provider_ref.to_canonical_string(),
+            assignment: AssignmentEnvelope::from_identity(&grant.assignment),
+            resource_ref: grant.resource_ref.to_canonical_string(),
+            resource_generation: grant.resource_generation.get(),
+            resource_types: grant
+                .resource_types
+                .iter()
+                .map(|resource_type| resource_type.as_str().to_owned())
+                .collect(),
+            primary_verbs: grant
+                .primary_verbs
+                .iter()
+                .map(|verb| encode_assignment_verb(*verb).to_owned())
+                .collect(),
+            owner_child_process_verbs: grant
+                .owner_child_process_verbs
+                .iter()
+                .map(|verb| encode_assignment_verb(*verb).to_owned())
+                .collect(),
+            scopes: grant
+                .scopes
+                .iter()
+                .map(|scope| encode_assignment_scope(*scope).to_owned())
+                .collect(),
+        }
+    }
+}
+
+/// Strict wire form of one revocation notice.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssignmentRevocationEnvelope {
+    version: u64,
+    kind: String,
+    provider_ref: String,
+    assignment: AssignmentEnvelope,
+}
+
 impl ControllerAssignmentGrant {
     /// Build a grant from one admitted Core ResourceClient lease.
     pub fn from_lease(lease: &ResourceClientLease) -> Self {
@@ -1851,30 +1880,10 @@ impl ControllerAssignmentGrant {
 
     /// Encode this grant as bounded canonical JSON.
     pub fn encode(&self) -> Result<Vec<u8>, AssignmentTransportError> {
-        let value = json!({
-            "version": 1,
-            "providerRef": self.provider_ref.to_canonical_string(),
-            "assignment": encode_assignment(&self.assignment),
-            "resourceRef": self.resource_ref.to_canonical_string(),
-            "resourceGeneration": self.resource_generation.get(),
-            "resourceTypes": self.resource_types
-                .iter()
-                .map(|resource_type| resource_type.as_str())
-                .collect::<Vec<_>>(),
-            "primaryVerbs": self.primary_verbs
-                .iter()
-                .map(|verb| encode_assignment_verb(*verb))
-                .collect::<Vec<_>>(),
-            "ownerChildProcessVerbs": self.owner_child_process_verbs
-                .iter()
-                .map(|verb| encode_assignment_verb(*verb))
-                .collect::<Vec<_>>(),
-            "scopes": self.scopes
-                .iter()
-                .map(|scope| encode_assignment_scope(*scope))
-                .collect::<Vec<_>>(),
-        });
-        encode_bounded_json(&value, MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES)
+        encode_bounded_json(
+            &AssignmentGrantEnvelope::from_grant(self),
+            MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES,
+        )
     }
 
     /// Decode one bounded canonical grant.
@@ -1883,88 +1892,39 @@ impl ControllerAssignmentGrant {
             return Err(AssignmentTransportError::TooLarge);
         }
         CanonicalJsonValue::parse(bytes).map_err(|_| AssignmentTransportError::Malformed)?;
-        let value = serde_json::from_slice::<Value>(bytes)
+        let envelope = serde_json::from_slice::<AssignmentGrantEnvelope>(bytes)
             .map_err(|_| AssignmentTransportError::Malformed)?;
-        let object = value
-            .as_object()
-            .ok_or(AssignmentTransportError::Malformed)?;
-        require_exact_keys(
-            object,
-            &[
-                "version",
-                "providerRef",
-                "assignment",
-                "resourceRef",
-                "resourceGeneration",
-                "resourceTypes",
-                "primaryVerbs",
-                "ownerChildProcessVerbs",
-                "scopes",
-            ],
-        )?;
-        if object.get("version").and_then(Value::as_u64) != Some(1) {
+        if envelope.version != 1 {
             return Err(AssignmentTransportError::Malformed);
         }
-        let provider_ref = ResourceRef::parse(
-            object
-                .get("providerRef")
-                .and_then(Value::as_str)
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )
-        .map_err(|_| AssignmentTransportError::Malformed)?;
-        let assignment = decode_assignment(
-            object
-                .get("assignment")
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )?;
-        let resource_ref = ResourceRef::parse(
-            object
-                .get("resourceRef")
-                .and_then(Value::as_str)
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )
-        .map_err(|_| AssignmentTransportError::Malformed)?;
-        let resource_generation = ResourceGeneration::new(
-            object
-                .get("resourceGeneration")
-                .and_then(Value::as_u64)
-                .ok_or(AssignmentTransportError::Malformed)?,
-        )
-        .map_err(|_| AssignmentTransportError::Malformed)?;
+        let provider_ref = ResourceRef::parse(&envelope.provider_ref)
+            .map_err(|_| AssignmentTransportError::Malformed)?;
+        let assignment = envelope.assignment.into_identity()?;
+        let resource_ref = ResourceRef::parse(&envelope.resource_ref)
+            .map_err(|_| AssignmentTransportError::Malformed)?;
+        let resource_generation = ResourceGeneration::new(envelope.resource_generation)
+            .map_err(|_| AssignmentTransportError::Malformed)?;
         let resource_types = decode_string_set(
-            object
-                .get("resourceTypes")
-                .and_then(Value::as_array)
-                .ok_or(AssignmentTransportError::Malformed)?,
+            &envelope.resource_types,
             MAX_ASSIGNMENT_GRANT_RESOURCE_TYPES,
             |value| ResourceTypeName::parse(value).map_err(|_| AssignmentTransportError::Malformed),
         )?;
         let primary_verbs = decode_string_set(
-            object
-                .get("primaryVerbs")
-                .and_then(Value::as_array)
-                .ok_or(AssignmentTransportError::Malformed)?,
+            &envelope.primary_verbs,
             MAX_ASSIGNMENT_GRANT_VERBS,
             decode_assignment_verb,
         )?;
-        let owner_child_process_values = object
-            .get("ownerChildProcessVerbs")
-            .and_then(Value::as_array)
-            .ok_or(AssignmentTransportError::Malformed)?;
-        let owner_child_process_verbs = if owner_child_process_values.is_empty() {
+        let owner_child_process_verbs = if envelope.owner_child_process_verbs.is_empty() {
             BTreeSet::new()
         } else {
             decode_string_set(
-                owner_child_process_values,
+                &envelope.owner_child_process_verbs,
                 MAX_ASSIGNMENT_GRANT_VERBS,
                 decode_assignment_verb,
             )?
         };
         let scopes = decode_string_set(
-            object
-                .get("scopes")
-                .and_then(Value::as_array)
-                .ok_or(AssignmentTransportError::Malformed)?,
+            &envelope.scopes,
             MAX_ASSIGNMENT_GRANT_SCOPES,
             decode_assignment_scope,
         )?;
@@ -1988,13 +1948,15 @@ impl ControllerAssignmentGrant {
         if provider_ref.resource_type().as_str() != "Provider" {
             return Err(AssignmentTransportError::Malformed);
         }
-        let value = json!({
-            "version": 1,
-            "kind": "revoke",
-            "providerRef": provider_ref.to_canonical_string(),
-            "assignment": encode_assignment(assignment),
-        });
-        encode_bounded_json(&value, MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES)
+        encode_bounded_json(
+            &AssignmentRevocationEnvelope {
+                version: 1,
+                kind: "revoke".to_owned(),
+                provider_ref: provider_ref.to_canonical_string(),
+                assignment: AssignmentEnvelope::from_identity(assignment),
+            },
+            MAX_CONTROLLER_ASSIGNMENT_GRANT_BYTES,
+        )
     }
 }
 
@@ -2015,7 +1977,7 @@ impl fmt::Debug for ControllerAssignmentGrant {
 }
 
 fn decode_string_set<T>(
-    values: &[Value],
+    values: &[String],
     limit: usize,
     decode: impl Fn(&str) -> Result<T, AssignmentTransportError>,
 ) -> Result<BTreeSet<T>, AssignmentTransportError>
@@ -2028,7 +1990,6 @@ where
     let mut decoded = BTreeSet::new();
     let mut previous = None;
     for value in values {
-        let value = value.as_str().ok_or(AssignmentTransportError::Malformed)?;
         let value = decode(value)?;
         if previous.as_ref().is_some_and(|previous| previous >= &value) || !decoded.insert(value) {
             return Err(AssignmentTransportError::Malformed);
@@ -2297,29 +2258,19 @@ impl ControllerAssignmentGrantStore {
         }
         CanonicalJsonValue::parse(bytes)
             .map_err(|_| AssignmentGrantError::Transport(AssignmentTransportError::Malformed))?;
-        let value = serde_json::from_slice::<Value>(bytes)
-            .map_err(|_| AssignmentGrantError::Transport(AssignmentTransportError::Malformed))?;
-        let object = value.as_object().ok_or(AssignmentGrantError::Transport(
-            AssignmentTransportError::Malformed,
-        ))?;
-        if object.get("kind").and_then(Value::as_str) == Some("revoke") {
-            require_exact_keys(object, &["version", "kind", "providerRef", "assignment"])
-                .map_err(AssignmentGrantError::Transport)?;
-            if object.get("version").and_then(Value::as_u64) != Some(1) {
+        if let Ok(revocation) = serde_json::from_slice::<AssignmentRevocationEnvelope>(bytes) {
+            if revocation.kind != "revoke" || revocation.version != 1 {
                 return Err(AssignmentGrantError::Transport(
                     AssignmentTransportError::Malformed,
                 ));
             }
-            let provider_ref = ResourceRef::parse(
-                object.get("providerRef").and_then(Value::as_str).ok_or(
-                    AssignmentGrantError::Transport(AssignmentTransportError::Malformed),
-                )?,
-            )
-            .map_err(|_| AssignmentGrantError::Transport(AssignmentTransportError::Malformed))?;
-            let assignment = decode_assignment(object.get("assignment").ok_or(
-                AssignmentGrantError::Transport(AssignmentTransportError::Malformed),
-            )?)
-            .map_err(AssignmentGrantError::Transport)?;
+            let provider_ref = ResourceRef::parse(&revocation.provider_ref).map_err(|_| {
+                AssignmentGrantError::Transport(AssignmentTransportError::Malformed)
+            })?;
+            let assignment = revocation
+                .assignment
+                .into_identity()
+                .map_err(AssignmentGrantError::Transport)?;
             return self
                 .revoke_assignment(&provider_ref, assignment)
                 .map_err(AssignmentGrantError::Assignment);
@@ -3063,7 +3014,6 @@ mod tests {
             8,
             digest(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {

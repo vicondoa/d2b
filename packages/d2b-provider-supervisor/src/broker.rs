@@ -25,9 +25,9 @@ use d2b_core::bundle_resolver::{BundleResolver, intent_id_legacy_runner};
 use d2b_core::processes::ProcessRole;
 use d2b_process_conformance::runtime_scope_commitment;
 use d2b_provider_process::{
-    BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
-    ProcessEffectError, ProcessIdentityDigest, ProcessLaunchRequest, ProcessRequest,
-    ProcessStopClass, WaitReapOwner,
+    BackendLaunch, BackendObservation, IdentityBinding, LaunchedSnapshot, ObservedIdentity,
+    ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest, ProcessLaunchRequest,
+    ProcessRequest, ProcessStopClass, WaitReapOwner,
 };
 use rustix::event::{PollFd, PollFlags, poll};
 use sha2::{Digest, Sha256};
@@ -387,7 +387,7 @@ impl BundleBackedLaunchResolver {
     fn zone_for_launch_vm(&self, vm: &str) -> Option<String> {
         if let Some(environment) = self
             .bundle
-            .manifest
+            .manifest()
             .vms
             .get(vm)
             .and_then(|entry| entry.env.as_deref())
@@ -867,7 +867,7 @@ impl BundleBackedLaunchResolver {
             generation: ticket.resource_generation().get(),
             resource_ref: ticket.process_ref().clone(),
             resource_uid: ticket.process_uid().clone(),
-            bundle_content_identity: self.bundle.bundle.bundle_hash.clone().ok_or_else(|| {
+            bundle_content_identity: self.bundle.bundle().bundle_hash.clone().ok_or_else(|| {
                 warn!(
                         provider = "supervisor",
                         resource = %ticket.process_ref().to_canonical_string(),
@@ -947,9 +947,9 @@ impl std::fmt::Debug for BrokerPidfdHandle {
 /// so the family handlers' runner lookup (ObserveRunner/SignalRunner) sees
 /// it; registration failure never fails the launch.
 pub trait LaunchedObserver: Send + Sync {
-    /// One launched runner's snapshot: `(vm, role, pid, start_time_ticks,
-    /// pidfd duplicate)`.
-    fn launched(&self, vm: &str, role: &str, pid: i32, start_time_ticks: u64, pidfd: OwnedFd);
+    /// One launched runner's snapshot: its `(vm, role)` keys, live
+    /// `(pid, start_time_ticks)` identity, and owned pidfd duplicate.
+    fn launched(&self, snapshot: LaunchedSnapshot);
 }
 
 /// Production process backend for existing broker-managed runner roles.
@@ -1388,10 +1388,9 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         // handlers' runner lookup sees the kernel-spawned runner. A
         // snapshot failure never fails the launch.
         if let Some(observer) = &self.launched_observer
-            && let Some((vm, role, pid, start_time_ticks, pidfd_dup)) =
-                self.launched_runner_snapshot(&handle)?
+            && let Some(snapshot) = self.launched_runner_snapshot(&handle)?
         {
-            observer.launched(&vm, &role, pid, start_time_ticks, pidfd_dup);
+            observer.launched(snapshot);
         }
         Ok(BackendLaunch::new(observation, handle))
     }
@@ -1495,10 +1494,10 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
     fn launched_runner_snapshot(
         &self,
         handle: &Self::Handle,
-    ) -> Result<Option<(String, String, i32, u64, OwnedFd)>, ProcessEffectError> {
-        Ok(Some((
-            handle.observed.intent.vm_id.to_string(),
-            if handle.observed.intent.multi_instance {
+    ) -> Result<Option<LaunchedSnapshot>, ProcessEffectError> {
+        Ok(Some(LaunchedSnapshot {
+            vm: handle.observed.intent.vm_id.to_string(),
+            role: if handle.observed.intent.multi_instance {
                 format!(
                     "{}@{}",
                     handle.observed.intent.role_id.as_str(),
@@ -1507,9 +1506,9 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             } else {
                 handle.observed.intent.role_id.to_string()
             },
-            handle.observed.pid,
-            handle.observed.start_time_ticks,
-            handle.pidfd.try_clone().map_err(|error| {
+            pid: handle.observed.pid,
+            start_time_ticks: handle.observed.start_time_ticks,
+            pidfd: handle.pidfd.try_clone().map_err(|error| {
                 warn!(
                     provider = "supervisor",
                     error = %error,
@@ -1517,7 +1516,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                 );
                 ProcessEffectError::PidfdUnavailable
             })?,
-        )))
+        }))
     }
 
     fn take_controller_bootstrap(

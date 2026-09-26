@@ -25,10 +25,11 @@ d2b-resource-types = { path = "../d2b-resource-types", version = "0.0.0-bootstra
 async-trait = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.10"
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
 tracing = "0.1"
 zbus = "5.16"
 
 [dev-dependencies]
+d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap", features = ["test-support"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }

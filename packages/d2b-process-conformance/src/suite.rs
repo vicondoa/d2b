@@ -7,20 +7,29 @@
 //! [`ProcessProviderProfile`](crate::ProcessProviderProfile) rather than
 //! branched on by name.
 
+#[cfg(any(test, feature = "test-support"))]
 use std::collections::BTreeSet;
 
+#[cfg(any(test, feature = "test-support"))]
 use d2b_contracts_resource::v3::ResourceRef;
+#[cfg(any(test, feature = "test-support"))]
 use d2b_contracts_resource::v3::execution_policy::ExecutionDomain;
 
 use crate::error::ProcessConformanceError;
-use crate::identity::{IdentityBinding, WaitReapOwner};
+use crate::identity::WaitReapOwner;
+#[cfg(any(test, feature = "test-support"))]
+use crate::identity::IdentityBinding;
+#[cfg(any(test, feature = "test-support"))]
 use crate::provider::{AdoptionOutcome, ProcessProvider};
 use crate::sandbox::{StopProof, validate_stop_proof};
+#[cfg(any(test, feature = "test-support"))]
 use crate::status::{AdoptionCondition, ProcessPhaseClass};
+#[cfg(any(test, feature = "test-support"))]
 use crate::testing::{PortCall, ScriptedEffectPort, block_on, fixtures};
 use crate::ticket::LaunchTicket;
 
 /// Field or value fragments that must never appear in public status.
+#[cfg(any(test, feature = "test-support"))]
 const FORBIDDEN_STATUS_FRAGMENTS: [&str; 12] = [
     "pid",
     "pidfd",
@@ -38,6 +47,7 @@ const FORBIDDEN_STATUS_FRAGMENTS: [&str; 12] = [
 
 /// Build the two execution fixtures every Provider must handle
 /// identically: a physical Host and a VM Guest.
+#[cfg(any(test, feature = "test-support"))]
 fn execution_refs() -> [ResourceRef; 2] {
     [
         ResourceRef::parse("Host/host-system").expect("valid fixture ref"),
@@ -48,6 +58,7 @@ fn execution_refs() -> [ResourceRef; 2] {
 /// A launch on a Host and on a Guest produces identical conformant status.
 ///
 /// The ResourceType and its status projection do not change with locality.
+#[cfg(any(test, feature = "test-support"))]
 pub fn assert_launch_is_locality_neutral<P: ProcessProvider>(provider: &P, provider_name: &str) {
     let profile = provider.profile();
     let bindings: Vec<IdentityBinding> = profile
@@ -78,6 +89,7 @@ pub fn assert_launch_is_locality_neutral<P: ProcessProvider>(provider: &P, provi
 }
 
 /// A ticket selecting a different Process Provider is rejected.
+#[cfg(any(test, feature = "test-support"))]
 pub fn assert_foreign_provider_selection_is_rejected<P: ProcessProvider>(provider: &P) {
     let bindings: Vec<IdentityBinding> = provider
         .profile()
@@ -99,6 +111,7 @@ pub fn assert_foreign_provider_selection_is_rejected<P: ProcessProvider>(provide
 /// Every domain outside the Provider's declared support set is rejected,
 /// and a user-domain launch the Provider does support carries the exact
 /// `userRef` through to status.
+#[cfg(any(test, feature = "test-support"))]
 pub fn assert_domain_support_matches_the_profile<P: ProcessProvider>(
     provider: &P,
     provider_name: &str,
@@ -140,6 +153,7 @@ pub fn assert_domain_support_matches_the_profile<P: ProcessProvider>(
 
 /// A launch that establishes fewer identity bindings than the Provider
 /// requires fails closed and is never reported as running.
+#[cfg(any(test, feature = "test-support"))]
 pub fn assert_incomplete_launch_identity_fails_closed<P, F>(build: F, provider_name: &str)
 where
     P: ProcessProvider,
@@ -172,6 +186,7 @@ where
 
 /// Adoption verifies every required identity binding *before* a pidfd is
 /// opened, and ambiguity quarantines instead of adopting.
+#[cfg(any(test, feature = "test-support"))]
 pub fn assert_adoption_verifies_identity_before_opening_a_pidfd<P, F>(build: F, provider_name: &str)
 where
     P: ProcessProvider,
@@ -232,6 +247,7 @@ where
 
 /// The pidfd is opened only after identity verification, proven from the
 /// recorded effect-port call order.
+#[cfg(any(test, feature = "test-support"))]
 pub fn assert_pidfd_open_follows_verification(port_calls: &[PortCall]) {
     let observe = port_calls
         .iter()
@@ -294,6 +310,7 @@ pub fn assert_finalizer_requires_verified_stop(owner: WaitReapOwner) {
 
 /// Public status carries no PID, pidfd, unit name, cgroup, path, argv,
 /// environment, or numeric identity.
+#[cfg(any(test, feature = "test-support"))]
 pub fn assert_status_is_redacted<P: ProcessProvider>(provider: &P, provider_name: &str) {
     let bindings: Vec<IdentityBinding> = provider
         .profile()

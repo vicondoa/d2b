@@ -1215,7 +1215,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Command",
-            dto_resource_schema::<d2b_provider_command::CommandSpec>(
+            dto_resource_schema::<d2b_provider_command::command::CommandSpec>(
                 "Command",
                 "Declared launch shape: executable, argv placeholder slots, parameters, worker role, and intent.",
                 true,
@@ -1223,7 +1223,7 @@ fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
         ),
         (
             "Operation",
-            dto_resource_schema::<d2b_provider_operation::OperationSpec>(
+            dto_resource_schema::<d2b_provider_operation::operation::OperationSpec>(
                 "Operation",
                 "Committed broker operation: payload schema, authority, audit, fd, bounds, and provenance facets.",
                 true,

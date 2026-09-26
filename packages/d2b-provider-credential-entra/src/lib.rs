@@ -15,7 +15,8 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use d2b_contracts_provider::v3::credential::{
     CREDENTIAL_SERVICE_NAME, CredentialLeaseHandle, CredentialLeaseState, CredentialMetadata,
@@ -26,7 +27,7 @@ use d2b_contracts_resource::v3::ResourceRef;
 use d2b_provider_toolkit::{
     AuthenticatedSessionRouteBinding, GuestCredentialBackend, GuestCredentialBackendResponse,
     ProviderFd10Spec, ProviderRuntimeError, ProviderSessionMetadata, RouteCredentialAuthorization,
-    credential::{is_absolute_unix_ms, now_unix_ms, ABSOLUTE_UNIX_MS_THRESHOLD},
+    credential::{is_absolute_unix_ms, now_unix_ms, operation_deadline},
     run_from_fd10 as run_provider_from_fd10,
 };
 
@@ -1098,7 +1099,7 @@ impl EntraCredentialProvider {
                 remaining: 0,
             });
         }
-        let deadline = Self::operation_deadline(deadline_ms)?;
+        let deadline = operation_deadline(deadline_ms)?;
         self.lifecycle
             .lock()
             .await
@@ -1192,66 +1193,6 @@ if primary.is_some() {
         }
     }
 
-    pub(crate) fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialServiceError> {
-        Self::time_bound_instant(deadline_ms)
-    }
-
-    pub(crate) fn is_expired_unix_ms(value_ms: u64) -> bool {
-        is_absolute_unix_ms(value_ms) && value_ms <= now_unix_ms()
-    }
-
-    pub(crate) fn time_bound_instant(value_ms: u64) -> Result<Instant, CredentialServiceError> {
-        let now = Instant::now();
-        let now_unix_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
-            .as_millis()
-            .try_into()
-            .map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-            })?;
-        Self::time_bound_instant_at(value_ms, now, now_unix_ms)
-    }
-
-    pub(crate) fn time_bounds_not_after(
-        later_ms: u64,
-        earlier_ms: u64,
-    ) -> Result<bool, CredentialServiceError> {
-        let now = Instant::now();
-        let now_unix_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure))?
-            .as_millis()
-            .try_into()
-            .map_err(|_| {
-                CredentialServiceError::new(CredentialServiceErrorCode::InvariantFailure)
-            })?;
-        let later = Self::time_bound_instant_at(later_ms, now, now_unix_ms)?;
-        let earlier = Self::time_bound_instant_at(earlier_ms, now, now_unix_ms)?;
-        Ok(later <= earlier)
-    }
-
-    fn time_bound_instant_at(
-        value_ms: u64,
-        now: Instant,
-        now_unix_ms: u64,
-    ) -> Result<Instant, CredentialServiceError> {
-        if value_ms >= ABSOLUTE_UNIX_MS_THRESHOLD {
-            let remaining_ms = value_ms.checked_sub(now_unix_ms).ok_or_else(|| {
-                CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
-            })?;
-            now.checked_add(Duration::from_millis(remaining_ms))
-                .ok_or_else(|| {
-                    CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
-                })
-        } else {
-            now.checked_add(Duration::from_millis(value_ms))
-                .ok_or_else(|| {
-                    CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
-                })
-        }
-    }
-
     pub(crate) fn map_client_error(error: EntraClientError) -> CredentialServiceError {
         tracing::warn!(
             provider = crate::PROVIDER_REF,
@@ -1293,7 +1234,7 @@ if primary.is_some() {
                 CredentialServiceErrorCode::InvariantFailure,
             ));
         }
-        if Self::is_expired_unix_ms(grant.expires_at_unix_ms) {
+        if is_absolute_unix_ms(grant.expires_at_unix_ms) && grant.expires_at_unix_ms <= now_unix_ms() {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::InvariantFailure,
             ));
@@ -1451,9 +1392,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        assert!(EntraCredentialProvider::operation_deadline(now + 1_000).is_ok());
+        assert!(operation_deadline(now + 1_000).is_ok());
         assert_eq!(
-            EntraCredentialProvider::operation_deadline(now - 1)
+            operation_deadline(now - 1)
                 .unwrap_err()
                 .code(),
             CredentialServiceErrorCode::DeadlineExceeded

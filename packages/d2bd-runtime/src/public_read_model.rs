@@ -14,7 +14,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::{daemon_config::ArtifactPaths, typed_error::TypedError};
+use crate::{
+    daemon_config::ArtifactPaths,
+    typed_error::{TypedError, error_source},
+};
 
 pub fn request_invalidates_public_status_model(request: &crate::wire::Request) -> bool {
     !matches!(
@@ -200,6 +203,7 @@ fn file_fingerprint(path: &Path) -> Result<FileFingerprint, TypedError> {
     let metadata = fs::metadata(path).map_err(|error| TypedError::InternalIo {
         context: format!("fingerprint {}", path.display()),
         detail: error.to_string(),
+        source: error_source(error),
     })?;
     Ok(FileFingerprint {
         path: path.display().to_string(),

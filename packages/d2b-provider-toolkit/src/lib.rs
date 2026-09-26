@@ -68,7 +68,7 @@
 #![deny(missing_docs)]
 
 pub mod audit;
-pub mod base;
+mod base;
 pub mod credential;
 pub mod declaration;
 pub mod operations;
@@ -100,11 +100,11 @@ pub use base::{
     DEFAULT_DRAIN_BUDGET_MS, DrainError, EnrolledRoute, EnrollmentRequest, GUEST_RECONNECT_ATTEMPTS,
     GUEST_RECONNECT_INITIAL_MS, GUEST_RECONNECT_MAX_MS, GUEST_SESSION_MAX_FRAME_BYTES, GuestAgent,
     GuestEnrollment, GuestError, GuestFrame, GuestLink, GuestLinkFuture, GuestPlacement, Lifecycle,
-    PROVIDER_RESOURCE_TYPE, ProviderAdmission, ProviderAgentBootstrap, ProviderAgentIdentity,
-    ProviderBase, ProviderEntrypoint, ProviderLifecycle, ProviderRunError, ProviderRuntimeError,
-    ProviderSessionAdmission, ProviderToolkitError, ServiceMethods, ServiceSurface, StartupError,
-    StartupPlan, StartupPlanRefusal, StartupStepError, StartupStepExecutor, SupervisedProvider,
-    run, run_guest, run_with_startup,
+    PROVIDER_RESOURCE_TYPE, PlannedStep, ProviderAdmission, ProviderAgentBootstrap,
+    ProviderAgentIdentity, ProviderBase, ProviderEntrypoint, ProviderLifecycle, ProviderRunError,
+    ProviderRuntimeError, ProviderSessionAdmission, ProviderToolkitError, ServiceMethods,
+    ServiceSurface, StartupError, StartupPlan, StartupPlanRefusal, StartupStepError,
+    StartupStepExecutor, SupervisedProvider, run, run_guest, run_with_startup,
 };
 pub use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, Cancellation,

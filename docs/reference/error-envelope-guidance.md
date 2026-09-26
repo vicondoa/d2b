@@ -27,7 +27,7 @@ Every new error or refusal should follow these rules first:
 
 ## Public daemon/operator envelope
 
-`d2b_core::error::Error` serializes as the public operator envelope:
+`d2b_contracts::error::Error` serializes as the public operator envelope:
 
 | Field | Meaning |
 | --- | --- |

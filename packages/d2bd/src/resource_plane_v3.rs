@@ -120,13 +120,14 @@ use crate::provider_lifecycle::{
 };
 use d2b_provider_toolkit::EffectServiceFactory;
 use d2b_provider_device::{
-    DEVICE_EFFECTS_SERVICE, DeviceDriverArgs, device_descriptor,
+    DeviceDriverArgs, device_descriptor, effects_service::DEVICE_EFFECTS_SERVICE,
 };
 use d2b_provider_device_security_key::{
-    SECURITY_KEY_EFFECTS_SERVICE, SecurityKeyDriverArgs, security_key_descriptors,
+    SecurityKeyDriverArgs, security_key_descriptors,
+    effects_service::SECURITY_KEY_EFFECTS_SERVICE,
 };
 use d2b_provider_device_usbip::{
-    USBIP_EFFECTS_SERVICE, UsbipDriverArgs, usbip_descriptors,
+    UsbipDriverArgs, usbip_descriptors, effects_service::USBIP_EFFECTS_SERVICE,
 };
 
 use d2b_provider_network_local::{
@@ -176,7 +177,7 @@ fn interaction_driver_args<T: d2b_provider_wayland_policy::InteractionType>(
     behavior: T,
 ) -> InteractionDriverArgs<T> {
     InteractionDriverArgs {
-        zone: inputs.zone.as_str().to_owned(),
+        zone: inputs.zone.clone(),
         controller_generation: inputs.authority.controller_generation,
         effects: Arc::new(InteractionEffectsService::new(
             inputs.interaction_facets.clone(),
@@ -2935,7 +2936,7 @@ impl ResourcePlaneV3 {
             // from the daemon-supplied facet set; no externally built port
             // appears at this construction site (R2).
             "volume-binding" => vec![binding_descriptor(BindingDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
+                zone: inputs.zone.clone(),
                 facets: inputs.binding_facets.clone(),
                 vcpu_count: inputs.authority.vcpu_count,
             })],
@@ -2957,7 +2958,6 @@ impl ResourcePlaneV3 {
             // The Volume family (U7): the driver builds its effects from the
             // declared facets; no externally built port appears here (R2).
             "volume" => vec![volume_descriptor(VolumeDriverArgs {
-                zone: inputs.zone.as_str().to_owned(),
                 facets: inputs.volume_facets.clone(),
             })],
             _ => Vec::new(),

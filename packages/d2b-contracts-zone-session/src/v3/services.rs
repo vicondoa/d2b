@@ -4,6 +4,7 @@
 //! fingerprint is derived from the canonical ordered method set, so adding,
 //! removing, or renaming a method cannot be mistaken for the old service.
 
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

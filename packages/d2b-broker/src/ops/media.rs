@@ -51,7 +51,7 @@ static D2BD_GROUP_GID: std::sync::LazyLock<Result<Option<nix::unistd::Gid>, Stri
 pub enum MediaOpError {
     /// The media ref failed [`d2b_host::media::validate_media_ref`].
     InvalidRef(String),
-    /// The USB bus id failed [`d2b_host::media::validate_usb_busid`].
+    /// The USB bus id failed the [`d2b_host::nftables::BusId`] grammar.
     InvalidBusId(String),
     /// The bundle declares no policy for the ref.
     MissingBundlePolicy,
@@ -256,11 +256,11 @@ pub async fn enroll(
 ) -> Result<EnrollOutcome, MediaOpError> {
     d2b_host::media::validate_media_ref(req.media_ref.as_str())
         .map_err(|err| MediaOpError::InvalidRef(err.to_string()))?;
-    d2b_host::media::validate_usb_busid(&req.bus_id)
+    let bus_id = d2b_host::nftables::BusId::try_from(req.bus_id.as_str())
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let source = resolve_physical_source(resolver, req.vm_id.as_str(), req.media_ref.as_str())?;
     let identity =
-        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id).await?;
+        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), bus_id.as_str()).await?;
     preflight_identity_not_busy(Path::new("/sys"), &identity).await?;
     let access = access_mode(source);
     let fd = open_block_device(&identity.block_device, access)?;
@@ -454,10 +454,10 @@ pub async fn detach(
     resolver: &BundleResolver,
     req: &QemuMediaHotplugRequest,
 ) -> Result<HotplugOutcome, MediaOpError> {
-    d2b_host::media::validate_usb_busid(&req.bus_id)
+    let bus_id = d2b_host::nftables::BusId::try_from(req.bus_id.as_str())
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let identity =
-        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id).await?;
+        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), bus_id.as_str()).await?;
     let mut client = QmpClient::connect(&qmp_socket_path(req.vm_id.as_str())).await?;
     let (record, source) =
         resolve_detach_runtime_selector(resolver, req.vm_id.as_str(), &identity, &mut client)
@@ -503,10 +503,10 @@ async fn open_runtime_selector_source<'a>(
     resolver: &'a BundleResolver,
     req: &QemuMediaHotplugRequest,
 ) -> Result<OpenedMedia<'a>, MediaOpError> {
-    d2b_host::media::validate_usb_busid(&req.bus_id)
+    let bus_id = d2b_host::nftables::BusId::try_from(req.bus_id.as_str())
         .map_err(|err| MediaOpError::InvalidBusId(err.to_string()))?;
     let identity =
-        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), &req.bus_id).await?;
+        read_usb_identity(Path::new("/sys"), Path::new("/dev/disk/by-id"), bus_id.as_str()).await?;
     let (_record, source) =
         match resolve_runtime_selector(resolver, req.vm_id.as_str(), &identity).await {
             Ok(pair) => pair,
@@ -694,7 +694,7 @@ fn resolve_boot_source<'a>(
     vm: &str,
 ) -> Result<&'a QemuMediaSourceIntent, MediaOpError> {
     resolver
-        .host
+        .host()
         .qemu_media
         .as_ref()
         .and_then(|qemu_media| {
@@ -930,7 +930,7 @@ fn select_unique_declared_physical_source<'a>(
     identity: &UsbPhysicalIdentity,
     attached_refs: Option<&BTreeSet<String>>,
 ) -> Result<&'a QemuMediaSourceIntent, MediaOpError> {
-    let Some(qemu_media) = resolver.host.qemu_media.as_ref() else {
+    let Some(qemu_media) = resolver.host().qemu_media.as_ref() else {
         return Err(MediaOpError::MissingBundlePolicy);
     };
     select_unique_declared_physical_source_from_sources(
@@ -2108,7 +2108,7 @@ async fn image_has_loop_backing(sysfs_root: &Path, image_path: &Path) -> Result<
 
 fn registry_dir(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
     resolver
-        .host
+        .host()
         .qemu_media
         .as_ref()
         .map(|media| PathBuf::from(&media.registry_dir))
@@ -2117,7 +2117,7 @@ fn registry_dir(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
 
 fn rules_path(resolver: &BundleResolver) -> Result<PathBuf, MediaOpError> {
     resolver
-        .host
+        .host()
         .qemu_media
         .as_ref()
         .map(|media| PathBuf::from(&media.runtime_rules_path))

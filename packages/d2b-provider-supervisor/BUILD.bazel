@@ -71,13 +71,13 @@ d2b_rust_test(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session",
-        ":d2b_provider_supervisor",
+        ":d2b_provider_supervisor_test_support",
         "//packages/d2b-contracts:d2b_contracts",
         "//packages/d2b-contracts-broker:d2b_contracts_broker",
-        "//packages/d2b-provider-process:d2b_provider_process",
-        "//packages/d2b-process-conformance:d2b_process_conformance",
-        "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail",
-        "//packages/d2b-provider-process-systemd:d2b_provider_process_systemd",
+        "//packages/d2b-provider-process:d2b_provider_process_test_support",
+        "//packages/d2b-process-conformance:d2b_process_conformance_test_support",
+        "//packages/d2b-provider-process-minijail:d2b_provider_process_minijail_test_support",
+        "//packages/d2b-provider-process-systemd:d2b_provider_process_systemd_test_support",
     ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )
 
@@ -88,8 +88,8 @@ d2b_rust_test(
         "//:tests/golden/manifest_v04/baseline-vms.json",  # keep
         "Cargo.toml",
     ],
-    crate = ":d2b_provider_supervisor",
-    deps = ["//packages/d2b-process-conformance:d2b_process_conformance",
+    crate = ":d2b_provider_supervisor_test_support",
+    deps = ["//packages/d2b-process-conformance:d2b_process_conformance_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts-zone-session:d2b_contracts_zone_session", ] + all_crate_deps(normal = True, normal_dev = True, cargo_only = True),
 )

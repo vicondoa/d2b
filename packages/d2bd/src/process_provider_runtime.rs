@@ -37,7 +37,7 @@ use d2b_provider_credential::{
 };
 use d2b_provider_process::{
     CommittedProviderIdentitySource, DeviceWorkerFamily, DeviceWorkerLaunch, ExecutionMode,
-    GpuWorkerParams, LaunchRow, ProcessFamilySpec, ProcessProviderRuntime,
+    GpuWorkerParams, LaunchRow, LaunchedSnapshot, ProcessFamilySpec, ProcessProviderRuntime,
     ProcessResourceContext, ProcessResourceIdentity, ProviderAdoption, ProviderLaunch,
     ProviderLiveness, ServingWorkerLaunch, ServingWorkerRoot, SwtpmFlushParams, SwtpmWorkerParams,
     VideoWorkerParams, device_worker_family, device_worker_vm, execution_target_allowed,
@@ -749,14 +749,14 @@ struct PidfdTableLaunchedObserver {
 }
 
 impl d2b_provider_supervisor::LaunchedObserver for PidfdTableLaunchedObserver {
-    fn launched(
-        &self,
-        vm: &str,
-        role: &str,
-        pid: i32,
-        start_time_ticks: u64,
-        pidfd: std::os::fd::OwnedFd,
-    ) {
+    fn launched(&self, snapshot: LaunchedSnapshot) {
+        let LaunchedSnapshot {
+            vm,
+            role,
+            pid,
+            start_time_ticks,
+            pidfd,
+        } = snapshot;
         // A broker-confirmed spawn proves a live process now owns this
         // (vm, role). If the slot still holds a STALE entry from a failed
         // prior launch - the launch-failure cleanup stops the child but
@@ -775,19 +775,19 @@ impl d2b_provider_supervisor::LaunchedObserver for PidfdTableLaunchedObserver {
         // spawn for one broker runner is impossible (the broker's
         // duplicate-runner guard), and replacing a live entry would orphan
         // its pidfd.
-        if self.pidfd_table.contains(vm, role)
-            && !self.pidfd_table.still_alive_same_start_time(vm, role)
+        if self.pidfd_table.contains(&vm, &role)
+            && !self.pidfd_table.still_alive_same_start_time(&vm, &role)
         {
             tracing::warn!(
                 vm,
                 role,
                 "pidfd-table: dropping stale entry before relaunched runner registration"
             );
-            self.pidfd_table.deregister(vm, role);
+            self.pidfd_table.deregister(&vm, &role);
         }
         match self.pidfd_table.register(
-            vm.to_owned(),
-            role.to_owned(),
+            vm.clone(),
+            role.clone(),
             d2bd_runtime::supervisor::pidfd_table::PidfdEntry {
                 pidfd,
                 pid,
@@ -1085,7 +1085,7 @@ impl ProductionProcessProviders {
     /// Return every VM that has a process DAG in the trusted bundle.
     pub fn vm_ids(&self) -> Vec<String> {
         self.bundle
-            .processes
+            .processes()
             .vms
             .iter()
             .map(|dag| dag.vm.clone())
@@ -3222,7 +3222,7 @@ pub(crate) async fn resolve_device_worker_launch(
             // artifact, or a headless site, leaves the slot unbound and
             // the launch refuses with its own code instead of naming a
             // path no trusted artifact names.
-            let wayland_sock = gpu_worker_wayland_sock(self.bundle().site.as_ref())?;
+            let wayland_sock = gpu_worker_wayland_sock(self.bundle().site())?;
             // The typed parameters travel as the canonical JSON of the
             // Provider's own `GpuParams`; the argv seat decodes them back.
             let params = serde_json::to_value(d2b_provider_device_gpu::GpuParams {
@@ -4155,7 +4155,7 @@ fn compiled_resource_digests(
             ManagedProvider::Minijail => "system-minijail",
             ManagedProvider::Systemd => "system-systemd",
         },
-        bundle.bundle.bundle_hash.as_deref().unwrap_or("bundle"),
+        bundle.bundle().bundle_hash.as_deref().unwrap_or("bundle"),
     );
     CompiledDigests {
         sandbox: digest(&format!("{context}:sandbox"), spec_bytes),
@@ -4294,7 +4294,7 @@ fn compiled_digests(
             ManagedProvider::Minijail => "system-minijail",
             ManagedProvider::Systemd => "system-systemd",
         },
-        bundle.bundle.bundle_hash.as_deref().unwrap_or("bundle")
+        bundle.bundle().bundle_hash.as_deref().unwrap_or("bundle")
     );
     CompiledDigests {
         sandbox: digest(&format!("{context}:sandbox"), &node_bytes),
@@ -4311,10 +4311,10 @@ fn stable_generation(bundle: &BundleResolver) -> u64 {
     let mut hasher = Sha256::new();
     hasher.update(
         bundle
-            .bundle
+            .bundle()
             .bundle_hash
             .as_deref()
-            .unwrap_or(bundle.bundle.generation.generator.as_str()),
+            .unwrap_or(bundle.bundle().generation.generator.as_str()),
     );
     let bytes: [u8; 32] = hasher.finalize().into();
     let generation = u64::from_le_bytes(bytes[..8].try_into().expect("digest prefix"));
@@ -6035,6 +6035,7 @@ mod tests {
 
     #[test]
     fn launched_observer_replaces_stale_pidfd_table_entry_on_relaunch() {
+        use d2b_provider_process::LaunchedSnapshot;
         use d2b_provider_supervisor::LaunchedObserver;
         use d2bd_runtime::supervisor::pidfd_table::PidfdTable;
 
@@ -6065,13 +6066,13 @@ mod tests {
         };
         // The relaunch: a fresh broker-confirmed spawn for the same slot.
         let live_pid = std::process::id() as i32;
-        observer.launched(
-            "host-system",
-            "controller-stale",
-            live_pid,
-            2,
-            std::fs::File::open("/dev/null").expect("null").into(),
-        );
+        observer.launched(LaunchedSnapshot {
+            vm: "host-system".to_owned(),
+            role: "controller-stale".to_owned(),
+            pid: live_pid,
+            start_time_ticks: 2,
+            pidfd: std::fs::File::open("/dev/null").expect("null").into(),
+        });
         let registration = table
             .list_for_vm("host-system")
             .into_iter()
@@ -6086,6 +6087,7 @@ mod tests {
 
     #[test]
     fn launched_observer_keeps_a_live_duplicate_slot() {
+        use d2b_provider_process::LaunchedSnapshot;
         use d2b_provider_supervisor::LaunchedObserver;
         use d2bd_runtime::supervisor::pidfd_table::PidfdTable;
 
@@ -6120,13 +6122,13 @@ mod tests {
         let observer = PidfdTableLaunchedObserver {
             pidfd_table: Arc::clone(&table),
         };
-        observer.launched(
-            "host-system",
-            "controller-live",
-            live_pid,
+        observer.launched(LaunchedSnapshot {
+            vm: "host-system".to_owned(),
+            role: "controller-live".to_owned(),
+            pid: live_pid,
             start_time_ticks,
-            std::fs::File::open("/dev/null").expect("null").into(),
-        );
+            pidfd: std::fs::File::open("/dev/null").expect("null").into(),
+        });
         let registration = table
             .list_for_vm("host-system")
             .into_iter()

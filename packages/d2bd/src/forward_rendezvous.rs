@@ -79,7 +79,7 @@ use d2b_audit::evidence_chain::{
     ChainAuditSink, ChainLeg, ChainOutcome, ChainRecord, ChainRecordClass, EvidenceChain,
     MAX_NESTED_DEPTH, NESTED_DEPTH_EXCEEDED,
 };
-use d2b_contracts_broker::FORWARD_SOCKET_ENV;
+use d2b_contracts_broker::broker_wire::FORWARD_SOCKET_ENV;
 use d2b_contracts_broker::broker_wire::{
     DEFAULT_CONTEXT_DEADLINE_MS, FD_LEG, FdKind, ForwardContext, ForwardOperationOutcome,
     ForwardOperationRequest, ForwardOperationResponse, MAX_CONTEXT_DEADLINE_MS, MAX_FRAME_FDS,
@@ -90,7 +90,7 @@ use d2b_provider_toolkit::operations::{UNCOMMITTED_OPERATION, UNGRANTED_CALLER};
 use d2b_resource_types::{KernelCaller, MethodFdContract, OperationResult};
 use d2bd_runtime::concurrency::DEFAULT_MAX_INFLIGHT_CONNECTIONS;
 use d2bd_runtime::runtime_process::{RuntimeIdentity, bind_public_socket};
-use d2bd_runtime::typed_error::TypedError;
+use d2bd_runtime::typed_error::{ErrorSource, TypedError, error_source};
 use d2bd_runtime::unix_transport::{close_received_fds, read_frame_with_fds, write_frame_with_fds};
 use d2bd_runtime::wire::MAX_FRAME_SIZE;
 use nix::sys::socket::{MsgFlags, getsockopt, recv, send, sockopt};
@@ -1331,10 +1331,12 @@ impl AsyncSeqpacket {
             .map_err(|error| TypedError::InternalIo {
                 context: "set forward rendezvous socket nonblocking".to_owned(),
                 detail: error.to_string(),
+                source: error_source(error),
             })?;
         let io = AsyncFd::new(socket).map_err(|error| TypedError::InternalIo {
             context: "register forward rendezvous socket".to_owned(),
             detail: error.to_string(),
+            source: error_source(error),
         })?;
         Ok(Self { io })
     }
@@ -1350,6 +1352,7 @@ impl AsyncSeqpacket {
             .map_err(|error| TypedError::InternalIo {
                 context: "read forward rendezvous peer credentials".to_owned(),
                 detail: error.to_string(),
+                source: error_source(error),
             })
     }
 
@@ -1386,8 +1389,8 @@ impl AsyncSeqpacket {
         .await
         {
             Ok(Ok(read)) => read,
-            Ok(Err(error)) => return Err(recv_failure(error.to_string())),
-            Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"))),
+            Ok(Err(error)) => return Err(recv_failure(error.to_string(), error_source(error))),
+            Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"), None)),
         };
         if peeked < 4 {
             // A datagram shorter than the prefix is malformed; consume it
@@ -1396,8 +1399,8 @@ impl AsyncSeqpacket {
             let mut short = [0u8; 4];
             let read = match tokio::time::timeout(deadline, self.recv_datagram(&mut short)).await {
                 Ok(Ok(read)) => read,
-                Ok(Err(error)) => return Err(recv_failure(error.to_string())),
-                Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"))),
+                Ok(Err(error)) => return Err(recv_failure(error.to_string(), error_source(error))),
+                Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"), None)),
             };
             return decode_frame(&short[..read]);
         }
@@ -1408,8 +1411,8 @@ impl AsyncSeqpacket {
         let mut datagram = vec![0u8; declared + 5];
         let read = match tokio::time::timeout(deadline, self.recv_datagram(&mut datagram)).await {
             Ok(Ok(read)) => read,
-            Ok(Err(error)) => return Err(recv_failure(error.to_string())),
-            Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"))),
+            Ok(Err(error)) => return Err(recv_failure(error.to_string(), error_source(error))),
+            Err(_) => return Err(recv_failure(format!("no frame within {deadline:?}"), None)),
         };
         decode_frame(&datagram[..read])
     }
@@ -1419,14 +1422,14 @@ impl AsyncSeqpacket {
         let frame = encode_frame(body)?;
         let written = match tokio::time::timeout(deadline, self.send_datagram(&frame)).await {
             Ok(Ok(written)) => written,
-            Ok(Err(error)) => return Err(send_failure(error.to_string())),
-            Err(_) => return Err(send_failure(format!("no write within {deadline:?}"))),
+            Ok(Err(error)) => return Err(send_failure(error.to_string(), error_source(error))),
+            Err(_) => return Err(send_failure(format!("no write within {deadline:?}"), None)),
         };
         if written != frame.len() {
-            return Err(send_failure(format!(
-                "short write: {written} of {}",
-                frame.len()
-            )));
+            return Err(send_failure(
+                format!("short write: {written} of {}", frame.len()),
+                None,
+            ));
         }
         Ok(())
     }
@@ -1445,8 +1448,8 @@ impl AsyncSeqpacket {
         // payload,length-checked and cmsg-truncation-checked.
         match tokio::time::timeout(deadline, self.recv_frame_with_fds()).await {
             Ok(Ok(pair)) => Ok(pair),
-            Ok(Err(error)) => Err(recv_failure(error.to_string())),
-            Err(_) => Err(recv_failure(format!("no frame within {deadline:?}"))),
+            Ok(Err(error)) => Err(recv_failure(error.to_string(), error_source(error))),
+            Err(_) => Err(recv_failure(format!("no frame within {deadline:?}"), None)),
         }
     }
 
@@ -1462,8 +1465,8 @@ impl AsyncSeqpacket {
         // as-is;the receiving transport strips the same prefix back off..
         match tokio::time::timeout(deadline, self.send_datagram_with_fds(body, fds)).await {
             Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => Err(send_failure(error.to_string())),
-            Err(_) => Err(send_failure(format!("no write within {deadline:?}"))),
+            Ok(Err(error)) => Err(send_failure(error.to_string(), error_source(error))),
+            Err(_) => Err(send_failure(format!("no write within {deadline:?}"), None)),
         }
     }
 
@@ -1535,20 +1538,24 @@ impl AsyncSeqpacket {
 }
 
 /// The failure of a frame read, in the vocabulary the blocking transport uses
-/// for the same syscall.
-fn recv_failure(detail: String) -> TypedError {
+/// for the same syscall. `source` is the origin error when the read failed on
+/// one; a deadline that elapsed without a frame has none.
+fn recv_failure(detail: String, source: Option<ErrorSource>) -> TypedError {
     TypedError::InternalIo {
         context: "recv seqpacket frame".to_owned(),
         detail,
+        source,
     }
 }
 
 /// The failure of a frame write, in the vocabulary the blocking transport
-/// uses for the same syscall.
-fn send_failure(detail: String) -> TypedError {
+/// uses for the same syscall. `source` is the origin error when the write
+/// failed on one; a deadline that elapsed without a write has none.
+fn send_failure(detail: String, source: Option<ErrorSource>) -> TypedError {
     TypedError::InternalIo {
         context: "send seqpacket frame".to_owned(),
         detail,
+        source,
     }
 }
 
@@ -1558,6 +1565,7 @@ fn encode_reply(response: &ForwardOperationResponse) -> Result<Vec<u8>, TypedErr
     serde_json::to_vec(response).map_err(|error| TypedError::InternalIo {
         context: "serialize JSON frame".to_owned(),
         detail: error.to_string(),
+        source: error_source(error),
     })
 }
 
@@ -1579,7 +1587,7 @@ fn encode_frame(body: &[u8]) -> Result<Vec<u8>, TypedError> {
 /// refuses.
 fn decode_frame(datagram: &[u8]) -> Result<Vec<u8>, TypedError> {
     if datagram.is_empty() {
-        return Err(recv_failure("peer closed the socket".to_owned()));
+        return Err(recv_failure("peer closed the socket".to_owned(), None));
     }
     if datagram.len() < 4 {
         return Err(TypedError::WireInvalidFrame {

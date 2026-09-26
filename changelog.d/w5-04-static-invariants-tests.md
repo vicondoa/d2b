@@ -1,0 +1,4 @@
+### Fixed
+
+- The four static security/policy validators in d2b-core's `static_invariants` module (world-readable-leak, opaque-key-ids, broad-caps, writable-paths) now carry in-module unit tests restoring the positive/negative gate cases from the retired `tests/static-invariant-*.sh` bash gates, so the invariants are enforced as tests; the module doc's claim that the cases were preserved as unit tests is now true.
+- Corrected the `static_invariants` module doc, which claimed the validators check the real rendered artifacts; they are pure and caller-free, so the doc now describes the in-module test coverage instead.

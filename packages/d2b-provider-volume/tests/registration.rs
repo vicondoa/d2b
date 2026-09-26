@@ -22,7 +22,6 @@ fn unused_facets() -> d2b_provider_volume::VolumeEffectFacets {
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     volume_descriptor(VolumeDriverArgs {
-        zone: "work".to_owned(),
         facets: unused_facets(),
     })
 }

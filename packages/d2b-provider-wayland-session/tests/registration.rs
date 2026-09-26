@@ -82,7 +82,7 @@ fn intent(target: &str, spec: Value) -> OwnedChildIntent {
 
 fn descriptor() -> d2b_resource_types::DriverDescriptor {
     wayland_session_descriptor(InteractionDriverArgs {
-        zone: "work".to_owned(),
+        zone: ZoneId::parse("work").expect("zone"),
         controller_generation: ControllerGeneration::new(3).expect("generation"),
         effects: Arc::new(UnusedEffects),
         behavior: WaylandSession::new(Arc::new(TwoWorkers)),

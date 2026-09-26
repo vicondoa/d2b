@@ -18,3 +18,6 @@ await_holding_refcell_ref = "deny"
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap" }
 tracing = "0.1"
+
+[dev-dependencies]
+d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap", features = ["test-support"] }

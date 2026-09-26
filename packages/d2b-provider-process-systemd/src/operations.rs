@@ -234,7 +234,7 @@ fn validate_request(
     let intent = bundle
         .find_runner_intent(request.bundle_runner_intent_ref.as_str())
         .ok_or(UNIT_BUNDLE_INTENT)?;
-    if bundle.bundle.bundle_hash.as_deref() != Some(request.bundle_content_identity.as_str()) {
+    if bundle.bundle().bundle_hash.as_deref() != Some(request.bundle_content_identity.as_str()) {
         return Err(UNIT_IDENTITY_MISMATCH);
     }
     if intent.vm_name != request.vm_id.as_str()

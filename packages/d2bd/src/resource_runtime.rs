@@ -5867,7 +5867,7 @@ impl ZoneResourceRuntime {
         volume_spec: &VolumeSpec,
     ) -> bool {
         d2b_provider_volume_local::desired_binding_intents(
-            spec.volume_ref().clone(),
+            spec.volume_ref(),
             volume_spec,
             false,
         )
@@ -12888,7 +12888,7 @@ mod tests {
         let volume_ref = ResourceRef::parse("Volume/store-view-work-vm")
             .expect("volume ref");
         let intents = d2b_provider_volume_local::desired_binding_intents(
-            volume_ref.clone(),
+            &volume_ref,
             &volume,
             false,
         )

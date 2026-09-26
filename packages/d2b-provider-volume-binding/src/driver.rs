@@ -46,7 +46,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use d2b_contracts_resource::v3::{
-    ResourceRef, ResourceSpec, ResourceUid,
+    ResourceRef, ResourceSpec, ResourceUid, ZoneId,
     volume::{VolumeSpec, ViewSpec},
     volume_binding::VolumeBindingSpec,
 };
@@ -354,7 +354,7 @@ pub trait BindingDriverEffects: Send + Sync + 'static {
 /// from the spec store).
 pub struct BindingDriverArgs {
     /// The zone this driver's rows live in.
-    pub zone: String,
+    pub zone: ZoneId,
     /// The daemon-supplied facet set the family's effects are built from
     /// (R2): the serving-socket probe, the socket removal, and the
     /// guest-mount observation. The family never receives a daemon-built
@@ -406,7 +406,11 @@ impl ResourceDriverFactory for BindingDriverFactory {
 /// One VolumeBinding resource's driver.
 #[derive(Clone)]
 pub(crate) struct BindingDriver {
-    zone: String,
+    zone: ZoneId,
+    /// The zone as a bounded token (the socket identity namespace), derived
+    /// once at construction: every ZoneId is a valid bounded token, so the
+    /// coercion cannot fail.
+    zone_bounded: d2b_contracts_resource::v3::execution_policy::BoundedToken,
     effects: Arc<dyn BindingDriverEffects>,
     vcpu_count: u32,
     /// Targets this driver already registered a dependency watch on
@@ -418,11 +422,15 @@ pub(crate) struct BindingDriver {
 
 impl BindingDriver {
     pub(crate) fn new(
-        zone: String,
+        zone: ZoneId,
         effects: Arc<dyn BindingDriverEffects>,
         vcpu_count: u32,
     ) -> Self {
         Self {
+            zone_bounded: d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(
+                zone.as_str(),
+            )
+            .expect("zone names are bounded tokens"),
             zone,
             effects,
             vcpu_count,
@@ -435,9 +443,8 @@ impl BindingDriver {
     }
 
     /// The zone as a bounded token (the socket identity namespace).
-    fn zone_bounded(&self) -> d2b_contracts_resource::v3::execution_policy::BoundedToken {
-        d2b_contracts_resource::v3::execution_policy::BoundedToken::parse(self.zone.clone())
-            .expect("zone name is a bounded token")
+    fn zone_bounded(&self) -> &d2b_contracts_resource::v3::execution_policy::BoundedToken {
+        &self.zone_bounded
     }
 
     /// Decode the stored envelope into the strict neutral binding contract.
@@ -474,7 +481,7 @@ impl BindingDriver {
 
     /// The key of the parent Volume this binding declares.
     fn parent_volume_key(&self, binding: &VolumeBindingSpec) -> ResourceKey {
-        ResourceKey::new(&self.zone, "Volume", binding.volume_ref().name().as_str())
+        ResourceKey::new(self.zone.as_str(), "Volume", binding.volume_ref().name().as_str())
     }
 
     /// The parent Volume row through the manager (R2: the driver never
@@ -627,8 +634,8 @@ impl BindingDriver {
             .endpoint_ref()
             .map_err(|_| self.error(BindingDriverErrorKind::PlanDerivation, op))?;
         Ok([
-            ResourceKey::new(&self.zone, WORKER_TYPE, worker.name().as_str()),
-            ResourceKey::new(&self.zone, ENDPOINT_TYPE, endpoint.name().as_str()),
+            ResourceKey::new(self.zone.as_str(), WORKER_TYPE, worker.name().as_str()),
+            ResourceKey::new(self.zone.as_str(), ENDPOINT_TYPE, endpoint.name().as_str()),
         ])
     }
 
@@ -876,7 +883,7 @@ impl ResourceDriver for BindingDriver {
         let children_current = desired
             .iter()
             .all(|key| owned.iter().any(|row| row.key == *key && !row.deleting));
-        let socket = stored.socket_identity(&self.zone_bounded());
+        let socket = stored.socket_identity(self.zone_bounded());
         let socket_ready = self.effects.socket_ready(&socket).await;
         if children_current && socket_ready {
             ctx.set_status(BindingDriverStatus::RecoveredPlan {
@@ -920,7 +927,7 @@ impl ResourceDriver for BindingDriver {
         // Readiness is child-phase driven: the worker socket is the serving
         // evidence and the guest mount the consumer-side one; both
         // fail closed when the port cannot observe them.
-        let socket = stored.socket_identity(&self.zone_bounded());
+        let socket = stored.socket_identity(self.zone_bounded());
         let socket_ready = self.effects.socket_ready(&socket).await;
         let mount_ready = self
             .effects
@@ -1023,7 +1030,7 @@ impl ResourceDriver for BindingDriver {
             ctx.delete(&endpoint)
                 .await
                 .map_err(|_| self.error(BindingDriverErrorKind::ChildMutation, op))?;
-            let socket = stored.socket_identity(&self.zone_bounded());
+            let socket = stored.socket_identity(self.zone_bounded());
             self.effects
                 .remove_socket(&socket)
                 .await
@@ -1122,7 +1129,7 @@ mod tests {
     use std::sync::Arc;
 
     use d2b_contracts_resource::v3::{
-        ResourceGeneration, ResourceUid, ZoneRevision,
+        ResourceGeneration, ResourceUid, ZoneId, ZoneRevision,
         resource_status::StatusCode,
         volume_binding::{VolumeBindingReadinessFence, VolumeBindingStatusResource},
     };
@@ -1452,7 +1459,7 @@ mod tests {
 
     async fn driver(effects: Arc<FakeServingEffects>) -> Box<dyn DynResourceDriver> {
         let factory = BindingDriverFactory::new(BindingDriverArgs {
-            zone: "work".to_owned(),
+            zone: ZoneId::parse("work").expect("zone"),
             facets: effects.facet_set(),
             vcpu_count: 4,
         });
@@ -1467,7 +1474,7 @@ mod tests {
     #[tokio::test]
     async fn factory_registers_only_the_binding_resource_type() {
         let factory = BindingDriverFactory::new(BindingDriverArgs {
-            zone: "work".to_owned(),
+            zone: ZoneId::parse("work").expect("zone"),
             facets: FakeServingEffects::new().facet_set(),
             vcpu_count: 4,
         });

@@ -1171,11 +1171,13 @@ fn now_epoch_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::{ids::OperationId, token::ProtocolToken, workload_identity::WorkloadTarget};
+    use d2b_contracts::{
+        configured_argv::ConfiguredArgv, ids::OperationId, token::ProtocolToken,
+        workload_identity::WorkloadTarget,
+    };
     use d2b_contracts_resource::v3::{
         ResourceGeneration, ResourceRef, ResourceUid, ZoneId, ZoneResourceIdentity, ZoneRevision,
     };
-    use d2b_core::configured_argv::ConfiguredArgv;
     use nix::fcntl::{FcntlArg, FdFlag, fcntl};
     use nix::sys::socket::{AddressFamily, SockFlag, socketpair};
     use std::os::fd::OwnedFd;

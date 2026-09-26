@@ -10,7 +10,7 @@ d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.10"
+sha2 = { workspace = true }
 
 # U33: this crate does not inherit `[workspace.lints]` (it carries its own lint
 # posture), but `clippy.toml` at the workspace root arms

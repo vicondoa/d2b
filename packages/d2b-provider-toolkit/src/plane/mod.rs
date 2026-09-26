@@ -2,7 +2,7 @@
 //!
 //! A provider declares its own plane adapters, storage roots, principals,
 //! and services ([`crate::declaration`]); the plane calls
-//! [`crate::base::ProviderBase::attach`] with a [`ZonePlaneHandle`] that
+//! [`crate::ProviderBase::attach`] with a [`ZonePlaneHandle`] that
 //! carries those declared facts and the plane's own port. The toolkit owns
 //! the order - adapters in declared dependency order - and never performs an
 //! effect itself: every host-side action goes through the port, which the

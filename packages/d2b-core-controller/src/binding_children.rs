@@ -11,10 +11,11 @@ use d2b_contracts_provider::v3::semantic_services::child_resources::{
     BindingChildIntent, BindingChildKind, BindingChildPlacement,
 };
 use d2b_contracts_resource::v3::{
-    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef, ResourceTypeName,
-    canonical_digest,
+    CanonicalJsonObject, CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceRef,
+    ResourceTypeName, canonical_digest,
 };
 use d2b_contracts_zone_session::v3::resource_bundle::BundleResource;
+use serde::Serialize;
 
 use crate::OwnerReconcileError;
 
@@ -164,6 +165,121 @@ pub fn semantic_child_digest(
     Ok(canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical))
 }
 
+/// Typed wire form of the UID-free create payload Core materializes for one
+/// Binding child. The store remains responsible for minting the
+/// authoritative UID and revision.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChildCreateEnvelope<'a> {
+    api_version: &'static str,
+    #[serde(rename = "type")]
+    resource_type: &'a str,
+    metadata: ChildCreateMetadata<'a>,
+    spec: ChildCreateSpec,
+    status: ChildCreateStatus,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChildCreateMetadata<'a> {
+    name: &'a str,
+    zone: &'a str,
+    owner_ref: &'a str,
+    finalizers: &'static [&'static str],
+    deletion_requested_at: Option<&'static str>,
+    created_at: &'static str,
+    updated_at: &'static str,
+    generation: u64,
+    revision: u64,
+    managed_by: &'static str,
+}
+
+/// Process and Endpoint child specs carry disjoint field sets, so the spec
+/// is exactly one of the two strict structs.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ChildCreateSpec {
+    Process(ProcessChildSpec),
+    Endpoint(EndpointChildSpec),
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProcessChildSpec {
+    execution_ref: String,
+    process_class: String,
+    template: String,
+    provider_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    domain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_ref: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EndpointChildSpec {
+    provider_ref: String,
+    producer_ref: String,
+    endpoint_class: String,
+    transport: String,
+    purpose: String,
+    locality: String,
+    visibility: String,
+    attachment_policy: AttachmentPolicy,
+    consumer_policy: ConsumerPolicy,
+    lifecycle_policy: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AttachmentPolicy {
+    supported: bool,
+    max_attachments: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConsumerPolicy {
+    allowed_operations: &'static [&'static str],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChildCreateStatus {
+    observed_generation: u64,
+    phase: &'static str,
+    conditions: &'static [&'static str],
+    last_reconciled_at: Option<&'static str>,
+    started_at: Option<&'static str>,
+    completed_at: Option<&'static str>,
+    outcome: Option<&'static str>,
+    update: ChildCreateUpdate,
+    resource: CanonicalJsonObject,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChildCreateUpdate {
+    dependencies: ChildCreateCurrencySet,
+    disruption: &'static str,
+    last_assessed_at: Option<&'static str>,
+    observed_generation: u64,
+    operation_id: Option<&'static str>,
+    owned: ChildCreateCurrencySet,
+    preserve_state: bool,
+    reasons: &'static [&'static str],
+    state: &'static str,
+    target_generation: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ChildCreateCurrencySet {
+    count: u64,
+    refs: &'static [&'static str],
+}
+
 /// Build the canonical, UID-free Resource API create payload for one child.
 ///
 /// This is intentionally owned by Core: Providers cannot smuggle arbitrary
@@ -175,14 +291,7 @@ pub fn materialize_child_create_payload(
     zone: &d2b_contracts_resource::v3::ZoneId,
 ) -> Result<Vec<u8>, BindingChildMaterializationError> {
     let owner_ref = intent.owner_ref().to_canonical_string();
-    let provider_ref = match intent.kind() {
-        BindingChildKind::Process | BindingChildKind::EphemeralProcess => {
-            "Provider/system-systemd".to_owned()
-        }
-        BindingChildKind::Endpoint => intent.provider_ref().to_canonical_string(),
-    };
-    let mut spec = serde_json::Map::new();
-    match intent.kind() {
+    let spec = match intent.kind() {
         BindingChildKind::Process | BindingChildKind::EphemeralProcess => {
             let process_provider = intent
                 .process_provider()
@@ -200,139 +309,88 @@ pub fn materialize_child_create_payload(
                     } else {
                         "worker"
                     });
-            spec.insert(
-                "executionRef".to_owned(),
-                serde_json::Value::String(intent.execution_ref().to_canonical_string()),
-            );
-            spec.insert(
-                "processClass".to_owned(),
-                serde_json::Value::String(process_class.to_owned()),
-            );
-            spec.insert(
-                "template".to_owned(),
-                serde_json::Value::String(process_template.to_owned()),
-            );
-            spec.insert(
-                "providerRef".to_owned(),
-                serde_json::Value::String(process_provider.to_owned()),
-            );
-            if let Some(process_domain) = process_domain {
-                spec.insert(
-                    "domain".to_owned(),
-                    serde_json::Value::String(process_domain.to_owned()),
-                );
-            }
-            if let Some(user_ref) = intent.process_user() {
-                spec.insert(
-                    "userRef".to_owned(),
-                    serde_json::Value::String(user_ref.to_canonical_string()),
-                );
-            }
+            ChildCreateSpec::Process(ProcessChildSpec {
+                execution_ref: intent.execution_ref().to_canonical_string(),
+                process_class: process_class.to_owned(),
+                template: process_template.to_owned(),
+                provider_ref: process_provider.to_owned(),
+                domain: process_domain.map(str::to_owned),
+                user_ref: intent
+                    .process_user()
+                    .map(|user_ref| user_ref.to_canonical_string()),
+            })
         }
         BindingChildKind::Endpoint => {
             let producer = intent
                 .producer_ref()
                 .ok_or(BindingChildMaterializationError::ProducerMismatch)?;
-            spec.insert(
-                "providerRef".to_owned(),
-                serde_json::Value::String(provider_ref),
-            );
-            spec.insert(
-                "producerRef".to_owned(),
-                serde_json::Value::String(producer.to_canonical_string()),
-            );
-            spec.insert(
-                "endpointClass".to_owned(),
-                serde_json::Value::String("service".to_owned()),
-            );
-            spec.insert(
-                "transport".to_owned(),
-                serde_json::Value::String("opaque-carriage".to_owned()),
-            );
-            spec.insert(
-                "purpose".to_owned(),
-                serde_json::Value::String(intent.role().to_owned()),
-            );
-            spec.insert(
-                "locality".to_owned(),
-                serde_json::Value::String(
-                    match intent.placement() {
-                        BindingChildPlacement::Host => "host-local",
-                        BindingChildPlacement::Guest => "guest-local",
-                    }
-                    .to_owned(),
-                ),
-            );
-            spec.insert(
-                "visibility".to_owned(),
-                serde_json::Value::String("provider".to_owned()),
-            );
-            spec.insert(
-                "attachmentPolicy".to_owned(),
-                serde_json::json!({
-                    "supported": true,
-                    "maxAttachments": 1
-                }),
-            );
-            spec.insert(
-                "consumerPolicy".to_owned(),
-                serde_json::json!({
-                    "allowedOperations": ["resolve", "attach", "observe"]
-                }),
-            );
-            spec.insert(
-                "lifecyclePolicy".to_owned(),
-                serde_json::Value::String("recycle-with-producer".to_owned()),
-            );
+            ChildCreateSpec::Endpoint(EndpointChildSpec {
+                provider_ref: intent.provider_ref().to_canonical_string(),
+                producer_ref: producer.to_canonical_string(),
+                endpoint_class: "service".to_owned(),
+                transport: "opaque-carriage".to_owned(),
+                purpose: intent.role().to_owned(),
+                locality: match intent.placement() {
+                    BindingChildPlacement::Host => "host-local",
+                    BindingChildPlacement::Guest => "guest-local",
+                }
+                .to_owned(),
+                visibility: "provider".to_owned(),
+                attachment_policy: AttachmentPolicy {
+                    supported: true,
+                    max_attachments: 1,
+                },
+                consumer_policy: ConsumerPolicy {
+                    allowed_operations: &["resolve", "attach", "observe"],
+                },
+                lifecycle_policy: "recycle-with-producer".to_owned(),
+            })
         }
-    }
-    let value = serde_json::json!({
-        "apiVersion": "resources.d2bus.org/v3",
-        "type": intent.kind().resource_type(),
-        "metadata": {
-            "name": intent.resource_ref().name().as_str(),
-            "zone": zone.as_str(),
-            "ownerRef": owner_ref,
-            "finalizers": [],
-            "deletionRequestedAt": null,
-            "createdAt": "1970-01-01T00:00:00.000Z",
-            "updatedAt": "1970-01-01T00:00:00.000Z",
-            "generation": 1,
-            "revision": 1,
-            "managedBy": "controller"
+    };
+    let envelope = ChildCreateEnvelope {
+        api_version: "resources.d2bus.org/v3",
+        resource_type: intent.kind().resource_type(),
+        metadata: ChildCreateMetadata {
+            name: intent.resource_ref().name().as_str(),
+            zone: zone.as_str(),
+            owner_ref: &owner_ref,
+            finalizers: &[],
+            deletion_requested_at: None,
+            created_at: "1970-01-01T00:00:00.000Z",
+            updated_at: "1970-01-01T00:00:00.000Z",
+            generation: 1,
+            revision: 1,
+            managed_by: "controller",
         },
-        "spec": spec,
-        "status": {
-            "observedGeneration": 0,
-            "phase": "Pending",
-            "conditions": [],
-            "lastReconciledAt": null,
-            "startedAt": null,
-            "completedAt": null,
-            "outcome": null,
-            "update": {
-                "dependencies": {"count": 0, "refs": []},
-                "disruption": "None",
-                "lastAssessedAt": null,
-                "observedGeneration": 0,
-                "operationId": null,
-                "owned": {"count": 0, "refs": []},
-                "preserveState": true,
-                "reasons": [],
-                "state": "Unknown",
-                "targetGeneration": 1
+        spec,
+        status: ChildCreateStatus {
+            observed_generation: 0,
+            phase: "Pending",
+            conditions: &[],
+            last_reconciled_at: None,
+            started_at: None,
+            completed_at: None,
+            outcome: None,
+            update: ChildCreateUpdate {
+                dependencies: ChildCreateCurrencySet { count: 0, refs: &[] },
+                disruption: "None",
+                last_assessed_at: None,
+                observed_generation: 0,
+                operation_id: None,
+                owned: ChildCreateCurrencySet { count: 0, refs: &[] },
+                preserve_state: true,
+                reasons: &[],
+                state: "Unknown",
+                target_generation: 1,
             },
-            "resource": {}
-        }
-    });
-    let bytes = serde_json::to_vec(&value)
+            resource: CanonicalJsonObject::default(),
+        },
+    };
+    let bytes = serde_json::to_vec(&envelope)
         .map_err(|_| BindingChildMaterializationError::MalformedResource)?;
     let canonical = CanonicalJsonValue::parse(&bytes)
         .map_err(|_| BindingChildMaterializationError::MalformedResource)?
         .to_canonical_bytes();
-    if canonical != bytes {
-        return Err(BindingChildMaterializationError::NonCanonicalResource);
-    }
     Ok(canonical)
 }
 

@@ -31,7 +31,7 @@ pub mod worker_launch;
 pub mod test_support;
 
 pub use backend::{
-    BackendLaunch, BackendObservation, ProcessEffectBackend, ProcessEffectError,
+    BackendLaunch, BackendObservation, LaunchedSnapshot, ProcessEffectBackend, ProcessEffectError,
     ProcessLaunchRequest, ProcessRequest, ProcessStopClass,
 };
 pub use driver::{

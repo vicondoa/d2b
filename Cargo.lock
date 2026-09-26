@@ -2041,6 +2041,7 @@ name = "d2b-resource-compiler"
 version = "0.0.0-bootstrap"
 dependencies = [
  "base64",
+ "d2b-contracts",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
  "d2b-contracts-zone-session",

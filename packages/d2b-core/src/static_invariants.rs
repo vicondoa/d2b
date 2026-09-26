@@ -3,9 +3,8 @@
 //! These were historically enforced by the `tests/static-invariant-*.sh` bash
 //! gates as `jq` filters over synthetic positive/negative fixtures (plus, for
 //! two of them, a grep over the real rendered `vms.json`). They are re-homed
-//! here as typed validators so the *real* rendered artifacts are checked (a
-//! strictly stronger guarantee than the synthetic-fixture grep), with the
-//! original positive/negative cases preserved as unit tests.
+//! here as typed validators, with the original positive/negative gate cases
+//! preserved as in-module unit tests (see the `tests` module below).
 //!
 //! Validators are pure and return the list of offending locations (empty ==
 //! invariant holds), so callers (contract tests, and potentially the broker)
@@ -242,4 +241,156 @@ pub fn undeclared_writable_paths<'a>(
     undeclared.sort();
     undeclared.dedup();
     undeclared
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Positive fixture from `tests/static-invariant-world-readable-leak.sh`:
+    /// a public-safe manifest (allowlisted fields, `_manifest.` reserved block)
+    /// must produce no leaks.
+    #[test]
+    fn world_readable_leak_accepts_public_safe_manifest() {
+        let manifest = json!({
+            "_manifest": {"manifestVersion": 4},
+            "corp-vm": {
+                "name": "corp-vm",
+                "env": "work",
+                "index": 10,
+                "sshUser": "alice",
+                "sshPort": 22,
+                "ipv4": "10.20.0.10",
+                "mac": "02:00:00:00:00:0a",
+                "isNetVm": false,
+            }
+        });
+        assert_eq!(world_readable_field_leaks(&manifest), Vec::<String>::new());
+    }
+
+    /// Negative fixture from `tests/static-invariant-world-readable-leak.sh`:
+    /// a non-allowlisted field must be reported by dotted path.
+    #[test]
+    fn world_readable_leak_rejects_non_allowlisted_field() {
+        let manifest = json!({
+            "corp-vm": {"name": "corp-vm", "privateKeyPath": "/var/lib/nixling/vms/corp-vm/id_ed25519"}
+        });
+        assert_eq!(
+            world_readable_field_leaks(&manifest),
+            vec!["corp-vm.privateKeyPath".to_owned()]
+        );
+    }
+
+    /// The `_observability.` reserved block is exempt, matching the doc'd
+    /// reserved-block carve-out (the bash gate predated the block).
+    #[test]
+    fn world_readable_leak_exempts_observability_reserved_block() {
+        let manifest = json!({
+            "_observability": {"internal": {"bufferBytes": 4096}}
+        });
+        assert_eq!(world_readable_field_leaks(&manifest), Vec::<String>::new());
+    }
+
+    /// Positive fixture from `tests/static-invariant-opaque-key-ids.sh`:
+    /// opaque key/secret IDs must not be flagged as host paths.
+    #[test]
+    fn path_bearing_key_accepts_opaque_key_ids() {
+        let manifest = json!({
+            "keys": {"ssh": {"key_id": "corp-vm-host-key"}},
+            "secrets": [{"secret_id": "api-token"}]
+        });
+        assert_eq!(path_bearing_key_violations(&manifest), Vec::<String>::new());
+    }
+
+    /// Negative fixture from `tests/static-invariant-opaque-key-ids.sh`:
+    /// path-bearing key suffixes with host-path values must be reported as
+    /// `dotted.path=value`.
+    #[test]
+    fn path_bearing_key_rejects_host_paths() {
+        let manifest = json!({
+            "keys": {"ssh": {"privateKeyPath": "/var/lib/nixling/vms/corp-vm/id_ed25519"}},
+            "secret_path": "/run/secrets/token"
+        });
+        assert_eq!(
+            path_bearing_key_violations(&manifest),
+            vec![
+                "keys.ssh.privateKeyPath=/var/lib/nixling/vms/corp-vm/id_ed25519".to_owned(),
+                "secret_path=/run/secrets/token".to_owned(),
+            ]
+        );
+    }
+
+    /// A path-suffixed key whose value is an opaque ID (no `/`) is not a
+    /// violation: only path-looking values leak host locations.
+    #[test]
+    fn path_bearing_key_accepts_opaque_value_on_path_suffixed_key() {
+        let manifest = json!({"tokenPath": "tok_abc123"});
+        assert_eq!(path_bearing_key_violations(&manifest), Vec::<String>::new());
+    }
+
+    /// Positive fixture from `tests/static-invariant-broad-caps.sh`: a broad
+    /// capability with an ADR carve-out reference is accepted.
+    #[test]
+    fn broad_cap_with_adr_carve_out_is_allowed() {
+        let caps = vec!["CAP_NET_ADMIN".to_owned()];
+        assert!(!is_broad_cap_violation(&caps, Some("ADR 0004")));
+    }
+
+    /// Negative fixture from `tests/static-invariant-broad-caps.sh`: a broad
+    /// capability without any ADR carve-out is a violation.
+    #[test]
+    fn broad_cap_without_adr_carve_out_is_violation() {
+        let caps = vec!["CAP_SYS_ADMIN".to_owned()];
+        assert!(is_broad_cap_violation(&caps, None));
+    }
+
+    /// Non-broad capabilities need no carve-out.
+    #[test]
+    fn non_broad_caps_need_no_carve_out() {
+        let caps = vec!["CAP_DAC_OVERRIDE".to_owned()];
+        assert!(!is_broad_cap_violation(&caps, None));
+    }
+
+    /// A blank/whitespace carve-out does not satisfy the invariant.
+    #[test]
+    fn blank_adr_carve_out_does_not_satisfy_broad_cap() {
+        let caps = vec!["CAP_SYS_ADMIN".to_owned()];
+        assert!(is_broad_cap_violation(&caps, Some("   ")));
+    }
+
+    /// Positive fixture from `tests/static-invariant-writable-paths.sh`: every
+    /// used writable path declared by the bundle is accepted.
+    #[test]
+    fn declared_writable_paths_are_accepted() {
+        let declared = ["/var/lib/nixling/vms/corp-vm"];
+        let used = ["/var/lib/nixling/vms/corp-vm"];
+        assert_eq!(
+            undeclared_writable_paths(declared, used),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Negative fixture from `tests/static-invariant-writable-paths.sh`: a
+    /// used path absent from the bundle's declaration is reported.
+    #[test]
+    fn undeclared_writable_paths_are_reported() {
+        let declared = ["/var/lib/nixling/vms/corp-vm"];
+        let used = ["/run/secrets"];
+        assert_eq!(
+            undeclared_writable_paths(declared, used),
+            vec!["/run/secrets".to_owned()]
+        );
+    }
+
+    /// The result is the sorted, deduplicated set difference `used - declared`.
+    #[test]
+    fn undeclared_writable_paths_are_sorted_and_deduped() {
+        let declared = ["/var/lib/nixling/vms/corp-vm"];
+        let used = ["/b", "/a", "/b"];
+        assert_eq!(
+            undeclared_writable_paths(declared, used),
+            vec!["/a".to_owned(), "/b".to_owned()]
+        );
+    }
 }

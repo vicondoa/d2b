@@ -441,7 +441,7 @@ impl ProductionSharedProviderEffects {
         kind: SharedProviderKind,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<bool, SharedProviderEffectError> {
-        for dependency in kind.declared_dependency_refs(&request.spec, &request.metadata) {
+        for dependency in kind.declared_dependency_refs(request.spec, &request.metadata) {
             if !self.resource_ready(&dependency).await {
                 return Ok(false);
             }
@@ -1252,9 +1252,7 @@ impl ProductionSharedProviderEffects {
         &self,
         request: &SharedProviderEffectRequest<'_>,
     ) -> Result<d2b_contracts_resource::v3::network::NetworkSpec, SharedProviderEffectError> {
-        let mut spec_value = request
-            .spec
-            .clone();
+        let mut spec_value = (*request.spec).clone();
         if let Some(spec) = spec_value.as_object_mut() {
             for field in ["providerRef", "updatePolicy", "provider"] {
                 spec.remove(field);
@@ -1628,7 +1626,7 @@ impl ProductionSharedProviderEffects {
             })?;
         let mut controller = {
             let mut controllers = state
-                .tpm_controllers
+                .tpm_controllers()
                 .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .map_err(|_| SharedProviderEffectError::Unavailable)?;
             match controllers.remove(&request.uid) {
@@ -1676,7 +1674,7 @@ impl ProductionSharedProviderEffects {
             Ok(outcome) => {
                 {
                     let mut controllers = state
-                        .tpm_controllers
+                        .tpm_controllers()
                         .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
@@ -1701,7 +1699,7 @@ impl ProductionSharedProviderEffects {
             Err(error) => {
                 {
                     let mut controllers = state
-                        .tpm_controllers
+                        .tpm_controllers()
                         .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
@@ -2132,7 +2130,7 @@ impl ProductionSharedProviderEffects {
             ));
         }
         let (_runtime, admission, tokens, settings, holder_ref) = self.gpu_admission(request).await?;
-        let mut controllers = state.gpu_controllers
+        let mut controllers = state.gpu_controllers()
             .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let mut controller = match controllers.remove(&request.uid) {
@@ -2163,7 +2161,7 @@ impl ProductionSharedProviderEffects {
             d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortArgs::new(
                 d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortDeps::new(
                     Arc::clone(&gpu_facets.runtime),
-                    Arc::clone(&state.gpu_authority_leases),
+                    Arc::clone(state.gpu_authority_leases()),
                     tokio::runtime::Handle::current(),
                     request.children,
                 ),
@@ -2521,7 +2519,7 @@ impl ProductionSharedProviderEffects {
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let mut controller = {
             let mut controllers = state
-                .tpm_controllers
+                .tpm_controllers()
                 .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                 .map_err(|_| SharedProviderEffectError::Unavailable)?;
             controllers
@@ -2554,7 +2552,7 @@ impl ProductionSharedProviderEffects {
             Err(error) => {
                 {
                     let mut controllers = state
-                        .tpm_controllers
+                        .tpm_controllers()
                         .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
                         .map_err(|_| SharedProviderEffectError::Unavailable)?;
                     controllers.insert(request.uid.clone(), controller);
@@ -2610,7 +2608,7 @@ impl ProductionSharedProviderEffects {
         request: &SharedProviderEffectRequest<'_>,
         state: &DeviceResourceState,
     ) -> Result<SharedProviderFinalize, SharedProviderEffectError> {
-        let mut controllers = state.gpu_controllers
+        let mut controllers = state.gpu_controllers()
             .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
             .map_err(|_| SharedProviderEffectError::Unavailable)?;
         let admission = controllers
@@ -2629,7 +2627,7 @@ impl ProductionSharedProviderEffects {
             d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortArgs::new(
                 d2b_provider_device_gpu::effects_service::DeclaredWorkerGpuPortDeps::new(
                     Arc::clone(&gpu_facets.runtime),
-                    Arc::clone(&state.gpu_authority_leases),
+                    Arc::clone(state.gpu_authority_leases()),
                     tokio::runtime::Handle::current(),
                     request.children,
                 ),
@@ -3537,21 +3535,21 @@ mod tests {
                         )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
                     (
-                        d2b_provider_device_usbip::USBIP_EFFECTS_SERVICE.id,
+                        d2b_provider_device_usbip::effects_service::USBIP_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device_usbip::effects_service::
                             UsbipEffectsServiceFactory::new(
                                 usbip_facets,
                             )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
                     (
-                        d2b_provider_device_security_key::SECURITY_KEY_EFFECTS_SERVICE.id,
+                        d2b_provider_device_security_key::effects_service::SECURITY_KEY_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device_security_key::effects_service::
                             SecurityKeyEffectsServiceFactory::new(
                                 security_key_facets,
                             )) as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
                     ),
                     (
-                        d2b_provider_device::DEVICE_EFFECTS_SERVICE.id,
+                        d2b_provider_device::effects_service::DEVICE_EFFECTS_SERVICE.id,
                         Arc::new(d2b_provider_device::effects_service::
                             DeviceEffectsServiceFactory::new(device_facets))
                             as Arc<dyn d2b_provider_toolkit::EffectServiceFactory>,
@@ -3887,6 +3885,7 @@ mod tests {
         network_name: &str,
         uid: d2b_contracts_resource::v3::ResourceUid,
         generation: d2b_contracts_resource::v3::ResourceGeneration,
+        spec: &'a Value,
         children: &'a UnusedChildSurface,
     ) -> d2b_provider_toolkit::SharedProviderEffectRequest<'a> {
         d2b_provider_toolkit::SharedProviderEffectRequest {
@@ -3895,7 +3894,7 @@ mod tests {
             uid,
             generation,
             operation_id: "network-admission-test".to_owned(),
-            spec: serde_json::json!({}),
+            spec,
             metadata: serde_json::json!({}),
             status: None,
             children: children as &dyn d2b_provider_toolkit::SharedProviderChildSurface,
@@ -3916,11 +3915,13 @@ mod tests {
         let harness = network_admission_harness().await;
         let children = UnusedChildSurface;
 
+        let spec = serde_json::json!({});
         let request = network_admission_request(
             ZoneId::parse("work").unwrap(),
             "zone-net",
             harness.network_uid.clone(),
             harness.network_generation,
+            &spec,
             &children,
         );
         let result = harness

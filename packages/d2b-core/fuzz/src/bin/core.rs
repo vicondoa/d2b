@@ -3,6 +3,7 @@ mod harness;
 
 use d2b_contracts_resource::v3::{IfName, IfNameError};
 use std::collections::BTreeMap;
+use d2b_contracts::error::{BrokerOp, Error, SemverRange, Version};
 use d2b_core::{
     bundle::{Bundle, BundleGeneration},
     bundle_resolver::{
@@ -12,7 +13,6 @@ use d2b_core::{
         intent_id_sysctl, intent_id_usbip_bind,
         intent_id_usbip_firewall,
     },
-    error::{BrokerOp, Error, SemverRange, Version},
     host::{
         BridgePortFlags, HostJson, HostsFileOwnership, Ipv6SysctlEntry, LanPolicy, NetEnv,
         NetworkManagerUnmanaged, NftChain, NftablesModel, OwnershipRule, SitePolicy, TapRole,
@@ -625,23 +625,36 @@ fn bundle_resolver_host_runtime_synthesizes_from_ifname_mappings() {
 
 fn build_resolver_with_ifname_mappings() -> d2b_core::bundle_resolver::BundleResolver {
     use d2b_core::host::IfNameMapping;
-    let mut r = build_synthetic_resolver();
-    r.host.if_name_mappings = vec![IfNameMapping {
+    let r = build_synthetic_resolver();
+    let mut host = r.host().clone();
+    host.if_name_mappings = vec![IfNameMapping {
         env: "work".to_owned(),
         vm: None,
         role: TapRole::WorkloadLan,
         user_visible_name: "br-work-lan".to_owned(),
         derived_ifname: IfName::new("d2b-br-a1b2c3d4").expect("ifname"),
     }];
-    r
+    BundleResolver::from_artifacts_with_zone_resource_bundles(
+        r.bundle().clone(),
+        host,
+        r.processes().clone(),
+        r.manifest().clone(),
+        BTreeMap::new(),
+    )
 }
 
 fn build_resolver_with_usbip_bus_ids(
     bus_ids: &[&str],
 ) -> d2b_core::bundle_resolver::BundleResolver {
-    let mut r = build_synthetic_resolver();
-    r.host.environments[0].usbip_busid_locks[0].bus_ids =
+    let r = build_synthetic_resolver();
+    let mut host = r.host().clone();
+    host.environments[0].usbip_busid_locks[0].bus_ids =
         bus_ids.iter().map(|bus_id| (*bus_id).to_owned()).collect();
     BundleResolver::from_artifacts_with_zone_resource_bundles(
-        r.bundle, r.host, r.processes, r.manifest, BTreeMap::new())
+        r.bundle().clone(),
+        host,
+        r.processes().clone(),
+        r.manifest().clone(),
+        BTreeMap::new(),
+    )
 }

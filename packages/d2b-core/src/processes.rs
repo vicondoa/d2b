@@ -1,5 +1,5 @@
 use crate::sandbox_profile::{CgroupPlacement, MountPolicy, NamespaceSet};
-use crate::workload_identity::WorkloadIdentity;
+use d2b_contracts::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

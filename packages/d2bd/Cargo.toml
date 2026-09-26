@@ -97,7 +97,7 @@ d2b-provider-shell-pool = { path = "../d2b-provider-shell-pool", version = "0.0.
 d2b-provider-shell-session = { path = "../d2b-provider-shell-session", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
 serde.workspace = true
-sha2 = "0.10"
+sha2 = { workspace = true }
 tracing = "0.1"
 # v1.1.1 live-deploy fu9: stderr tracing subscriber for d2bd
 # so RUST_LOG=debug actually surfaces in journalctl. Without this
@@ -113,6 +113,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "
 ttrpc = { workspace = true, features = ["async"] }
 
 [dev-dependencies]
+d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap", features = ["test-support"] }
 # U100: wired over the binary/service contract in tests/cloud_composition.rs only
 d2b-provider-guest-azure-container-apps = { path = "../d2b-provider-guest-azure-container-apps", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap", features = ["test-support"] }
@@ -121,7 +122,7 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["tes
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-display-wayland = { path = "../d2b-provider-display-wayland", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-guest = { path = "../d2b-provider-guest", version = "0.0.0-bootstrap", features = ["test-support"] }
-d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap" }
+d2b-provider-volume-local = { path = "../d2b-provider-volume-local", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-process = { path = "../d2b-provider-process", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-volume = { path = "../d2b-provider-volume", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-provider-volume-binding = { path = "../d2b-provider-volume-binding", version = "0.0.0-bootstrap", features = ["test-support"] }

@@ -770,7 +770,6 @@ mod tests {
             8,
             assignment_digest(),
             [],
-            false,
         )
         .unwrap()
         .with_execution(ComponentExecution::Launchable {

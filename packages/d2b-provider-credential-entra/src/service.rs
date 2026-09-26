@@ -8,6 +8,7 @@ use d2b_contracts_provider::v3::credential::{
 };
 use d2b_contracts_resource::v3::ResourceRef;
 use d2b_contracts_resource::v3::identity::Locality;
+use d2b_provider_toolkit::credential::{is_absolute_unix_ms, now_unix_ms, operation_deadline};
 
 use crate::{
     CREDENTIAL_SESSION_PURPOSE, EntraClientState, EntraCredentialProvider, EntraLeaseInspection,
@@ -70,6 +71,13 @@ impl CredentialProvider for &EntraCredentialProvider {
 }
 
 impl EntraCredentialProvider {
+    fn time_bounds_not_after(
+        later_ms: u64,
+        earlier_ms: u64,
+    ) -> Result<bool, CredentialServiceError> {
+        Ok(operation_deadline(later_ms)? <= operation_deadline(earlier_ms)?)
+    }
+
     fn authorize_request(
         &self,
         method: CredentialMethod,
@@ -108,9 +116,9 @@ impl EntraCredentialProvider {
         if request.credential_ref().resource_type().as_str() != "Credential" {
             return Err(denied());
         }
-        Self::time_bound_instant(request.requested_expiry_unix_ms())?;
-        Self::operation_deadline(request.deadline_unix_ms())?;
-        Self::time_bound_instant(session.expires_at_unix_ms()).map_err(|_| denied())?;
+        operation_deadline(request.requested_expiry_unix_ms())?;
+        operation_deadline(request.deadline_unix_ms())?;
+        operation_deadline(session.expires_at_unix_ms()).map_err(|_| denied())?;
         if !Self::time_bounds_not_after(
             request.deadline_unix_ms(),
             request.requested_expiry_unix_ms(),
@@ -128,8 +136,8 @@ impl EntraCredentialProvider {
             let delivery = authorization
                 .delivery_session_params()
                 .ok_or_else(invariant)?;
-            Self::time_bound_instant(delivery.expiry_unix_ms())?;
-            Self::operation_deadline(delivery.deadline_unix_ms())?;
+            operation_deadline(delivery.expiry_unix_ms())?;
+            operation_deadline(delivery.deadline_unix_ms())?;
             if delivery.credential_ref() != request.credential_ref()
                 || delivery.operation_class() != method.operation_class()
                 || delivery.consumer_provider_ref() != self.consumer_ref()
@@ -169,7 +177,7 @@ impl EntraCredentialProvider {
             .delivery_session_params()
             .cloned()
             .ok_or_else(invariant)?;
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_client_ready_async(deadline).await?;
         self.ensure_lifecycle_active(&key).await?;
@@ -326,7 +334,7 @@ impl EntraCredentialProvider {
             .delivery_session_params()
             .cloned()
             .ok_or_else(invariant)?;
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_client_ready_async(deadline).await?;
         self.ensure_lifecycle_active(&key).await?;
@@ -419,7 +427,7 @@ if !self.adopt_committed_refresh(&key, request.idempotency_key(), grant).await? 
         &self,
         request: &CredentialRequest,
     ) -> Result<CredentialResponse, CredentialServiceError> {
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_client_ready_async(deadline).await?;
         let primary = self
@@ -515,7 +523,7 @@ if !self.adopt_committed_refresh(&key, request.idempotency_key(), grant).await? 
         &self,
         request: &CredentialRequest,
     ) -> Result<CredentialResponse, CredentialServiceError> {
-        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let deadline = operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         self.ensure_client_ready_async(deadline).await?;
         let record = self
@@ -616,7 +624,7 @@ if inspection.rotation_generation == 0 || inspection.expires_at_unix_ms == 0 {
             return Err(invariant());
         }
         let state = if inspection.state == CredentialLeaseState::Active
-            && crate::EntraCredentialProvider::is_expired_unix_ms(inspection.expires_at_unix_ms)
+            && is_absolute_unix_ms(inspection.expires_at_unix_ms) && inspection.expires_at_unix_ms <= now_unix_ms()
         {
             CredentialLeaseState::Expired
         } else {

@@ -1,6 +1,6 @@
 //! Azure VM lifecycle controller.
 
-use std::{fmt, sync::Arc};
+use std::sync::Arc;
 
 use d2b_provider_toolkit::plane::{Clock, SystemClock};
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     bootstrap::{BootstrapPsk, BootstrapService, BootstrapServiceState},
-    config::{AzureVmConfig, AzureVmGuestSettings, DataDiskSpec},
+    config::{AzureVmConfig, AzureVmGuestSettings},
     effect::AzureCredentialPort,
     effect::{
         AzureAccessToken, AzureEffectPort, AzureVmHandle, AzureVmState, LroStatus,
@@ -36,8 +36,6 @@ pub enum AzureVmPhase {
     Bootstrapping,
     /// VM and enrolled KK session are ready.
     Ready,
-    /// VM is being reconfigured.
-    Reconfiguring,
     /// VM is draining.
     Draining,
     /// VM deletion is in progress.
@@ -73,32 +71,6 @@ pub enum AzureVmReconcileOutcome {
     },
 }
 
-/// A supported mutable Guest update.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub enum AzureVmUpdate {
-    /// Resize the VM to a new Azure size SKU.
-    Resize {
-        /// New size SKU.
-        size: d2b_contracts::OpaqueAzureRef,
-    },
-    /// Attach a provider-owned data disk.
-    AttachDisk {
-        /// Disk intent.
-        disk: DataDiskSpec,
-    },
-    /// Detach a provider-owned data disk by LUN.
-    DetachDisk {
-        /// Azure LUN.
-        lun: u8,
-    },
-    /// Replace operator-owned Azure tags.
-    ReplaceTags {
-        /// New tag set.
-        tags: Vec<(String, String)>,
-    },
-}
-
 /// Non-secret controller state required for restart recovery.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -117,8 +89,6 @@ pub struct AzureVmRecoveryState {
     pub psk_delivery_attempts: u8,
     /// Controller-local LRO start time.
     pub operation_started_at_unix_ms: Option<u64>,
-    /// Pending typed update.
-    pub pending_update: Option<AzureVmUpdate>,
     /// Bootstrap service enrollment state.
     pub bootstrap_service_state: BootstrapServiceState,
     /// Whether the one-time bootstrap extension may still contain PSK data.
@@ -132,52 +102,8 @@ pub struct AzureVmRecoveryState {
     pub bootstrap_deadline_failed: bool,
 }
 
-impl AzureVmUpdate {
-    fn operation_class(&self) -> &'static str {
-        match self {
-            Self::Resize { .. } => "resize",
-            Self::AttachDisk { .. } => "disk-attach",
-            Self::DetachDisk { .. } => "disk-detach",
-            Self::ReplaceTags { .. } => "tags",
-        }
-    }
-}
-
-/// Redacted Guest status projection.
-#[derive(Clone, PartialEq, Eq)]
-pub struct AzureVmStatus {
-    phase: AzureVmPhase,
-    identity_digest: Option<[u8; 32]>,
-}
-
-impl AzureVmStatus {
-    /// Return the current phase.
-    pub const fn phase(&self) -> AzureVmPhase {
-        self.phase
-    }
-
-    /// Return the enrolled identity digest.
-    pub const fn identity_digest(&self) -> Option<[u8; 32]> {
-        self.identity_digest
-    }
-}
-
-impl fmt::Debug for AzureVmStatus {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AzureVmStatus")
-            .field("phase", &self.phase)
-            .field(
-                "identity_digest",
-                &self.identity_digest.map(|_| "<redacted>"),
-            )
-            .finish()
-    }
-}
-
 /// Azure VM controller.
 pub struct AzureVmController<E> {
-    provider_config: AzureVmConfig,
     settings: AzureVmGuestSettings,
     effect: E,
     credentials: Arc<dyn AzureCredentialPort>,
@@ -186,14 +112,12 @@ pub struct AzureVmController<E> {
     operation: Option<crate::effect::AzureOperationHandle>,
     vm_handle: Option<AzureVmHandle>,
     expected_tag_digest: TagDigest,
-    identity_digest: Option<[u8; 32]>,
     bootstrap_psk: Option<BootstrapPsk>,
     bootstrap_service: BootstrapService,
     pending_delete_operation_id: Option<String>,
     bootstrap_started_at_unix_ms: Option<u64>,
     psk_delivery_attempts: u8,
     operation_started_at_unix_ms: Option<u64>,
-    pending_update: Option<AzureVmUpdate>,
     clock: Arc<dyn Clock>,
     bootstrap_extension_present: bool,
     child_cleanup_complete: bool,
@@ -216,7 +140,6 @@ where
         settings.validate()?;
         let expected_tag_digest = TagDigest::from_tags(&settings.azure_tags);
         Ok(Self {
-            provider_config,
             settings,
             effect,
             credentials,
@@ -225,14 +148,12 @@ where
             operation: None,
             vm_handle: None,
             expected_tag_digest,
-            identity_digest: None,
             bootstrap_psk,
             bootstrap_service: BootstrapService::default(),
             pending_delete_operation_id: None,
             bootstrap_started_at_unix_ms: None,
             psk_delivery_attempts: 0,
             operation_started_at_unix_ms: None,
-            pending_update: None,
             clock: Arc::new(SystemClock),
             bootstrap_extension_present: false,
             child_cleanup_complete: false,
@@ -262,7 +183,6 @@ where
             bootstrap_started_at_unix_ms: self.bootstrap_started_at_unix_ms,
             psk_delivery_attempts: self.psk_delivery_attempts,
             operation_started_at_unix_ms: self.operation_started_at_unix_ms,
-            pending_update: self.pending_update.clone(),
             bootstrap_service_state: self.bootstrap_service.state(),
             bootstrap_extension_present: self.bootstrap_extension_present,
             child_cleanup_complete: self.child_cleanup_complete,
@@ -282,9 +202,6 @@ where
         recovery: AzureVmRecoveryState,
     ) -> Result<Self, AzureVmError> {
         if recovery.operation.is_some() != recovery.operation_started_at_unix_ms.is_some()
-            || (recovery.phase == AzureVmPhase::Reconfiguring
-                && (recovery.operation.is_none() || recovery.pending_update.is_none()))
-            || (recovery.pending_update.is_some() && recovery.phase != AzureVmPhase::Reconfiguring)
             || (matches!(
                 recovery.phase,
                 AzureVmPhase::PskCleaning | AzureVmPhase::ChildCleaning
@@ -309,7 +226,6 @@ where
         self.bootstrap_started_at_unix_ms = recovery.bootstrap_started_at_unix_ms;
         self.psk_delivery_attempts = recovery.psk_delivery_attempts;
         self.operation_started_at_unix_ms = recovery.operation_started_at_unix_ms;
-        self.pending_update = recovery.pending_update;
         self.bootstrap_service = BootstrapService::from_state(recovery.bootstrap_service_state);
         self.bootstrap_extension_present = recovery.bootstrap_extension_present;
         self.child_cleanup_complete = recovery.child_cleanup_complete;
@@ -325,14 +241,6 @@ where
     /// Return whether the finalizer remains installed.
     pub const fn finalizer_installed(&self) -> bool {
         self.finalizer
-    }
-
-    /// Return the redacted status.
-    pub fn status(&self) -> AzureVmStatus {
-        AzureVmStatus {
-            phase: self.phase,
-            identity_digest: self.identity_digest,
-        }
     }
 
     /// Reconcile without blocking on ARM polling.
@@ -391,21 +299,18 @@ where
                 Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 })
             }
             AzureVmState::Running => {
-                let (_, tags) = match self.verify_owned_vm(handle, tags, "reconcile") {
-                    Ok(owned) => owned,
-                    Err(error) => {
-                        if error == AzureVmError::ArmResourceConflict {
-                            self.phase = AzureVmPhase::Failed;
-                        }
-                        return Err(error);
+                if let Err(error) = self.verify_owned_vm(handle, tags, "reconcile") {
+                    if error == AzureVmError::ArmResourceConflict {
+                        self.phase = AzureVmPhase::Failed;
                     }
-                };
+                    return Err(error);
+                }
                 if self.bootstrap_psk.is_some()
                     && self.bootstrap_service.state() != BootstrapServiceState::Enrolled
                 {
                     self.start_psk_delivery().await
                 } else {
-                    self.ready_if_enrolled(tags).await
+                    self.ready_if_enrolled().await
                 }
             }
             AzureVmState::Provisioning => {
@@ -427,40 +332,6 @@ where
                 Err(AzureVmError::ArmProvisioningFailed)
             }
         }
-    }
-
-    /// Adopt a running VM only when its d2b tag digest matches.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AzureVmError::InvalidConfiguration`] when the finalizer is
-    /// missing, [`AzureVmError::Ambiguous`] when the observed VM identity
-    /// does not match the tag digest, and the ARM effect variants for
-    /// retryable and fatal effect failures.
-    #[tracing::instrument(skip_all, fields(provider = "runtime-azure-virtual-machine"))]
-    pub async fn adopt(&mut self) -> Result<AzureVmReconcileOutcome, AzureVmError> {
-        if !self.finalizer {
-            return Err(AzureVmError::InvalidConfiguration);
-        }
-        let token = self.arm_token().await?;
-        let (state, handle, tags) = self.effect.get_vm_state(&self.settings, &token).await?;
-        if state != AzureVmState::Running {
-            tracing::warn!(
-                state = ?state,
-                "adoption refused: VM is not running"
-            );
-            return Err(AzureVmError::Transient);
-        }
-        let (_, tags) = match self.verify_owned_vm(handle, tags, "adopt") {
-            Ok(owned) => owned,
-            Err(error) => {
-                if error == AzureVmError::ArmResourceConflict {
-                    self.phase = AzureVmPhase::Failed;
-                }
-                return Err(error);
-            }
-        };
-        self.ready_if_enrolled(tags).await
     }
 
     /// Advance the current opaque long-running operation.
@@ -487,7 +358,6 @@ where
                 "long-running operation exceeded maximum age; abandoning"
             );
             self.clear_operation();
-            self.pending_update = None;
             if self.pending_delete_operation_id.is_some() {
                 self.phase = AzureVmPhase::Deleting;
                 return self.start_pending_delete().await;
@@ -516,7 +386,6 @@ where
                     return Err(AzureVmError::Ambiguous);
                 }
                 self.clear_operation();
-                self.pending_update = None;
                 if self.pending_delete_operation_id.is_some() {
                     self.phase = AzureVmPhase::Deleting;
                     return self.start_pending_delete().await;
@@ -580,26 +449,6 @@ where
                         self.phase = AzureVmPhase::Ready;
                         Ok(AzureVmReconcileOutcome::Converged)
                     }
-                    AzureVmPhase::Reconfiguring => {
-                        let update = match self.pending_update.take() {
-                            Some(update) => update,
-                            None => {
-                                tracing::warn!(
-                                    "reconfiguration LRO succeeded without pending update"
-                                );
-                                return Err(AzureVmError::Ambiguous);
-                            }
-                        };
-                        if let Err(error) = self.apply_update(update) {
-                            tracing::warn!(
-                                code = error.code(),
-                                "applied update rejected during reconfiguration"
-                            );
-                            return Err(error);
-                        }
-                        self.phase = AzureVmPhase::Ready;
-                        Ok(AzureVmReconcileOutcome::Converged)
-                    }
                     AzureVmPhase::Deleting => self.start_pending_delete().await,
                     AzureVmPhase::ChildCleaning => {
                         self.child_cleanup_complete = true;
@@ -612,81 +461,6 @@ where
                 }
             }
         }
-    }
-
-    /// Start one typed mutable update without blocking on ARM.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AzureVmError::InvalidConfiguration`] when an update is
-    /// already pending or the finalizer is missing, the validation error
-    /// when the update contradicts the current VM shape,
-    /// [`AzureVmError::Ambiguous`] when the owned VM identity is absent,
-    /// and the ARM effect variants for retryable and fatal failures.
-    #[tracing::instrument(skip_all, fields(provider = "runtime-azure-virtual-machine"))]
-    pub async fn update(
-        &mut self,
-        zone_uid: &str,
-        guest_uid: &str,
-        generation: u64,
-        update: AzureVmUpdate,
-    ) -> Result<AzureVmReconcileOutcome, AzureVmError> {
-        if !matches!(self.phase, AzureVmPhase::Ready) {
-            tracing::warn!(
-                zone = %zone_uid,
-                resource = %guest_uid,
-                phase = ?self.phase,
-                "update rejected: VM is not in Ready phase"
-            );
-            return Err(AzureVmError::Transient);
-        }
-        if self.operation.is_some() || self.pending_update.is_some() {
-            tracing::debug!(
-                zone = %zone_uid,
-                resource = %guest_uid,
-                "update deferred while another operation is in flight"
-            );
-            return Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 });
-        }
-        if let Err(error) = self.validate_update(&update) {
-            tracing::warn!(
-                zone = %zone_uid,
-                resource = %guest_uid,
-                code = error.code(),
-                "update rejected: validation failed"
-            );
-            return Err(error);
-        }
-        let handle = self.vm_handle.as_ref().ok_or(AzureVmError::Ambiguous)?;
-        let operation_id =
-            operation_id(zone_uid, guest_uid, generation, update.operation_class());
-        let token = self.arm_token().await?;
-        let operation = match &update {
-            AzureVmUpdate::Resize { size } => {
-                self.effect
-                    .start_vm_resize(handle, size.as_str(), &operation_id, &token)
-                    .await?
-            }
-            AzureVmUpdate::AttachDisk { disk } => {
-                self.effect
-                    .start_disk_attach(handle, disk, &operation_id, &token)
-                    .await?
-            }
-            AzureVmUpdate::DetachDisk { lun } => {
-                self.effect
-                    .start_disk_detach(handle, *lun, &operation_id, &token)
-                    .await?
-            }
-            AzureVmUpdate::ReplaceTags { tags } => {
-                self.effect
-                    .update_vm_tags(handle, tags, &operation_id, &token)
-                    .await?
-            }
-        };
-        self.pending_update = Some(update);
-        self.set_operation(operation);
-        self.phase = AzureVmPhase::Reconfiguring;
-        Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 })
     }
 
     /// Begin deletion. The finalizer is retained until the LRO succeeds.
@@ -713,7 +487,6 @@ where
             })
             .clone();
         if self.operation.is_some() {
-            self.pending_update = None;
             if !matches!(
                 self.phase,
                 AzureVmPhase::PskCleaning | AzureVmPhase::ChildCleaning
@@ -765,34 +538,6 @@ where
         Ok(AzureVmReconcileOutcome::Progressing { after_ms: 1_000 })
     }
 
-    /// Return the configured gateway execution reference.
-    pub fn controller_execution_ref(&self) -> &d2b_contracts::ResourceRef {
-        &self.provider_config.controller_execution_ref
-    }
-
-    /// Complete one authenticated bootstrap enrollment.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AzureVmError::BootstrapFailed`] when the enrollment
-    /// deadline elapsed, and the bootstrap admission variants
-    /// (`BootstrapPskExpired`, `BootstrapPskReplayed`,
-    /// `BootstrapEnrollmentFailed`) when the presented PSK is refused.
-    pub fn complete_enrollment(
-        &mut self,
-        admission: &mut crate::bootstrap::BootstrapAdmission,
-        presented: &[u8],
-        now_unix_ms: u64,
-    ) -> Result<(), AzureVmError> {
-        if self.bootstrap_started_at_unix_ms.is_some_and(|started| {
-            now_unix_ms.saturating_sub(started) >= self.settings.bootstrap_deadline_ms
-        }) {
-            return Err(AzureVmError::BootstrapFailed);
-        }
-        self.bootstrap_service
-            .complete_enrollment(admission, presented, now_unix_ms)
-    }
-
     async fn start_psk_delivery(&mut self) -> Result<AzureVmReconcileOutcome, AzureVmError> {
         let handle = self.vm_handle.as_ref().ok_or(AzureVmError::Ambiguous)?;
         let started = *self
@@ -831,10 +576,7 @@ where
         Ok(AzureVmReconcileOutcome::Progressing { after_ms: 250 })
     }
 
-    async fn ready_if_enrolled(
-        &mut self,
-        tags: TagDigest,
-    ) -> Result<AzureVmReconcileOutcome, AzureVmError> {
+    async fn ready_if_enrolled(&mut self) -> Result<AzureVmReconcileOutcome, AzureVmError> {
         if self.bootstrap_service.state() != BootstrapServiceState::Enrolled {
             let started = *self
                 .bootstrap_started_at_unix_ms
@@ -852,7 +594,6 @@ where
                 }
                 return Err(AzureVmError::BootstrapFailed);
             }
-            self.identity_digest = None;
             self.phase = AzureVmPhase::Bootstrapping;
             return Ok(AzureVmReconcileOutcome::Retry { after_ms: 1_000 });
         }
@@ -861,7 +602,6 @@ where
         }
         self.bootstrap_psk = None;
         self.phase = AzureVmPhase::Ready;
-        self.identity_digest = Some(Sha256::digest(tags.as_bytes()).into());
         Ok(AzureVmReconcileOutcome::Converged)
     }
 
@@ -994,42 +734,6 @@ where
         self.operation_started_at_unix_ms.is_some_and(|started| {
             self.clock.now_unix_ms().saturating_sub(started) >= MAX_LRO_AGE_MS
         })
-    }
-
-    fn validate_update(&self, update: &AzureVmUpdate) -> Result<(), AzureVmError> {
-        match update {
-            AzureVmUpdate::Resize { .. } => {}
-            AzureVmUpdate::AttachDisk { disk } => {
-                let mut settings = self.settings.clone();
-                settings.data_disks.push(disk.clone());
-                settings.validate()?;
-            }
-            AzureVmUpdate::DetachDisk { lun } => {
-                if !self.settings.data_disks.iter().any(|disk| disk.lun == *lun) {
-                    return Err(AzureVmError::InvalidConfiguration);
-                }
-            }
-            AzureVmUpdate::ReplaceTags { tags } => {
-                let mut settings = self.settings.clone();
-                settings.azure_tags = tags.clone();
-                settings.validate()?;
-            }
-        }
-        Ok(())
-    }
-
-    fn apply_update(&mut self, update: AzureVmUpdate) -> Result<(), AzureVmError> {
-        match update {
-AzureVmUpdate::Resize { size } => self.settings.vm_size = size,
-        AzureVmUpdate::AttachDisk { disk } => self.settings.data_disks.push(disk),
-        AzureVmUpdate::DetachDisk { lun } => {
-            self.settings.data_disks.retain(|disk| disk.lun != lun)
-        }
-        AzureVmUpdate::ReplaceTags { tags } => self.settings.azure_tags = tags,
-        }
-        self.settings.validate()?;
-        self.expected_tag_digest = TagDigest::from_tags(&self.settings.azure_tags);
-        Ok(())
     }
 
     async fn arm_token(&self) -> Result<AzureAccessToken, AzureVmError> {

@@ -1302,7 +1302,7 @@ pub(crate) fn try_load_resolver_with_policy(
     bundle_path: &Path,
     policy: &d2b_core::bundle_resolver::BundleVerifyPolicy,
 ) -> BundleSlot {
-    use d2b_core::error::{BundleError, Error as CoreError};
+    use d2b_contracts::error::{BundleError, Error as CoreError};
     // Per the tracing contract, span attributes MUST NOT include
     // filesystem paths (high cardinality + can leak host layout). The
     // bundle path is bounded operational context handled by the typed
@@ -3868,7 +3868,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let resolver = require_resolver(resolver)?;
             let outcome = crate::ops::security_key::live_open_hidraw_security_key(
                 &req,
-                &resolver.host.security_key_selectors,
+                &resolver.host().security_key_selectors,
                 audit_log,
             )
             .await
@@ -4826,13 +4826,13 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let expected_hash = persisted_nft_hash()
                 .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-                .or_else(|| resolver.host.nftables.table_hash_after_apply.clone());
+                .or_else(|| resolver.host().nftables.table_hash_after_apply.clone());
             crate::ops::nft::apply_with_coexistence(
                 &exec,
                 &nft_binary,
                 &nft_script,
-                resolver.host.nftables.ownership_id.as_str(),
-                resolver.host.firewall_coexistence_policy.as_ref(),
+                resolver.host().nftables.ownership_id.as_str(),
+                resolver.host().firewall_coexistence_policy.as_ref(),
                 expected_hash.as_deref(),
             )
             .await
@@ -4866,8 +4866,8 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             crate::ops::nft::persist_live_nft_hash(
                 &exec,
                 &nft_binary,
-                &resolver.host.nftables.family,
-                &resolver.host.nftables.table,
+                &resolver.host().nftables.family,
+                &resolver.host().nftables.table,
                 &nft_hash_sidecar_path(),
             )
             .await
@@ -6564,8 +6564,8 @@ impl DispatchBackend for LiveDispatchBackend {
             let destroy_script;
             let script_body = if destroy {
                 destroy_script = render_nft_destroy_script(
-                    &resolver.host.nftables.family,
-                    &resolver.host.nftables.table,
+                    &resolver.host().nftables.family,
+                    &resolver.host().nftables.table,
                 );
                 destroy_script.as_str()
             } else {
@@ -6577,7 +6577,7 @@ impl DispatchBackend for LiveDispatchBackend {
                 persisted_nft_hash()
                     .await
                     .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-                    .or_else(|| resolver.host.nftables.table_hash_after_apply.clone())
+                    .or_else(|| resolver.host().nftables.table_hash_after_apply.clone())
             };
             let expected_hash = if destroy {
                 None
@@ -6589,7 +6589,7 @@ impl DispatchBackend for LiveDispatchBackend {
                 &nft_binary,
                 script_body,
                 intent.ownership_id.as_str(),
-                resolver.host.firewall_coexistence_policy.as_ref(),
+                resolver.host().firewall_coexistence_policy.as_ref(),
                 expected_hash,
             )
             .await
@@ -6623,8 +6623,8 @@ impl DispatchBackend for LiveDispatchBackend {
             crate::ops::nft::persist_live_nft_hash(
                 &exec,
                 &nft_binary,
-                &resolver.host.nftables.family,
-                &resolver.host.nftables.table,
+                &resolver.host().nftables.family,
+                &resolver.host().nftables.table,
                 &nft_hash_sidecar_path(),
             )
             .await
@@ -6945,13 +6945,13 @@ impl DispatchBackend for LiveDispatchBackend {
             let expected_hash = persisted_nft_hash()
                 .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-                .or_else(|| resolver.host.nftables.table_hash_after_apply.clone());
+                .or_else(|| resolver.host().nftables.table_hash_after_apply.clone());
             crate::ops::nft::apply_with_coexistence(
                 &exec,
                 &nft_binary,
                 &nft_script,
-                resolver.host.nftables.ownership_id.as_str(),
-                resolver.host.firewall_coexistence_policy.as_ref(),
+                resolver.host().nftables.ownership_id.as_str(),
+                resolver.host().firewall_coexistence_policy.as_ref(),
                 expected_hash.as_deref(),
             )
             .await
@@ -6985,8 +6985,8 @@ impl DispatchBackend for LiveDispatchBackend {
             crate::ops::nft::persist_live_nft_hash(
                 &exec,
                 &nft_binary,
-                &resolver.host.nftables.family,
-                &resolver.host.nftables.table,
+                &resolver.host().nftables.family,
+                &resolver.host().nftables.table,
                 &nft_hash_sidecar_path(),
             )
             .await
@@ -8645,10 +8645,12 @@ async fn build_usbip_explicit_firewall_decision(
         let Some(active_firewall) = resolver.find_usbip_firewall_intent(&firewall_id) else {
             continue;
         };
+        let bus_id = d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str())
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
                 d2b_host::nftables::ChainHook::Input,
-                &d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                &bus_id,
                 active_firewall.nft_rule_body.as_str(),
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
@@ -8667,10 +8669,12 @@ async fn build_usbip_explicit_firewall_decision(
         else {
             continue;
         };
+        let bus_id = d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str())
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
                 d2b_host::nftables::ChainHook::Input,
-                &d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                &bus_id,
                 active_firewall.nft_rule_body.as_str(),
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
@@ -8685,22 +8689,22 @@ async fn build_usbip_explicit_firewall_decision(
         if !inserted.insert(carveout_id) {
             continue;
         }
+        let bus_id = d2b_host::nftables::BusId::new(explicit_bus_id.as_str())
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
                 d2b_host::nftables::ChainHook::Input,
-                &d2b_host::nftables::BusId::new(explicit_bus_id.as_str()),
+                &bus_id,
                 explicit_rule_body.as_str(),
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
     }
 
     // Insert the new explicit carveout last.
-    crate::ops::usbip_firewall::bind_firewall_rule(
-        batch,
-        &d2b_host::nftables::BusId::new(bus_id),
-        rule_body,
-    )
-    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    let bus_id = d2b_host::nftables::BusId::new(bus_id)
+        .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+    crate::ops::usbip_firewall::bind_firewall_rule(batch, &bus_id, rule_body)
+        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
 fn runner_role_for_process_role(
@@ -10056,10 +10060,12 @@ async fn build_usbip_firewall_decision(
                 intent_id: firewall_id,
             });
         };
+        let bus_id = d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str())
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
                 d2b_host::nftables::ChainHook::Input,
-                &d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                &bus_id,
                 active_firewall.nft_rule_body.as_str(),
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
@@ -10079,21 +10085,21 @@ async fn build_usbip_firewall_decision(
                 intent_id: firewall_id,
             });
         };
+        let bus_id = d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str())
+            .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
         batch
             .add_usbip_carveout_expr(
                 d2b_host::nftables::ChainHook::Input,
-                &d2b_host::nftables::BusId::new(active_firewall.bus_id.as_str()),
+                &bus_id,
                 active_firewall.nft_rule_body.as_str(),
             )
             .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
     }
 
-    crate::ops::usbip_firewall::bind_firewall_rule(
-        batch,
-        &d2b_host::nftables::BusId::new(current.bus_id.as_str()),
-        current.nft_rule_body.as_str(),
-    )
-    .map_err(|err| BrokerError::LiveHandler(err.to_string()))
+    let bus_id = d2b_host::nftables::BusId::new(current.bus_id.as_str())
+        .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+    crate::ops::usbip_firewall::bind_firewall_rule(batch, &bus_id, current.nft_rule_body.as_str())
+        .map_err(|err| BrokerError::LiveHandler(err.to_string()))
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]

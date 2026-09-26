@@ -9,7 +9,7 @@ use d2b_contracts_broker::broker_wire::{
 };
 
 use crate::target_runtime::DaemonMode;
-use crate::typed_error::TypedError;
+use crate::typed_error::{TypedError, error_source};
 use crate::unix_transport::{
     connect_seqpacket, connect_seqpacket_with_timeout, read_frame, write_json_frame,
 };
@@ -43,6 +43,7 @@ pub fn dispatch_broker_request_to_socket(
             TypedError::InternalBrokerUnavailable {
                 path: socket_path.to_path_buf(),
                 detail: err.to_string(),
+                source: error_source(err),
             }
         });
     };
@@ -117,6 +118,7 @@ fn broker_round_trip_within_deadline(
         .map_err(|error| TypedError::InternalIo {
             context: format!("set broker write timeout to {remaining:?}"),
             detail: error.to_string(),
+            source: error_source(error),
         })?;
     write_json_frame(&socket, envelope)?;
 
@@ -126,11 +128,13 @@ fn broker_round_trip_within_deadline(
         .map_err(|error| TypedError::InternalIo {
             context: format!("set broker read timeout to {remaining:?}"),
             detail: error.to_string(),
+            source: error_source(error),
         })?;
     let response = read_frame(&socket)?;
     serde_json::from_slice(&response).map_err(|error| TypedError::InternalBrokerUnavailable {
         path: socket_path.to_path_buf(),
         detail: error.to_string(),
+        source: error_source(error),
     })
 }
 

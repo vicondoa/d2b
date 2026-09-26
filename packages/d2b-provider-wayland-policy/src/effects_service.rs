@@ -210,7 +210,8 @@ impl InteractionEffectsService {
             .identity()
             .await
             .ok_or(InteractionEffectError::Unavailable)?;
-        let session_ref = key_ref(&request.target);
+        let session_ref = key_ref(&request.target)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
         if identity.wayland_session_ref != session_ref
             || identity.wayland_session_uid != request.uid
             || identity.subject_ref != *spec.guest_ref()
@@ -258,7 +259,9 @@ impl InteractionEffectsService {
         &self,
         request: &InteractionEffectRequest<'_>,
     ) -> Result<InteractionEffectOutcome, InteractionEffectError> {
-        let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
+        let target_ref = key_ref(&request.target)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
+        let Some(target) = self.live_stored(&target_ref).await? else {
             return Err(InteractionEffectError::Unavailable);
         };
         self.facets
@@ -278,7 +281,9 @@ impl InteractionEffectsService {
                 serde_json::from_value(spec)
                     .map_err(|error| InteractionEffectError::InvalidSpec(error.to_string()))
             })?;
-        let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
+        let target_ref = key_ref(&request.target)
+            .map_err(|_| InteractionEffectError::InvalidResource)?;
+        let Some(target) = self.live_stored(&target_ref).await? else {
             return Err(InteractionEffectError::Unavailable);
         };
         let Some(service) = self.fresh_audio_dependency(&spec.service_ref).await? else {
@@ -310,7 +315,7 @@ impl InteractionEffectsService {
             .map_err(map_audio_effect_error)?
             .ok_or(InteractionEffectError::InvalidResource)?;
         let children = AudioBindingController::<Box<dyn d2b_provider_audio_pipewire::AudioMediator>>::child_resources(
-            &key_ref(&request.target),
+            &key_ref(&request.target).map_err(|_| InteractionEffectError::InvalidResource)?,
             &spec,
         )
         .map_err(|_| InteractionEffectError::InvalidResource)?;
@@ -436,7 +441,9 @@ impl InteractionDriverEffects for InteractionEffectsService {
             // references it (old `finalize_u9`): the owner stays with its
             // durable deleting mark and the pass retries.
             InteractionKind::AudioService => {
-                let target = key_ref(&request.target).to_canonical_string();
+                let target = key_ref(&request.target)
+                    .map_err(|_| InteractionEffectError::InvalidResource)?
+                    .to_canonical_string();
                 let dangling = self.specs_of_type(AUDIO_BINDING_TYPE).await?.iter().any(
                     |binding| {
                         binding.pointer("/serviceRef").and_then(Value::as_str)
@@ -450,7 +457,9 @@ impl InteractionDriverEffects for InteractionEffectsService {
                 })
             }
             InteractionKind::AudioBinding => {
-                let Some(target) = self.live_stored(&key_ref(&request.target)).await? else {
+                let target_ref = key_ref(&request.target)
+                    .map_err(|_| InteractionEffectError::InvalidResource)?;
+                let Some(target) = self.live_stored(&target_ref).await? else {
                     return Ok(InteractionFinalize::Complete);
                 };
                 self.facets
@@ -463,7 +472,9 @@ impl InteractionDriverEffects for InteractionEffectsService {
             // A ShellPool refuses to go away while a Session still
             // references it (old `finalize_u9`).
             InteractionKind::ShellPool => {
-                let target = key_ref(&request.target).to_canonical_string();
+                let target = key_ref(&request.target)
+                    .map_err(|_| InteractionEffectError::InvalidResource)?
+                    .to_canonical_string();
                 let dangling = self
                     .specs_of_type("shell-terminal.d2bus.org.ShellSession")
                     .await?

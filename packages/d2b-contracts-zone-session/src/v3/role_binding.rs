@@ -6,6 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::role::{
     MAX_ROLE_RULE_EXECUTION_REFS, MAX_ROLE_RULE_RESOURCE_NAMES, RoleContractError, RoleRule,
 };
+use d2b_contracts::wire_deserialize;
 use d2b_contracts_resource::v3::{
     CanonicalJsonObject, ResourceRef, ZoneId, execution_policy::redacted_debug,
 };

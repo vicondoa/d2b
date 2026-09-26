@@ -9,6 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::resource_export::{ResourceExportSpec, ShareQuota, is_qualified_service_type};
+use d2b_contracts::wire_deserialize;
 use d2b_contracts_provider::v3::provider::{
     Exportability, ProjectionFactory, ProviderContractError,
 };

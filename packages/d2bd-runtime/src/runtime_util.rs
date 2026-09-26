@@ -16,6 +16,7 @@ pub fn duplicate_received_fd(
         return Err(TypedError::InternalIo {
             context: context.to_owned(),
             detail: format!("missing SCM_RIGHTS fd at index {fd_index}"),
+            source: None,
         });
     };
     duplicate_fd_cloexec(received_fds[fd_slot], context)

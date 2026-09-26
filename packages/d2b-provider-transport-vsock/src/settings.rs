@@ -14,16 +14,28 @@ pub enum PortClass {
 
 /// Provider-specific transport settings.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    try_from = "VsockTransportSettingsWire"
+)]
 pub struct VsockTransportSettings {
-    /// Same-child-Zone Guest reference.
-    pub guest_ref: String,
-    /// Allocator-owned port class.
+    guest_ref: String,
+    port_class: PortClass,
+    connect_timeout_seconds: u16,
+}
+
+/// Untrusted wire mirror for [`VsockTransportSettings`]; deserialization
+/// routes through the validating conversion so a derived path can never admit
+/// unvalidated settings.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VsockTransportSettingsWire {
+    guest_ref: String,
     #[serde(default)]
-    pub port_class: PortClass,
-    /// Open deadline in seconds.
+    port_class: PortClass,
     #[serde(default = "default_timeout_seconds")]
-    pub connect_timeout_seconds: u16,
+    connect_timeout_seconds: u16,
 }
 
 impl VsockTransportSettings {
@@ -42,6 +54,21 @@ impl VsockTransportSettings {
         };
         settings.validate()?;
         Ok(settings)
+    }
+
+    /// Borrow the same-child-Zone Guest reference.
+    pub fn guest_ref(&self) -> &str {
+        &self.guest_ref
+    }
+
+    /// Return the allocator-owned port class.
+    pub const fn port_class(&self) -> PortClass {
+        self.port_class
+    }
+
+    /// Return the open deadline in seconds.
+    pub const fn connect_timeout_seconds(&self) -> u16 {
+        self.connect_timeout_seconds
     }
 
     /// Validate settings and reject raw endpoint material.
@@ -67,6 +94,20 @@ impl VsockTransportSettings {
         include_str!(
             "../../../docs/reference/schemas/v3/providers/transport-vsock.transport-binding.json"
         )
+    }
+}
+
+impl TryFrom<VsockTransportSettingsWire> for VsockTransportSettings {
+    type Error = SettingsError;
+
+    fn try_from(wire: VsockTransportSettingsWire) -> Result<Self, Self::Error> {
+        let settings = Self {
+            guest_ref: wire.guest_ref,
+            port_class: wire.port_class,
+            connect_timeout_seconds: wire.connect_timeout_seconds,
+        };
+        settings.validate()?;
+        Ok(settings)
     }
 }
 
