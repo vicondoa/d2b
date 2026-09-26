@@ -11,11 +11,17 @@ let
     inherit self;
     inherit (pkgs) lib;
   };
+  # The reusable guest configuration lives outside this directory so it
+  # survives the fixture (see `nix/test-support/host-integration-node.nix`).
+  d2bNode = import ../../nix/test-support/host-integration-node.nix {
+    inherit self;
+    inherit (pkgs) lib;
+  };
 in
 pkgs.testers.runNixOSTest {
   name = "d2b-privilege-oracle";
 
-  nodes.machine = d2bLib.d2bDaemonNode { };
+  nodes.machine = d2bNode.d2bDaemonNode { };
 
   testScript = ''
     ${d2bLib.fixtureDiagnostics}

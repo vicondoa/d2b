@@ -33,6 +33,12 @@ let
     inherit lib;
     inherit hostToolBundle;
   };
+  # The reusable guest configuration lives outside this directory so it
+  # survives the fixture (see `nix/test-support/host-integration-node.nix`).
+  d2bNode = import ../../nix/test-support/host-integration-node.nix {
+    inherit self;
+    inherit lib;
+  };
   cloudHypervisorArtifact = d2bLib.mkRuntimeCloudHypervisorArtifact pkgs;
   volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
 
@@ -279,7 +285,7 @@ in
 pkgs.testers.runNixOSTest {
   name = "d2b-device-worker-launch";
 
-  nodes.machine = d2bLib.d2bDaemonNode {
+  nodes.machine = d2bNode.d2bDaemonNode {
     extra = { ... }: {
       d2b.site.adminUsers = [ "alice" ];
       environment.systemPackages = with pkgs; [

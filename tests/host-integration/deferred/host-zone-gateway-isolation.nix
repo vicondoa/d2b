@@ -9,6 +9,10 @@ let
     hostToolBundle =
       if self.lib ? d2bHostToolBundle then self.lib.d2bHostToolBundle else null;
   };
+  d2bNode = import ../../../nix/test-support/host-integration-node.nix {
+    inherit self;
+    inherit (pkgs) lib;
+  };
   cloudHypervisorArtifact =
     d2bLib.mkRuntimeCloudHypervisorArtifact pkgs;
   volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
@@ -126,7 +130,7 @@ in
 pkgs.testers.runNixOSTest {
   name = "d2b-host-zone-gateway-isolation";
 
-  nodes.machine = d2bLib.d2bCloudHypervisorNode {
+  nodes.machine = d2bNode.d2bCloudHypervisorNode {
     extra = { ... }: {
       environment.systemPackages = [
         pkgs.iproute2

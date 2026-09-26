@@ -32,10 +32,12 @@ let
   missing = lib.filter (name: !(builtins.elem name stagedEntries)) bazelHostTools.inventory;
   unexpected = lib.filter (name: !(builtins.elem name bazelHostTools.inventory)) stagedEntries;
 
-  d2bLib = import ../../tests/host-integration/lib.nix {
+  # The shared node configuration, re-homed so the guest outlives the
+  # fixtures that used to declare it. The Bazel host-tool package reaches
+  # the guest through the self override, not through this module.
+  d2bNode = import ./host-integration-node.nix {
     self = self;
     inherit (pkgs) lib;
-    hostToolBundle = bazelHostTools.package;
   };
 
   # `d2bDaemonNode` declares `virtualisation.*`, so the guest is evaluated
@@ -47,7 +49,7 @@ let
     system = pkgs.stdenv.hostPlatform.system;
     modules = [
       (pkgs.path + "/nixos/modules/virtualisation/qemu-vm.nix")
-      (d2bLib.d2bDaemonNode { extra = { imports = extraModules; }; })
+      (d2bNode.d2bDaemonNode { extra = { imports = extraModules; }; })
       {
         virtualisation.host.pkgs = pkgs;
       }

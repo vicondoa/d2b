@@ -20,6 +20,12 @@ let
     hostToolBundle =
       if self.lib ? d2bHostToolBundle then self.lib.d2bHostToolBundle else null;
   };
+  # The reusable guest configuration lives outside this directory so it
+  # survives the fixture (see `nix/test-support/host-integration-node.nix`).
+  d2bNode = import ../../nix/test-support/host-integration-node.nix {
+    inherit self;
+    inherit lib;
+  };
   volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
   artifacts = {
     volume-acceptance-provider = {
@@ -37,7 +43,7 @@ in
 pkgs.testers.runNixOSTest {
   name = "d2b-virtiofsd-volume-runtime";
 
-  nodes.machine = d2bLib.d2bDaemonNode {
+  nodes.machine = d2bNode.d2bDaemonNode {
       extra = { ... }: {
         networking.nftables.enable = true;
         networking.nftables.ruleset = lib.mkAfter ''

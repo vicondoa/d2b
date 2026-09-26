@@ -13,6 +13,12 @@ let
     hostToolBundle =
       if self.lib ? d2bHostToolBundle then self.lib.d2bHostToolBundle else null;
   };
+  # The reusable guest configuration lives outside this directory so it
+  # survives the fixture (see `nix/test-support/host-integration-node.nix`).
+  d2bNode = import ../../nix/test-support/host-integration-node.nix {
+    inherit self;
+    inherit lib;
+  };
   cloudHypervisorArtifact =
     d2bLib.mkRuntimeCloudHypervisorArtifact pkgs;
   volumeProviderArtifact = d2bLib.mkVolumeProviderArtifact pkgs;
@@ -187,7 +193,7 @@ in
 pkgs.testers.runNixOSTest {
   name = "d2b-runtime-cloud-hypervisor-guest-preflight";
 
-  nodes.machine = d2bLib.d2bCloudHypervisorNode {
+  nodes.machine = d2bNode.d2bCloudHypervisorNode {
     extra = { ... }: {
       d2b.site.adminUsers = [ "alice" ];
       environment.systemPackages = with pkgs; [

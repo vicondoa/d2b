@@ -18,7 +18,6 @@ _GUEST_SOURCES = [
     "//:packages_workspace_sources",
     "//packages/d2b-broker:src/ops/state-posture-contract.json",
     "//:rust-toolchain.toml",
-    "//:tests/host-integration/lib.nix",
     "//tests/fixtures:fixture_sources",
 ]
 
