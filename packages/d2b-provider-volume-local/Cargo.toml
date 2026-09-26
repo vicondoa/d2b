@@ -13,6 +13,16 @@ disallowed_methods = "deny"
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
 
+# `testing` is needed both by external crates (which opt in via the
+# `test-support` feature) and by this crate's OWN tests. Gating on
+# `any(test, feature = "test-support")` makes the module available
+# automatically when compiling this crate's unit tests, so
+# `cargo test -p d2b-provider-volume-local` works without anyone having to
+# remember `--features test-support`; the integration tests that script the
+# doubles require the feature explicitly.
+[features]
+test-support = []
+
 [dependencies]
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-contracts-resource = { path = "../d2b-contracts-resource", version = "0.0.0-bootstrap" }
@@ -34,3 +44,25 @@ d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-
 d2b-provider-network-local = { path = "../d2b-provider-network-local", version = "0.0.0-bootstrap" }
 # The anchored adapter's in-module tests materialize roots in temp dirs.
 tempfile = "3"
+
+# These suites script the `testing` doubles, so they need the feature gate
+# open; `cargo test -p d2b-provider-volume-local` skips them otherwise.
+[[test]]
+name = "layout_conformance"
+path = "tests/layout_conformance.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "store_view_and_swtpm"
+path = "tests/store_view_and_swtpm.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "views_and_sharing"
+path = "tests/views_and_sharing.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "volume_effect_adapter"
+path = "tests/volume_effect_adapter.rs"
+required-features = ["test-support"]
