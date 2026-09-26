@@ -1,5 +1,3 @@
-# `w6-06-network-intent-parse-error.md`
-
 ### Fixed
 
 - Network spec parse failures in the trusted-bundle network path now surface
