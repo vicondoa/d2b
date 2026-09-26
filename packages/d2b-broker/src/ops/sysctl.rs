@@ -201,6 +201,7 @@ fn proc_sys_path(key: &str) -> PathBuf {
 /// key, read from `d2b_host::netlink` (the crate that owns the sysctl
 /// tables). A key with no destroy value cannot be destroyed; the broker
 /// fails closed instead of guessing a value.
+#[cfg(not(feature = "layer1-bootstrap"))]
 pub use d2b_host::netlink::destroy_value_for_key;
 
 #[cfg(test)]
