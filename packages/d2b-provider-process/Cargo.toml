@@ -27,10 +27,10 @@ d2b-provider-toolkit = { path = "../d2b-provider-toolkit", version = "0.0.0-boot
 d2b-provider-volume-virtiofs = { path = "../d2b-provider-volume-virtiofs", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
 parking_lot = "0.12"
-rustix = { version = "0.38", features = ["std", "process"] }
+rustix = { workspace = true, features = ["std", "process"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.10"
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
 tracing = "0.1"
 

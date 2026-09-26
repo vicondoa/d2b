@@ -57,10 +57,10 @@ nix = { version = "0.29", features = ["fs", "socket", "uio", "user", "signal", "
 # plan.md §"W3 filesystem path-safety tests". `rustix` provides
 # those calls without a per-syscall `unsafe` block, so the broker's
 # `unsafe_code = "deny"` lint stays clean.
-rustix = { version = "0.38", features = ["fs", "process", "net"] }
+rustix = { workspace = true, features = ["fs", "process", "net"] }
 tracing = "0.1"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "net", "time", "fs", "process", "io-util", "test-util"] }
-sha2 = "0.10"
+sha2 = { workspace = true }
 # U9 (plan R16): the `blocking-api` feature is removed - the broker's
 # D-Bus surface is async (the systemd operations now live in the
 # process-systemd provider crate), so the blocking module must not be
@@ -80,7 +80,7 @@ d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["tes
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap", features = ["fake-backends"] }
 d2b-contracts-zone-session = { path = "../d2b-contracts-zone-session", version = "0.0.0-bootstrap" }
 tempfile = "3"
-sha2 = "0.10"
+sha2 = { workspace = true }
 
 # U33/U9: this crate does not inherit `[workspace.lints]` (it carries its own
 # lint posture), but `clippy.toml` at the workspace root arms

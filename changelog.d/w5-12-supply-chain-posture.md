@@ -1,0 +1,5 @@
+### Fixed
+
+- Member manifests now inherit `rustix` and `sha2` from `workspace.dependencies` instead of pinning literal versions; the 13 member decls across d2b-broker, d2b-provider-guest, d2b-provider-network-local, d2b-provider-process, d2b-provider-process-systemd, d2b-provider-user, d2b-telemetry, d2b-unsafe-local-helper, d2bd, and d2bd-runtime resolve to the same versions as before, so both lockfiles are unchanged.
+- `deny.toml` records the accepted duplicate clusters (nix at 0.26/0.29/0.31, rustix at 0.38/1.1, and the 31 transitive-only clusters) with their versions, pullers, and re-check triggers, and raises the licence confidence threshold from 0.8 to 0.9.
+- Added a lock-drift check comparing shared-crate versions across `Cargo.lock` and `packages/Cargo.guest.lock`; it currently reports 39 shared crates resolving to newer versions in the guest tree, to be aligned by regenerating both locks from one index snapshot at the next dependency refresh.
