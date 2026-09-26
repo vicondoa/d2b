@@ -10796,6 +10796,51 @@ mod tests {
         assert_eq!(check_self_binding_scope(&fixture.root), Ok(()));
     }
 
+    /// The escape scan window is the declaring `SeedProvider` block: it
+    /// ends at the block's closing brace, not at the end of the file.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn the_self_binding_scan_window_ends_at_the_declaring_provider() {
+        let fixture = Fixture::new("self-binding-window");
+        let d2bd = fixture.root.join("packages/d2bd/src");
+        fs::create_dir_all(&d2bd).unwrap();
+        let seed = d2bd.join("seed.rs");
+        // A self-binding row that follows the declaring block belongs to
+        // no provider of its own, so it is not attributed to the
+        // provider that precedes it. An open-ended window would carry
+        // that provider's name and role list into the trailing row and
+        // report a second provider's row as that provider's escape.
+        fs::write(
+            &seed,
+            "SeedProvider {\n    provider_ref: ResourceRef::parse(\"Provider/system-minijail\"),\n    roles: vec![ResourceRef::parse(\"Role/worker\")],\n}\nSeedSelfBinding {\n    subject_ref: ResourceRef::parse(\"Provider/other\"),\n    role_ref: ResourceRef::parse(\"Role/other\"),\n}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            check_self_binding_scope(&fixture.root),
+            Ok(()),
+            "the window ends at the block's closing brace"
+        );
+        // Narrowing one block's window does not blind the file to a
+        // later block, which is scanned in its own right and reports
+        // its escape against its own declaring provider.
+        fs::write(
+            &seed,
+            "SeedProvider {\n    provider_ref: ResourceRef::parse(\"Provider/system-minijail\"),\n    roles: vec![ResourceRef::parse(\"Role/worker\")],\n}\nSeedProvider {\n    provider_ref: ResourceRef::parse(\"Provider/other\"),\n    roles: vec![ResourceRef::parse(\"Role/other\")],\n    self_bindings: vec![SeedSelfBinding {\n        subject_ref: ResourceRef::parse(\"Provider/third\"),\n        role_ref: ResourceRef::parse(\"Role/third\"),\n    }],\n}\n",
+        )
+        .unwrap();
+        let error = check_self_binding_scope(&fixture.root)
+            .expect_err("a later provider block is scanned in its own window");
+        assert!(error.contains("self-binding-subject-escape"), "{error}");
+        assert!(error.contains("self-binding-role-escape"), "{error}");
+        assert!(error.contains("third"), "{error}");
+        assert!(
+            !error.contains("system-minijail"),
+            "the earlier clean block does not inherit the later escape: {error}"
+        );
+        fs::remove_file(&seed).unwrap();
+        assert_eq!(check_self_binding_scope(&fixture.root), Ok(()));
+    }
+
     #[test]
     fn the_structural_ratchet_matches_the_committed_tree() {
         let root = repo_root().expect("resolve repository root");
