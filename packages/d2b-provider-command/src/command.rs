@@ -25,8 +25,20 @@ pub const COMMAND_RESOURCE_TYPE: &str = "Command";
 pub const MAX_COMMAND_ARGV_SLOTS: usize = 64;
 /// Maximum bytes of one argument slot.
 pub const MAX_COMMAND_ARGV_SLOT_BYTES: usize = 4096;
-/// Maximum bytes of one executable path.
+/// Maximum bytes of an executable path.
 pub const MAX_COMMAND_EXEC_BYTES: usize = 4096;
+
+/// The published spelling of an executable path, mirroring
+/// [`CommandExec::parse`]: absolute, and free of every code point
+/// `char::is_control` selects (C0, DEL, and C1).
+const EXEC_PATTERN: &str = "^/[^\\u0000-\\u001f\\u007f-\\u009f]*$";
+/// The published spelling of one argument slot, mirroring
+/// [`CommandArgvSlot::parse`]: literal text with no brace and no control code
+/// point, or one whole-slot `{placeholder}` whose name is a well-formed
+/// payload parameter name (`valid_property_name`: a lowercase ASCII letter
+/// followed by up to 62 ASCII alphanumerics).
+const ARGV_SLOT_PATTERN: &str =
+    "^(?:[^{}\\u0000-\\u001f\\u007f-\\u009f]+|\\{[a-z][a-zA-Z0-9]{0,62}\\})$";
 
 /// A validated absolute executable path.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -78,7 +90,7 @@ impl JsonSchema for CommandExec {
             ))),
             ..Default::default()
         };
-        schema.string().pattern = Some("^/[^\\u0000]*$".to_owned());
+        schema.string().pattern = Some(EXEC_PATTERN.to_owned());
         schema.string().max_length = Some(MAX_COMMAND_EXEC_BYTES as u32);
         schemars::schema::Schema::Object(schema)
     }
@@ -95,14 +107,14 @@ impl CommandArgvSlot {
     /// # Errors
     ///
     /// Returns `InvalidArgvSlot` when the slot is empty, over bound,
-    /// contains a NUL byte, or is a brace-carrying slot that is not a
-    /// single placeholder naming a valid parameter.
+    /// carries a control character, or is a brace-carrying slot that is not
+    /// a single placeholder naming a valid parameter.
     pub fn parse(value: impl Into<String>) -> Result<Self, CommandContractError> {
         let value = value.into();
         if value.is_empty() || value.len() > MAX_COMMAND_ARGV_SLOT_BYTES {
             return Err(CommandContractError::InvalidArgvSlot);
         }
-        if value.contains('\u{0}') {
+        if value.chars().any(char::is_control) {
             return Err(CommandContractError::InvalidArgvSlot);
         }
         if value.contains(['{', '}']) {
@@ -157,6 +169,8 @@ impl JsonSchema for CommandArgvSlot {
             "One argument slot: a literal, or a whole-slot {placeholder} naming a declared parameter."
                 .to_owned(),
         );
+        schema.string().min_length = Some(1);
+        schema.string().pattern = Some(ARGV_SLOT_PATTERN.to_owned());
         schema.string().max_length = Some(MAX_COMMAND_ARGV_SLOT_BYTES as u32);
         schemars::schema::Schema::Object(schema)
     }
@@ -322,6 +336,9 @@ impl From<PrimitiveSpecError> for CommandContractError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts_resource::v3::payload_schema::MAX_PAYLOAD_PROPERTY_NAME_BYTES;
+    use schemars::r#gen::SchemaGenerator;
+    use schemars::schema::Schema;
     use serde_json::json;
 
     fn params() -> PayloadSchema {
@@ -414,5 +431,87 @@ mod tests {
             "shell": "true"
         });
         assert!(serde_json::from_value::<CommandSpec>(unknown).is_err());
+    }
+
+    #[test]
+    fn the_published_schemas_carry_the_parse_patterns() {
+        let mut generator = SchemaGenerator::default();
+
+        let Schema::Object(exec) = CommandExec::json_schema(&mut generator) else {
+            panic!("CommandExec schema is an object");
+        };
+        let exec_string = exec.string.expect("CommandExec string validation");
+        assert_eq!(exec_string.pattern.as_deref(), Some(EXEC_PATTERN));
+        assert_eq!(exec_string.max_length, Some(MAX_COMMAND_EXEC_BYTES as u32));
+
+        let Schema::Object(slot) = CommandArgvSlot::json_schema(&mut generator) else {
+            panic!("CommandArgvSlot schema is an object");
+        };
+        let slot_string = slot.string.expect("CommandArgvSlot string validation");
+        assert_eq!(slot_string.pattern.as_deref(), Some(ARGV_SLOT_PATTERN));
+        assert_eq!(slot_string.min_length, Some(1));
+        assert_eq!(
+            slot_string.max_length,
+            Some(MAX_COMMAND_ARGV_SLOT_BYTES as u32)
+        );
+    }
+
+    #[test]
+    fn argument_slot_admission_covers_the_published_language() {
+        for slot in [
+            "--flag",
+            "-",
+            "/run/d2b/vfs/socket",
+            "caf\u{e9}-dir",
+            "{socketPath}",
+            "{aB9}",
+        ] {
+            assert!(CommandArgvSlot::parse(slot).is_ok(), "{slot:?}");
+        }
+        let longest_name = format!("a{}", "b".repeat(MAX_PAYLOAD_PROPERTY_NAME_BYTES - 1));
+        assert!(CommandArgvSlot::parse(format!("{{{longest_name}}}")).is_ok());
+
+        for slot in [
+            "",
+            "\u{0}",
+            "--flag\t",
+            "--flag\n",
+            "\u{7f}",
+            "\u{9f}",
+            "{",
+            "}",
+            "a}b",
+            "-{socketPath}",
+            "{socketPath",
+            "{}",
+            "{Upper}",
+            "{a-b}",
+            "{a_b}",
+            "{caf\u{e9}}",
+        ] {
+            assert!(CommandArgvSlot::parse(slot).is_err(), "{slot:?}");
+        }
+        let over_long_name = format!("a{}", "b".repeat(MAX_PAYLOAD_PROPERTY_NAME_BYTES));
+        assert!(CommandArgvSlot::parse(format!("{{{over_long_name}}}")).is_err());
+        assert!(CommandArgvSlot::parse("x".repeat(MAX_COMMAND_ARGV_SLOT_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn executable_admission_rejects_every_control_code_point() {
+        for exec in [
+            "/bin/true",
+            "/usr/lib/d2b/libexec/virtiofsd",
+            "/bin/caf\u{e9}",
+        ] {
+            assert!(CommandExec::parse(exec).is_ok(), "{exec:?}");
+        }
+        for exec in [
+            "/bin/true\u{0}",
+            "/bin/true\t",
+            "/bin/true\u{7f}",
+            "/bin/true\u{9f}",
+        ] {
+            assert!(CommandExec::parse(exec).is_err(), "{exec:?}");
+        }
     }
 }

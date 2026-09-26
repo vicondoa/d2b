@@ -16,11 +16,13 @@
     "CommandArgvSlot": {
       "description": "One argument slot: a literal, or a whole-slot {placeholder} naming a declared parameter.",
       "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^(?:[^{}\\u0000-\\u001f\\u007f-\\u009f]+|\\{[a-z][a-zA-Z0-9]{0,62}\\})$",
       "type": "string"
     },
     "CommandExec": {
       "maxLength": 4096,
-      "pattern": "^/[^\\u0000]*$",
+      "pattern": "^/[^\\u0000-\\u001f\\u007f-\\u009f]*$",
       "type": "string"
     },
     "CommandIntent": {
