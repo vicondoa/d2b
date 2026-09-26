@@ -5,6 +5,7 @@
 - Moved blocking reaping, file locking, ACL application, and NSS group lookup off the broker's async executor workers, so a busy executor no longer stalls on host syscalls.
 - The published v2 storage lifecycle report schema now names each issue field the way the daemon writes it, so a consumer validating a real report no longer rejects the five issue variants that carry a renamed field.
 - The daemon API reference now documents an audit response page as the wire carries it - entries, the continuing cursor, and completion - rather than as the daemon holds it in memory.
+- The blocking-API baseline row for the device Provider's `block_on` count is real and stays; its recorded call site named a line inside the test, and the census counts the async test attribute that expands to the call.
 
 ### Changed
 
