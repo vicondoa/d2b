@@ -1446,6 +1446,37 @@ mod tests {
     }
 
     #[test]
+    fn assignment_binding_refuses_a_zero_epoch() {
+        let session = d2b_contracts_resource::v3::identity::ReconnectGeneration::new(3).unwrap();
+        let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        assert_eq!(
+            GuestExecutionBinding::new(
+                uid,
+                ConfigurationDigest::from_bytes([9; 32]),
+                session,
+                0,
+                ResourceGeneration::new(2).unwrap(),
+                ControllerGeneration::new(1).unwrap(),
+            ),
+            Err(ProcessConformanceError::InvalidTicket)
+        );
+        assert_eq!(
+            fixtures::ticket_builder()
+                .build()
+                .unwrap()
+                .with_resource_revision(ZoneRevision::new(1))
+                .unwrap()
+                .with_assignment_binding(
+                    ResourceGeneration::new(2).unwrap(),
+                    session,
+                    0,
+                    ConfigurationDigest::from_bytes([11; 32]),
+                ),
+            Err(ProcessConformanceError::InvalidTicket)
+        );
+    }
+
+    #[test]
     fn launch_identity_tracks_the_ticket_owner_target_and_vm() {
         let owner = ResourceRef::parse("VolumeBinding/data").unwrap();
         let target = ResourceRef::parse("Guest/acceptance-guest").unwrap();

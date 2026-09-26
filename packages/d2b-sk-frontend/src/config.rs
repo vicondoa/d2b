@@ -210,6 +210,167 @@ mod tests {
         assert!(digest_of(&"00".repeat(32)).is_err(), "an all-zero digest is refused");
     }
 
+    fn valid_digest() -> String {
+        "33".repeat(32)
+    }
+
+    fn valid_vars() -> Vec<(&'static str, String)> {
+        vec![
+            ("D2B_SK_VM_ID", "vm-1".to_owned()),
+            ("D2B_SK_VSOCK_PORT", "5050".to_owned()),
+            ("D2B_SK_VSOCK_CID", "3".to_owned()),
+            ("D2B_SK_UHID_PATH", "/dev/uhid".to_owned()),
+            ("D2B_SK_PARENT_ZONE", "k0".to_owned()),
+            ("D2B_SK_GUEST_ZONE", "k1/k0".to_owned()),
+            (
+                "D2B_SK_ZONE_LINK_UID",
+                "123e4567-e89b-42d3-a456-426614174000".to_owned(),
+            ),
+            ("D2B_SK_CONTROLLER_GENERATION", "gen-1".to_owned()),
+            ("D2B_SK_RECONNECT_GENERATION", "1".to_owned()),
+            ("D2B_SK_SCHEMA_FINGERPRINT", valid_digest()),
+            ("D2B_SK_PSK_ISSUANCE", "7".to_owned()),
+            ("D2B_SK_PSK_TTL_MS", "30000".to_owned()),
+            ("D2B_SK_PSK_ISSUED_AT_UNIX_MS", "1000".to_owned()),
+            ("D2B_SK_STATIC_KEY_FINGERPRINT", valid_digest()),
+        ]
+    }
+
+    /// Re-execute this test binary with a controlled environment so
+    /// `Config::from_env` sees exactly the placement under test. The crate
+    /// forbids `unsafe` (no `std::env::set_var`), so the environment is
+    /// injected through the child process instead.
+    fn run_child(case: &str, vars: &[(&str, String)]) -> std::process::Output {
+        let exe = std::env::current_exe().expect("test binary");
+        let mut command = std::process::Command::new(exe);
+        command
+            .arg("--exact")
+            .arg("config::tests::from_env_child_probe")
+            .arg("--nocapture")
+            .env("D2B_SK_TEST_CHILD", "1")
+            .env("D2B_SK_TEST_CASE", case);
+        for (name, value) in vars {
+            command.env(name, value);
+        }
+        command.output().expect("spawn from_env child probe")
+    }
+
+    #[test]
+    fn from_env_fails_closed_on_missing_or_invalid_placement() {
+        // Every case is asserted inside the child probe: the child exits
+        // non-zero exactly when the expected refusal did not happen.
+        let cases: [(&str, Vec<(&str, String)>); 8] = [
+            ("valid", valid_vars()),
+            ("missing-vm-id", {
+                let mut vars = valid_vars();
+                vars.retain(|(name, _)| *name != "D2B_SK_VM_ID");
+                vars
+            }),
+            ("guest-equals-parent", {
+                let mut vars = valid_vars();
+                vars.iter_mut()
+                    .find(|(name, _)| *name == "D2B_SK_GUEST_ZONE")
+                    .expect("guest zone var")
+                    .1 = "k0".to_owned();
+                vars
+            }),
+            ("not-direct-child", {
+                let mut vars = valid_vars();
+                vars.iter_mut()
+                    .find(|(name, _)| *name == "D2B_SK_GUEST_ZONE")
+                    .expect("guest zone var")
+                    .1 = "k2/k1/k0".to_owned();
+                vars
+            }),
+            ("zero-reconnect", {
+                let mut vars = valid_vars();
+                vars.iter_mut()
+                    .find(|(name, _)| *name == "D2B_SK_RECONNECT_GENERATION")
+                    .expect("reconnect var")
+                    .1 = "0".to_owned();
+                vars
+            }),
+            ("invalid-port", {
+                let mut vars = valid_vars();
+                vars.iter_mut()
+                    .find(|(name, _)| *name == "D2B_SK_VSOCK_PORT")
+                    .expect("port var")
+                    .1 = "not-a-port".to_owned();
+                vars
+            }),
+            ("invalid-digest", {
+                let mut vars = valid_vars();
+                vars.iter_mut()
+                    .find(|(name, _)| *name == "D2B_SK_SCHEMA_FINGERPRINT")
+                    .expect("digest var")
+                    .1 = "not-hex".to_owned();
+                vars
+            }),
+            ("empty-parent", {
+                let mut vars = valid_vars();
+                vars.iter_mut()
+                    .find(|(name, _)| *name == "D2B_SK_PARENT_ZONE")
+                    .expect("parent var")
+                    .1 = String::new();
+                vars
+            }),
+        ];
+        for (case, vars) in cases {
+            let output = run_child(case, &vars);
+            assert!(
+                output.status.success(),
+                "child probe {case} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn from_env_child_probe() {
+        if std::env::var("D2B_SK_TEST_CHILD").is_err() {
+            return; // no-op unless spawned by from_env_fails_closed_on_missing_or_invalid_placement
+        }
+        let case = std::env::var("D2B_SK_TEST_CASE").expect("case name");
+        match case.as_str() {
+            "valid" => {
+                let config = Config::from_env().expect("all values valid");
+                assert_eq!(config.vm_id, "vm-1");
+                assert_eq!(config.link.port(), 5050);
+                assert_eq!(config.placement.psk_issuance, 7);
+                assert_eq!(config.placement.identity.reconnect_generation.get(), 1);
+            }
+            "missing-vm-id" => {
+                let error = Config::from_env().expect_err("missing vm id");
+                assert!(error.contains("D2B_SK_VM_ID is required"), "{error}");
+            }
+            "guest-equals-parent" => {
+                let error = Config::from_env().expect_err("guest equals parent");
+                assert!(error.contains("must differ"), "{error}");
+            }
+            "not-direct-child" => {
+                let error = Config::from_env().expect_err("guest not a direct child");
+                assert!(error.contains("direct child"), "{error}");
+            }
+            "zero-reconnect" => {
+                let error = Config::from_env().expect_err("zero reconnect generation");
+                assert!(error.contains("must be nonzero"), "{error}");
+            }
+            "invalid-port" => {
+                let error = Config::from_env().expect_err("invalid vsock port");
+                assert!(error.contains("D2B_SK_VSOCK_PORT"), "{error}");
+            }
+            "invalid-digest" => {
+                let error = Config::from_env().expect_err("invalid digest");
+                assert!(error.contains("D2B_SK_SCHEMA_FINGERPRINT"), "{error}");
+            }
+            "empty-parent" => {
+                let error = Config::from_env().expect_err("empty value is missing");
+                assert!(error.contains("D2B_SK_PARENT_ZONE is required"), "{error}");
+            }
+            other => panic!("unknown from_env child case: {other}"),
+        }
+    }
+
     #[test]
     fn zone_paths_are_label_paths_most_specific_first() {
         let path = zone_path("k2/k1/k0", "TEST").expect("a valid path");

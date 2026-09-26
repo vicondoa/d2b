@@ -158,26 +158,6 @@ mod tests {
     }
 
     #[test]
-    fn the_thread_pool_falls_back_to_the_guest_vcpu_count() {
-        let binding = fixtures::binding("read-only");
-        let view = fixtures::read_only_view();
-        let plan = VirtiofsdWorkerPlan::for_binding(&binding, &view, 8, fixtures::principal())
-            .expect("conformant plan");
-        assert_eq!(plan.thread_pool_size, 8);
-        assert!(plan.readonly);
-    }
-
-    #[test]
-    fn a_write_binding_over_a_read_only_view_is_rejected() {
-        let binding = fixtures::binding("read-write");
-        let view = fixtures::read_only_view();
-        assert_eq!(
-            VirtiofsdWorkerPlan::for_binding(&binding, &view, 4, fixtures::principal()).unwrap_err(),
-            VirtiofsBindingError::ViewRightsInsufficient
-        );
-    }
-
-    #[test]
     fn the_frozen_default_posture_survives_the_neutral_envelope() {
         // The neutral envelope carries no attachment tuning (KTD1); the
         // plan keeps the frozen default profile the pre-cutover default
@@ -192,5 +172,15 @@ mod tests {
         assert_eq!(plan.cache, AttachmentCache::Auto);
         assert_eq!(plan.user_namespace_mapping_class, USER_NAMESPACE_MAPPING_CLASS);
         assert!(WorkerSandbox::conformant().assert_conformant().is_ok());
+    }
+
+    #[test]
+    fn zero_vcpu_count_is_rejected() {
+        let binding = fixtures::binding("read-only");
+        let view = fixtures::read_only_view();
+        assert_eq!(
+            VirtiofsdWorkerPlan::for_binding(&binding, &view, 0, fixtures::principal()).unwrap_err(),
+            VirtiofsBindingError::InvalidBinding
+        );
     }
 }

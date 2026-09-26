@@ -832,4 +832,84 @@ mod tests {
         assert!(text.contains("\"payloadProvenance\":\"request\""));
         assert!(!text.contains("wireTag"));
     }
+
+    #[test]
+    fn over_limit_audit_facets_are_refused() {
+        let fields = (0..=MAX_OPERATION_AUDIT_FIELDS)
+            .map(|i| BoundedText::parse(format!("field-{i}")).unwrap())
+            .collect();
+        let error = OperationAudit::new(
+            true,
+            AuditMode::Yes,
+            fields,
+            vec![BoundedText::parse("token").unwrap()],
+            BoundedToken::parse("opaque-target").unwrap(),
+        )
+        .expect_err("retained fields over the audit cap");
+        assert_eq!(error, OperationContractError::TooManyAuditFields);
+
+        let keys = (0..=MAX_OPERATION_REDACTION_KEYS)
+            .map(|i| BoundedText::parse(format!("key-{i}")).unwrap())
+            .collect();
+        let error = OperationAudit::new(
+            true,
+            AuditMode::Yes,
+            vec![BoundedText::parse("target").unwrap()],
+            keys,
+            BoundedToken::parse("opaque-target").unwrap(),
+        )
+        .expect_err("redaction keys over the audit cap");
+        assert_eq!(error, OperationContractError::TooManyAuditFields);
+    }
+
+    #[test]
+    fn over_limit_fd_contract_lists_are_refused() {
+        let contracts: Vec<FdContract> = (0..=MAX_OPERATION_FDS)
+            .map(|i| {
+                FdContract::new(
+                    BoundedToken::parse(format!("fd-{i}")).unwrap(),
+                    FdKind::File,
+                    true,
+                )
+            })
+            .collect();
+        for (lists, what) in [
+            (OperationFds::new(contracts.clone(), Vec::new(), Vec::new()), "request"),
+            (OperationFds::new(Vec::new(), contracts.clone(), Vec::new()), "response"),
+        ] {
+            let error = lists.expect_err("fd contract list over the cap");
+            assert_eq!(error, OperationContractError::TooManyFds, "{what}");
+        }
+
+        let preopened = (0..=MAX_OPERATION_FDS)
+            .map(|i| {
+                PreopenedFd::new(
+                    BoundedToken::parse(format!("fd-{i}")).unwrap(),
+                    BoundedToken::parse("open").unwrap(),
+                )
+            })
+            .collect();
+        let error = OperationFds::new(Vec::new(), Vec::new(), preopened)
+            .expect_err("preopened list over the fd cap");
+        assert_eq!(error, OperationContractError::TooManyFds);
+    }
+
+    #[test]
+    fn owner_ref_must_name_a_command_resource() {
+        let error = OperationSpec::new(
+            Some(ResourceRef::parse("Host/worker").unwrap()),
+            payload(),
+            false,
+            SecretAccess::ReadWrite,
+            audit(),
+            None,
+            authority(),
+            OperationFds::default(),
+            OperationBounds::default(),
+            PayloadProvenance::Request,
+            None,
+        )
+        .expect_err("non-Command owner ref");
+        assert_eq!(error, OperationContractError::InvalidOwnerRef);
+    }
 }

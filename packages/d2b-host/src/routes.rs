@@ -66,4 +66,10 @@ mod tests {
         let extracted = extract_managed_block(&body).unwrap();
         assert_eq!(extracted, rendered);
     }
+
+    #[test]
+    fn extract_managed_block_returns_none_without_the_d2b_markers() {
+        assert!(extract_managed_block("127.0.0.1 localhost\n# foreign block\n").is_none());
+        assert!(extract_managed_block("# d2b-managed end\n127.0.0.1 localhost\n").is_none());
+    }
 }

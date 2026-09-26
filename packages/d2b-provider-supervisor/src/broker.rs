@@ -2843,6 +2843,62 @@ mod tests {
                 .unwrap();
         assert_ne!(first.digest(), recreated.digest());
     }
+
+    // -- the pidfd wait loops ----------------------------------------------
+
+    /// One never-ready descriptor: a socketpair read end whose peer stays
+    /// open and silent. Poll semantics are identical to a pidfd's - the
+    /// wait loops only test readiness - so the timeout boundary of both
+    /// backends' wait path is pinned without a real pidfd. The caller
+    /// keeps the peer alive for the wait's duration.
+    fn never_ready_pidfd() -> (OwnedFd, std::os::unix::net::UnixStream) {
+        let (reader, peer) = std::os::unix::net::UnixStream::pair().expect("socketpair");
+        (reader.into(), peer)
+    }
+
+    /// The observer wait's timeout boundary: a pidfd that never becomes
+    /// readable reports `DeadlineExceeded`, the closed "never produced a
+    /// result" verdict the readiness probe translates to the transient
+    /// launch failure.
+    #[test]
+    fn wait_pidfd_observer_times_out_with_deadline_exceeded() {
+        let (pidfd, _peer) = never_ready_pidfd();
+        assert_eq!(
+            wait_pidfd_observer(&pidfd, Duration::from_millis(20)),
+            Err(ProcessEffectError::DeadlineExceeded)
+        );
+    }
+
+    /// The stop wait's timeout boundary: a never-exiting target reports
+    /// `StopFailed`, so a stop never hangs past its budget.
+    #[test]
+    fn wait_pidfd_exit_times_out_with_stop_failed() {
+        let (pidfd, _peer) = never_ready_pidfd();
+        assert_eq!(
+            wait_pidfd_exit(&pidfd, Duration::from_millis(20)),
+            Err(ProcessEffectError::StopFailed)
+        );
+    }
+
+    /// The readable branch: once the target goes away (the peer closes),
+    /// both waits return `Ok` - the exact-main authority is gone and the
+    /// wait is satisfied.
+    #[test]
+    fn wait_pidfd_returns_ok_once_the_target_goes_away() {
+        let (reader, peer) = std::os::unix::net::UnixStream::pair().expect("socketpair");
+        let pidfd: OwnedFd = reader.into();
+        drop(peer);
+        assert_eq!(
+            wait_pidfd_observer(&pidfd, Duration::from_secs(5)),
+            Ok(()),
+            "the observer wait is satisfied by the target's disappearance"
+        );
+        assert_eq!(
+            wait_pidfd_exit(&pidfd, Duration::from_secs(5)),
+            Ok(()),
+            "the exit wait is satisfied by the target's disappearance"
+        );
+    }
 }
 
 // Short /proc read at a sync boundary: these helpers are called from the

@@ -453,4 +453,23 @@ mod tests {
         assert_ne!(exit_code, 0);
     }
 
+    #[test]
+    fn cstring_helpers_reject_embedded_nul_bytes() {
+        assert!(cstring_path(Path::new("/etc/hosts")).is_ok());
+        let err = cstring_path(Path::new("/etc/hosts\0evil")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(cstring_name(b"entry").is_ok());
+        let err = cstring_name(b"entry\0evil").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn parse_gid_refuses_non_numeric_and_out_of_range_inputs() {
+        assert_eq!(parse_gid("0"), Ok(0));
+        assert_eq!(parse_gid("65534"), Ok(65534));
+        assert!(parse_gid("abc").is_err());
+        assert!(parse_gid("4294967296").is_err());
+        assert!(parse_gid("-1").is_err());
+    }
+
 }

@@ -38,6 +38,8 @@ sha2 = { workspace = true }
 tracing = "0.1"
 
 [dev-dependencies]
+# The suite's no-op-waker driver lives in `d2b_core::test_support` (KTD2).
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }
 d2b-contracts-provider = { path = "../d2b-contracts-provider", version = "0.0.0-bootstrap" }
 # The moved adapter suite (U7) renders Network content through the
 # network-local controller helpers to pin the foreign-marker preserve path.

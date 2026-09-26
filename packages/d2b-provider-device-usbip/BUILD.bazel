@@ -67,6 +67,8 @@ d2b_rust_test(
     crate = ":d2b_provider_device_usbip",
     compile_data = [
         "Cargo.toml",
+        "//tests/fixtures:deny-unknown/host-valid.json",
+        "//:tests/golden/manifest_v04/baseline-vms.json",
     ],
     deps = [
         "//packages/d2b-core-controller:d2b_core_controller",

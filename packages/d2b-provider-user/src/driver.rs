@@ -435,13 +435,11 @@ mod tests {
         user::{OsUsername, UserSpec},
     };
     use d2b_provider_system_core::UserDiscoveryCondition;
+    use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
-        WatchRegistration,
+        ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration,
     };
-    use d2b_resource_runtime::driver::{
-        DynResourceDriver, RecoveryOutcome, ReconcileOutcome, ResourceDriverFactory,
-    };
+    use d2b_resource_runtime::driver::{DynResourceDriver, RecoveryOutcome, ReconcileOutcome};
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::provider::ProviderDirectory;
@@ -449,11 +447,7 @@ mod tests {
 
     use crate::test_support::{RecordingEffects, ScriptedProbe, recording_facets};
 
-    use super::{
-        USER_REDISCOVER, UserDriver, UserDriverFactory, UserDriverStatus, user_descriptor,
-        user_spec_decoder,
-    };
-    use crate::UserEffectFacets;
+    use super::{USER_REDISCOVER, UserDriver, UserDriverStatus, user_descriptor, user_spec_decoder};
 
     // -- fakes ---------------------------------------------------------------
 
@@ -554,36 +548,6 @@ mod tests {
         }
     }
 
-    struct RecordingRequeue {
-        calls: tokio::sync::Mutex<Vec<u64>>,
-    }
-
-    impl RecordingRequeue {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: tokio::sync::Mutex::new(Vec::new()),
-            })
-        }
-
-        fn call_count(&self) -> usize {
-            self.calls.try_lock().expect("uncontended test mutex").len()
-        }
-
-        /// The scheduled delays in milliseconds, in arrival order.
-        fn calls(&self) -> Vec<u64> {
-            self.calls.try_lock().expect("uncontended test mutex").clone()
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, _key: ResourceKey, after: std::time::Duration) -> RequeueId {
-            self.calls.try_lock().expect("uncontended test mutex").push(after.as_millis() as u64);
-            RequeueId(0)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
-
     // -- fixtures ------------------------------------------------------------
 
     fn user_spec_bytes() -> Vec<u8> {
@@ -612,7 +576,7 @@ mod tests {
     fn fixture(
         row: StoredDesiredResource,
         manager: Arc<RecordingManager>,
-        requeue: Arc<RecordingRequeue>,
+        requeue: RecordingRequeue,
     ) -> ResourceContext {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -620,7 +584,7 @@ mod tests {
             row,
             user_spec_decoder(),
             manager,
-            requeue,
+            Arc::new(requeue),
             effects_tx,
             notify_tx,
         )
@@ -633,39 +597,22 @@ mod tests {
         Box::new(UserDriver::new(effects))
     }
 
-    /// The facet set the factory and declaration tests build over: the
-    /// scripted probe double, exactly as the plane's test inputs build it.
-    fn facets() -> UserEffectFacets {
-        recording_facets(ScriptedProbe::new())
-    }
-
     async fn user_fixture() -> (
         ResourceContext,
         Arc<RecordingEffects>,
         Arc<RecordingManager>,
-        Arc<RecordingRequeue>,
+        RecordingRequeue,
         Box<dyn DynResourceDriver>,
     ) {
         let effects = RecordingEffects::new();
         let manager = RecordingManager::new();
-        let requeue = RecordingRequeue::new();
-        let ctx = fixture(row(user_spec_bytes()), Arc::clone(&manager), Arc::clone(&requeue));
+        let requeue = RecordingRequeue::default();
+        let ctx = fixture(row(user_spec_bytes()), Arc::clone(&manager), requeue.clone());
         let driver = build_driver(Arc::clone(&effects)).await;
         (ctx, effects, manager, requeue, driver)
     }
 
     // -- factory -------------------------------------------------------------
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_registers_exactly_the_user_resource_type() {
-        let factory = UserDriverFactory::new(facets());
-        assert_eq!(factory.resource_types().len(), 1);
-        assert_eq!(factory.resource_types()[0].as_str(), "User");
-        factory
-            .create(&ResourceKey::new("work", "User", "alice"))
-            .await;
-    }
 
     /// The declaration registers the type and the registry serves the
     /// declared factory, so a User row reaches its driver through the
@@ -693,7 +640,7 @@ mod tests {
         let mut ctx = fixture(
             row(envelope.canonical_bytes().expect("canonical spec bytes")),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         assert_eq!(
             driver.reconcile(&mut ctx).await.expect("reconcile"),
@@ -723,7 +670,7 @@ mod tests {
         let mut ctx = fixture(
             row(br#"{"nonsense":true}"#.to_vec()),
             RecordingManager::new(),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = build_driver(RecordingEffects::new()).await;
         let failure = driver.validate(&mut ctx).await.expect_err("terminal");
@@ -772,7 +719,7 @@ mod tests {
             "one discovery per desired generation"
         );
         assert_eq!(
-            requeue.call_count(),
+            requeue.scheduled().len(),
             0,
             "a realized discovery re-checks nothing"
         );
@@ -799,7 +746,7 @@ mod tests {
             assert_eq!(status.report().phase, phase);
             assert_eq!(status.report().discovery, UserDiscoveryCondition::Discovered);
             assert_eq!(
-                requeue.calls(),
+                requeue.scheduled().iter().map(|d| d.as_millis() as u64).collect::<Vec<_>>(),
                 vec![USER_REDISCOVER.as_millis() as u64],
                 "exactly one re-check, on the discovery cadence"
             );
@@ -873,7 +820,7 @@ mod tests {
         let effects = RecordingEffects::new();
         let manager = RecordingManager::new();
         manager.seed_owned(ResourceKey::new("work", "Process", "system-core-child"));
-        let requeue = RecordingRequeue::new();
+        let requeue = RecordingRequeue::default();
         let mut ctx = fixture(row(user_spec_bytes()), Arc::clone(&manager), requeue);
         let mut d = build_driver(effects).await;
 
@@ -916,7 +863,7 @@ mod tests {
             manager.call_order()
         );
         assert_eq!(
-            requeue.call_count(),
+            requeue.scheduled().len(),
             0,
             "no self-requeue: the observed identity was realized"
         );

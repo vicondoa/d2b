@@ -712,9 +712,9 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    use d2b_provider_toolkit::testing::fakes::RecordingRequeue;
     use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
-        WatchRegistration,
+        ChildEnsure, ManagerEndpoint, ResourceContext, WatchId, WatchRegistration,
     };
     use d2b_resource_runtime::driver::{DynResourceDriver, ResourceDriverFactory};
     use d2b_resource_runtime::error::{FailureClass, ResourceError};
@@ -887,16 +887,6 @@ mod tests {
         }
     }
 
-    struct RecordingRequeue;
-
-    impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, _key: ResourceKey, _after: std::time::Duration) -> RequeueId {
-            RequeueId(0)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
-
     // -- fixtures ------------------------------------------------------------
 
     fn spec_bytes(value: serde_json::Value) -> Vec<u8> {
@@ -928,7 +918,7 @@ mod tests {
             target,
             provider_spec_decoder(),
             manager,
-            Arc::new(RecordingRequeue),
+            Arc::new(RecordingRequeue::default()),
             effects_tx,
             notify_tx,
         )

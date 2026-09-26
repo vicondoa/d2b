@@ -6054,7 +6054,6 @@ mod tests {
     };
     use std::collections::BTreeMap;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     const HOST_JSON_FIXTURE: &str =
         include_str!("../../../tests/fixtures/deny-unknown/host-valid.json");
@@ -6110,22 +6109,9 @@ mod tests {
         );
     }
 
-    fn test_root(test_name: &str) -> PathBuf {
-        let base = std::env::var_os("TEST_TMPDIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| std::env::temp_dir().join("d2b-bundle-resolver-tests"));
-        #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-        fs::create_dir_all(&base).expect("create bundle resolver test root");
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        base.join(format!("{test_name}-{}-{unique}", std::process::id()))
-    }
-
     #[test]
     fn production_bundle_does_not_load_legacy_env_nft_projection() {
-        let root = test_root("nft-projection");
+        let root = crate::test_support::scratch_root("nft-projection");
         let resolver = build_personal_dev_bundle_with_fixture_network(&root, false);
         assert!(
             resolver
@@ -7149,7 +7135,7 @@ mod tests {
     fn loads_zone_native_bundle_index_without_legacy_artifacts() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = test_root("zone-native-bundle-index");
+        let root = crate::test_support::scratch_root("zone-native-bundle-index");
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&root).expect("create bundle root");
         let bundle_path = root.join("bundle.json");
@@ -7217,7 +7203,7 @@ mod tests {
     fn site_artifact_loads_declared_and_conventional_and_refuses_malformed() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = test_root("site-artifact");
+        let root = crate::test_support::scratch_root("site-artifact");
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&root).expect("create bundle root");
         let site_bytes = serde_json::to_vec(&serde_json::json!({
@@ -7258,7 +7244,7 @@ mod tests {
              only a declared v3 index.sitePath resolves the artifact"
         );
 
-        let empty_root = test_root("site-artifact-absent");
+        let empty_root = crate::test_support::scratch_root("site-artifact-absent");
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&empty_root).expect("create empty bundle root");
         assert_eq!(
@@ -7294,43 +7280,6 @@ mod tests {
         let _ = fs::remove_dir_all(empty_root);
     }
 
-    /// The v3 host contract doc the generation side emits:`empty_zone_native_host`
-    /// fields plus the declared NetworkManager unmanaged contract, with
-    /// `tableHashAfterApply`/optional fields skipped the same way serde
-    /// serialises them.
-    fn sample_zone_native_host_json() -> serde_json::Value {
-        serde_json::json!({
-            "schemaVersion": "v3",
-            "site": { "allowUnsafeEastWest": false },
-            "environments": [],
-            "nftables": {
-                "family": "inet",
-                "table": "d2b",
-                "chains": [],
-                "ownershipId": ""
-            },
-            "networkManager": {
-                "filePath": "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf",
-                "matchCriteria": ["interface-name:d2b-*"],
-                "reloadBehavior": "atomic-reload",
-                "ownership": {
-                    "owner": "root",
-                    "group": "d2bd",
-                    "mode": "0640",
-                    "driftPolicy": "preserve"
-                }
-            },
-            "hostsFile": {
-                "startMarker": "# d2b-managed begin",
-                "endMarker": "# d2b-managed end",
-                "rule": ""
-            },
-            "kernelModules": [],
-            "fdOwnership": [],
-            "cloudHypervisorCapabilities": []
-        })
-    }
-
     /// The host contract is a declared artifact of the zone-native bundle:
     /// a bundle that ships it (declared by its v3 index `hostPath`) resolves
     /// the NetworkManager unmanaged contract into the host model, matching the
@@ -7339,10 +7288,10 @@ mod tests {
     fn zone_native_host_artifact_declares_nm_unmanaged_contract() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = test_root("zone-native-host-nm-contract");
+        let root = crate::test_support::scratch_root("zone-native-host-nm-contract");
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&root).expect("create bundle root");
-        let host_bytes = serde_json::to_vec(&sample_zone_native_host_json())
+        let host_bytes = serde_json::to_vec(&crate::test_support::sample_zone_native_host_json())
         .expect("serialize host artifact");
         let host_path = root.join("host.json");
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -7401,7 +7350,7 @@ mod tests {
     /// path-safety preflight failing closed before any host write.
     #[test]
     fn zone_native_host_artifact_absent_keeps_empty_model_fail_closed() {
-        let empty_root = test_root("zone-native-host-absent");
+        let empty_root = crate::test_support::scratch_root("zone-native-host-absent");
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&empty_root).expect("create empty bundle root");
         let host = load_zone_native_host_artifact(
@@ -7438,14 +7387,14 @@ mod tests {
     fn zone_native_host_artifact_tamper_is_refused_by_hash_policy() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = test_root("zone-native-host-tampered");
+        let root = crate::test_support::scratch_root("zone-native-host-tampered");
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&root).expect("create bundle root");
         let host_path = root.join("host.json");
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::write(
             &host_path,
-            serde_json::to_vec(&sample_zone_native_host_json())
+            serde_json::to_vec(&crate::test_support::sample_zone_native_host_json())
                 .expect("serialize host artifact"),
         )
         .expect("write host artifact");
@@ -7498,7 +7447,7 @@ mod tests {
     fn zone_native_index_supplies_sealed_runtime_topology() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let root = test_root("zone-native-topology");
+        let root = crate::test_support::scratch_root("zone-native-topology");
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&root).expect("create bundle root");
         let parent_map = BTreeMap::from([
@@ -7649,7 +7598,7 @@ mod tests {
 
     #[test]
     fn zone_native_index_admits_the_emitted_keys_and_refuses_a_foreign_one() {
-        let root = test_root("zone-native-index-unknown-key");
+        let root = crate::test_support::scratch_root("zone-native-index-unknown-key");
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         fs::create_dir_all(&root).expect("create bundle root");
         let zone_bundles = BTreeMap::from([("work".to_owned(), Vec::new())]);
@@ -7704,7 +7653,7 @@ mod tests {
 
     #[test]
     fn host_reconcile_and_store_preflight_emit_executable_vm_start_intents() {
-        let root = test_root("vm-start-intents");
+        let root = crate::test_support::scratch_root("vm-start-intents");
         let resolver = build_personal_dev_bundle(&root);
 
         let host = resolver
@@ -7751,7 +7700,7 @@ mod tests {
 
     #[test]
     fn resolves_macvtap_intents_from_process_contract() {
-        let root = test_root("macvtap-intents");
+        let root = crate::test_support::scratch_root("macvtap-intents");
         let resolver = build_personal_dev_bundle(&root);
         let mut processes = resolver.processes().clone();
         processes.vms[0].nodes.push(ProcessNode {
@@ -7908,7 +7857,7 @@ mod tests {
 
     #[test]
     fn v3_tap_resolution_ignores_legacy_env_and_manifest_names() {
-        let root = test_root("tap-resolution-uid-authority");
+        let root = crate::test_support::scratch_root("tap-resolution-uid-authority");
         let resolver = build_personal_dev_bundle(&root);
         let mut processes = resolver.processes().clone();
         processes.vms[0].nodes.push(ProcessNode {
@@ -8107,7 +8056,7 @@ mod tests {
 
     #[test]
     fn resolved_uplink_bridge_intent_carries_derived_address_and_lan_none() {
-        let root = test_root("network-bridge-address");
+        let root = crate::test_support::scratch_root("network-bridge-address");
         let zone_uid =
             ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("zone uid");
         let network_uid =
@@ -8178,7 +8127,7 @@ mod tests {
 
     #[test]
     fn network_spec_parse_failure_surfaces_as_manifest_parse_error() {
-        let root = test_root("network-spec-parse-error");
+        let root = crate::test_support::scratch_root("network-spec-parse-error");
         let zone_uid =
             ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("zone uid");
         let network_uid =
@@ -8305,7 +8254,7 @@ mod tests {
 
     #[test]
     fn resolved_network_effects_bind_complete_provenance_and_markers() {
-        let root = test_root("network-effect-provenance");
+        let root = crate::test_support::scratch_root("network-effect-provenance");
         let zone_uid =
             ResourceUid::parse("323e4567-e89b-42d3-a456-426614174002").expect("zone uid");
         let network_uid =
@@ -8394,7 +8343,7 @@ mod tests {
 
     #[test]
     fn usbip_firewall_intent_targets_uplink_not_lan_bridge() {
-        let root = test_root("usbip-firewall-uplink");
+        let root = crate::test_support::scratch_root("usbip-firewall-uplink");
         let resolver = build_personal_dev_bundle(&root);
 
         let intent = resolver

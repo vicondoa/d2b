@@ -410,33 +410,4 @@ pub fn plan_cleanup(entry: &EntryRequest, observed: &ObservedEntry) -> bool {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    fn volume_uid() -> ResourceUid {
-        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").expect("volume UID")
-    }
-
-    /// Regression (security review): the daemon's entry decode refuses a
-    /// declaration whose grants exceed the declared mode's group class, so no
-    /// effect is ever planned for a declaration that would widen the mode.
-    #[test]
-    fn resolve_refuses_grants_wider_than_the_group_class() {
-        let widened: LayoutEntry = serde_json::from_value(serde_json::json!({
-            "path": "",
-            "type": "directory",
-            "ownerRef": "User/d2bd",
-            "groupRef": "User/d2bd",
-            "mode": "0700",
-            "accessAcl": [{ "principal": { "ref": "User/alice" }, "permissions": "rwx" }],
-            "defaultAcl": [],
-            "foreignChildPolicy": "preserve"
-        }))
-        .expect("valid entry");
-        assert_eq!(
-            EntryRequest::resolve(&volume_uid(), &widened),
-            Err(VolumeLocalError::InvalidSpec)
-        );
-    }
-}

@@ -401,9 +401,11 @@ impl wire::CallerRole {
         match self {
             wire::CallerRole::AdminUid { .. } => "d2b-admin",
             wire::CallerRole::LauncherUid { .. } => "d2b-launcher",
-            wire::CallerRole::RootUid { .. } => "RootUid",
+            wire::CallerRole::RootUid { .. } => "d2b-root",
             wire::CallerRole::HostShutdownUid { .. } => "d2b-host-shutdown",
             wire::CallerRole::NotAuthorized => "d2b-not-authorized",
         }
     }
 }
+
+

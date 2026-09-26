@@ -363,7 +363,7 @@ mod tests {
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn temp_lock_dir() -> TempDir {
-        let base = crate::test_scratch_root();
+        let base = d2b_core::test_support::scratch_root("usbip-lock");
         fs::create_dir_all(&base).expect("create temp base");
         TempDir::new_in(base).expect("tempdir")
     }

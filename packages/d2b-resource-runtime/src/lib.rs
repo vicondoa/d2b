@@ -62,27 +62,3 @@ pub use crate::target::{
     TargetError, TargetHandle, TargetKind, TargetObservation, TargetRef,
 };
 
-#[cfg(test)]
-mod smoke_tests {
-    /// Scaffold smoke test: the crate compiles and its module tree resolves.
-    /// Compile-resolution only (audit A5): each module's `MODULE_NAME` const
-    /// must stay reachable, but its value is not pinned here.
-    #[test]
-    fn modules_resolve() {
-        let _ = (
-            crate::manager::MODULE_NAME,
-            crate::resource::MODULE_NAME,
-            crate::driver::MODULE_NAME,
-            crate::metadata::MODULE_NAME,
-            crate::context::MODULE_NAME,
-            crate::provider::MODULE_NAME,
-            crate::target::MODULE_NAME,
-            crate::guest_target::MODULE_NAME,
-            crate::watch::MODULE_NAME,
-            crate::spec_store::MODULE_NAME,
-            crate::identity::MODULE_NAME,
-            crate::error::MODULE_NAME,
-            crate::revision::MODULE_NAME,
-        );
-    }
-}

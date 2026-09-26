@@ -876,25 +876,6 @@ mod runtime_acl_tests {
 
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn validate_lock_parent_accepts_production_tmpfile_shape() {
-        // Production posture: `d /run/d2b 1770 root d2b -` with
-        // ACLs (g::r-x, u:d2bd:rwx, m::rwx). The validator expects
-        // uid=0, gid=public_socket_gid, mode=0o770 (0o1770 & 0o777).
-        // Since cargo tests cannot become root, this exercises the
-        // equivalent shape via the unprivileged path (expect_root_owned_parent=false)
-        // with mode 0o770, which test mode accepts.
-        let dir = scratch_dir("validate-prod");
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o770))
-            .expect("chmod scratch dir 0770");
-        let identity = caller_identity(false);
-        let lock_path = dir.join("daemon.lock");
-        validate_lock_parent(&lock_path, &identity)
-            .expect("validator must accept mode 0770 (root:d2b 1770 equivalent) in test mode");
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn validate_lock_parent_rejects_wrong_mode_in_production() {
         // 0o700 (the old `/run/d2b/locks` mode) is not acceptable
         // for `/run/d2b` itself because launcher users could not

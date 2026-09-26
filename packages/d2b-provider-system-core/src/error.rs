@@ -30,8 +30,6 @@ pub enum SystemCoreError {
     KernelTooOld,
     /// The delegated cgroup leaf has no writable cgroup.kill.
     CgroupKillUnavailable,
-    /// Child process reservations exceed the Host aggregate budget.
-    BudgetOvercommit,
 }
 
 impl fmt::Display for SystemCoreError {
@@ -47,7 +45,6 @@ impl fmt::Display for SystemCoreError {
             Self::CapabilityMissing => "required host capability is absent",
             Self::KernelTooOld => "kernel is below the process-provider floor",
             Self::CgroupKillUnavailable => "delegated cgroup.kill is unavailable",
-            Self::BudgetOvercommit => "host process budget is overcommitted",
         };
         f.write_str(text)
     }

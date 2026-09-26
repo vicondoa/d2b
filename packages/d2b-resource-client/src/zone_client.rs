@@ -1042,4 +1042,120 @@ mod tests {
         assert_eq!(watch.transport().closes.load(Ordering::Acquire), 2);
         assert!(watch.is_closed());
     }
+
+    fn endpoint_fixture() -> GuestControlEndpoint {
+        GuestControlEndpoint::new(
+            ResourceRef::parse("Endpoint/gateway-guest-control").unwrap(),
+            ResourceRef::parse("Guest/gateway").unwrap(),
+            d2b_contracts_resource::v3::ZoneId::parse("work").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ResourceGeneration::new(3).unwrap(),
+            SchemaFingerprint::parse(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            true,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn guest_control_endpoint_refuses_every_invalid_input_shape() {
+        let valid = endpoint_fixture();
+        assert!(valid.ready());
+        // The Endpoint and Guest ref types are closed; zero generations and a
+        // not-ready state must each refuse InvalidTarget.
+        assert_eq!(
+            GuestControlEndpoint::new(
+                ResourceRef::parse("Guest/gateway").unwrap(),
+                ResourceRef::parse("Guest/gateway").unwrap(),
+                valid.zone().clone(),
+                valid.uid().clone(),
+                ResourceGeneration::new(1).unwrap(),
+                ResourceGeneration::new(2).unwrap(),
+                ResourceGeneration::new(3).unwrap(),
+                valid.schema_digest().clone(),
+                true,
+            ),
+            Err(ClientError::InvalidTarget)
+        );
+        assert_eq!(
+            GuestControlEndpoint::new(
+                ResourceRef::parse("Endpoint/gateway-guest-control").unwrap(),
+                ResourceRef::parse("Endpoint/gateway-guest-control").unwrap(),
+                valid.zone().clone(),
+                valid.uid().clone(),
+                ResourceGeneration::new(1).unwrap(),
+                ResourceGeneration::new(2).unwrap(),
+                ResourceGeneration::new(3).unwrap(),
+                valid.schema_digest().clone(),
+                true,
+            ),
+            Err(ClientError::InvalidTarget)
+        );
+        // Zero resource/endpoint/provider generations are structurally
+        // unreachable: `ResourceGeneration::new(0)` is refused at the type
+        // boundary of the contracts crate itself.
+        assert_eq!(
+            GuestControlEndpoint::new(
+                valid.endpoint_ref().clone(),
+                valid.guest_ref().clone(),
+                valid.zone().clone(),
+                valid.uid().clone(),
+                ResourceGeneration::new(1).unwrap(),
+                ResourceGeneration::new(2).unwrap(),
+                ResourceGeneration::new(3).unwrap(),
+                valid.schema_digest().clone(),
+                false,
+            ),
+            Err(ClientError::InvalidTarget)
+        );
+    }
+
+    #[test]
+    fn guest_control_endpoint_validate_for_refuses_any_mismatch() {
+        let endpoint = endpoint_fixture();
+        let endpoint_ref = endpoint.endpoint_ref().clone();
+        let guest_ref = endpoint.guest_ref().clone();
+        let provider_generation = endpoint.provider_generation();
+        let schema_digest = endpoint.schema_digest().clone();
+        assert!(endpoint
+            .validate_for(&endpoint_ref, &guest_ref, provider_generation, &schema_digest)
+            .is_ok());
+        assert_eq!(
+            endpoint.validate_for(
+                &ResourceRef::parse("Endpoint/other").unwrap(),
+                &guest_ref,
+                provider_generation,
+                &schema_digest,
+            ),
+            Err(ClientError::TransportPolicyMismatch)
+        );
+        assert_eq!(
+            endpoint.validate_for(
+                &endpoint_ref,
+                &ResourceRef::parse("Guest/other").unwrap(),
+                provider_generation,
+                &schema_digest,
+            ),
+            Err(ClientError::TransportPolicyMismatch)
+        );
+        assert_eq!(
+            endpoint.validate_for(
+                &endpoint_ref,
+                &guest_ref,
+                ResourceGeneration::new(99).unwrap(),
+                &schema_digest,
+            ),
+            Err(ClientError::TransportPolicyMismatch)
+        );
+        assert_eq!(
+            endpoint.validate_for(
+                &endpoint_ref,
+                &guest_ref,
+                provider_generation,
+                &SchemaFingerprint::parse(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            ),
+            Err(ClientError::TransportPolicyMismatch)
+        );
+    }
 }

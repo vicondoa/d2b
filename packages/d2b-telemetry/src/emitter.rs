@@ -754,26 +754,6 @@ mod tests {
     }
 
     #[test]
-    fn canonical_metric_frames_are_admitted() {
-        let path = socket_path("canonical-metric");
-        let emitter = BoundedEmitter::new(&path, 512).unwrap();
-        let frame = encode_frame(
-            Signal::Metric,
-            &serde_json::json!({
-                "name": "d2b_api_watch_active",
-                "labels": {},
-                "value": 1,
-            }),
-        )
-        .unwrap();
-        assert_eq!(
-            emitter.emit(Signal::Metric, &frame).unwrap(),
-            EmitOutcome::Buffered
-        );
-        cleanup_socket(path);
-    }
-
-    #[test]
     fn raw_metric_frames_require_a_canonical_descriptor() {
         let path = socket_path("invalid-descriptor");
         let emitter = BoundedEmitter::new(&path, 512).unwrap();

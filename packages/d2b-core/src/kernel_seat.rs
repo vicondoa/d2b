@@ -161,3 +161,75 @@ where
     }))?;
     outcome.await.map_err(|_| KernelRefusal::Unavailable)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::block_on;
+    use std::sync::{
+        Arc, Mutex,
+        mpsc::{Receiver, sync_channel},
+    };
+
+    #[test]
+    fn saturated_seat_refuses_with_busy() {
+        let seat = KernelSeat::start().expect("workers start");
+        let (release_tx, release_rx) = sync_channel::<()>(0);
+        let release_rx: Arc<Mutex<Receiver<()>>> = Arc::new(Mutex::new(release_rx));
+        let max_admissible = WORKERS * (QUEUE_PER_WORKER + 1);
+        let mut accepted = 0;
+        loop {
+            assert!(
+                accepted <= max_admissible,
+                "seat must saturate within {max_admissible} admits, got {accepted}"
+            );
+            let rx = Arc::clone(&release_rx);
+            let job: Job = Box::new(move || {
+                let _ = rx.lock().expect("release receiver").recv();
+            });
+            match seat.admit(job) {
+                Ok(()) => accepted += 1,
+                Err(refusal) => {
+                    assert_eq!(refusal, KernelRefusal::Busy);
+                    break;
+                }
+            }
+        }
+        assert!(
+            accepted >= WORKERS * QUEUE_PER_WORKER,
+            "saturation must consume every worker queue slot, only {accepted} admits"
+        );
+        for _ in 0..accepted {
+            let _ = release_tx.send(());
+        }
+    }
+
+    #[test]
+    fn admit_refuses_with_unavailable_when_every_worker_is_gone() {
+        let mut senders = Vec::with_capacity(WORKERS);
+        for _ in 0..WORKERS {
+            let (sender, _receiver) = sync_channel::<Job>(0);
+            senders.push(sender);
+        }
+        let seat = KernelSeat {
+            senders,
+            next: AtomicUsize::new(0),
+        };
+        assert_eq!(
+            seat.admit(Box::new(|| {})),
+            Err(KernelRefusal::Unavailable)
+        );
+    }
+
+    #[test]
+    fn panicking_job_replies_unavailable() {
+        let result = block_on(run::<(), _>(|| panic!("kernel job panicked")));
+        assert_eq!(result, Err(KernelRefusal::Unavailable));
+    }
+
+    #[test]
+    fn kernel_legs_round_trip_on_the_worker_seat() {
+        let result = block_on(run(|| 7usize));
+        assert_eq!(result, Ok(7));
+    }
+}

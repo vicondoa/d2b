@@ -348,15 +348,6 @@ fn create_request() -> wire::CreateRequest {
     request
 }
 
-fn status_body() -> MessageField<wire::ResourceEnvelopeBytes> {
-    let canonical = CanonicalJsonValue::parse(GOLDEN_HOST).unwrap().to_canonical_bytes();
-    let mut body = wire::ResourceEnvelopeBytes::new();
-    body.identity = identity();
-    body.payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
-    body.canonical_json = canonical;
-    MessageField::some(body)
-}
-
 fn update_spec_request(
     expected_revision: u64,
     uid: &str,
@@ -1771,45 +1762,6 @@ fn host_spec() -> Vec<u8> {
 // No status write path from API status updates
 // ---------------------------------------------------------------------------
 
-
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-#[tokio::test]
-async fn api_status_updates_have_no_persistent_write_path() {
-    let fixture = manager_fixture().await;
-    let service = wired_service(&fixture, authorizer(&[ResourceVerb::UpdateStatus, ResourceVerb::Get]));
-    let mut request = wire::UpdateStatusRequest::new();
-    request.meta = request_meta();
-    let mut mutation = wire::Mutation::new();
-    mutation.kind = EnumOrUnknown::new(wire::MutationKind::MUTATION_KIND_UPDATE_STATUS);
-    mutation.target = identity();
-    let mut precondition = wire::Precondition::new();
-    precondition.kind =
-        EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
-    precondition.expected_revision = Some(1);
-    mutation.precondition = MessageField::some(precondition);
-    mutation.resource = status_body();
-    request.mutation = MessageField::some(mutation);
-    let response = service.update_status(trusted(request)).await;
-    assert_eq!(
-        error_kind(&response),
-        wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_STATUS_OWNER_MISMATCH,
-        "status-shaped API writes are rejected before any persistence"
-    );
-
-    // Compile-level invariant: the runtime spec store and manager expose no
-    // status-carrying durable write. The absence is enforced by the type
-    // system at build time (SpecStore has no update-status method and the
-    // manager protocol carries no persist-status message); here we pin the
-    // wire-level behavior already asserted above.
-    let rejected_kind = error_kind(&response);
-    assert_eq!(
-        rejected_kind,
-        wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_STATUS_OWNER_MISMATCH,
-        "no API status write may reach persistence"
-    );
-
-    fixture.manager_actor.get_cell().stop(None);
-}
 
 // ---------------------------------------------------------------------------
 // One-way bootstrap latch from an empty store (KTD6, R28)

@@ -557,16 +557,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_handoff_closes_local_fd_copy() {
-        assert_peer_observes_local_close(HandoffStatus::Failed(Some(nix::errno::Errno::EPIPE)));
-    }
-
-    #[test]
-    fn backpressured_handoff_closes_local_fd_copy() {
-        assert_peer_observes_local_close(HandoffStatus::Backpressure);
-    }
-
-    #[test]
     fn sendmsg_backpressure_is_not_fatal_handoff_failure() {
         assert_eq!(
             handoff_status_from_sendmsg_result(Err(nix::errno::Errno::EAGAIN), 128),

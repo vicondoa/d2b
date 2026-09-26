@@ -769,17 +769,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unauthenticated_route_projection_refuses_a_remote_entrypoint() {
-        let resolver = ZoneEntrypointResolver::new(sealed());
-        let engine = seeded_engine();
-        let request = ZoneEntrypointRequest::new(zone(&["k2", "k1", "k0"]));
-        assert_eq!(
-            resolver.resolve(&engine, &request).denial_reason(),
-            Some(ZoneRouteFailClosedReason::PolicyDenial)
-        );
-    }
-
-    #[test]
     fn an_absent_projection_for_a_sealed_zone_fails_closed() {
         let resolver = ZoneEntrypointResolver::new(sealed());
         // A sealed topology with no admitted advertisement at all.

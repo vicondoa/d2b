@@ -258,6 +258,35 @@ fn diagnose_identity(
 }
 
 #[test]
+fn diagnose_identity_rejects_zone_and_epoch_mismatches() {
+    use crate::v3::ZoneId;
+
+    let slot = StoreSlot::new(7).unwrap();
+    let zone = ZoneId::parse("work").unwrap();
+    let uuid = ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap();
+    let (_, acceptor) = mutation_seal_pair(StoreSealIdentity::new(slot, zone.clone(), uuid.clone()));
+
+    // A different zone is diagnosed as Zone before the store uuid is
+    // compared, even when the uuid also differs.
+    let other_zone = StoreSealIdentity::new(
+        slot,
+        ZoneId::parse("personal").unwrap(),
+        ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+    );
+    assert_eq!(
+        acceptor.diagnose(&other_zone),
+        Err(SealIdentityMismatch::Zone)
+    );
+
+    // A different epoch is diagnosed as Epoch when zone and uuid agree.
+    let other_epoch = StoreSealIdentity::new(slot, zone, uuid).with_store_epoch(2);
+    assert_eq!(
+        acceptor.diagnose(&other_epoch),
+        Err(SealIdentityMismatch::Epoch)
+    );
+}
+
+#[test]
 fn open_rejects_same_authority_with_mismatched_declared_identity() {
     use crate::v3::{ConfigurationGeneration, ResourceRef};
 

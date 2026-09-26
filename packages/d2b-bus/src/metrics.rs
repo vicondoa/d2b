@@ -788,4 +788,43 @@ mod tests {
         assert_eq!(service_label(&service), "bus");
     }
 
+    #[test]
+    fn route_outcome_classifies_bus_errors_into_closed_metric_labels() {
+        use crate::authorization::AuthorizationError;
+        use crate::operations::OperationError;
+        use crate::registry::RegistryError;
+        use crate::router::BusError;
+
+        assert_eq!(route_outcome(None), BusRouteOutcome::Ok);
+        assert_eq!(
+            route_outcome(Some(&BusError::Authorization(
+                AuthorizationError::SessionBindingMismatch
+            ))),
+            BusRouteOutcome::Denied
+        );
+        assert_eq!(
+            route_outcome(Some(&BusError::Registry(
+                RegistryError::RouteNotFound
+            ))),
+            BusRouteOutcome::NotFound
+        );
+        assert_eq!(
+            route_outcome(Some(&BusError::Operation(
+                OperationError::OperationNotFound
+            ))),
+            BusRouteOutcome::NotFound
+        );
+        for other in [
+            BusError::Registry(RegistryError::RouteCapacity),
+            BusError::Operation(OperationError::InvalidOperationId),
+            BusError::SessionClosed,
+        ] {
+            assert_eq!(
+                route_outcome(Some(&other)),
+                BusRouteOutcome::Error,
+                "unexpected classification for {other}"
+            );
+        }
+    }
+
 }

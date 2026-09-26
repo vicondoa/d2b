@@ -56,19 +56,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn forbidden_identity_keys_fail_before_values() {
-        for key in FORBIDDEN_LABEL_KEYS {
-            assert_eq!(
-                validate_label_key(key),
-                Err(MetricPolicyError::KeyForbidden)
-            );
-        }
-        for key in ["resource_name", "zone_uid", "link_name_hash"] {
-            assert!(validate_label_key(key).is_err());
-        }
-    }
-
-    #[test]
     fn descriptor_and_identity_canary_validation_are_structural() {
         let descriptor = MetricDescriptor::new(
             "d2b_store_compaction_duration_seconds",

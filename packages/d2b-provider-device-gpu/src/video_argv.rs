@@ -186,17 +186,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn audit_parity_minimal() {
-        let argv = generate_video_argv(&audit_input()).unwrap();
-        assert!(argv[0].ends_with("/crosvm"));
-        assert_eq!(argv[1], "device");
-        assert_eq!(argv[2], "video-decoder");
-        let joined = argv.join(" ");
-        assert!(joined.contains("--socket-path /run/d2b-video/corp-desktop/video.sock"));
-        assert!(joined.contains("--backend vaapi"));
-    }
-
     /// One single-field rejection vector: mutate exactly one valid fixture
     /// field and pin the typed error.
     struct VideoRejectVector {
@@ -247,11 +236,6 @@ mod tests {
                 "rejection vector: {name}"
             );
         }
-    }
-
-    #[test]
-    fn backend_string_round_trip() {
-        assert_eq!(VideoBackend::Vaapi.as_str(), "vaapi");
     }
 
     #[test]

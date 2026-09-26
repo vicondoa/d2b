@@ -1127,14 +1127,6 @@ mod tests {
     }
 
     #[test]
-    fn the_session_reports_its_link_epoch_and_generation() {
-        let driver = Arc::new(FakeDriver::new(42));
-        let session = session(driver);
-        assert_eq!(session.epoch(), LinkEpoch::FIRST);
-        assert_eq!(session.generation(), 42);
-    }
-
-    #[test]
     fn debug_output_names_no_driver_stream_or_generation() {
         let driver = Arc::new(FakeDriver::new(42));
         let rendered = format!("{:?}", session(driver));

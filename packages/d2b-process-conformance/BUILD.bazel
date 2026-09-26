@@ -21,6 +21,7 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts:d2b_contracts",
+        "//packages/d2b-core:d2b_core_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -34,6 +35,7 @@ d2b_rust_library(
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-contracts:d2b_contracts_test_support",
+        "//packages/d2b-core:d2b_core_test_support",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 

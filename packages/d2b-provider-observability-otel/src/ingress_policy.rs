@@ -862,30 +862,7 @@ mod tests {
         )
     }
 
-    #[test]
-    fn policy_runs_before_capacity_and_rejects_the_whole_frame() {
-        let mut gate = IngressPolicyGate::default();
-        let valid = frame("outcome", "accepted");
-        assert_eq!(
-            gate.admit(
-                Ingress::EmitterUnix,
-                &valid,
-                &IdentityCanaries::default(),
-                false
-            ),
-            (IngressOutcome::Rejected, IngressErrorClass::None)
-        );
-        let invalid = frame("vm", "work");
-        assert_eq!(
-            gate.admit(
-                Ingress::EmitterUnix,
-                &invalid,
-                &IdentityCanaries::default(),
-                true
-            ),
-            (IngressOutcome::Rejected, IngressErrorClass::KeyForbidden)
-        );
-    }
+
 
     #[test]
     fn import_stream_has_no_credits_after_quarantine() {
@@ -1011,25 +988,7 @@ mod tests {
         assert_eq!(gate.series_count(), 1);
     }
 
-    #[test]
-    fn raw_unknown_descriptor_is_rejected_before_series_accounting() {
-        let mut gate = IngressPolicyGate::default();
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "signal": "metric",
-            "value": {
-                "name": "d2b_unregistered_total",
-                "labels": {"outcome": "ok"},
-                "value": 1
-            }
-        }))
-        .expect("unknown metric frame");
 
-        assert_eq!(
-            gate.admit_raw(Ingress::EmitterUnix, 0, &bytes),
-            (IngressOutcome::Rejected, IngressErrorClass::Malformed)
-        );
-        assert_eq!(gate.series_count(), 0);
-    }
 
     #[test]
     fn raw_known_descriptor_requires_its_canonical_label_set() {

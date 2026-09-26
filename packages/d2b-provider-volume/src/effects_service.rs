@@ -60,22 +60,12 @@ pub const VOLUME_EFFECTS_SERVICE: ServiceDecl = ServiceDecl {
 };
 
 /// The one `has-layout` response payload: whether the zone retains an
-/// initialized layout for the requested volume. The two literals are
-/// canonical by construction; the parse refusal is unreachable and names
-/// its own code.
-fn has_layout_response(has_layout: bool) -> Result<EffectResponse, EffectServiceError> {
-    let bytes: &[u8] = if has_layout {
-        b"{\"hasLayout\":true}"
-    } else {
-        b"{\"hasLayout\":false}"
-    };
-    let payload = CanonicalJsonObject::parse(bytes).map_err(|_| {
-        EffectServiceError::Declined {
-            service: VOLUME_EFFECTS_SERVICE.id.to_owned(),
-            reason: "has-layout-response-invalid".to_owned(),
-        }
-    })?;
-    Ok(EffectResponse::new(payload))
+/// initialized layout for the requested volume. Built from the value
+/// itself, so the two literals cannot fail to parse.
+fn has_layout_response(has_layout: bool) -> EffectResponse {
+    let payload = serde_json::from_value(serde_json::json!({ "hasLayout": has_layout }))
+        .expect("the static has-layout payload is canonical");
+    EffectResponse::new(payload)
 }
 
 /// The declared `has-layout` payload contract: `volumeUid` names the volume
@@ -107,7 +97,7 @@ async fn serve_has_layout(
         .map_err(declined)?;
     let volume_uid =
         ResourceUid::parse(volume_uid).map_err(|_| declined("has-layout-volume-uid-invalid"))?;
-    has_layout_response(runtime.has_layout(&volume_uid))
+    Ok(has_layout_response(runtime.has_layout(&volume_uid)))
 }
 
 /// The provider-owned Volume effects (U7), built from the daemon-supplied
@@ -195,7 +185,6 @@ impl EffectServiceFactory for VolumeEffectsServiceFactory {
 mod tests {
     use super::*;
 
-    use d2b_contracts_resource::v3::canonical_json_bytes;
     use d2b_provider_toolkit::ServiceInvocation;
     use d2b_resource_runtime::context::ServiceResourceContext;
 
@@ -280,6 +269,30 @@ mod tests {
         );
     }
 
+    /// The false answer is the same payload shape with the probe's false
+    /// value: a runtime that has not laid the volume out answers
+    /// `{"hasLayout":false}` rather than a different envelope.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn has_layout_answers_false_for_an_unlaid_out_volume() {
+        let service = VolumeEffectsService::new(facets(Arc::new(ScriptedRuntime {
+            has_layout: false,
+        })));
+        let payload = canonical(serde_json::json!({
+            "volumeUid": "6f9619ff-8b86-4d01-b42d-00cf4fc964ff",
+        }));
+        let mut resources = ServiceResourceContext::fail_closed();
+        let response = service
+            .handle(invocation(&payload, &mut resources, "invocation-u7"))
+            .await
+            .expect("call");
+        assert_eq!(
+            response.payload,
+            canonical(serde_json::json!({ "hasLayout": false })),
+            "the hosted method answers the negative probe from the runtime facet"
+        );
+    }
+
     /// A volume uid that is absent from the payload refuses with the
     /// method's own closed code instead of answering a half-built report.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -328,19 +341,4 @@ mod tests {
         );
     }
 
-    /// The canonical payload bytes are exactly the two literals the method
-    /// serves, so the wire contract is pinned byte for byte.
-    #[test]
-    fn the_has_layout_wire_payloads_are_canonical() {
-        assert_eq!(
-            canonical_json_bytes(&canonical(serde_json::json!({ "hasLayout": true })))
-                .expect("canonical"),
-            b"{\"hasLayout\":true}",
-        );
-        assert_eq!(
-            canonical_json_bytes(&canonical(serde_json::json!({ "hasLayout": false })))
-                .expect("canonical"),
-            b"{\"hasLayout\":false}",
-        );
     }
-}

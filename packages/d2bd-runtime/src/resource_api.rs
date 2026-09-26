@@ -621,3 +621,223 @@ pub fn parse_projection(value: Option<&Value>) -> Result<StoreProjection, Resour
         _ => Err(ResourceRuntimeError::RequestInvalid),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_resource_names_fails_closed_on_malformed_payloads() {
+        // Absent and null are the only empty shapes; anything else that is
+        // not a bounded array of valid resource names is refused.
+        assert_eq!(
+            parse_resource_names(&json!({})).unwrap(),
+            Vec::<ResourceName>::new()
+        );
+        assert_eq!(
+            parse_resource_names(&json!({ "resourceNames": null })).unwrap(),
+            Vec::<ResourceName>::new()
+        );
+        assert_eq!(
+            parse_resource_names(&json!({ "resourceNames": "guest" })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_resource_names(&json!({ "resourceNames": [7] })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_resource_names(&json!({ "resourceNames": ["bad name"] })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        let over_cap: Vec<String> = (0..=MAX_FILTER_VALUES).map(|i| format!("n{i}")).collect();
+        assert_eq!(
+            parse_resource_names(&json!({ "resourceNames": over_cap })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_resource_names(&json!({ "resourceNames": ["guest", "host"] })).unwrap(),
+            vec![ResourceName::parse("guest").unwrap(), ResourceName::parse("host").unwrap()]
+        );
+    }
+
+    #[test]
+    fn parse_typed_filters_fails_closed_on_malformed_payloads() {
+        assert_eq!(
+            parse_typed_filters(&json!({ "filters": "metadata.name" })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        let over_cap: Vec<serde_json::Value> = (0..=MAX_LIST_FILTERS)
+            .map(|i| json!({ "field": "metadata.name", "values": [format!("n{i}")] }))
+            .collect();
+        assert_eq!(
+            parse_typed_filters(&json!({ "filters": over_cap })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_typed_filters(&json!({ "filters": ["metadata.name"] })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_typed_filters(&json!({ "filters": [{ "field": "metadata.name", "values": ["guest"], "extra": true }] })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_typed_filters(&json!({ "filters": [{ "values": ["guest"] }] })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_typed_filters(&json!({ "filters": [{ "field": "metadata.name", "values": "guest" }] })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_typed_filters(&json!({ "filters": [{ "field": "metadata.name", "values": [7] }] })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        // A well-formed filter on an unsupported field is a capability
+        // refusal, not a parse error.
+        assert_eq!(
+            parse_typed_filters(&json!({ "filters": [{ "field": "spec.osUsername", "values": ["alice"] }] })),
+            Err(ResourceRuntimeError::CapabilityUnavailable)
+        );
+        assert_eq!(
+            parse_typed_filters(&json!({ "filters": [{ "field": "metadata.name", "values": ["bad name"] }] })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_typed_filters(&json!({ "filters": [{ "field": "metadata.name", "values": ["guest"] }] })).unwrap(),
+            vec![StoreFilter { field: "metadata.name".to_owned(), values: vec!["guest".to_owned()] }]
+        );
+    }
+
+    #[test]
+    fn typed_filter_fails_closed_on_invalid_fields_and_values() {
+        assert_eq!(
+            typed_filter("", vec!["guest".to_owned()]),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            typed_filter(&"x".repeat(65), vec!["guest".to_owned()]),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            typed_filter("metadata name", vec!["guest".to_owned()]),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            typed_filter("metadata.name", vec![]),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        let over_cap: Vec<String> = (0..=MAX_FILTER_VALUES).map(|i| format!("n{i}")).collect();
+        assert_eq!(
+            typed_filter("metadata.name", over_cap),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            typed_filter("metadata.name", vec!["".to_owned()]),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            typed_filter("metadata.name", vec!["x".repeat(257)]),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            typed_filter("metadata.owner", vec!["guest".to_owned()]),
+            Err(ResourceRuntimeError::CapabilityUnavailable)
+        );
+        assert_eq!(
+            typed_filter("type", vec!["bad type".to_owned()]),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            typed_filter("metadata.name", vec!["guest".to_owned()]).unwrap(),
+            StoreFilter { field: "metadata.name".to_owned(), values: vec!["guest".to_owned()] }
+        );
+    }
+
+    #[test]
+    fn aliased_cursor_fails_closed_on_malformed_payloads() {
+        assert_eq!(aliased_cursor(&json!({})).unwrap(), None);
+        assert_eq!(aliased_cursor(&json!({ "cursor": null })).unwrap(), None);
+        assert_eq!(
+            aliased_cursor(&json!({ "cursor": 7 })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            aliased_cursor(&json!({ "cursor": "x".repeat(MAX_PAGE_CURSOR_BYTES + 1) })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            aliased_cursor(&json!({ "cursor": "a", "pageCursor": "b" })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(aliased_cursor(&json!({ "cursor": "" })).unwrap(), None);
+        assert_eq!(
+            aliased_cursor(&json!({ "cursor": "opaque", "pageCursor": "opaque" })).unwrap(),
+            Some("opaque".to_owned())
+        );
+    }
+
+    #[test]
+    fn aliased_page_size_fails_closed_on_malformed_payloads() {
+        assert_eq!(aliased_page_size(&json!({})).unwrap(), DEFAULT_LIST_PAGE_SIZE);
+        assert_eq!(aliased_page_size(&json!({ "pageSize": null })).unwrap(), DEFAULT_LIST_PAGE_SIZE);
+        assert_eq!(
+            aliased_page_size(&json!({ "pageSize": "100" })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            aliased_page_size(&json!({ "pageSize": 0 })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            aliased_page_size(&json!({ "pageSize": MAX_LIST_PAGE_SIZE + 1 })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            aliased_page_size(&json!({ "pageSize": 10, "limit": 20 })),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(aliased_page_size(&json!({ "pageSize": 10 })).unwrap(), 10);
+        assert_eq!(aliased_page_size(&json!({ "limit": 10 })).unwrap(), 10);
+    }
+
+    #[test]
+    fn parse_projection_fails_closed_on_malformed_payloads() {
+        assert_eq!(parse_projection(None).unwrap(), StoreProjection::Full);
+        assert_eq!(parse_projection(Some(&json!(null))).unwrap(), StoreProjection::Full);
+        assert_eq!(
+            parse_projection(Some(&json!(7))),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_projection(Some(&json!({ "kind": "full", "extra": true }))),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_projection(Some(&json!({ "other": "full" }))),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_projection(Some(&json!("summary"))),
+            Err(ResourceRuntimeError::RequestInvalid)
+        );
+        assert_eq!(
+            parse_projection(Some(&json!("full"))).unwrap(),
+            StoreProjection::Full
+        );
+        assert_eq!(
+            parse_projection(Some(&json!("base-only"))).unwrap(),
+            StoreProjection::BaseOnly
+        );
+        assert_eq!(
+            parse_projection(Some(&json!("metadataOnly"))).unwrap(),
+            StoreProjection::MetadataOnly
+        );
+        assert_eq!(
+            parse_projection(Some(&json!({ "kind": "projection-kind-full" }))).unwrap(),
+            StoreProjection::Full
+        );
+    }
+}

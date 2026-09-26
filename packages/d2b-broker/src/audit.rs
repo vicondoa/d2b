@@ -2778,7 +2778,7 @@ mod tests {
     use d2b_audit::evidence_chain::{ChainLeg, ChainOutcome, ChainRecordClass};
 
     fn target_scratch_root(prefix: &str) -> PathBuf {
-        let base = crate::test_scratch_root();
+        let base = d2b_core::test_support::scratch_root("audit");
         base.join(format!(
             "{prefix}-{}-{}",
             std::process::id(),

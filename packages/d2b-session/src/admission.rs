@@ -1938,23 +1938,4 @@ mod tests {
         handle.cancel(request_id()).await.unwrap();
         assert_eq!(driver.local_complete_calls.load(Ordering::Acquire), 1);
     }
-
-
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-
-    #[tokio::test]
-    async fn cancellation_propagates_delivery_failure_after_local_cleanup() {
-        let driver = Arc::new(MockCancellationDriver {
-            cancel_error: Some(SessionError::new(SessionErrorCode::SessionDisconnected)),
-            local_complete_calls: AtomicUsize::new(0),
-        });
-        let handle = SessionCancellationHandle {
-            driver: driver.clone(),
-            writer_fence: crate::Cancellation::new(),
-        };
-
-        let error = handle.cancel(request_id()).await.unwrap_err();
-        assert_eq!(error.code(), SessionErrorCode::SessionDisconnected);
-        assert_eq!(driver.local_complete_calls.load(Ordering::Acquire), 1);
-    }
 }

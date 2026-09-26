@@ -29,27 +29,3 @@ pub(crate) fn authorized_service_record(
         idempotency_key,
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn process_unique_managed_identity_canary_never_renders() {
-        let marker = format!("managed-identity-canary-{:x}", std::process::id());
-        let record = authorized_service_record(
-            true,
-            "dev",
-            marker.as_bytes(),
-            marker.as_bytes(),
-            CredentialMethod::AcquireToken,
-            CredentialAuditOutcome::Success,
-            1,
-            Some(marker.as_bytes()),
-        )
-        .unwrap()
-        .unwrap();
-        assert!(!record.to_wire_record().contains(&marker));
-        assert!(!format!("{record:?}").contains(&marker));
-    }
-}

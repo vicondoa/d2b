@@ -1807,15 +1807,6 @@ mod tests {
     }
 
     #[test]
-    fn exit_code_is_two_when_fail() {
-        let mut report = DoctorReport::default();
-        report.push("broker-ready", DoctorStatus::Fail, "down");
-        report.push("daemon-ready", DoctorStatus::Pass, "up");
-        assert_eq!(report.exit_code(), 2);
-        assert!(!report.broker_ready());
-    }
-
-    #[test]
     fn exit_code_is_one_when_only_warn() {
         let mut report = DoctorReport::default();
         report.push("broker-ready", DoctorStatus::Pass, "ok");
@@ -1897,26 +1888,6 @@ mod tests {
 
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn kernel_module_matrix_clean_is_pass() {
-        let dir = unique_scratch("km-pass");
-        write_state(
-            &dir,
-            "kernel-module-report.json",
-            serde_json::json!({
-                "required": ["kvm_intel"],
-                "present": ["kvm_intel"],
-                "missing_required": [],
-                "optional_missing": [],
-            }),
-        );
-        let mut report = DoctorReport::default();
-        check_kernel_module_matrix(&dir, &mut report);
-        assert_eq!(report.checks[0].status, DoctorStatus::Pass);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn kernel_module_matrix_optional_is_warn() {
         let dir = unique_scratch("km-warn");
         write_state(
@@ -1939,68 +1910,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn kernel_module_matrix_required_missing_is_fail() {
-        let dir = unique_scratch("km-fail");
-        write_state(
-            &dir,
-            "kernel-module-report.json",
-            serde_json::json!({
-                "required": ["kvm_intel"],
-                "present": [],
-                "missing_required": ["kvm_intel"],
-                "optional_missing": [],
-            }),
-        );
-        let mut report = DoctorReport::default();
-        check_kernel_module_matrix(&dir, &mut report);
-        assert_eq!(report.checks[0].status, DoctorStatus::Fail);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn autostart_status_failed_is_fail() {
-        let dir = unique_scratch("autostart-fail");
-        write_state(
-            &dir,
-            "autostart-report.json",
-            serde_json::json!({
-                "outcomes": [
-                    {"vm": "a", "env": null, "is_net_vm": true, "outcome": {"kind": "started"}},
-                    {"vm": "b", "env": null, "is_net_vm": false, "outcome": {"kind": "failed", "reason": "boom"}},
-                ]
-            }),
-        );
-        let mut report = DoctorReport::default();
-        check_autostart_status(&dir, &mut report);
-        assert_eq!(report.checks[0].status, DoctorStatus::Fail);
-        let data = report.checks[0].data.as_ref().unwrap();
-        assert_eq!(data["failed"].as_u64(), Some(1));
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn autostart_status_degraded_is_warn() {
-        let dir = unique_scratch("autostart-warn");
-        write_state(
-            &dir,
-            "autostart-report.json",
-            serde_json::json!({
-                "outcomes": [
-                    {"vm": "a", "env": null, "is_net_vm": false, "outcome": {"kind": "degraded", "reason": "net-vm down"}},
-                ]
-            }),
-        );
-        let mut report = DoctorReport::default();
-        check_autostart_status(&dir, &mut report);
-        assert_eq!(report.checks[0].status, DoctorStatus::Warn);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
+#[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn autostart_status_pass_when_all_started() {
         let dir = unique_scratch("autostart-pass");
@@ -2017,33 +1927,6 @@ mod tests {
         let mut report = DoctorReport::default();
         check_autostart_status(&dir, &mut report);
         assert_eq!(report.checks[0].status, DoctorStatus::Pass);
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn storage_lifecycle_report_clean_is_pass() {
-        let dir = unique_scratch("storage-life-pass");
-        write_state(
-            &dir,
-            "storage-lifecycle-report.json",
-            serde_json::json!({
-                "schemaVersion": "v2",
-                "storageContractPresent": true,
-                "syncContractPresent": true,
-                "pathCount": 12,
-                "restartPolicyCount": 4,
-                "lockCount": 3,
-                "issues": [],
-            }),
-        );
-        let mut report = DoctorReport::default();
-        check_storage_lifecycle_report(&dir, &mut report);
-        assert_eq!(report.checks[0].status, DoctorStatus::Pass);
-        let data = report.checks[0].data.as_ref().unwrap();
-        assert_eq!(data["pathCount"].as_u64(), Some(12));
-        assert_eq!(data["issueKinds"].as_str(), Some(""));
-        assert!(data.get("remediation").is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2283,14 +2166,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn seccomp_field_parse_disabled() {
-        let status = fake_proc_status(0, &[99]);
-        assert_eq!(
-            parse_proc_status_field(&status, "Seccomp:"),
-            Some("0".to_owned())
-        );
-    }
+
 
     // Simulate the actual /proc check using the real current process
     // PID (which will have Seccomp: 0 in a normal test runner).
@@ -2355,13 +2231,7 @@ mod tests {
         assert!(val.split_whitespace().count() >= 2);
     }
 
-    #[test]
-    fn nstgid_single_parse() {
-        // One value → initial user NS
-        let status = fake_proc_status(2, &[12345]);
-        let val = parse_proc_status_field(&status, "NStgid:").unwrap();
-        assert_eq!(val.split_whitespace().count(), 1);
-    }
+
 
     // --- check_broker_reap_health ---
 

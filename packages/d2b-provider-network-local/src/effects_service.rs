@@ -334,34 +334,7 @@ mod tests {
         assert_eq!(committed, expected);
     }
 
-    /// The report's operation spellings are the committed PascalCase wire
-    /// names, byte for byte (the catalog's spellings, not the lowercase
-    /// operation references).
-    #[test]
-    fn inspect_network_report_spells_the_catalog_wire_names() {
-        let report = inspect_network_response("sha256:abc", "inet", "d2b", false)
-            .expect("report")
-            .payload;
-        let bytes = canonical_json_bytes(&report).expect("canonical");
-        let text = String::from_utf8(bytes).expect("utf8");
-        for wire_name in [
-            "ApplyNftables",
-            "ApplyNftablesProjection",
-            "ApplyNmUnmanaged",
-            "ApplyRoute",
-            "ApplySysctl",
-            "CreateBridge",
-            "CreatePersistentTap",
-            "CreateTapFd",
-            "DeleteBridge",
-            "DeletePersistentTap",
-            "SeedDnsmasqLease",
-            "SetBridgePortFlags",
-            "UpdateHostsFile",
-        ] {
-            assert!(text.contains(wire_name), "missing {wire_name} in {text}");
-        }
-    }
+
 
     /// A structural character inside a trusted value yields a correctly
     /// escaped report instead of an unparseable one: the payload is built

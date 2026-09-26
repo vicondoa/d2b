@@ -1,8 +1,4 @@
-use std::{
-    future::Future,
-    sync::{Arc, Mutex, MutexGuard},
-    task::{Context, Poll, Waker},
-};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use d2b_contracts_resource::v3::{
     ResourceBundleGenerationId, ResourceGeneration, ResourceUid,
@@ -22,6 +18,7 @@ use d2b_provider_network_local::{
     },
     plan::{PlanStep, compute_plan, ActualState},
 };
+use d2b_provider_toolkit::testing::block_on;
 
 #[derive(Clone, Default)]
 struct FakePorts {
@@ -40,7 +37,7 @@ impl FakePorts {
     /// Take one recorder lock, failing loudly on poisoning.
     ///
     /// The recorded fields are `std::sync::Mutex`: the port methods are
-    /// driven by this file's own `block_on` harness (plain `#[test]`
+    /// driven by this file's `block_on` harness (plain `#[test]`
     /// functions, with no runtime) and the test bodies read the records
     /// synchronously, so they cannot be awaited async locks. This is the
     /// single acquisition site and it carries the recorded exception.
@@ -86,18 +83,6 @@ impl FakePorts {
     /// The recorded mDNS values, oldest first.
     fn mdns_values(&self) -> Vec<bool> {
         self.recorder(&self.inner.mdns_values).clone()
-    }
-}
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    let mut future = Box::pin(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => std::thread::yield_now(),
-        }
     }
 }
 

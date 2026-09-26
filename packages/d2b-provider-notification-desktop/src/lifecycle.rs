@@ -554,3 +554,171 @@ impl<B: NotificationLifecycleBackend> core::fmt::Debug for NotificationLifecycle
         formatter.write_str("NotificationLifecycleSupervisor(<redacted>)")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zone() -> ZoneId {
+        ZoneId::parse("work").expect("zone")
+    }
+
+    fn provider_ref() -> ResourceRef {
+        ResourceRef::parse("Provider/notification-desktop").expect("provider ref")
+    }
+
+    fn source_ref() -> ResourceRef {
+        ResourceRef::parse("Guest/work-vm").expect("source ref")
+    }
+
+    fn source_identity() -> NotificationSourceIdentity {
+        NotificationSourceIdentity::new(
+            zone(),
+            provider_ref(),
+            source_ref(),
+            1,
+            1,
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .expect("source identity")
+    }
+
+    /// The source identity fence: wrong resource types, zero generations,
+    /// and empty or oversized endpoint digests are all refused closed.
+    #[test]
+    fn source_identity_rejects_wrong_types_zero_generations_and_oversized_digests() {
+        assert_eq!(
+            NotificationSourceIdentity::new(
+                zone(),
+                ResourceRef::parse("Guest/not-a-provider").expect("ref"),
+                source_ref(),
+                1,
+                1,
+                "digest",
+            ),
+            Err(ProviderError::LifecycleSourceInvalid),
+            "a non-Provider provider ref is refused"
+        );
+        assert_eq!(
+            NotificationSourceIdentity::new(
+                zone(),
+                provider_ref(),
+                ResourceRef::parse("Process/not-a-guest").expect("ref"),
+                1,
+                1,
+                "digest",
+            ),
+            Err(ProviderError::LifecycleSourceInvalid),
+            "a non-Guest source ref is refused"
+        );
+        assert_eq!(
+            NotificationSourceIdentity::new(zone(), provider_ref(), source_ref(), 0, 1, "digest"),
+            Err(ProviderError::LifecycleSourceInvalid),
+            "a zero source generation is refused"
+        );
+        assert_eq!(
+            NotificationSourceIdentity::new(zone(), provider_ref(), source_ref(), 1, 0, "digest"),
+            Err(ProviderError::LifecycleSourceInvalid),
+            "a zero display generation is refused"
+        );
+        assert_eq!(
+            NotificationSourceIdentity::new(zone(), provider_ref(), source_ref(), 1, 1, ""),
+            Err(ProviderError::LifecycleSourceInvalid),
+            "an empty endpoint digest is refused"
+        );
+        assert_eq!(
+            NotificationSourceIdentity::new(
+                zone(),
+                provider_ref(),
+                source_ref(),
+                1,
+                1,
+                "x".repeat(129),
+            ),
+            Err(ProviderError::LifecycleSourceInvalid),
+            "an oversized endpoint digest is refused"
+        );
+        assert!(source_identity().zone() == &zone());
+    }
+
+    /// The host-sink identity fence: each of the four refs must be its
+    /// exact resource type, and both generations must be nonzero.
+    #[test]
+    fn host_sink_identity_rejects_wrong_types_and_zero_generations() {
+        let valid = || {
+            NotificationHostSinkIdentity::new(
+                zone(),
+                provider_ref(),
+                ResourceRef::parse("Host/host-system").expect("host ref"),
+                ResourceRef::parse("User/alice").expect("user ref"),
+                ResourceRef::parse("Provider/display-wayland").expect("display provider ref"),
+                2,
+                3,
+            )
+        };
+        assert!(valid().is_ok());
+
+        let mut args = (
+            zone(),
+            ResourceRef::parse("Provider/notification-desktop").expect("ref"),
+            ResourceRef::parse("Host/host-system").expect("ref"),
+            ResourceRef::parse("User/alice").expect("ref"),
+            ResourceRef::parse("Provider/display-wayland").expect("ref"),
+            2,
+            3,
+        );
+        for (field, ref_text) in [
+            ("provider", "Guest/not-a-provider"),
+            ("host", "Process/not-a-host"),
+            ("user", "Guest/not-a-user"),
+            ("display", "Guest/not-a-display-provider"),
+        ] {
+            match field {
+                "provider" => args.1 = ResourceRef::parse(ref_text).expect("ref"),
+                "host" => args.2 = ResourceRef::parse(ref_text).expect("ref"),
+                "user" => args.3 = ResourceRef::parse(ref_text).expect("ref"),
+                "display" => args.4 = ResourceRef::parse(ref_text).expect("ref"),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                NotificationHostSinkIdentity::new(
+                    args.0.clone(),
+                    args.1.clone(),
+                    args.2.clone(),
+                    args.3.clone(),
+                    args.4.clone(),
+                    args.5,
+                    args.6,
+                ),
+                Err(ProviderError::LifecycleHostSinkInvalid),
+                "{field}"
+            );
+        }
+        assert_eq!(
+            NotificationHostSinkIdentity::new(
+                zone(),
+                provider_ref(),
+                ResourceRef::parse("Host/host-system").expect("host ref"),
+                ResourceRef::parse("User/alice").expect("user ref"),
+                ResourceRef::parse("Provider/display-wayland").expect("display provider ref"),
+                0,
+                3,
+            ),
+            Err(ProviderError::LifecycleHostSinkInvalid),
+            "a zero display generation is refused"
+        );
+        assert_eq!(
+            NotificationHostSinkIdentity::new(
+                zone(),
+                provider_ref(),
+                ResourceRef::parse("Host/host-system").expect("host ref"),
+                ResourceRef::parse("User/alice").expect("user ref"),
+                ResourceRef::parse("Provider/display-wayland").expect("display provider ref"),
+                2,
+                0,
+            ),
+            Err(ProviderError::LifecycleHostSinkInvalid),
+            "a zero controller generation is refused"
+        );
+    }
+}

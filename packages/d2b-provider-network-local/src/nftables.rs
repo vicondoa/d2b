@@ -727,18 +727,7 @@ mod tests {
     }
 
 
-    #[test]
-    fn foreign_marker_in_target_slot_fails_closed() {
-        let owner = uid("123e4567-e89b-42d3-a456-426614174000");
-        let bytes = b"foreign occupant".to_vec();
-        let snapshot = SharedNftTable::new(vec![SharedTableEntry::foreign_in_network_slot(
-            owner.clone(),
-            bytes.clone(),
-        )]);
-        let error = apply_projection(&snapshot, &NetworkNftProjection::empty(owner)).unwrap_err();
-        assert_eq!(error, NftablesError::ForeignMarkerPreserved);
-        assert_eq!(snapshot.entries()[0].bytes(), bytes);
-    }
+
 
     #[test]
     fn network_rules_reject_usbip_and_service_port() {

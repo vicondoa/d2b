@@ -167,6 +167,8 @@ impl GracefulVmShutdown for CloudHypervisorShutdown {
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     use super::*;
 
     #[tokio::test]
@@ -194,6 +196,86 @@ mod tests {
         assert_eq!(
             provider.request_vmm_exit(&target).await,
             ProviderVmmExitOutcome::NotSupported
+        );
+    }
+
+    /// Remove one test serving directory, ignoring absence.
+    async fn remove_serving_dir(dir: &std::path::Path) {
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
+    /// Serve one `vm.info` HTTP-over-unix exchange for the given wire state,
+    /// and return the socket path the poll reads, plus the serving dir the
+    /// caller removes when the exchange is complete.
+    async fn serve_vm_info(state: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "d2b-provider-guest-shutdown-{}",
+            std::process::id()
+        ));
+        tokio::fs::create_dir_all(&dir).await.expect("temp dir");
+        let socket = dir.join(format!("vm-{state}.sock"));
+        let _ = tokio::fs::remove_file(&socket).await;
+        let listener = tokio::net::UnixListener::bind(&socket).expect("bind");
+        let body = format!(r#"{{"state":"{state}"}}"#);
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut request = [0u8; 512];
+            let _ = stream.read(&mut request).await.expect("read request");
+            let response = format!(
+                "HTTP/1.0 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.expect("write response");
+        });
+        (socket, dir)
+    }
+
+    /// The wire-state classification of [`CloudHypervisorShutdown::poll_state`]:
+    /// Created/Shutdown stop, Running/Paused run, anything else and every
+    /// error answer `Unknown`.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    async fn cloud_hypervisor_poll_state_classifies_the_wire_state() {
+        let provider = CloudHypervisorShutdown::default();
+        for (state, expected) in [
+            ("Created", ProviderGuestState::GuestStopped),
+            ("Shutdown", ProviderGuestState::GuestStopped),
+            ("Running", ProviderGuestState::Running),
+            ("Paused", ProviderGuestState::Running),
+            (
+                "Resuming",
+                ProviderGuestState::Unknown {
+                    reason: "unknown_state",
+                },
+            ),
+        ] {
+            let (socket, dir) = serve_vm_info(state).await;
+            let target = ProviderShutdownTarget {
+                vm: "work".to_owned(),
+                kind: ProviderKind::CloudHypervisor,
+                api_socket: Some(socket.clone()),
+            };
+            assert_eq!(provider.poll_state(&target).await, expected, "state {state}");
+            remove_serving_dir(&dir).await;
+        }
+
+        // An unreachable socket is an error, and errors answer Unknown.
+        let missing = std::env::temp_dir().join(format!(
+            "d2b-provider-guest-shutdown-{}-missing.sock",
+            std::process::id()
+        ));
+        let target = ProviderShutdownTarget {
+            vm: "work".to_owned(),
+            kind: ProviderKind::CloudHypervisor,
+            api_socket: Some(missing),
+        };
+        assert_eq!(
+            provider.poll_state(&target).await,
+            ProviderGuestState::Unknown {
+                reason: "api_unavailable"
+            },
+            "an unreachable API socket answers Unknown"
         );
     }
 }

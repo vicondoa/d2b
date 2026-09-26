@@ -248,29 +248,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Positive fixture from `tests/static-invariant-world-readable-leak.sh`:
-    /// a public-safe manifest (allowlisted fields, `_manifest.` reserved block)
-    /// must produce no leaks.
-    #[test]
-    fn world_readable_leak_accepts_public_safe_manifest() {
-        let manifest = json!({
-            "_manifest": {"manifestVersion": 4},
-            "corp-vm": {
-                "name": "corp-vm",
-                "env": "work",
-                "index": 10,
-                "sshUser": "alice",
-                "sshPort": 22,
-                "ipv4": "10.20.0.10",
-                "mac": "02:00:00:00:00:0a",
-                "isNetVm": false,
-            }
-        });
-        assert_eq!(world_readable_field_leaks(&manifest), Vec::<String>::new());
-    }
-
     /// Negative fixture from `tests/static-invariant-world-readable-leak.sh`:
-    /// a non-allowlisted field must be reported by dotted path.
+    /// a non-allowlisted field must be reported by dotted path, so the owning
+    /// object segment is part of the reported location.
     #[test]
     fn world_readable_leak_rejects_non_allowlisted_field() {
         let manifest = json!({
@@ -280,27 +260,6 @@ mod tests {
             world_readable_field_leaks(&manifest),
             vec!["corp-vm.privateKeyPath".to_owned()]
         );
-    }
-
-    /// The `_observability.` reserved block is exempt, matching the doc'd
-    /// reserved-block carve-out (the bash gate predated the block).
-    #[test]
-    fn world_readable_leak_exempts_observability_reserved_block() {
-        let manifest = json!({
-            "_observability": {"internal": {"bufferBytes": 4096}}
-        });
-        assert_eq!(world_readable_field_leaks(&manifest), Vec::<String>::new());
-    }
-
-    /// Positive fixture from `tests/static-invariant-opaque-key-ids.sh`:
-    /// opaque key/secret IDs must not be flagged as host paths.
-    #[test]
-    fn path_bearing_key_accepts_opaque_key_ids() {
-        let manifest = json!({
-            "keys": {"ssh": {"key_id": "corp-vm-host-key"}},
-            "secrets": [{"secret_id": "api-token"}]
-        });
-        assert_eq!(path_bearing_key_violations(&manifest), Vec::<String>::new());
     }
 
     /// Negative fixture from `tests/static-invariant-opaque-key-ids.sh`:
@@ -321,76 +280,76 @@ mod tests {
         );
     }
 
-    /// A path-suffixed key whose value is an opaque ID (no `/`) is not a
-    /// violation: only path-looking values leak host locations.
     #[test]
-    fn path_bearing_key_accepts_opaque_value_on_path_suffixed_key() {
-        let manifest = json!({"tokenPath": "tok_abc123"});
-        assert_eq!(path_bearing_key_violations(&manifest), Vec::<String>::new());
+    fn world_readable_field_leaks_reports_only_unallowlisted_scalars_outside_reserved_blocks() {
+        let manifest = serde_json::json!({
+            "name": "dev",
+            "secretField": "s3cr3t",
+            "_manifest": { "hostName": "hidden" },
+            "_observability": { "metricsToken": "opaque" },
+        });
+        let mut leaked = world_readable_field_leaks(&manifest);
+        leaked.sort();
+        assert_eq!(leaked, vec!["secretField".to_owned()]);
     }
 
-    /// Positive fixture from `tests/static-invariant-broad-caps.sh`: a broad
-    /// capability with an ADR carve-out reference is accepted.
     #[test]
-    fn broad_cap_with_adr_carve_out_is_allowed() {
-        let caps = vec!["CAP_NET_ADMIN".to_owned()];
-        assert!(!is_broad_cap_violation(&caps, Some("ADR 0004")));
+    fn world_readable_field_leaks_accepts_allowlisted_and_reserved_scalars() {
+        let manifest = serde_json::json!({
+            "name": "dev",
+            "state": "Ready",
+            "netVm": { "ip": "10.0.0.1", "mac": "aa:bb" },
+            "_manifest": { "generation": 3 },
+            "_observability": { "enabled": true },
+        });
+        assert!(world_readable_field_leaks(&manifest).is_empty());
     }
 
-    /// Negative fixture from `tests/static-invariant-broad-caps.sh`: a broad
-    /// capability without any ADR carve-out is a violation.
     #[test]
-    fn broad_cap_without_adr_carve_out_is_violation() {
-        let caps = vec!["CAP_SYS_ADMIN".to_owned()];
-        assert!(is_broad_cap_violation(&caps, None));
-    }
-
-    /// Non-broad capabilities need no carve-out.
-    #[test]
-    fn non_broad_caps_need_no_carve_out() {
-        let caps = vec!["CAP_DAC_OVERRIDE".to_owned()];
-        assert!(!is_broad_cap_violation(&caps, None));
-    }
-
-    /// A blank/whitespace carve-out does not satisfy the invariant.
-    #[test]
-    fn blank_adr_carve_out_does_not_satisfy_broad_cap() {
-        let caps = vec!["CAP_SYS_ADMIN".to_owned()];
-        assert!(is_broad_cap_violation(&caps, Some("   ")));
-    }
-
-    /// Positive fixture from `tests/static-invariant-writable-paths.sh`: every
-    /// used writable path declared by the bundle is accepted.
-    #[test]
-    fn declared_writable_paths_are_accepted() {
-        let declared = ["/var/lib/nixling/vms/corp-vm"];
-        let used = ["/var/lib/nixling/vms/corp-vm"];
+    fn path_bearing_key_violations_names_only_path_shaped_values() {
+        let manifest = serde_json::json!({
+            "keyPath": "/run/keys/ed25519",
+            "tokenPath": "opaque-id-42",
+            "privateKeyPath": 7,
+            "credentialPath": "/etc/d2b/creds.json",
+            "display": { "tokenPath": "/var/lib/d2b/token" },
+        });
+        let mut violations = path_bearing_key_violations(&manifest);
+        violations.sort_unstable();
         assert_eq!(
-            undeclared_writable_paths(declared, used),
-            Vec::<String>::new()
+            violations,
+            vec![
+                "credentialPath=/etc/d2b/creds.json".to_owned(),
+                "display.tokenPath=/var/lib/d2b/token".to_owned(),
+                "keyPath=/run/keys/ed25519".to_owned(),
+            ]
         );
     }
 
-    /// Negative fixture from `tests/static-invariant-writable-paths.sh`: a
-    /// used path absent from the bundle's declaration is reported.
     #[test]
-    fn undeclared_writable_paths_are_reported() {
-        let declared = ["/var/lib/nixling/vms/corp-vm"];
-        let used = ["/run/secrets"];
-        assert_eq!(
-            undeclared_writable_paths(declared, used),
-            vec!["/run/secrets".to_owned()]
-        );
+    fn broad_cap_requires_a_nonempty_adr_carve_out() {
+        assert!(is_broad_cap_violation(
+            &["CAP_SYS_ADMIN".to_owned()],
+            None,
+        ));
+        assert!(is_broad_cap_violation(
+            &["CAP_NET_ADMIN".to_owned()],
+            Some("   "),
+        ));
+        assert!(!is_broad_cap_violation(
+            &["CAP_SYS_ADMIN".to_owned()],
+            Some("adr/2026-09-24/broad-caps"),
+        ));
+        assert!(!is_broad_cap_violation(&["CAP_CHOWN".to_owned()], None));
     }
 
-    /// The result is the sorted, deduplicated set difference `used - declared`.
     #[test]
-    fn undeclared_writable_paths_are_sorted_and_deduped() {
-        let declared = ["/var/lib/nixling/vms/corp-vm"];
-        let used = ["/b", "/a", "/b"];
+    fn undeclared_writable_paths_reports_missing_used_paths_sorted_and_deduped() {
+        let declared = ["/data", "/runtime"];
+        let used = ["/runtime", "/data", "/data", "/etc/passwd", "/tmp/x"];
         assert_eq!(
-            undeclared_writable_paths(declared, used),
-            vec!["/a".to_owned(), "/b".to_owned()]
+            undeclared_writable_paths(declared.iter().copied(), used.iter().copied()),
+            vec!["/etc/passwd".to_owned(), "/tmp/x".to_owned()]
         );
     }
 }

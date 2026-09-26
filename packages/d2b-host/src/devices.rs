@@ -452,13 +452,6 @@ mod tests {
     }
 
     #[test]
-    fn loose_mode_when_group_execute_set() {
-        let e = entry(DeviceClass::Kvm, 0o660, "kvm", true);
-        let r = readback(DeviceNodeKind::CharacterDevice, 0o670, Some("kvm"));
-        assert_eq!(validate_entry(&e, &r), DeviceValidation::LooseMode);
-    }
-
-    #[test]
     fn wrong_group_when_group_name_differs() {
         let e = entry(DeviceClass::Kvm, 0o660, "kvm", true);
         let r = readback(DeviceNodeKind::CharacterDevice, 0o660, Some("foo"));

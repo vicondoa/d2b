@@ -809,6 +809,7 @@ dependencies = [
 name = "d2b-audit"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-core",
  "d2b-telemetry",
  "libc",
  "rustix 0.38.44",
@@ -1035,6 +1036,7 @@ name = "d2b-process-conformance"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
+ "d2b-core",
  "serde",
  "serde_json",
  "sha2",
@@ -1612,6 +1614,7 @@ dependencies = [
  "d2b-controller-toolkit",
  "d2b-provider-process-minijail",
  "d2b-provider-system-core",
+ "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "serde_json",
@@ -1737,6 +1740,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "async-trait",
  "d2b-contracts-resource",
+ "d2b-provider-toolkit",
  "serde",
  "serde_json",
  "tracing",
@@ -1751,6 +1755,7 @@ dependencies = [
  "d2b-contracts-resource",
  "d2b-core-controller",
  "d2b-provider-observability-otel",
+ "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "serde_json",
@@ -1764,6 +1769,7 @@ dependencies = [
  "async-trait",
  "d2b-contracts-provider",
  "d2b-contracts-resource",
+ "d2b-provider-toolkit",
  "d2b-resource-runtime",
  "d2b-resource-types",
  "serde",
@@ -1935,6 +1941,7 @@ name = "d2b-provider-volume-virtiofs"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts-resource",
+ "d2b-core",
  "serde",
  "serde_json",
  "sha2",

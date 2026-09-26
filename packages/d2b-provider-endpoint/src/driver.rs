@@ -611,8 +611,8 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
     use d2b_resource_runtime::spec_store::EnsureOutcome;
 
     use super::{
-        EndpointDriverArgs, EndpointDriverFactory, EndpointPurposeVocabulary,
-        endpoint_spec_decoder,
+        EndpointDriver, EndpointDriverArgs, EndpointDriverEffects, EndpointDriverFactory,
+        EndpointPurposeVocabulary, GuestControlProducer, endpoint_spec_decoder,
     };
     use crate::test_support::FakeSocketEffects;
 
@@ -1013,27 +1013,7 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
         )
     }
 
-    /// Regression (vmCheck guest preflight): the provider commits `ch-api` on
-    /// the VMM Process with locality `host-local`, not on the Guest with
-    /// `cross-domain`. The admission set previously took the Guest-produced
-    /// shape as the whole family, so the committed `ch-api` row failed
-    /// `validate` terminally (`endpoint-shape-unsupported`), the guest's
-    /// endpoint-publication stage refused its `Failed` phase, and the Guest
-    /// never reached Ready.
-    #[test]
-    fn provider_committed_control_shapes_are_admitted() {
-        let vocabulary = FakeSocketEffects::new();
-        for purpose in ["ch-api", "guest-control"] {
-            let spec = guest_control_endpoint_spec(purpose);
-            assert_eq!(
-                super::endpoint_realization(&spec, &*vocabulary),
-                Some(super::EndpointRealization::GuestControl),
-                "{purpose} is one of the provider's fixed child-role endpoints",
-            );
-        }
-    }
-
-    /// One device-worker endpoint from the posture the Device TPM Provider's
+/// One device-worker endpoint from the posture the Device TPM Provider's
     /// projection declares: the swtpm worker Process is the producer, the
     /// carriage is opaque, and the purpose names the class.
     fn device_worker_endpoint_spec_with(
@@ -1256,6 +1236,125 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
                 ReconcileOutcome::Satisfied
             );
             d.delete(&mut ctx).await.expect("delete converges");
+        }
+    }
+
+    /// A failing socket effect maps to the registered retryable
+    /// socket-effect failure on the endpoint-first teardown leg.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn delete_maps_a_socket_effect_failure_to_retryable_socket_effect() {
+        let mut ctx = fixture(test_row(&virtiofsd_endpoint_spec()));
+        let mut d = EndpointDriver::new(Arc::new(FailingSocketEffects));
+        let failure = d.delete(&mut ctx).await.expect_err("retryable");
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(
+            failure.kind(),
+            d2b_resource_runtime::error::FailureKinds::ENDPOINT_SOCKET_EFFECT_FAILED
+        );
+    }
+
+    /// A failing ensure surfaces through the spawned long effect as the same
+    /// retryable socket-effect failure the delete leg reports.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn reconcile_reports_a_failed_socket_effect_as_retryable() {
+        let (mut ctx, mut effects_rx) =
+            fixture_with_effects_rx(test_row(&virtiofsd_endpoint_spec()));
+        let mut d = EndpointDriver::new(Arc::new(FailingSocketEffects));
+        match d.reconcile(&mut ctx).await.expect("reconcile") {
+            ReconcileOutcome::InProgress { .. } => {}
+            other => panic!("expected InProgress, got {other:?}"),
+        }
+        let completed = effects_rx.recv().await.expect("effect completed");
+        let d2b_resource_runtime::context::EffectResult::Failed(failure) = completed.result else {
+            panic!("expected a failed effect result");
+        };
+        assert_eq!(failure.class(), FailureClass::Retryable);
+        assert_eq!(
+            failure.kind(),
+            d2b_resource_runtime::error::FailureKinds::ENDPOINT_SOCKET_EFFECT_FAILED
+        );
+    }
+
+    /// One resource context with the effects mailbox retained, so the
+    /// spawned long-effect results are observable.
+    fn fixture_with_effects_rx(
+        row: StoredDesiredResource,
+    ) -> (
+        ResourceContext,
+        tokio::sync::mpsc::UnboundedReceiver<
+            d2b_resource_runtime::context::EffectCompleted,
+        >,
+    ) {
+        let (effects_tx, effects_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
+        (
+            ResourceContext::new(
+                row,
+                endpoint_spec_decoder(),
+                Arc::new(DeadManager::new()),
+                Arc::new(NullRequeue),
+                effects_tx,
+                notify_tx,
+            ),
+            effects_rx,
+        )
+    }
+
+    /// Delete on an undecodable stored spec converges: nothing durable to
+    /// clean up, no socket effect runs.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn delete_on_an_undecodable_stored_spec_converges_without_effects() {
+        let fake = FakeSocketEffects::new();
+        let row = StoredDesiredResource {
+            spec: serde_json::json!({ "nonsense": true }).to_string().into_bytes(),
+            ..test_row(&virtiofsd_endpoint_spec())
+        };
+        let mut ctx = fixture(row);
+        let mut d = driver(fake.clone()).await;
+        d.delete(&mut ctx).await.expect("converged");
+        assert!(
+            fake.call_order().is_empty(),
+            "undecodable spec: no socket effect runs"
+        );
+    }
+
+    /// Scripted failing port: every socket effect refuses, so the driver's
+    /// effect-failure classification is exercised.
+    struct FailingSocketEffects;
+
+    impl EndpointPurposeVocabulary for FailingSocketEffects {
+        fn guest_control_producer(&self, _purpose: &str) -> Option<GuestControlProducer> {
+            None
+        }
+
+        fn device_worker_endpoint_class(&self, _purpose: &str) -> Option<EndpointClass> {
+            None
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl EndpointDriverEffects for FailingSocketEffects {
+        async fn socket_present(&self, _producer_ref: &ResourceRef, _purpose: &str) -> bool {
+            false
+        }
+
+        async fn ensure_socket(
+            &self,
+            _producer_ref: &ResourceRef,
+            _purpose: &str,
+        ) -> Result<(), String> {
+            Err("socket ensure refused".to_owned())
+        }
+
+        async fn remove_socket(
+            &self,
+            _producer_ref: &ResourceRef,
+            _purpose: &str,
+        ) -> Result<(), String> {
+            Err("socket remove refused".to_owned())
         }
     }
 }

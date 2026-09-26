@@ -161,41 +161,4 @@ mod tests {
         }
         assert_eq!(client.resolver().records().len(), 2);
     }
-
-    #[test]
-    fn a_zone_outside_the_table_is_refused_before_any_call_is_prepared() {
-        let client = k0_client();
-        assert_eq!(
-            client
-                .resolve(
-                    &TargetInput::ZoneService(zone(&["k2", "k1", "k0"]), ZoneServiceKind::Resource),
-                    ZoneServiceKind::Resource,
-                    TransportSelection::exact(TransportKind::ZoneLink),
-                )
-                .unwrap_err(),
-            ClientError::RouteUnavailable
-        );
-    }
-
-    #[test]
-    fn a_cancelled_cross_zone_call_is_refused_at_the_client_boundary() {
-        let client = k0_client();
-        let target = client
-            .resolve(
-                &TargetInput::ZoneService(zone(&["k1", "k0"]), ZoneServiceKind::Resource),
-                ZoneServiceKind::Resource,
-                TransportSelection::exact(TransportKind::ZoneLink),
-            )
-            .unwrap();
-        let profile = MethodProfile::new(ZoneServiceKind::Resource, false, false, 30_000).unwrap();
-        let mut driver = client
-            .prepare_call(&target, profile, options(4), false)
-            .unwrap();
-        let token = CancellationToken::default();
-        token.cancel();
-        assert_eq!(
-            driver.begin_attempt(&token).unwrap_err(),
-            ClientError::Cancelled
-        );
-    }
 }

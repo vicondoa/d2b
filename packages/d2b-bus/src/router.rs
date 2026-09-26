@@ -5333,6 +5333,201 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn route_registration_capacity_is_enforced_per_session_and_in_total() {
+        // Per-session cap: one route per session, but the registration
+        // declares two -> refused before any route is installed.
+        let mut harness = harness_with_config(
+            HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![SessionVerb::Connect, SessionVerb::Invoke],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: RecordingEndpoint::new(),
+            },
+            BusConfig {
+                max_routes_per_session: 1,
+                max_total_routes: 4,
+                ..BusConfig::default()
+            },
+        );
+        let second_route = RouteKey::new(
+            harness.route.zone().clone(),
+            harness.route.service().clone(),
+            RouteMember::method("ResourceService/List").unwrap(),
+            harness.route.target().clone(),
+            harness.route.schema().clone(),
+            harness.route.generations(),
+        );
+        let greedy = context(
+            "User/bob",
+            "33333333-3333-4333-8333-333333333333",
+            "d2b.resource.v3",
+            harness.route.schema().clone(),
+            harness.route.generations(),
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        harness
+            .bus
+            .replace_policy(
+                policy(
+                    2,
+                    &[
+                        harness.subjects[0].clone(),
+                        harness.subjects[1].clone(),
+                        bound_subject(&greedy),
+                    ],
+                    &[SessionVerb::Connect, SessionVerb::Invoke],
+                    &[ResourceVerb::Get],
+                ),
+                state(2),
+            )
+            .unwrap();
+        assert!(matches!(
+            harness.registrar.register(SessionRegistration::new(
+                greedy,
+                vec![harness.route.clone(), second_route],
+                harness.endpoint.clone(),
+            )),
+            Err(BusError::Registry(RegistryError::RouteCapacity))
+        ));
+
+        // Total cap: per-session limit is roomy (2), but the registry-wide
+        // total (2) is already holding the endpoint's route, so a two-route
+        // registration exceeds it.
+        let mut harness = harness_with_config(
+            HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![SessionVerb::Connect, SessionVerb::Invoke],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: RecordingEndpoint::new(),
+            },
+            BusConfig {
+                max_routes_per_session: 2,
+                max_total_routes: 2,
+                ..BusConfig::default()
+            },
+        );
+        let second_route = RouteKey::new(
+            harness.route.zone().clone(),
+            harness.route.service().clone(),
+            RouteMember::method("ResourceService/List").unwrap(),
+            harness.route.target().clone(),
+            harness.route.schema().clone(),
+            harness.route.generations(),
+        );
+        let greedy = context(
+            "User/bob",
+            "33333333-3333-4333-8333-333333333333",
+            "d2b.resource.v3",
+            harness.route.schema().clone(),
+            harness.route.generations(),
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        harness
+            .bus
+            .replace_policy(
+                policy(
+                    2,
+                    &[
+                        harness.subjects[0].clone(),
+                        harness.subjects[1].clone(),
+                        bound_subject(&greedy),
+                    ],
+                    &[SessionVerb::Connect, SessionVerb::Invoke],
+                    &[ResourceVerb::Get],
+                ),
+                state(2),
+            )
+            .unwrap();
+        assert!(matches!(
+            harness.registrar.register(SessionRegistration::new(
+                greedy,
+                vec![harness.route.clone(), second_route],
+                harness.endpoint.clone(),
+            )),
+            Err(BusError::Registry(RegistryError::RouteCapacity))
+        ));
+    }
+
+    #[test]
+    fn adjacent_zone_and_remote_registrations_require_enrolled_kk_zone_evidence() {
+        let mut harness = resource_harness(
+            RouteMember::method("ResourceService/Get").unwrap(),
+            vec![SessionVerb::Connect, SessionVerb::Invoke],
+            vec![ResourceVerb::Get],
+            "User/alice",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        // AdjacentZone evidence that is not an EnrolledKk Zone(p/ZoneLink
+        // subject is refused: the transport could not be authenticated.
+        let unauthenticated = context(
+            "ZoneLink/parent",
+            "44444444-4444-4444-8444-444444444444",
+            "d2b.resource.v3",
+            harness.route.schema().clone(),
+            harness.route.generations(),
+            Locality::AdjacentZone,
+            EvidenceClass::UnixPeer,
+        );
+        let remote = context(
+            "ZoneLink/peer",
+            "55555555-5555-4555-8555-555555555555",
+            "d2b.resource.v3",
+            harness.route.schema().clone(),
+            harness.route.generations(),
+            Locality::Remote,
+            EvidenceClass::EnrolledKk,
+        );
+        harness
+            .bus
+            .replace_policy(
+                policy(
+                    2,
+                    &[
+                        harness.subjects[0].clone(),
+                        harness.subjects[1].clone(),
+                        bound_subject(&unauthenticated),
+                        bound_subject(&remote),
+                    ],
+                    &[SessionVerb::Connect, SessionVerb::Invoke],
+                    &[ResourceVerb::Get],
+                ),
+                state(2),
+            )
+            .unwrap();
+        // AdjacentZone evidence that is not an EnrolledKk Zone(p/ZoneLink
+        // subject is refused: the transport could not be authenticated.
+        assert!(matches!(
+            harness.registrar.register(SessionRegistration::new(
+                unauthenticated,
+                Vec::new(),
+                harness.endpoint.clone(),
+            )),
+            Err(BusError::Registry(RegistryError::UnauthenticatedTransport))
+        ));
+        // Remote locality is refused even with EnrolledKk evidence: only
+        // the AdjacentZone + Zone(p/ZoneLink subject combination admits.
+        assert!(matches!(
+            harness.registrar.register(SessionRegistration::new(
+                remote,
+                Vec::new(),
+                harness.endpoint.clone(),
+            )),
+            Err(BusError::Registry(RegistryError::UnauthenticatedTransport))
+        ));
+    }
+
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn exact_routes_deliver_only_to_the_named_recipient() {

@@ -92,6 +92,16 @@ d2b guest status <name> --zone <zone> --json
 These outputs contain bounded mapping and status data only; they do not expose
 private locators, credentials, namespace IDs, or raw host paths.
 
+## Broker caller-role audit labels
+
+Broker audit records carry the caller's role as a stable lowercase
+`d2b-<role>` label, never the Rust variant name. The labels are
+`d2b-admin`, `d2b-launcher`, `d2b-root`, `d2b-host-shutdown`, and
+`d2b-not-authorized`, and they must match the contracts crate's
+`BrokerCallerRole::for_display` and the layer1-bootstrap profile's mirror of
+it. Audit filters and export queries match on these labels, so a label change
+is a consumer-visible change.
+
 ## Historical names
 
 Older Realm, environment, VM-first, Gateway-daemon, and per-workload unit

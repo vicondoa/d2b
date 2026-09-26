@@ -20,3 +20,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 tracing = "0.1"
+
+[dev-dependencies]
+# The suite's no-op-waker driver lives in `d2b_core::test_support` (KTD2).
+d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap", features = ["test-support"] }

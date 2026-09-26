@@ -346,6 +346,220 @@ mod tests {
         second.bundle_content_identity = "bundle-b".to_owned();
         assert_ne!(first.digest(), second.digest());
     }
+
+    // -- the broker-backed effect owner ------------------------------------
+
+    use d2b_contracts::types::{BundleOpId, RoleId, VmId};
+    use d2b_contracts_broker::broker_wire::{RunnerRole, UnitRequest};
+    use d2b_core::bundle::{Bundle, BundleGeneration};
+    use d2b_core::bundle_resolver::BundleResolver;
+    use d2b_core::host::HostJson;
+    use d2b_core::manifest_v04::ManifestV04;
+    use d2b_core::processes::ProcessesJson;
+    use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
+    use std::collections::BTreeMap;
+
+    /// The trusted-bundle fixture the driver tests share: host fixture +
+    /// golden v04 manifest, no zone resource bundles. The ledger and
+    /// identity-fence legs never consult the bundle, so this is enough.
+    fn fixture_bundle() -> BundleResolver {
+        let host: HostJson = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/deny-unknown/host-valid.json"
+        ))
+        .expect("host fixture");
+        let manifest = ManifestV04::from_slice(
+            include_str!("../../../tests/golden/manifest_v04/baseline-vms.json").as_bytes(),
+        )
+        .expect("manifest fixture");
+        BundleResolver::from_artifacts_with_zone_resource_bundles(
+            Bundle {
+                bundle_version: 1,
+                schema_version: "v3".to_owned(),
+                privileges_path: "privileges.json".to_owned(),
+                storage_path: None,
+                realm_workloads_launcher_v2_path: None,
+                generation: BundleGeneration {
+                    generator: "test".to_owned(),
+                    source_revision: None,
+                    generated_at: None,
+                },
+                bundle_hash: Some("sha256:bundle".to_owned()),
+                artifact_hashes: None,
+            },
+            host,
+            ProcessesJson {
+                schema_version: "v2".to_owned(),
+                vms: Vec::new(),
+            },
+            manifest,
+            BTreeMap::new(),
+        )
+    }
+
+    fn broker_owner() -> BrokerSystemdEffectOwner {
+        BrokerSystemdEffectOwner::with_socket_and_role(
+            BundleBackedLaunchResolver::new(fixture_bundle()),
+            "/unused",
+            std::time::Duration::from_millis(1),
+            BrokerCallerRole::NotAuthorized,
+        )
+    }
+
+    fn unit_request() -> UnitRequest {
+        UnitRequest {
+            vm_id: VmId::new("vm-a"),
+            role_id: RoleId::new("virtiofsd"),
+            resource_ref: Some(ResourceRef::parse("Process/worker").unwrap()),
+            resource_uid: Some(
+                ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ),
+            role: RunnerRole::Virtiofsd,
+            bundle_runner_intent_ref: BundleOpId::new("runner:vm:vm-a:role:virtiofsd"),
+            bundle_content_identity: "bundle".to_owned(),
+            provider_identity: [2; 32],
+            template_identity: [3; 32],
+            generation: 1,
+            domain: UnitDomain::System,
+            execution_ref: Some(ResourceRef::parse("Host/host-system").unwrap()),
+            user_ref: None,
+            guest_execution: None,
+            sandbox_plan: None,
+            tracing_span_id: None,
+        }
+    }
+
+    fn wire_identity(seed: u32) -> UnitIdentity {
+        UnitIdentity {
+            invocation_id: {
+                let mut invocation_id = [0; 16];
+                invocation_id[..4].copy_from_slice(&(seed + 1).to_le_bytes());
+                invocation_id
+            },
+            cgroup_identity: [1; 32],
+            main_pid: seed + 1,
+            start_time_ticks: u64::from(seed) + 1,
+            provider_identity: [2; 32],
+            template_identity: [3; 32],
+            generation: 1,
+            bundle_content_identity: "bundle".to_owned(),
+            guest_execution: None,
+        }
+    }
+
+    fn launch_intent() -> BrokerLaunchIntent {
+        BrokerLaunchIntent {
+            vm_id: VmId::new("vm-a"),
+            zone: "work".to_owned(),
+            zone_uid: None,
+            owner_ref: None,
+            owner_uid: None,
+            runtime_scope: None,
+            typed_identity: true,
+            provider_ref: ResourceRef::parse("Provider/system-systemd").unwrap(),
+            execution_ref: ResourceRef::parse("Host/host-system").unwrap(),
+            domain: ExecutionDomain::System,
+            user_ref: None,
+            role_id: RoleId::new("virtiofsd"),
+            role: RunnerRole::Virtiofsd,
+            bundle_runner_intent_ref: BundleOpId::new("runner:vm:vm-a:role:virtiofsd"),
+            provider_identity: [2; 32],
+            template_identity: [3; 32],
+            generation: 1,
+            resource_ref: ResourceRef::parse("Process/worker").unwrap(),
+            resource_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            bundle_content_identity: "bundle".to_owned(),
+            sandbox_plan: None,
+            activation_input: None,
+            guest_execution: None,
+            accepts_launch_args: false,
+            multi_instance: false,
+        }
+    }
+
+    /// The owner's caller-role fence: an unauthenticated caller is refused
+    /// before any socket is dialed, and the refusal projects onto the
+    /// transient `LaunchFailed` the driver retries.
+    #[test]
+    fn broker_owner_refuses_envelope_calls_when_the_caller_is_not_authorized() {
+        let owner = broker_owner();
+        let refusal = owner
+            .envelope_call("StartSystemdUnit", "work", serde_json::json!({}))
+            .expect_err("not-authorized caller");
+        assert!(
+            matches!(&refusal, KernelInvokeError::Refused { code, .. } if code == "not-authorized"),
+            "refusal names the caller fence: {refusal:?}"
+        );
+        assert_eq!(
+            response_error(&refusal),
+            ProcessEffectError::LaunchFailed
+        );
+    }
+
+    /// The unit-request ledger: a remembered request is returned exactly
+    /// once, a miss is `IdentityChanged` (the unit's identity is no longer
+    /// the one the daemon launched), and consumption removes the entry.
+    #[test]
+    fn broker_owner_ledger_remembers_and_consumes_unit_requests() {
+        let owner = broker_owner();
+        let identity = identity(7);
+        let unit = unit_request();
+
+        assert_eq!(
+            owner.request_for(&identity),
+            Err(ProcessEffectError::IdentityChanged),
+            "an unknown identity is a ledger miss"
+        );
+        owner
+            .remember(&identity, unit.clone(), "work".to_owned())
+            .expect("remembered");
+        assert_eq!(
+            owner.request_for(&identity).expect("lookup"),
+            (unit.clone(), "work".to_owned())
+        );
+        assert_eq!(
+            owner.take_request(&identity).expect("taken"),
+            (unit, "work".to_owned())
+        );
+        assert_eq!(
+            owner.request_for(&identity),
+            Err(ProcessEffectError::IdentityChanged),
+            "consumed entries are gone"
+        );
+        assert_eq!(
+            owner.take_request(&identity),
+            Err(ProcessEffectError::IdentityChanged),
+            "a second take is a miss"
+        );
+    }
+
+    /// The identity fence: a wire identity whose binding fields disagree
+    /// with the resolved intent - or whose main pid is zero - is a drifted
+    /// runtime tuple and refuses as `IdentityChanged`, never adopted.
+    #[test]
+    fn broker_owner_identity_fence_refuses_drifted_wire_identities() {
+        let owner = broker_owner();
+        let intent = launch_intent();
+        assert!(
+            owner.identity(&wire_identity(7), &intent).is_ok(),
+            "a matching wire identity binds"
+        );
+
+        let mut zero_pid = wire_identity(7);
+        zero_pid.main_pid = 0;
+        assert_eq!(
+            owner.identity(&zero_pid, &intent),
+            Err(ProcessEffectError::IdentityChanged),
+            "a zero main pid is never a launchable identity"
+        );
+
+        let mut drifted = wire_identity(7);
+        drifted.provider_identity = [9; 32];
+        assert_eq!(
+            owner.identity(&drifted, &intent),
+            Err(ProcessEffectError::IdentityChanged),
+            "a provider digest that disagrees with the intent refuses"
+        );
+    }
 }
 
 impl<O: SystemdEffectOwner> std::fmt::Debug for SystemdProcessBackend<O> {

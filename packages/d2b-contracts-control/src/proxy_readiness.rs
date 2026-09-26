@@ -117,4 +117,30 @@ mod tests {
             event
         );
     }
+
+    #[test]
+    fn failed_readiness_event_serializes_the_closed_failure_reason() {
+        let event = ProxyReadinessEvent::failed(
+            WorkloadTarget::parse("browser.host.d2b").unwrap(),
+            WorkloadProviderKind::UnsafeLocal,
+            ProxyReadinessStage::Upstream,
+            ProxyReadinessFailure::UpstreamUnavailable,
+        );
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["state"], "failed");
+        assert_eq!(value["stage"], "upstream");
+        assert_eq!(value["failure"], "upstream-unavailable");
+        assert_eq!(
+            serde_json::from_value::<ProxyReadinessEvent>(value).unwrap(),
+            event
+        );
+        // A ready event never carries the failure key on the wire.
+        let ready = ProxyReadinessEvent::ready(
+            WorkloadTarget::parse("browser.host.d2b").unwrap(),
+            WorkloadProviderKind::UnsafeLocal,
+            ProxyReadinessStage::Listener,
+        );
+        let ready_value = serde_json::to_value(&ready).unwrap();
+        assert!(!ready_value.as_object().unwrap().contains_key("failure"));
+    }
 }

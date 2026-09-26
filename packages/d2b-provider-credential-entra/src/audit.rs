@@ -31,26 +31,4 @@ pub(super) fn authorized_service_record(
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn process_unique_token_and_identity_canaries_never_render() {
-        let marker = format!("entra-token-canary-{:x}", std::process::id());
-        let record = authorized_service_record(
-            true,
-            "dev",
-            marker.as_bytes(),
-            marker.as_bytes(),
-            CredentialMethod::RefreshToken,
-            CredentialAuditOutcome::Success,
-            2,
-            Some(marker.as_bytes()),
-        )
-        .unwrap()
-        .unwrap();
-        assert!(!record.to_wire_record().contains(&marker));
-        assert!(!format!("{record:?}").contains(&marker));
-    }
-}

@@ -119,4 +119,12 @@ mod tests {
             Err(QemuMediaHotplugScaffoldError::InvalidSlot)
         ));
     }
+
+    #[test]
+    fn qmp_scaffold_rejects_an_empty_slot() {
+        assert!(matches!(
+            qemu_media_hotplug_scaffold("installer-usb", "", QemuMediaHotplugAction::Attach),
+            Err(QemuMediaHotplugScaffoldError::EmptySlot)
+        ));
+    }
 }

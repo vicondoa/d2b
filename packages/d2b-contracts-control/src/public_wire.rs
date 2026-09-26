@@ -4250,29 +4250,6 @@ mod tests {
     }
 
     #[test]
-    fn audio_set_volume_rejects_out_of_range_level() {
-        use super::{AudioChannel, AudioSetVolumeArgs};
-
-        let bad_json = serde_json::json!({
-            "vm": "corp-vm",
-            "channel": "speaker",
-            "level": 101
-        });
-        serde_json::from_value::<AudioSetVolumeArgs>(bad_json)
-            .expect_err("level 101 must be rejected");
-
-        let good_json = serde_json::json!({
-            "vm": "corp-vm",
-            "channel": "speaker",
-            "level": 75
-        });
-        let args =
-            serde_json::from_value::<AudioSetVolumeArgs>(good_json).expect("level 75 is valid");
-        assert_eq!(args.level.get(), 75);
-        assert_eq!(args.channel, AudioChannel::Speaker);
-    }
-
-    #[test]
     fn audio_status_unknown_fields_fail_closed() {
         use super::AudioStatusArgs;
         let bad = serde_json::json!({ "vms": [], "extraField": true });

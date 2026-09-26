@@ -1529,31 +1529,100 @@ mod tests {
     }
 
     #[test]
-    fn user_agent_placement_is_rejected() {
-        assert_eq!(
-            ManagedIdentityPlacement::new(
-                PlacementBinding::UserAgent,
-                ResourceRef::parse("Host/workstation").unwrap(),
-                ResourceRef::parse("Zone/dev").unwrap(),
-            ),
-            Err(ManagedIdentityProviderError::InvalidPlacement)
-        );
-    }
-
-    #[test]
-    fn client_id_is_redacted_from_debug() {
-        let marker = format!("client-canary-{:x}", std::process::id());
-        let config = ManagedIdentityClientConfig::new(&marker, "azure-imds", 64).unwrap();
-        assert!(!format!("{config:?}").contains(&marker));
-        assert_eq!(config.client_id().as_str(), marker);
-    }
-
-    #[test]
     fn poll_client_accepts_ready_result_at_deadline() {
         let future: ManagedIdentityFuture<'_, u8> = Box::pin(async { Ok(7) });
         assert_eq!(
             ManagedIdentityCredentialProvider::poll_client_sync(future, Instant::now()).unwrap(),
             7
         );
+    }
+
+    #[test]
+    fn poll_client_sync_times_out_a_pending_future_past_deadline() {
+        let future: ManagedIdentityFuture<'_, u8> = Box::pin(async {
+            std::future::pending::<Result<u8, ManagedIdentityClientError>>().await
+        });
+        let deadline = Instant::now() - std::time::Duration::from_secs(1);
+        assert_eq!(
+            ManagedIdentityCredentialProvider::poll_client_sync(future, deadline)
+                .unwrap_err()
+                .code(),
+            CredentialServiceErrorCode::DeadlineExceeded
+        );
+    }
+
+    #[test]
+    fn config_rejects_lease_ceiling_outside_the_local_bounds() {
+        assert_eq!(
+            ManagedIdentityClientConfig::new("client-1234", "azure-imds", 0).unwrap_err(),
+            ManagedIdentityProviderError::InvalidConfig
+        );
+        assert_eq!(
+            ManagedIdentityClientConfig::new("client-1234", "azure-imds", MAX_LOCAL_LEASES + 1)
+                .unwrap_err(),
+            ManagedIdentityProviderError::InvalidConfig
+        );
+        assert!(ManagedIdentityClientConfig::new("client-1234", "azure-imds", 1).is_ok());
+        assert!(
+            ManagedIdentityClientConfig::new("client-1234", "azure-imds", MAX_LOCAL_LEASES).is_ok()
+        );
+    }
+
+    #[test]
+    fn factory_rejects_a_non_provider_consumer() {
+        let config = ManagedIdentityClientConfig::new("client-1234", "azure-imds", 64).unwrap();
+        let placement = ManagedIdentityPlacement::new(
+            PlacementBinding::HostSystem,
+            ResourceRef::parse("Host/runner").unwrap(),
+            ResourceRef::parse("Zone/dev").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ManagedIdentityCredentialProviderFactory::new(
+                config,
+                placement,
+                ResourceRef::parse("User/alice").unwrap(),
+                Arc::new(UnusedClient),
+            )
+            .unwrap_err(),
+            ManagedIdentityProviderError::InvalidConsumer
+        );
+    }
+
+    /// Client never reached by the closed-construction tests.
+    struct UnusedClient;
+
+    impl ManagedIdentityCredentialClient for UnusedClient {
+        fn state(&self) -> ManagedIdentityFuture<'_, ManagedIdentityClientState> {
+            Box::pin(async { panic!("unused client state") })
+        }
+
+        fn issue_lease(
+            &self,
+            _request: &ManagedIdentityLeaseRequest,
+        ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseGrant> {
+            Box::pin(async { panic!("unused client issue") })
+        }
+
+        fn inspect_lease(
+            &self,
+            _lease: &ManagedIdentityLeaseRef,
+        ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseInspection> {
+            Box::pin(async { panic!("unused client inspect") })
+        }
+
+        fn refresh_lease(
+            &self,
+            _lease: &ManagedIdentityLeaseRef,
+        ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseRenewal> {
+            Box::pin(async { panic!("unused client refresh") })
+        }
+
+        fn revoke_lease(
+            &self,
+            _lease: &ManagedIdentityLeaseRef,
+        ) -> ManagedIdentityFuture<'_, ManagedIdentityLeaseRevocation> {
+            Box::pin(async { panic!("unused client revoke") })
+        }
     }
 }

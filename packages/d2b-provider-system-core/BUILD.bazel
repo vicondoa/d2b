@@ -21,6 +21,7 @@ d2b_rust_library(
     compile_data = ["Cargo.toml"],
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 
@@ -32,6 +33,7 @@ d2b_rust_library(
     crate_name = "d2b_provider_system_core",
     deps = [
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
+        "//packages/d2b-provider-toolkit:d2b_provider_toolkit",
     ] + all_crate_deps(normal = True, cargo_only = True),
 )
 

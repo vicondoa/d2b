@@ -343,4 +343,34 @@ mod tests {
             Remediation::RepairConfiguration
         );
     }
+
+    #[test]
+    fn every_session_error_code_is_total_across_class_remediation_and_reason() {
+        for code in SessionErrorCode::ALL {
+            let error = SessionError::new(*code);
+            assert_eq!(error.code(), *code, "{}", code.as_str());
+            let class = error.class();
+            let remediation = error.remediation();
+            assert!(!class.as_str().is_empty(), "{}", code.as_str());
+            assert!(!remediation.as_str().is_empty(), "{}", code.as_str());
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains(code.as_str()),
+                "{} not in {rendered}",
+                code.as_str()
+            );
+            assert!(
+                rendered.contains(class.as_str()),
+                "{} not in {rendered}",
+                class.as_str()
+            );
+            assert!(
+                rendered.contains(remediation.as_str()),
+                "{} not in {rendered}",
+                remediation.as_str()
+            );
+            // The metrics classifier must also be total over the closed set.
+            let _ = crate::metrics::reason_for_error(*code);
+        }
+    }
 }

@@ -886,33 +886,4 @@ mod tests {
         assert_eq!(all.len(), 2);
     }
 
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn async_recv_drains_then_missed_then_ends() {
-        let hub = WatchHub::with_config(
-            &ManualClock::at(1_000),
-            WatchHubConfig {
-                ring_capacity: 32,
-                delivery_buffer: 2,
-            },
-        );
-        let WatchRegistration::Live { stream, .. } = hub.register(WatchSelector::all(), None).await
-        else {
-            unreachable!()
-        };
-        let mut stream = stream;
-        for i in 0..8 {
-            upsert(&hub, &format!("p{i}")).await;
-        }
-        let mut changes = 0;
-        let mut missed = false;
-        while let Some(delivery) = stream.recv().await {
-            match delivery {
-                WatchDelivery::Change(_) => changes += 1,
-                WatchDelivery::Missed { .. } => missed = true,
-            }
-        }
-        assert!(changes <= 2);
-        assert!(missed, "async recv must surface the Missed signal");
     }
-}

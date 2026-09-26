@@ -504,7 +504,7 @@ mod tests {
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn temp_root(name: &str) -> PathBuf {
-        let base = crate::test_scratch_root().join("usbip-host-tests");
+        let base = d2b_core::test_support::scratch_root("usbip-host").join("usbip-host-tests");
         let root = base.join(format!("{}-{}", name, std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("create temp root");

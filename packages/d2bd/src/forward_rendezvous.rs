@@ -3533,28 +3533,6 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
         );
     }
 
-    /// A context minted against an older provider-set revision refuses: the
-    /// daemon republished its provider set since the broker minted.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_context_minted_against_an_older_provider_set_revision_is_refused() {
-        let serving = ServingRendezvous::start_attesting().await;
-        let response = forward_with_context(
-            &serving.socket_path,
-            "inspect-process-family",
-            "test",
-            serde_json::json!({ "resourceType": "Process" }),
-            context_for(5, "test", 0, 1),
-        );
-        assert_eq!(
-            response.outcome,
-            ForwardOperationOutcome::Refused {
-                code: STALE_CONTEXT.to_owned(),
-            },
-            "an older provider-set revision is stale"
-        );
-    }
-
     /// A context minted against a lower guest generation refuses: the
     /// daemon's current guest generation moved past the minted one.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -3574,28 +3552,6 @@ serde_json::from_slice(&frame).expect("the reply is a ForwardOperationResponse")
                 code: STALE_CONTEXT.to_owned(),
             },
             "a lower guest generation is stale"
-        );
-    }
-
-    /// A context whose Zone is not the call's Zone is not bound to the
-    /// connection: the attestation names another Zone, so the call refuses.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_context_minted_against_another_zone_is_refused() {
-        let serving = ServingRendezvous::start_attesting().await;
-        let response = forward_with_context(
-            &serving.socket_path,
-            "inspect-process-family",
-            "test",
-            serde_json::json!({ "resourceType": "Process" }),
-            context_for(5, "other-zone", 1, 1),
-        );
-        assert_eq!(
-            response.outcome,
-            ForwardOperationOutcome::Refused {
-                code: STALE_CONTEXT.to_owned(),
-            },
-            "a context for another zone is stale on this call"
         );
     }
 

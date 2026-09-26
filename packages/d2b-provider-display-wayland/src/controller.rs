@@ -1644,4 +1644,44 @@ mod tests {
         assert!(decision.stop_frontend);
         assert!(!decision.remove_finalizer);
     }
+
+    #[test]
+    fn finalizer_force_terminates_on_an_active_stop_request() {
+        let decision = DisplayController::finalize(FinalizationInput::new(
+            StopRequest::Active,
+            WorkerState::Starting,
+            WorkerState::Starting,
+            VolumeState::Present,
+            CleanupState::Pending,
+            CleanupState::Pending,
+            CleanupState::Pending,
+            GraceState::Active,
+        ));
+        assert_eq!(decision.phase, Phase::Terminating);
+        assert!(decision.stop_proxy);
+        assert!(decision.stop_frontend);
+        assert!(!decision.delete_runtime_volume);
+        assert!(!decision.remove_finalizer);
+        assert!(!decision.ambiguous);
+    }
+
+    #[test]
+    fn finalizer_requests_the_runtime_volume_deletion_after_terminal_workers() {
+        let decision = DisplayController::finalize(FinalizationInput::new(
+            StopRequest::Requested,
+            WorkerState::Terminal { deleted: true },
+            WorkerState::Terminal { deleted: true },
+            VolumeState::Present,
+            CleanupState::Pending,
+            CleanupState::Pending,
+            CleanupState::Pending,
+            GraceState::Active,
+        ));
+        assert_eq!(decision.phase, Phase::Terminating);
+        assert!(decision.delete_runtime_volume);
+        assert!(!decision.stop_proxy);
+        assert!(!decision.stop_frontend);
+        assert!(!decision.remove_finalizer);
+        assert!(!decision.ambiguous);
+    }
 }

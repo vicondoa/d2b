@@ -6,7 +6,8 @@
 
 use std::collections::BTreeSet;
 
-use d2b_provider_volume_local::testing::{PortCall, ScriptedPort, block_on, fixtures};
+use d2b_core::test_support::block_on;
+use d2b_provider_volume_local::testing::{PortCall, ScriptedPort, fixtures};
 use d2b_provider_volume_local::{
     ConditionSeverity, DriftClass, EntryDigest, LayoutPhase, MarkerState, ObservedEntry,
     OwnerProof, VolumeLocalController, VolumeLocalError, VolumeLocalProfile,

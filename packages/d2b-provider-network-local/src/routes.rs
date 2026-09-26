@@ -488,6 +488,24 @@ mod tests {
     }
 
     #[test]
+    fn routes_not_applied_fails_closed() {
+        let error = check_network_services(NetworkServiceStatus {
+            dnsmasq_phase: NetworkComponentPhase::Ready,
+            dnsmasq_bound: true,
+            routes_applied: false,
+        })
+        .unwrap_err();
+        assert_eq!(error, RoutePreflightError::RoutesNotApplied);
+
+        assert!(check_network_services(NetworkServiceStatus {
+            dnsmasq_phase: NetworkComponentPhase::Ready,
+            dnsmasq_bound: true,
+            routes_applied: true,
+        })
+        .is_ok());
+    }
+
+    #[test]
     fn ipv6_address_on_owned_link_fails_closed() {
         assert_eq!(
             check_owned_link_addresses(OwnedLinkAddressState::Ipv6Present),

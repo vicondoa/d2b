@@ -12581,7 +12581,7 @@ mod tests {
     }
 
     fn test_audit_dir(test_name: &str) -> PathBuf {
-        let root = crate::test_scratch_root().join("runtime-audit-tests");
+        let root = d2b_core::test_support::scratch_root("runtime-audit").join("runtime-audit-tests");
         crate::sys::path_safe::ensure_dir(&root, 0o750, None, None)
             .expect("create audit test root");
         let unique = SystemTime::now()
@@ -13131,7 +13131,7 @@ mod tests {
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn prepare_test_usb_sysfs_device(vendor: &str, product: &str, devpath: &str) -> PathBuf {
-        let root = crate::test_scratch_root().join("runtime-usb-sysfs-root");
+        let root = d2b_core::test_support::scratch_root("runtime-usb-sysfs").join("runtime-usb-sysfs-root");
         TEST_USB_SYSFS_ROOT
             .set(root.clone())
             .unwrap_or_else(|_| assert_eq!(TEST_USB_SYSFS_ROOT.get(), Some(&root)));
@@ -16886,10 +16886,6 @@ mod tests {
 
     #[cfg(not(feature = "layer1-bootstrap"))]
     #[test]
-    #[cfg_attr(
-        not(test_root),
-        ignore = "v1.1.1fu11: requires write access to /var/lib/d2b/runtime/ which only root can do; run with --cfg test_root in a privileged test environment"
-    )]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn dispatch_request_writes_typed_op_audit_records_for_all_live_arms() {
         use d2b_contracts::types::{BundleOpId, ScopeId, TracingSpanId, VmId};
@@ -16994,7 +16990,10 @@ mod tests {
             OperationFields::Hello {
                 client_version: "1.2.3".to_owned(),
             },
-            Some("usb-start-0000000000000001"),
+            // The Hello wire frame carries no tracing span; the arm
+            // records None (the span is only set from the request's
+            // tracing_span_id field).
+            None,
         );
         match hello.response {
             BrokerResponse::Hello(response) => {
@@ -19057,7 +19056,7 @@ mod tests {
         let bundle = build_test_bundle(&root);
         let intent = test_usbip_intent_with_lock(&root, &bundle);
         let _ = take_test_usbip_backend_acl_events();
-        let sysfs_root = crate::test_scratch_root().join("runtime-usb-sysfs-root");
+        let sysfs_root = d2b_core::test_support::scratch_root("runtime-usb-sysfs").join("runtime-usb-sysfs-root");
         TEST_USB_SYSFS_ROOT
             .set(sysfs_root.clone())
             .unwrap_or_else(|_| assert_eq!(TEST_USB_SYSFS_ROOT.get(), Some(&sysfs_root)));

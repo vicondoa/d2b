@@ -432,3 +432,114 @@ pub struct AuthDeniedSubcommandV2 {
     pub reason: String,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::public_wire::{VmAutostartMode, VmAutostartPosture};
+    use serde_json::json;
+
+    fn full_list_item() -> ListItemOutputV2 {
+        ListItemOutputV2 {
+            name: "corp-vm".to_owned(),
+            env: Some("work".to_owned()),
+            graphics: true,
+            tpm: false,
+            usbip: true,
+            static_ip: Some("10.0.0.5".to_owned()),
+            status: "running".to_owned(),
+            is_net_vm: true,
+            guest_closure_out_path: Some("/nix/store/closure".to_owned()),
+            runtime_kind: Some("cloud-hypervisor".to_owned()),
+            autostart: Some(VmAutostartPosture {
+                mode: VmAutostartMode::ManualOnly,
+                reason: "policy".to_owned(),
+            }),
+            runtime_capabilities: vec!["gpu".to_owned()],
+            service_capabilities: vec!["audio".to_owned()],
+            unsupported_capabilities: Vec::new(),
+            qemu_media: None,
+            runner_parity_ok: Some(true),
+            canonical_target: Some("corp.work.d2b".to_owned()),
+        }
+    }
+
+    #[test]
+    fn list_item_output_uses_camel_case_and_omits_defaulted_fields() {
+        let item = full_list_item();
+        let value = serde_json::to_value(&item).unwrap();
+        let object = value.as_object().unwrap();
+        for key in [
+            "name",
+            "env",
+            "graphics",
+            "tpm",
+            "usbip",
+            "staticIp",
+            "status",
+            "isNetVm",
+            "guestClosureOutPath",
+            "runtimeKind",
+            "autostart",
+            "runtimeCapabilities",
+            "serviceCapabilities",
+            "runnerParityOk",
+            "canonicalTarget",
+        ] {
+            assert!(object.contains_key(key), "missing camelCase key {key}");
+        }
+        // Empty vectors and absent optionals are omitted from the wire.
+        assert!(!object.contains_key("unsupportedCapabilities"));
+        assert!(!object.contains_key("qemuMedia"));
+        assert_eq!(
+            serde_json::from_value::<ListItemOutputV2>(value).unwrap(),
+            item
+        );
+        // deny_unknown_fields: a drifted key fails closed on decode.
+        let mut drifted = serde_json::to_value(&item).unwrap();
+        drifted
+            .as_object_mut()
+            .unwrap()
+            .insert("guestClosureOutPathX".to_owned(), json!("drift"));
+        assert!(serde_json::from_value::<ListItemOutputV2>(drifted).is_err());
+        // The V2 list wrapper is transparent: a bare array on the wire.
+        let list = ListOutputV2(vec![item]);
+        assert!(serde_json::to_value(&list).unwrap().is_array());
+    }
+
+    #[test]
+    fn audit_output_pins_its_explicit_legacy_renames() {
+        // The audit output pins its explicit legacy renames verbatim.
+        let audit = AuditOutputV2 {
+            kvm_dev_mode: "0666".to_owned(),
+            wayland_user_in_kvm: false,
+            store_delivery: BTreeMap::new(),
+            virtiofsd: BTreeMap::new(),
+            ssh: BTreeMap::from([(
+                "host".to_owned(),
+                AuditSshOutputV2 {
+                    password_authentication: Some(true),
+                },
+            )]),
+            bridge_isolation: BTreeMap::new(),
+            auto_upgrade_commits_lock: true,
+            ch_version: "1.2.3".to_owned(),
+            crosvm_rev: "rev".to_owned(),
+            seccomp_rev: "rev".to_owned(),
+            ch_crosvm_pair_ok: true,
+            fail2ban_active: false,
+            sidecars_per_vm: BTreeMap::new(),
+            usbipd_per_env_isolation: BTreeMap::new(),
+        };
+        let value = serde_json::to_value(&audit).unwrap();
+        assert_eq!(value["autoUpgrade_commits_lock"], json!(true));
+        assert_eq!(value["ssh"]["host"]["PasswordAuthentication"], json!(true));
+        assert_eq!(serde_json::from_value::<AuditOutputV2>(value).unwrap(), audit);
+        let mut drifted = serde_json::to_value(&audit).unwrap();
+        drifted
+            .as_object_mut()
+            .unwrap()
+            .insert("autoUpgrade_commits_lockX".to_owned(), json!(true));
+        assert!(serde_json::from_value::<AuditOutputV2>(drifted).is_err());
+    }
+}
+

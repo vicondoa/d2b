@@ -650,7 +650,7 @@ mod tests {
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn project_scratch(name: &str) -> ScratchDir {
-        let root = crate::test_scratch_root().join("storage-contract-test-scratch");
+        let root = d2b_core::test_support::scratch_root("storage-contract").join("storage-contract-test-scratch");
         std::fs::create_dir_all(&root).unwrap();
         let dir = root.join(format!(
             "{}-{}",

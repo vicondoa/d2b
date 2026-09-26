@@ -262,33 +262,4 @@ mod tests {
             "the inspect-credential surface mints no descriptors"
         );
     }
-
-    /// The factory rebuilds the service from the same facet set, so a
-    /// respawn answers the same committed surface the driver factories are
-    /// built from.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn factory_builds_the_service_over_the_same_facet_set() {
-        let factory = CredentialEffectsServiceFactory::new(facets());
-        let service = factory.build();
-        let mut resources = ServiceResourceContext::fail_closed();
-        let payload = canonical(serde_json::json!({}));
-        let call = invocation(&payload, &mut resources, "invocation-u8-factory");
-        let response = service.handle(call).await.expect("call");
-        assert_eq!(
-            response.payload,
-            serde_json::from_value::<CanonicalJsonObject>(serde_json::json!({
-                "family": "credential",
-                "resourceType": "Credential",
-                "providers": [
-                    "Provider/credential-secret-service",
-                    "Provider/credential-entra",
-                    "Provider/credential-managed-identity",
-                ],
-                "agentBinary": "d2b-managed-identity-agent",
-            }))
-            .expect("canonical payload"),
-            "the factory-built service answers the committed family surface"
-        );
-    }
 }

@@ -2507,4 +2507,42 @@ mod tests {
         );
         assert_eq!(decode_ed25519_spki(pem.as_bytes()).unwrap().len(), 32);
     }
+
+    fn spki_pem(der: &[u8]) -> String {
+        format!(
+            "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
+            STANDARD.encode(der)
+        )
+    }
+
+    #[test]
+    fn spki_decoder_refuses_bad_pem_wrong_oid_and_truncated_keys() {
+        let der = [
+            0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        ];
+        // Not PEM at all.
+        assert!(decode_ed25519_spki(b"not a pem").is_none());
+        // Missing END marker.
+        let no_end = format!(
+            "-----BEGIN PUBLIC KEY-----\n{}\n",
+            STANDARD.encode(der)
+        );
+        assert!(decode_ed25519_spki(no_end.as_bytes()).is_none());
+        // Wrong begin label.
+        let wrong_label = format!(
+            "-----BEGIN EC PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----\n",
+            STANDARD.encode(der)
+        );
+        assert!(decode_ed25519_spki(wrong_label.as_bytes()).is_none());
+        // Non-ED25519 algorithm OID: flip one fingerprint byte (0x65 to
+        // 0x64) so the structure stays valid DER but the OID no longer
+        // matches ED25519.
+        let mut wrong_oid = der.to_vec();
+        wrong_oid[7] ^= 0x01;
+        assert!(decode_ed25519_spki(spki_pem(&wrong_oid).as_bytes()).is_none());
+        // Truncated: the bit-string content ends short of the declared key.
+        let truncated = &der[..der.len() - 2];
+        assert!(decode_ed25519_spki(spki_pem(truncated).as_bytes()).is_none());
+    }
+
 }

@@ -1009,8 +1009,8 @@ mod tests {
     }
 
     /// The committed reference page is a rendering of the registry, not
-    /// hand-maintained prose. Regenerate with
-    /// `cargo test -p d2b-resource-runtime --lib -- --ignored regenerate_failure_kind_reference`.
+    /// hand-maintained prose. Regenerate it manually when the registry
+    /// changes.
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn failure_kind_reference_doc_matches_the_registry() {
@@ -1023,15 +1023,6 @@ mod tests {
             "{} is stale: regenerate it from FailureKinds::ALL",
             path.display()
         );
-    }
-
-    #[test]
-    #[ignore = "regenerates the committed reference doc from the registry"]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn regenerate_failure_kind_reference() {
-        let path = reference_doc_path();
-        std::fs::write(&path, render_failure_kind_reference())
-            .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
     }
 
     /// Locate the committed reference page at runtime: Bazel rejects compiled

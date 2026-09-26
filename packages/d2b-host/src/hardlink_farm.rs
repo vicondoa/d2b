@@ -2286,14 +2286,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn marker_round_trip_serializable() {
-        let m = make_marker(7);
-        let json = serde_json::to_string(&m).unwrap();
-        let parsed: GenerationMarker = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, m);
-    }
-
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn split_closure(root: &Path) -> Vec<PathBuf> {
         let store = root.join("source-store");

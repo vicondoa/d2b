@@ -1505,20 +1505,15 @@ mod tests {
     use std::sync::Arc;
 
     use d2b_contracts_resource::v3::{ControllerGeneration, ResourceRef, ZoneId};
-    use d2b_resource_runtime::context::{
-        ChildEnsure, ManagerEndpoint, RequeueId, RequeueScheduler, ResourceContext, WatchId,
-        WatchRegistration,
-    };
+    use d2b_provider_toolkit::testing::fakes::{RecordingManagerEndpoint, RecordingRequeue};
+    use d2b_resource_runtime::context::ResourceContext;
     use d2b_resource_runtime::driver::{
         ReconcileOutcome, RecoveryOutcome, ResourceDriver, ResourceDriverFactory,
     };
-    use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass, ResourceError};
+    use d2b_resource_runtime::error::{DriverFailure, DriverOp, FailureClass};
     use d2b_resource_runtime::identity::{ResourceKey, ResourceProvenance, StoredDesiredResource};
     use d2b_resource_runtime::manager::ResourceView;
     use d2b_resource_runtime::resource::ResourceStatus;
-    use d2b_resource_runtime::spec_store::EnsureOutcome;
-
-    use d2b_provider_toolkit::testing::SharedLog;
 
     use super::{
         GUEST_REGISTRATIONS, GUEST_TYPE_NAME, GuestDriver, GuestDriverArgs, GuestDriverFactory,
@@ -1536,272 +1531,6 @@ mod tests {
         0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x42, 0x22, 0x82, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
         0x22,
     ];
-
-    // -- fakes ---------------------------------------------------------------
-
-    /// Recording manager over a scripted row/view set. `ensure_child` commits
-    /// (or keeps) the child row and its live view; the child's published
-    /// phase is the `children_ready` switch.
-    struct RecordingManager {
-        calls: SharedLog,
-        rows: std::sync::Mutex<Vec<StoredDesiredResource>>,
-        views: std::sync::Mutex<Vec<(ResourceKey, ResourceView)>>,
-        children_ready: std::sync::atomic::AtomicBool,
-        fail_reads: std::sync::atomic::AtomicBool,
-    }
-
-    impl RecordingManager {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                calls: SharedLog::new(),
-                rows: std::sync::Mutex::new(Vec::new()),
-                views: std::sync::Mutex::new(Vec::new()),
-                children_ready: std::sync::atomic::AtomicBool::new(false),
-                fail_reads: std::sync::atomic::AtomicBool::new(false),
-            })
-        }
-
-        /// The shared order log: effect calls that were constructed over it
-        /// append to the same sequence.
-        fn log_handle(&self) -> SharedLog {
-            self.calls.clone()
-        }
-
-        fn set_children_ready(&self, ready: bool) {
-            self.children_ready.store(ready, std::sync::atomic::Ordering::SeqCst);
-        }
-
-        /// Make every read answer `ManagerUnavailable` (the unanswerable plane).
-        fn set_fail_reads(&self, fail: bool) {
-            self.fail_reads.store(fail, std::sync::atomic::Ordering::SeqCst);
-        }
-
-        fn add(&self, row: StoredDesiredResource, status: ResourceStatus) {
-            let view = ResourceView {
-                key: row.key.clone(),
-                uid: row.uid,
-                generation: row.generation,
-                deleting: row.deleting,
-                provenance: row.provenance,
-                spec: row.spec.clone(),
-                metadata: row.metadata.clone(),
-                owner_key: None,
-                status: Some(status),
-                status_generation: Some(row.generation),
-                status_projection: None,
-            };
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            self.rows.lock().unwrap().push(row);
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            self.views.lock().unwrap().push((view.key.clone(), view));
-        }
-
-        fn drop_row(&self, key: &ResourceKey) {
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            self.rows.lock().unwrap().retain(|row| row.key != *key);
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            self.views.lock().unwrap().retain(|(view_key, _)| view_key != key);
-        }
-
-        fn call_order(&self) -> Vec<String> {
-            self.calls.entries()
-        }
-
-        fn ensure_order(&self) -> Vec<String> {
-            self.calls
-                .entries()
-                .into_iter()
-                .filter(|call| call.starts_with("ensure:"))
-                .collect()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl ManagerEndpoint for RecordingManager {
-        async fn ensure_child(
-            &self,
-            parent: &ResourceKey,
-            child: ChildEnsure,
-        ) -> Result<EnsureOutcome, ResourceError> {
-            self.calls
-                .record(format!("ensure:{}/{}", child.type_name.as_str(), child.name));
-            let key = ResourceKey::new(
-                parent.zone.clone(),
-                child.type_name.as_str(),
-                child.name.as_str(),
-            );
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            let mut rows = self.rows.lock().unwrap(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            if let Some(existing) = rows.iter().find(|row| row.key == key).cloned() {
-                if existing.spec == child.spec {
-                    return Ok(EnsureOutcome::Unchanged(existing));
-                }
-                rows.retain(|row| row.key != key);
-                let mut updated = existing;
-                updated.spec = child.spec.clone();
-                updated.metadata = child.metadata.clone();
-                updated.generation += 1;
-                rows.push(updated.clone());
-                drop(rows);
-                #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-                self.views.lock().unwrap().retain(|(view_key, _)| view_key != &key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-                self.views.lock().unwrap().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                    key,
-                    ResourceView {
-                        key: updated.key.clone(),
-                        uid: updated.uid,
-                        generation: updated.generation,
-                        deleting: false,
-                        provenance: updated.provenance,
-                        spec: updated.spec.clone(),
-                        metadata: updated.metadata.clone(),
-                        owner_key: None,
-                        status: Some(if self.children_ready.load(std::sync::atomic::Ordering::SeqCst) {
-                            ResourceStatus::Ready
-                        } else {
-                            ResourceStatus::Pending
-                        }),
-                        status_generation: Some(updated.generation),
-                        status_projection: None,
-                    },
-                ));
-                return Ok(EnsureOutcome::Updated(updated));
-            }
-            let row = StoredDesiredResource {
-                key: key.clone(),
-                uid: CHILD_UID_BYTES,
-                generation: 1,
-                owner_uid: Some(GUEST_UID_BYTES),
-                provenance: ResourceProvenance::Resource,
-                deleting: false,
-                spec: child.spec,
-                metadata: child.metadata,
-                created_at: 0,
-            };
-            rows.push(row.clone());
-            drop(rows);
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            self.views.lock().unwrap().push(( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                key,
-                ResourceView {
-                    key: row.key.clone(),
-                    uid: row.uid,
-                    generation: row.generation,
-                    deleting: false,
-                    provenance: row.provenance,
-                    spec: row.spec.clone(),
-                    metadata: row.metadata.clone(),
-                    owner_key: None,
-                    status: Some(if self.children_ready.load(std::sync::atomic::Ordering::SeqCst) {
-                        ResourceStatus::Ready
-                    } else {
-                        ResourceStatus::Pending
-                    }),
-                    status_generation: Some(row.generation),
-                    status_projection: None,
-                },
-            ));
-            Ok(EnsureOutcome::Created(row))
-        }
-
-        async fn get(
-            &self,
-            key: &ResourceKey,
-        ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            self.calls.record(format!("get:{}/{}", key.type_name, key.name));
-            if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
-            }
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            Ok(self
-                .rows
-                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                .unwrap()
-                .iter()
-                .find(|row| row.key == *key)
-                .cloned())
-        }
-
-        async fn view(&self, key: &ResourceKey) -> Result<Option<ResourceView>, ResourceError> {
-            self.calls.record(format!("view:{}/{}", key.type_name, key.name));
-            if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
-            }
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            Ok(self
-                .views
-                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                .unwrap()
-                .iter()
-                .find(|(view_key, _)| view_key == key)
-                .map(|(_, view)| view.clone()))
-        }
-
-        async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.calls.record(format!("delete:{}/{}", key.type_name, key.name));
-            self.drop_row(key);
-            Ok(())
-        }
-
-        async fn list_owned(
-            &self,
-            owner_uid: [u8; 16],
-        ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            self.calls.record("list-owned".to_owned());
-            if self.fail_reads.load(std::sync::atomic::Ordering::SeqCst) {
-                return Err(ResourceError::ManagerRejected { reason: "scripted read failure".into() });
-            }
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            Ok(self
-                .rows
-                .lock() // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-                .unwrap()
-                .iter()
-                .filter(|row| row.owner_uid == Some(owner_uid))
-                .cloned()
-                .collect())
-        }
-
-        async fn register_watch(
-            &self,
-            _subscriber: &ResourceKey,
-            registration: WatchRegistration,
-        ) -> Result<WatchId, ResourceError> {
-            self.calls.record(format!(
-                "watch:{}/{}",
-                registration.target.type_name, registration.target.name
-            ));
-            Ok(WatchId(1))
-        }
-
-        async fn cancel_watch(&self, _watch: WatchId) -> Result<(), ResourceError> {
-            self.calls.record("cancel-watch".to_owned());
-            Ok(())
-        }
-    }
-
-    struct RecordingRequeue {
-        scheduled: std::sync::Mutex<Vec<(ResourceKey, std::time::Duration)>>,
-    }
-
-    impl RecordingRequeue {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                scheduled: std::sync::Mutex::new(Vec::new()),
-            })
-        }
-    }
-
-    impl RequeueScheduler for RecordingRequeue {
-        fn schedule(&self, key: ResourceKey, after: std::time::Duration) -> RequeueId {
-            #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-            self.scheduled.lock().unwrap().push((key, after));
-            RequeueId(0)
-        }
-
-        fn cancel(&self, _id: RequeueId) {}
-    }
 
     // -- fixtures ------------------------------------------------------------
 
@@ -1857,8 +1586,8 @@ mod tests {
 
     fn context(
         target: StoredDesiredResource,
-        manager: Arc<RecordingManager>,
-        requeue: Arc<RecordingRequeue>,
+        manager: Arc<RecordingManagerEndpoint>,
+        requeue: RecordingRequeue,
     ) -> ResourceContext {
         let (effects_tx, _effects_rx) = tokio::sync::mpsc::unbounded_channel();
         let (notify_tx, _notify_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1866,7 +1595,7 @@ mod tests {
             target,
             guest_spec_decoder(),
             manager,
-            requeue,
+            Arc::new(requeue),
             effects_tx,
             notify_tx,
         )
@@ -1910,9 +1639,9 @@ mod tests {
         })
     }
 
-    fn qemu_fixture() -> (ResourceContext, Arc<ScriptedEffects>, Arc<RecordingManager>) {
+    fn qemu_fixture() -> (ResourceContext, Arc<ScriptedEffects>, Arc<RecordingManagerEndpoint>) {
         let effects = ScriptedEffects::new();
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         manager.add(
             provider_row("runtime-qemu-media", qemu_provider_spec()),
             ResourceStatus::Ready,
@@ -1920,7 +1649,7 @@ mod tests {
         let ctx = context(
             guest_row("work-vm", qemu_guest_spec()),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         (ctx, effects, manager)
     }
@@ -2039,7 +1768,7 @@ mod tests {
             controller_generation: ControllerGeneration::new(3).expect("generation"),
             facets: facets.facet_set(),
         });
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         manager.add(
             provider_row("runtime-azure-container-apps", aca_provider_spec()),
             ResourceStatus::Ready,
@@ -2051,7 +1780,7 @@ mod tests {
         let mut ctx_a = context(
             guest_row("work-vm", serde_json::json!({ "providerRef": "Provider/runtime-azure-container-apps" })),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         driver_a.reconcile(&mut ctx_a).await.expect("first pass");
         assert_eq!(
@@ -2066,7 +1795,7 @@ mod tests {
         let mut ctx_b = context(
             guest_row("work-vm", serde_json::json!({ "providerRef": "Provider/runtime-azure-container-apps" })),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         driver_b.reconcile(&mut ctx_b).await.expect("recreated pass");
         assert_eq!(
@@ -2112,14 +1841,14 @@ mod tests {
     #[tokio::test]
     async fn validate_admits_every_registered_provider() {
         for registration in GUEST_REGISTRATIONS {
-            let manager = RecordingManager::new();
+            let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
             let mut ctx = context(
                 guest_row(
                     "work-vm",
                     serde_json::json!({ "providerRef": registration.provider_ref }),
                 ),
                 Arc::clone(&manager),
-                RecordingRequeue::new(),
+                RecordingRequeue::default(),
             );
             let mut driver = driver(ScriptedEffects::new());
             driver.validate(&mut ctx).await.expect("registered provider");
@@ -2129,14 +1858,14 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn validate_refuses_an_unregistered_provider_as_terminal() {
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let mut ctx = context(
             guest_row(
                 "work-vm",
                 serde_json::json!({ "providerRef": "Provider/not-a-runtime" }),
             ),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = driver(ScriptedEffects::new());
         let failure = driver.validate(&mut ctx).await.expect_err("refused provider");
@@ -2185,6 +1914,50 @@ mod tests {
         assert_eq!(ctx.take_status_projection(), Some(projection));
     }
 
+    /// The azure-container-apps kind's authored child graph is committed to
+    /// the manager before the effect runs: exactly the sandbox-agent control
+    /// Endpoint, the same commit-before-effect order the qemu graph pins.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[tokio::test]
+    async fn reconcile_ensures_the_aca_sandbox_agent_endpoint() {
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
+        manager.add(
+            provider_row("runtime-azure-container-apps", aca_provider_spec()),
+            ResourceStatus::Ready,
+        );
+        manager.set_children_ready(true);
+        let effects = ScriptedEffects::new();
+        let projection = serde_json::json!({ "phase": "Ready", "runtimeReady": true });
+        effects.set_projection(Some(projection.clone())).await;
+        let mut ctx = context(
+            guest_row(
+                "work-vm",
+                serde_json::json!({ "providerRef": "Provider/runtime-azure-container-apps" }),
+            ),
+            Arc::clone(&manager),
+            RecordingRequeue::default(),
+        );
+        let mut driver = driver(Arc::clone(&effects));
+
+        let outcome = driver.reconcile(&mut ctx).await.expect("reconcile");
+        assert_eq!(outcome, ReconcileOutcome::Satisfied);
+        assert_eq!(
+            manager.ensure_order(),
+            vec!["ensure:Endpoint/work-vm-sandbox-agent".to_owned()],
+            "the ACA child graph is the sandbox-agent control Endpoint",
+        );
+        let observation = effects.observations().await.pop().expect("effect call");
+        assert_eq!(observation.kind, GuestKind::AzureContainerApps);
+        assert_eq!(
+            observation.children,
+            vec![("Endpoint".to_owned(), "work-vm-sandbox-agent".to_owned(), true)],
+        );
+        let status = guest_status(&ctx);
+        assert_eq!(status.phase, GuestEffectPhase::Ready);
+        assert_eq!(status.resource, Some(projection.clone()));
+        assert_eq!(ctx.take_status_projection(), Some(projection));
+    }
+
     /// The old effect gate: a Provider that reports Ready ahead of its own
     /// children keeps the Guest Pending until every desired child is live.
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -2199,30 +1972,6 @@ mod tests {
         assert_eq!(effects.call_order(), vec!["reconcile:runtime-qemu-media-guest".to_owned()]);
     }
 
-    /// A qemu Guest whose Provider row the manager does not hold refuses
-    /// closed (the old fence) and never reaches the effect.
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[tokio::test]
-    async fn reconcile_refuses_a_qemu_guest_without_its_provider_row() {
-        let effects = ScriptedEffects::new();
-        let manager = RecordingManager::new();
-        let mut ctx = context(
-            guest_row("work-vm", qemu_guest_spec()),
-            Arc::clone(&manager),
-            RecordingRequeue::new(),
-        );
-        let mut driver = driver(Arc::clone(&effects));
-
-        let failure = driver
-            .reconcile(&mut ctx)
-            .await
-            .expect_err("unfenced provider row");
-        assert_eq!(failure.class(), FailureClass::Retryable);
-        assert_eq!(format!("{failure}"), "guest-provider-unavailable");
-        assert!(effects.call_order().is_empty());
-        assert!(manager.ensure_order().is_empty());
-    }
-
     /// Issue #511 at the migrated provider-row read
     /// ([`GuestDriver::provider_spec`], classified): an absent row and
     /// an unanswerable manager both defer (retryable - the actor requeues),
@@ -2234,11 +1983,11 @@ mod tests {
     async fn classified_provider_row_read_defers_absence_and_requires_terminal_evidence() {
         // Absent: the manager answers that it holds no provider row.
         let effects = ScriptedEffects::new();
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let mut ctx = context(
             guest_row("work-vm", qemu_guest_spec()),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = driver(Arc::clone(&effects));
         let failure = driver
@@ -2312,14 +2061,14 @@ mod tests {
         effects
             .set_projection(Some(serde_json::json!({ "phase": "Ready" })))
             .await;
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let mut ctx = context(
             guest_row(
                 "acceptance-guest",
                 serde_json::json!({ "providerRef": "Provider/runtime-cloud-hypervisor" }),
             ),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = driver(Arc::clone(&effects));
 
@@ -2345,14 +2094,14 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn recover_adopts_a_cloud_hypervisor_guest_with_a_live_vmm_child() {
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let mut ctx = context(
             guest_row(
                 "acceptance-guest",
                 serde_json::json!({ "providerRef": "Provider/runtime-cloud-hypervisor" }),
             ),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = driver(ScriptedEffects::new());
         assert_eq!(
@@ -2423,7 +2172,7 @@ mod tests {
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     #[tokio::test]
     async fn delete_runs_the_provider_stage_before_retiring_the_children() {
-        let manager = RecordingManager::new();
+        let manager = Arc::new(RecordingManagerEndpoint::new().with_owner_uid(GUEST_UID_BYTES));
         let effects = ScriptedEffects::with_shared_log(manager.log_handle());
         manager.add(
             provider_row("runtime-qemu-media", qemu_provider_spec()),
@@ -2436,7 +2185,7 @@ mod tests {
         let mut ctx = context(
             guest_row("work-vm", qemu_guest_spec()),
             Arc::clone(&manager),
-            RecordingRequeue::new(),
+            RecordingRequeue::default(),
         );
         let mut driver = driver(Arc::clone(&effects));
 

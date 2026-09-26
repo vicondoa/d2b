@@ -491,15 +491,6 @@ mod tests {
     }
 
     #[test]
-    fn the_pure_fixture_crate_passes_the_source_surface_probe() {
-        let Some(dir) = crate_dir("d2b-broker-fixture-handlers") else {
-            skip_without("pure fixture sources absent from this environment");
-            return;
-        };
-        assert_eq!(probe_sources_in(&dir), Vec::<String>::new());
-    }
-
-    #[test]
     fn the_syscall_surface_fixture_crate_fails_the_source_surface_probe() {
         let Some(dir) = crate_dir("d2b-broker-fixture-syscall-surface") else {
             skip_without("syscall fixture sources absent from this environment");

@@ -63,17 +63,6 @@ pub mod sys;
 
 pub use d2b_contracts_broker::broker_wire::BrokerProfile;
 
-#[cfg(test)]
-#[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-pub(crate) fn test_scratch_root() -> std::path::PathBuf {
-    let root = std::env::var_os("TEST_TMPDIR")
-        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("d2b-broker-tests"));
-    std::fs::create_dir_all(&root).expect("create test scratch root");
-    root
-}
-
 // Behavioral + regression seccomp BPF tests.
 #[cfg(test)]
 mod seccomp_compile_tests;

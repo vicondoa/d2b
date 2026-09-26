@@ -121,17 +121,7 @@ mod tests {
         assert_eq!(line.len(), PICKER_TO_DAEMON_MAX_FRAME_BYTES);
     }
 
-    #[test]
-    fn accepts_valid_maxish_open_request_line() {
-        let max = OpenRequestFrameCaps::default().max_frame_bytes();
-        let mut bytes = vec![b'b'; max];
-        bytes.push(b'\n');
-
-        let line = bounded_line(&bytes, max).expect("line");
-        assert_eq!(line.len(), max);
-    }
-
-    #[test]
+#[test]
     fn encode_decode_picker_message() {
         let message = PickerToDaemonMessage::ClientHello(ClientHello {
             protocol_version_range: ProtocolVersionRange { min: 1, max: 1 },

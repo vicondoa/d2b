@@ -500,7 +500,6 @@ impl GuestSessionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts_resource::v3::ResourceUid;
 
     const GUEST_UID: &str = "123e4567-e89b-42d3-a456-426614174000";
     const BOOT_DIGEST: &str =
@@ -562,28 +561,45 @@ mod tests {
         assert!(!spawned_only.ready_for(&binding(3)));
     }
 
+    /// The `current` constructor's fail-closed fence: a non-Guest resource
+    /// ref, a zero reconnect generation, and a malformed boot-identity
+    /// digest all answer `AuthenticationFailed` before any evidence exists.
+    /// (The empty-name branch is defense-in-depth: `ResourceName::parse`
+    /// rejects empty names, so no public constructor can produce it.)
     #[test]
-    fn bound_evidence_exposes_only_exact_bounded_commitments() {
-        let evidence = bound_evidence(3, true);
+    fn current_rejects_non_guest_refs_zero_reconnects_and_malformed_digests() {
+        assert!(GuestSessionEvidence::current(
+            guest_ref(),
+            BOOT_DIGEST,
+            3,
+            vec!["resource-read".to_owned()],
+            true,
+            true,
+        )
+        .is_ok());
+
         assert_eq!(
-            evidence.guest_uid().map(ResourceUid::as_str),
-            Some(GUEST_UID)
+            GuestSessionEvidence::current(
+                ResourceRef::parse("Process/test").expect("Process ref"),
+                BOOT_DIGEST,
+                3,
+                [],
+                true,
+                true,
+            ),
+            Err(GuestSessionError::AuthenticationFailed),
+            "a non-Guest resource ref is refused"
         );
         assert_eq!(
-            evidence.descriptor_digest().map(SchemaFingerprint::as_str),
-            Some(DESCRIPTOR_DIGEST)
+            GuestSessionEvidence::current(guest_ref(), BOOT_DIGEST, 0, [], true, true),
+            Err(GuestSessionError::AuthenticationFailed),
+            "a zero reconnect generation is refused"
         );
         assert_eq!(
-            evidence.schema_digest().map(SchemaFingerprint::as_str),
-            Some(SCHEMA_DIGEST)
+            GuestSessionEvidence::current(guest_ref(), "not-a-digest", 3, [], true, true),
+            Err(GuestSessionError::AuthenticationFailed),
+            "a malformed boot-identity digest is refused"
         );
-        assert_eq!(evidence.provider_generation(), Some(7));
-        assert_eq!(evidence.controller_generation(), Some(3));
-        assert_eq!(evidence.session_generation(), Some(3));
-        assert_eq!(evidence.reconnect_generation(), Some(3));
-        assert_eq!(evidence.endpoint_generation(), Some(3));
-        assert_eq!(evidence.seed_generation(), Some(3));
-        assert!(evidence.seed_ready());
     }
 
     #[test]

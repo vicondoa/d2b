@@ -397,6 +397,53 @@ mod tests {
     }
 
     #[test]
+    fn argv_slots_and_exec_and_slot_bytes_are_bounded() {
+        // Empty argv and more than 64 slots are refused.
+        assert_eq!(
+            CommandSpec::new(
+                CommandExec::parse("/bin/true").unwrap(),
+                vec![],
+                params(),
+                ResourceRef::parse("Role/worker").unwrap(),
+                virtiofsd().intent().clone(),
+            )
+            .expect_err("empty argv"),
+            CommandContractError::InvalidArgvSlot
+        );
+        let mut overlong = Vec::new();
+        for index in 0..=MAX_COMMAND_ARGV_SLOTS {
+            overlong
+                .push(CommandArgvSlot::parse(format!("--flag-{index}")).unwrap());
+        }
+        assert_eq!(
+            CommandSpec::new(
+                CommandExec::parse("/bin/true").unwrap(),
+                overlong,
+                params(),
+                ResourceRef::parse("Role/worker").unwrap(),
+                virtiofsd().intent().clone(),
+            )
+            .expect_err("over-bound argv"),
+            CommandContractError::InvalidArgvSlot
+        );
+
+        // The 4096-byte slot ceiling: exactly at the bound is admitted, one
+        // byte over is refused.
+        let at_boundary = "a".repeat(MAX_COMMAND_ARGV_SLOT_BYTES);
+        assert!(CommandArgvSlot::parse(at_boundary).is_ok());
+        assert!(
+            CommandArgvSlot::parse("a".repeat(MAX_COMMAND_ARGV_SLOT_BYTES + 1)).is_err()
+        );
+
+        // The 4096-byte exec ceiling, same boundary.
+        let exec_at_boundary = format!("/{}", "a".repeat(MAX_COMMAND_EXEC_BYTES - 1));
+        assert!(CommandExec::parse(exec_at_boundary).is_ok());
+        assert!(
+            CommandExec::parse(format!("/{}", "a".repeat(MAX_COMMAND_EXEC_BYTES))).is_err()
+        );
+    }
+
+    #[test]
     fn partial_braces_and_foreign_roles_are_refused() {
         for slot in ["-{socketPath}", "{socketPath", "a}b", "{Upper}"] {
             assert!(CommandArgvSlot::parse(slot).is_err(), "{slot:?}");

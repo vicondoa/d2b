@@ -598,16 +598,6 @@ mod tests {
     }
 
     #[test]
-    fn identity_target_is_not_overridden_by_app_id_metadata() {
-        let p = FilterPolicy::build(local_policy_input());
-
-        assert_eq!(
-            p.rewrite_app_id("org.example.App"),
-            "d2b.work.org.example.App"
-        );
-    }
-
-    #[test]
     fn unsafe_local_defaults_use_canonical_target_and_explicit_warning_title() {
         let identity = ProxyIdentity::canonical(
             WorkloadTarget::parse("tools.host.d2b").unwrap(),

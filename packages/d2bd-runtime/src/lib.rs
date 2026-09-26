@@ -55,14 +55,3 @@ pub mod wire_response_helpers;
 pub mod workload_dispatch;
 pub mod workload_target_index;
 pub mod zone_authority;
-
-#[cfg(test)]
-pub(crate) fn test_scratch_root() -> std::path::PathBuf {
-    std::env::var_os("TEST_TMPDIR")
-        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(std::path::PathBuf::from))
-        .or_else(|| std::env::current_dir().ok())
-        .map(|path| path.join("target"))
-        .expect("resolve test scratch root")
-}

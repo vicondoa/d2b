@@ -420,3 +420,149 @@ pub fn target_control_services(
         ttrpc::r#async::Service { methods, streams: HashMap::new() },
     )])
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use d2b_contracts_resource::v3::ZoneId;
+    use d2b_resource_runtime::guest_target::{
+        GuestRealizeRequest, GuestTargetRuntime, TargetControlAssignment, TargetControlRequest,
+        TargetControlResponse, target_local_spec_digest,
+    };
+    use d2b_resource_runtime::identity::{ResourceKey, ResourceTypeName};
+    use d2b_resource_runtime::target::TargetRef;
+
+    use super::{
+        GuestTargetEffect, GuestTargetEffectError, GuestTargetEffects, GuestTargetService,
+    };
+
+    /// A recording effect: counts every realize it is asked to apply, so a
+    /// refusal test can prove the effect never saw the request.
+    #[derive(Default)]
+    struct RecordingEffect {
+        realizes: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl GuestTargetEffect for RecordingEffect {
+        async fn realize(
+            &self,
+            _request: &GuestRealizeRequest,
+        ) -> Result<(), GuestTargetEffectError> {
+            self.realizes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn delete(&self, _source: &ResourceKey) -> Result<(), GuestTargetEffectError> {
+            Ok(())
+        }
+
+        async fn adopt(&self, _source: &ResourceKey) -> Result<bool, GuestTargetEffectError> {
+            Ok(true)
+        }
+    }
+
+    fn runtime() -> Arc<GuestTargetRuntime> {
+        Arc::new(GuestTargetRuntime::new(TargetRef::guest("work-vm").expect("guest ref")))
+    }
+
+    fn service(
+        runtime: Arc<GuestTargetRuntime>,
+        effects: GuestTargetEffects,
+    ) -> GuestTargetService {
+        GuestTargetService::new(
+            runtime,
+            ZoneId::parse("work").expect("zone"),
+            effects,
+        )
+    }
+
+    fn realize(source: ResourceKey, spec: &[u8], digest: &str) -> TargetControlRequest {
+        TargetControlRequest::Realize(GuestRealizeRequest::new(
+            TargetControlAssignment::new(source, [7; 16], 1, 1),
+            spec.to_vec(),
+            digest,
+            "/run/d2b/test.sock",
+        ))
+    }
+
+    /// The U13 guest-half fail-closed rules: a foreign-zone source, an
+    /// unregistered resource type, and a spec whose commitment does not
+    /// match all answer `SessionUnavailable` with no state and no effect.
+    #[tokio::test]
+    async fn target_control_refuses_foreign_zone_sources_without_state() {
+        let runtime = runtime();
+        runtime.bind_session(1).expect("bind session");
+        let effects = GuestTargetEffects::from([(
+            ResourceTypeName::new("Process"),
+            Arc::new(RecordingEffect::default()) as Arc<dyn GuestTargetEffect>,
+        )]);
+        let service = service(Arc::clone(&runtime), effects);
+        let source = ResourceKey::new("other", "Process", "worker-0");
+        let spec = br#"{"providerRef":"Provider/test"}"#;
+
+        let response = service
+            .handle(realize(source.clone(), spec, &target_local_spec_digest(spec)))
+            .await;
+        assert_eq!(
+            response,
+            TargetControlResponse::SessionUnavailable,
+            "a source under another Zone's authority is refused"
+        );
+        assert!(runtime.instance(&source).is_none(), "no realization is recorded");
+    }
+
+    #[tokio::test]
+    async fn target_control_refuses_unregistered_types_without_state() {
+        let runtime = runtime();
+        runtime.bind_session(1).expect("bind session");
+        let service = service(Arc::clone(&runtime), GuestTargetEffects::new());
+        let source = ResourceKey::new("work", "Process", "worker-0");
+        let spec = br#"{"providerRef":"Provider/test"}"#;
+
+        let response = service
+            .handle(realize(source.clone(), spec, &target_local_spec_digest(spec)))
+            .await;
+        assert_eq!(
+            response,
+            TargetControlResponse::SessionUnavailable,
+            "a type with no target-local effect code is refused"
+        );
+        assert!(runtime.instance(&source).is_none(), "no realization is recorded");
+    }
+
+    #[tokio::test]
+    async fn target_control_refuses_a_spec_digest_mismatch_before_the_effect() {
+        let runtime = runtime();
+        runtime.bind_session(1).expect("bind session");
+        let effect = Arc::new(RecordingEffect::default());
+        let effects = GuestTargetEffects::from([(
+            ResourceTypeName::new("Process"),
+            Arc::clone(&effect) as Arc<dyn GuestTargetEffect>,
+        )]);
+        let service = service(Arc::clone(&runtime), effects);
+        let source = ResourceKey::new("work", "Process", "worker-0");
+        let spec = br#"{"providerRef":"Provider/test"}"#;
+
+        let response = service
+            .handle(realize(
+                source.clone(),
+                spec,
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            ))
+            .await;
+        assert_eq!(
+            response,
+            TargetControlResponse::SessionUnavailable,
+            "a spec that does not match its commitment is refused"
+        );
+        assert!(runtime.instance(&source).is_none(), "no realization is recorded");
+        assert_eq!(
+            effect.realizes.load(Ordering::SeqCst),
+            0,
+            "the effect never sees a spec whose commitment does not match"
+        );
+    }
+}

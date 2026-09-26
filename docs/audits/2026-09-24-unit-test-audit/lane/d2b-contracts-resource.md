@@ -1,0 +1,148 @@
+# d2b-contracts-resource - unit-test audit
+tests: 137 · src files: 27
+net: -2 tests, -27 lines
+
+## Findings (biggest net first)
+- duplicate: `duplicate_json_keys_are_rejected_before_envelope_materialization` (src/v3/resource.rs:1145) - covered by `resource_codec_error_chains_never_retain_serde_text_or_payload_keys` (src/v3/resource.rs:1155). Both pin that duplicate JSON keys in an envelope are rejected with a `ResourceError::CanonicalJson` before materialization; the keeper additionally pins the exact `DuplicateKey` variant/ordinal and error-chain redaction.
+- duplicate: `status_debug_redacts_dynamic_and_message_values` (src/v3/resource_status.rs:940) - covered by `status_diagnostics_redact_refs_codes_messages_and_dynamic_layers` (src/v3/resource_status.rs:1029). Both pin `StatusMessage` Debug redaction and `ResourceStatus` Debug redaction of the dynamic layer; the keeper additionally pins refs/codes/conditions/outcomes/currency/update/provider redaction.
+- gap: seal identity mismatch for zone and epoch kinds (src/v3/operations/seal.rs:229 `diagnose_identity`) - only the Store-mismatch path is exercised (`open_rejects_same_authority_with_mismatched_declared_identity`, seal.rs:246); `SealIdentityMismatch::Zone` and `::Epoch` are never tested, so a broken zone/epoch comparison would ship silently.
+
+## Keep
+- `schema_vector_pins_the_minimal_emulated_device_base_spec` - golden bytes + roundtrip + base-object folding for DeviceSpec.
+- `exclusive_arbitration_pins_a_single_claimant` - arbitration/claimant-count field-combination rules.
+- `emulated_devices_carry_no_selector_and_physical_devices_require_one` - selector requirement per device class.
+- `the_selector_union_is_closed_and_carries_no_raw_device_path` - InventorySelector closed union, HexId/DeviceFilterText grammar.
+- `diagnostics_stay_redacted` (device) - DeviceSpec Debug is redacted.
+- `closed_device_sets_and_effect_limits_are_frozen` - error/verb/effect enums + frozen effect limits.
+- `common_status_claims_are_bounded_and_resource_typed` - DeviceClaim/DeviceStatusResource bounds and ref typing.
+- `error_kind_set_and_wire_names_are_frozen` - 31 wire names of ResourceErrorKind.
+- `optional_error_fields_are_narrowed` - revision/retry-after field legality per error kind.
+- `minimal_execution_policy_renders_the_canonical_base_object` - canonical bytes + base folding for ExecutionPolicy.
+- `user_domain_requires_a_default_user_ref` - defaultUserRef requirement.
+- `allowed_domains_bounds_and_default_membership_fail_closed` - empty/duplicate/mismatched allowedDomains.
+- `at_most_one_network_attachment_is_the_default` - attachment cardinality + ref typing.
+- `scalar_vectors_round_trip_and_reject_out_of_bound_values` - MilliCpu/ByteQuantity/DurationMs/BoundedToken/BoundedText parse bounds.
+- `budget_bounds_fail_closed` - zero/oversize budget limits.
+- `budget_requests_cannot_exceed_limits` - request>limit rejection for cpu/memory.
+- `direct_execution_policy_deserialization_rejects_unknown_fields` - unknown-field rejection.
+- `every_primitive_resource_type_is_declared_exactly_once_and_stays_unqualified` - resource-type name uniqueness.
+- `every_primitive_base_object_folds_rather_than_restating_a_universal_field` - cross-primitive base folding.
+- `diagnostics_never_echo_a_caller_supplied_marker` - marker redaction across policy scalars.
+- `schema_vectors_pin_the_minimal_and_user_only_host_base_specs` - golden bytes + roundtrip + no-isolation posture for HostSpec.
+- `base_object_never_carries_a_universal_or_layer_three_field` - HostSpec base folding.
+- `the_no_isolation_posture_is_required_and_cannot_be_evaded` - isolationPosture cross-field rules.
+- `unknown_base_fields_are_rejected` - unknown/restated-provider rejection.
+- `diagnostics_stay_redacted` (host) - HostSpec Debug is redacted.
+- `name_bounds_and_grammar_are_exact` - ZoneId/ResourceName grammar + serde bounds.
+- `resource_type_vectors_pin_standard_and_qualified_spellings` - ResourceTypeName grammar.
+- `schemas_preserve_runtime_identity_bounds` - JSON-schema min/max/pattern/enum for identity types.
+- `resource_uid_vectors_and_redaction_are_exact` - UUIDv4 parse/roundtrip/redaction.
+- `timestamp_vectors_are_exact_and_calendar_valid` - timestamp grammar + calendar validity.
+- `numeric_generations_preserve_zero_semantics` - generation zero rejection/roundtrip.
+- `generation_identity_and_configuration_ordinal_are_distinct` - digest-id vs ordinal type separation.
+- `authenticated_context_is_wholly_redacted` - AuthenticatedSubjectContext Debug redaction + exact serde shape.
+- `component_types_reject_noncanonical_values` - purpose/service/fingerprint/transcript grammar.
+- `identity_diagnostics_are_redacted_but_explicit_encodings_are_exact` - marker redaction across all identity types.
+- `schema_vector_pins_the_minimal_network_base_spec` - golden bytes + roundtrip + base folding for NetworkSpec.
+- `the_net_vm_system_artifact_is_required_with_no_implicit_default` - required netVmSystemArtifactId.
+- `east_west_is_an_explicit_per_network_opt_in` - allowEastWest default and opt-in.
+- `attachment_indexes_are_bounded_and_unique` - index bounds + duplicate rejection.
+- `network_cidr_shape_and_overlap_are_enforced_before_effects` - spec-level CIDR shape/overlap enforcement.
+- `cidr_overlap_arithmetic_covers_disjoint_equal_and_contained_ranges` - cidr_overlaps arithmetic.
+- `host_blocklist_defaults_are_mandatory_and_additive` - mandatory default blocklist, additive-only.
+- `reserved_net_vm_names_and_invalid_parent_ifnames_are_rejected` - reserved names + ifname grammar.
+- `multiplexed_arbitration_is_admitted_only_for_bridge_mode` - macvtap mode/policy cross-field rule.
+- `static_external_ipv4_requires_a_gateway` - gateway requirement.
+- `a_port_forward_names_exactly_one_target` - port-forward target exclusivity.
+- `address_scalars_reject_malformed_and_multicast_values` - IPv4/MAC scalar grammar.
+- `diagnostics_stay_redacted` (network) - NetworkSpec + CIDR Debug redaction.
+- `network_status_is_bounded_and_excludes_runtime_network_identity` - golden status bytes + leak-free serialization.
+- `opaque_attachment_handle_binds_both_generation_fences` - fence uid/generation binding + redaction.
+- `external_physical_nic_multiplex_never_crosses_a_zone_boundary` - external NIC claim admission rules.
+- `a_closed_object_schema_is_admitted` - closed PayloadSchema admission + accessors.
+- `write_only_properties_nested_under_containers_are_refused` - nested writeOnly-with-value ban.
+- `an_over_deep_nested_schema_is_refused` - depth bound.
+- `open_or_untyped_documents_are_refused` - open/untyped schema rejection.
+- `write_only_properties_reject_inferable_values` - default/enum/const/examples ban on writeOnly.
+- `unknown_required_names_and_malformed_property_names_are_refused` - required/property-name validation.
+- `nested_object_properties_keep_the_closed_shape` - nested open-properties rejection.
+- `diagnostics_never_render_property_values` - schema diagnostics redaction.
+- `schema_vector_pins_the_minimal_process_base_spec` - golden bytes + roundtrip for ProcessSpec.
+- `the_frozen_common_field_names_are_never_renamed` - base field-name freeze.
+- `renamed_or_free_form_execution_fields_are_rejected` - legacy field-name rejection.
+- `execution_ref_and_folded_refs_are_type_checked` - ref typing + mount path rules.
+- `direct_execution_spec_rejects_unknown_fields_and_duplicate_mounts` - unknown fields + duplicate mounts.
+- `ephemeral_process_is_worker_only_and_carries_no_restart_fields` - ephemeral class/field rules.
+- `the_backoff_multiplier_is_integer_fixed_point` - backoff multiplier wire form.
+- `sandbox_rejects_numeric_and_raw_implementation_fields` - sandbox field closure.
+- `diagnostics_stay_redacted` (process) - ProcessSpec/ExecutionSpec Debug redaction.
+- `golden_json_vector_pins_literal_envelope_bytes` - golden envelope bytes for parsed and constructed envelopes.
+- `three_layer_spec_round_trip_and_unknown_envelopes` - three-layer spec roundtrip + unknown-field rejection.
+- `provider_extension_is_bound_to_selected_provider_and_resource_type` - extension/resource-type binding.
+- `update_policy_base_round_trip_has_frozen_defaults` - frozen UpdatePolicy defaults.
+- `metadata_bounds_and_owner_self_reference_fail_closed` - metadata bounds + owner self-ref rejection.
+- `resource_codec_error_chains_never_retain_serde_text_or_payload_keys` - codec error-chain redaction.
+- `resource_diagnostics_redact_identity_and_payload_layers` - envelope-layer Debug redaction.
+- `canonical_json_pins_literal_bytes_and_digest` - canonicalization + digest vector.
+- `resource_activation_operation_ids_are_exact_and_content_addressed` - operation-id grammar.
+- `framed_digest_separates_domain_and_payload_boundaries` - framing boundary.
+- `framed_digest_matches_nix_bundle_and_catalog_vectors` - framed digest golden vectors.
+- `canonical_json_rejects_duplicates_floats_controls_and_non_nfc` - canonical JSON rejection classes.
+- `canonical_json_errors_keep_only_closed_reasons_and_safe_positions` - error shape + redaction.
+- `schema_version_and_extension_id_have_one_spelling` - SchemaVersion/ExtensionSchemaId grammar.
+- `placement_anchor_registry_is_closed_and_resolves_execution_targets` - placement anchor mapping.
+- `minimal_base_and_base_binding_conformance_are_exact` - contract conformance checks.
+- `provider_layers_reject_unknown_version_and_shadow_fields` - provider layer validation + shadow rejection.
+- `schema_diagnostics_redact_identity_field_and_payload_markers` - schema diagnostics redaction.
+- `status_update_literal_json_round_trip_pins_wire_names` - ResourceUpdateStatus wire names.
+- `base_projection_keeps_resource_and_omits_provider` - base projection shape.
+- `status_bounds_and_time_shape_fail_closed` - message/currency/outcome bounds.
+- `unknown_status_and_provider_fields_are_rejected` - unknown-field rejection at status layers.
+- `phase_wire_values_are_closed_and_case_sensitive` - phase enum closure.
+- `status_diagnostics_redact_refs_codes_messages_and_dynamic_layers` - status diagnostics redaction.
+- `canonical_row_round_trips_with_no_path_field` - storage row wire shape.
+- `opaque_ids_reject_host_paths` - opaque id grammar.
+- `every_invariant_is_required` - required-field closure of the storage row.
+- `unknown_fields_are_rejected_at_every_object_layer` - per-layer unknown-field rejection.
+- `link_count_is_closed` - link-count/mode closure.
+- `zone_store_identity_requires_a_nonzero_epoch` - epoch bound.
+- `schema_vector_pins_the_minimal_user_base_spec` - golden bytes + roundtrip for UserSpec.
+- `os_username_uses_host_rules_not_the_resource_name_grammar` - OsUsername grammar.
+- `group_names_and_bounds_fail_closed` - group grammar + cardinality.
+- `no_credential_or_key_material_is_admitted` - credential/uid/providerRef rejection + base folding.
+- `diagnostics_never_echo_the_os_username` - username redaction.
+- `schema_vector_pins_the_minimal_volume_base_spec` - golden bytes + roundtrip for VolumeSpec.
+- `nix_closure_source_is_bound_to_a_system_artifact` - nix-closure source binding.
+- `nix_closure_source_rejects_missing_or_conflicting_binding` - nix-closure rejection paths.
+- `no_raw_host_path_is_admitted_in_the_authored_source` - source path closure + base folding.
+- `layout_paths_are_anchored_and_principals_are_typed` - layout path/principal/mode rules.
+- `acl_principals_reject_a_numeric_identity` - ACL principal typing + permission grammar.
+- `attachment_view_membership_and_single_writer_fail_closed` - attachment view/writer rules.
+- `tmpfs_requires_both_hard_limits_and_a_boot_scoped_kind` - tmpfs cross-field rules.
+- `a_volume_must_declare_at_least_one_named_view` - view cardinality + name grammar.
+- `diagnostics_stay_redacted` (volume) - VolumeSpec Debug redaction.
+- `an_anchored_path_is_admitted_in_one_normal_form_only` - anchored-path normal form.
+- `anchored_and_mount_paths_reject_drive_separator_and_homoglyph_forms` - homoglyph/drive-separator rejection.
+- `source_kind_transport_and_quota_cross_fields_are_strict` - source/transport/quota cross-field rules.
+- `block_image_format_and_preallocation_stay_typed_and_source_scoped` - block-image settings typing.
+- `duplicate_invariants_and_empty_acl_permissions_are_rejected` - duplicate invariant + empty permission rejection.
+- `spec_serializes_and_round_trips_strictly` - VolumeBindingSpec wire shape.
+- `spec_rejects_unknown_fields_and_wrong_references` - spec unknown-field/ref/path rejection.
+- `admission_rejects_direct_external_creates_without_a_volume_owner` - owner admission rule.
+- `fence_structural_validity_is_enforced_by_typed_fields` - readiness fence wire shape + rejection.
+- `stale_or_reassigned_readiness_never_reports_current` - readiness currency across uid/generation/revision.
+- `status_serialization_exposes_no_paths_sockets_argv_or_numeric_identities` - status leak-free serialization.
+- `status_rejects_unknown_fields` - status unknown-field rejection.
+- `schema_and_status_golden_vectors_are_canonical` - VolumeStateSchema/Status golden bytes.
+- `phase_and_status_reason_tokens_round_trip` - token enum roundtrips.
+- `state_payload_digesting_fails_closed_without_a_frozen_domain` - digest-domain failure + next_generation.
+- `state_envelope_rejects_invalid_generations_and_redacts_payload` - generation bounds + payload redaction.
+- `state_schema_id_rejects_unqualified_or_path_shaped_values` - schema-id grammar.
+- `mutation_ordinal_is_zero_based_and_bounded_by_batch_limit` - ordinal bounds.
+- `store_slot_rejects_an_index_at_the_composition_bound` - slot bounds.
+- `batch_conflict_carries_only_revision_and_bounded_ordinal` - batch-conflict error shape.
+- `store_debug_surfaces_expose_only_whitelisted_diagnostics` - store type Debug whitelist.
+- `open_rejects_same_authority_with_mismatched_declared_identity` - seal identity-mismatch rejection.
+
+cross-check: golden-byte vectors (`MINIMAL_*_SPEC`, `GOLDEN_ENVELOPE`, canonical/framed digest vectors in resource_schema.rs) - consumer-crate contract tests and `tests/golden/` may re-pin these literal bytes; C2 to resolve.
+cross-check: identity scalar serde roundtrips (ResourceUid, Timestamp, generations, ResourceTypeName) - generated-schema/contract tests in d2b-contracts or consumer crates may re-pin; C2 to resolve.

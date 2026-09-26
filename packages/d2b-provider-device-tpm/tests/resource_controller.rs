@@ -3,6 +3,7 @@ use d2b_provider_device_tpm::{
     TpmResourceController, TpmResourceEffectError, TpmResourceEffectPort, TpmResourceOutcome,
     build_tpm_state_volume_spec,
 };
+use d2b_provider_toolkit::testing::block_on;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -219,20 +220,6 @@ fn controller_flushes_before_starting_swtpm_and_waits_for_endpoint() {
         effects.events.try_lock().unwrap().as_slice(),
         ["volume", "flush", "process", "endpoint"]
     );
-}
-
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    use std::pin::pin;
-    use std::task::{Context, Poll, Waker};
-    let mut future = pin!(future);
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => std::hint::spin_loop(),
-        }
-    }
 }
 
 struct NoopEffects;

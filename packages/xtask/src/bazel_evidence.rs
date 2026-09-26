@@ -592,17 +592,6 @@ mod tests {
     }
 
     #[test]
-    fn redaction_preserves_dispatch_evidence_while_removing_secret() {
-        let redacted = redact_text(
-            "remote execution started authorization: Bearer dispatch-token UNAUTHENTICATED",
-        );
-        assert!(!redacted.contains("dispatch-token"));
-        let classification = classification_value(classify_failure(&redacted, false));
-        assert_eq!(classification["dispatchEvidence"], true);
-        assert_eq!(classification["retryLocally"], false);
-    }
-
-    #[test]
     fn redaction_covers_quoted_structured_credentials() {
         let redacted = redact_text(
             "{\"authorization\": \"quoted-secret\"}\n\

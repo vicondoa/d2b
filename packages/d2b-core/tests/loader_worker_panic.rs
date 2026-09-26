@@ -8,31 +8,16 @@
 
 use std::{
     future::Future,
-    pin::pin,
     sync::mpsc,
-    task::{Context, Poll, Waker},
     thread,
     time::Duration,
 };
 
 use d2b_core::loader_worker::{self, LoaderRefusal};
+use d2b_core::test_support::block_on;
 
 /// Longest a refusal may take before the test declares the caller stranded.
 const REFUSAL_DEADLINE: Duration = Duration::from_secs(10);
-
-/// Drive a future with no executor, reactor, or timer: a no-op waker and a
-/// hand-rolled poll loop, as the other tests in this workspace do.
-fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::noop();
-    let mut context = Context::from_waker(waker);
-    let mut future = pin!(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => thread::yield_now(),
-        }
-    }
-}
 
 /// Await a `run` future on a scratch thread: a panicking job that stranded its
 /// waiter would be a wedged daemon, so it must fail this test with a diagnostic

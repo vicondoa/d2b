@@ -454,6 +454,22 @@ mod tests {
     }
 
     #[test]
+    fn validate_finalizer_accepts_only_the_drain_finalizer() {
+        use d2b_contracts_resource::v3::FinalizerId;
+
+        let drain = FinalizerId::parse(ZONE_DRAIN_FINALIZER).expect("drain finalizer parses");
+        assert!(validate_finalizer(&drain).is_ok());
+        for other in ["core.cleanup", "core.gc", "ops.d2bus.org/remove"] {
+            let finalizer = FinalizerId::parse(other).expect("finalizer parses");
+            assert_eq!(
+                validate_finalizer(&finalizer),
+                Err(ZoneContractError::FinalizerForbidden),
+                "{other} must be refused"
+            );
+        }
+    }
+
+    #[test]
     fn handler_status_is_sorted_and_bounded() {
         let status = ZoneStatusResource::new(
             1,

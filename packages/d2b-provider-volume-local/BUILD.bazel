@@ -115,6 +115,7 @@ d2b_rust_test(
     srcs = ["tests/store_view_and_swtpm.rs"],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-contracts-provider:d2b_contracts_provider",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         ":d2b_provider_volume_local_test_support",
@@ -153,6 +154,7 @@ d2b_rust_test(
     srcs = ["tests/volume_effect_adapter.rs"],
     compile_data = ["Cargo.toml"],
     deps = [
+        "//packages/d2b-core:d2b_core_test_support",
         "//packages/d2b-contracts-resource:d2b_contracts_resource",
         "//packages/d2b-host:d2b_host_test_support",
         "//packages/d2b-provider-network-local:d2b_provider_network_local_test_support",

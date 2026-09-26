@@ -193,6 +193,13 @@ mod tests {
     }
 
     #[test]
+    fn zero_digests_are_recognized() {
+        assert!(ProcessIdentityDigest::from_bytes([0; 32]).is_zero());
+        assert!(!ProcessIdentityDigest::from_bytes([1; 32]).is_zero());
+        assert!(ConfigurationDigest::from_bytes([0; 32]).is_zero());
+    }
+
+    #[test]
     fn pidfd_evidence_is_opaque_in_diagnostics() {
         assert_eq!(
             format!("{:?}", PidfdEvidence::held()),

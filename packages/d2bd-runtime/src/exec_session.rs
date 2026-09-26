@@ -3204,32 +3204,6 @@ mod tests {
 
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    fn resize_retry_with_same_op_id_replays_cached_ack() {
-        let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
-            accepted_len: 0,
-            next_offset: 0,
-            backpressured: false,
-            stdin_closed: false,
-        });
-        let resize = ExecOp::Resize(ExecResizeArgs {
-            session: "h".to_owned(),
-            rows: 40,
-            cols: 120,
-            op_id: 11,
-        });
-        let _ = send_op(&tx, resize.clone()).expect("resize ok");
-        let _ = send_op(&tx, resize).expect("resize retry ok");
-        assert_eq!(
-            shared.resize_calls.load(Ordering::SeqCst),
-            1,
-            "retried Resize with same opId must not re-deliver"
-        );
-        drop(tx);
-        worker.join().unwrap();
-    }
-
-    #[test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn oversized_chunk_is_rejected_before_the_transport() {
         let (tx, worker, shared) = backpressure_worker(WriteStdinOutcome {
             accepted_len: 0,

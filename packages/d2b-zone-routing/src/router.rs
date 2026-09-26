@@ -502,18 +502,91 @@ mod tests {
     }
 
     #[test]
-    fn durable_exec_table_is_bounded_to_ephemeral_processes() {
+    fn begin_refuses_invalid_expiry_and_empty_digest() {
+        let router = ZoneOperationRouter::new();
+        assert_eq!(
+            router.begin(key(), "digest-a", operation(), 100, 100),
+            Err(RouterError::InvalidExpiry)
+        );
+        assert_eq!(
+            router.begin(key(), "digest-a", operation(), 101, 100),
+            Err(RouterError::InvalidExpiry)
+        );
+        assert_eq!(
+            router.begin(key(), "", operation(), 1, 100),
+            Err(RouterError::InvalidRequestDigest)
+        );
+    }
+
+    #[test]
+    fn begin_refuses_at_the_row_capacity() {
+        let router = ZoneOperationRouter::with_capacity(1);
+        router
+            .begin(key(), "digest-a", operation(), 1, 100)
+            .unwrap();
+        let second = DedupKey::new(
+            zone(),
+            ResourceTypeName::parse("Process").unwrap(),
+            Some(ResourceName::parse("worker-2").unwrap()),
+            MutationVerb::Create,
+            BoundedToken::parse("request-2").unwrap(),
+            &subject("User/alice"),
+        )
+        .unwrap();
+        assert_eq!(
+            router.begin(second, "digest-b", operation(), 1, 100),
+            Err(RouterError::Capacity)
+        );
+    }
+
+    #[test]
+    fn complete_refuses_unknown_and_mismatched_operations() {
+        let router = ZoneOperationRouter::new();
+        assert_eq!(
+            router.complete(&key(), &operation(), "ok"),
+            Err(RouterError::UnknownOperation)
+        );
+        router
+            .begin(key(), "digest-a", operation(), 1, 100)
+            .unwrap();
+        let other = ResourceUid::parse("ffffffff-ffff-4fff-bfff-ffffffffffff").unwrap();
+        assert_eq!(
+            router.complete(&key(), &other, "ok"),
+            Err(RouterError::OperationMismatch)
+        );
+    }
+
+    #[test]
+    fn exec_table_refuses_non_ephemeral_refs_and_duplicates() {
         let table = DurableExecTable::new();
         let operation = operation();
-        table
-            .insert(
-                operation.clone(),
-                ResourceRef::parse("EphemeralProcess/exec-1").unwrap(),
-            )
-            .unwrap();
-        assert_eq!(table.len().unwrap(), 1);
-        assert!(table.remove(&operation).unwrap());
-        assert_eq!(table.len().unwrap(), 0);
+        let process = ResourceRef::parse("EphemeralProcess/worker").unwrap();
+        assert_eq!(
+            table.insert(operation.clone(), ResourceRef::parse("Process/worker").unwrap()),
+            Err(RouterError::WrongExecutionType)
+        );
+        table.insert(operation.clone(), process.clone()).unwrap();
+        assert_eq!(
+            table.insert(operation, process),
+            Err(RouterError::DuplicateOperation)
+        );
+    }
+
+    #[test]
+    fn exec_table_refuses_at_the_capacity_ceiling() {
+        let table = DurableExecTable::new();
+        let process = ResourceRef::parse("EphemeralProcess/worker").unwrap();
+        for index in 0..DEFAULT_MAX_EXECUTIONS {
+            let uid =
+                ResourceUid::parse(format!("123e4567-e89b-4abc-a456-{index:012x}")).unwrap();
+            table.insert(uid, process.clone()).unwrap();
+        }
+        let overflow = ResourceUid::parse("123e4567-e89b-4abc-a456-000000400000").unwrap();
+        assert_eq!(
+            table.insert(overflow, process),
+            Err(RouterError::Capacity)
+        );
+        assert_eq!(table.len().unwrap(), DEFAULT_MAX_EXECUTIONS);
     }
 
     #[test]

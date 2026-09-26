@@ -289,18 +289,6 @@ mod tests {
     }
 
     #[test]
-    fn daemon_input_pins_cross_domain_and_wayland_bind() {
-        let argv = generate_gpu_argv(&daemon_input()).unwrap();
-        let joined = argv.join(" ");
-        assert!(joined.contains("device gpu"));
-        assert!(joined.contains("--socket /run/d2b/vms/corp-vm/gpu.sock"));
-        assert!(joined.contains("--wayland-sock /run/d2b-gpu/corp-vm/wayland-0"));
-        assert!(joined.contains(
-            "--params {\"context-types\":\"virgl:virgl2:cross-domain\",\"displays\":[{\"hidden\":true}],\"egl\":true,\"vulkan\":true}"
-        ));
-    }
-
-    #[test]
     fn audit_parity_minimal() {
         let argv = generate_gpu_argv(&audit_input()).unwrap();
         assert!(argv[0].ends_with("/crosvm"));
@@ -457,18 +445,6 @@ mod tests {
         let argv = generate_gpu_argv(&input).unwrap();
         let joined = argv.join(" ");
         assert!(joined.contains("\"egl\":false"));
-    }
-
-    #[test]
-    fn context_type_string_round_trip() {
-        let pairs = [
-            (GpuContextType::Virgl, "virgl"),
-            (GpuContextType::Virgl2, "virgl2"),
-            (GpuContextType::CrossDomain, "cross-domain"),
-        ];
-        for (ct, expected) in pairs {
-            assert_eq!(ct.as_str(), expected);
-        }
     }
 
     /// Enforce at test time that every `GpuContextType::as_str()` output

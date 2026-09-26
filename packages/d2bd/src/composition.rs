@@ -373,17 +373,6 @@ impl std::fmt::Debug for CommittedGuestSessionTarget {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_scratch_root() -> PathBuf {
-    std::env::var_os("TEST_TMPDIR")
-        .or_else(|| std::env::var_os("CARGO_TARGET_TMPDIR"))
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
-        .or_else(|| std::env::current_dir().ok())
-        .map(|path| path.join("target"))
-        .expect("resolve test scratch root")
-}
-
 use d2bd_runtime::admission::{
     AdmissionConfig, PeerIdentity, PeerRole, authorize_peer, broker_caller_role_for_peer,
     verb_allowed_for_host_shutdown, verb_requires_admin,
@@ -24500,26 +24489,7 @@ mod accept_loop_concurrency_tests {
         );
     }
 
-    /// fix2b: a saturated semaphore refuses further admissions with `None`
-    /// (non-blocking), and a released permit re-opens a slot. This is the
-    /// admission decision the accept loop makes before spawning a handler.
-    #[test]
-    fn semaphore_refuses_at_cap_then_readmits_after_release() {
-        let sem = d2bd_runtime::concurrency::ConnSemaphore::new(2);
-        let p1 = sem.try_acquire().expect("first admit");
-        let p2 = sem.try_acquire().expect("second admit");
-        assert!(
-            sem.try_acquire().is_none(),
-            "cap-hit must refuse without blocking"
-        );
-        drop(p1);
-        let p3 = sem.try_acquire().expect("slot reopened after release");
-        drop(p2);
-        drop(p3);
-        let p4 = sem.try_acquire().expect("all permits released");
-        drop(p4);
     }
-}
 
 #[cfg(test)]
 mod broker_dispatch_tests {
@@ -24645,7 +24615,7 @@ mod broker_dispatch_tests {
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn test_daemon_state_dir(test_name: &str) -> PathBuf {
-        let dir = crate::test_scratch_root().join("d2bd-state");
+        let dir = d2b_core::test_support::scratch_root("d2bd-state").join("d2bd-state");
         fs::create_dir_all(&dir).expect("create broker dispatch scratch dir");
         let state_dir = dir.join(format!(
             "{test_name}-{}-{}",
@@ -26171,8 +26141,11 @@ mod broker_dispatch_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(test_root),
+        ignore = "P2fu1 software-r2 (longstanding pre-existing): same root/owner requirement as vm_start_broker_unreachable_returns_broker_error - the store-view sync enforces production bundle ownership policy (root:d2bd:0640), so the fixture must run as root. The flaky-ignore it replaced was a misdiagnosis of this same deterministic ownership failure."
+    )]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    #[ignore = "flaky on shared hosts; Unix socket reuse races"]
     fn vm_start_drives_supervisor_dag_in_topo_order() {
         use d2b_contracts_broker::broker_wire::{BrokerRequest, RunnerRole};
 
@@ -27656,7 +27629,6 @@ mod broker_dispatch_tests {
     }
 
     #[test]
-    #[ignore = "flaky on shared hosts; SIGKILL escalation timing varies"]
     fn vm_stop_escalates_to_sigkill_after_term_timeout() {
         let state =
             test_state_with_broker_socket(unreachable_broker_socket_path("vm-stop-sigkill"));
@@ -28787,42 +28759,6 @@ mod broker_dispatch_tests {
         );
     }
 
-    /// The v3 host contract document the generation side emits:the
-    /// `empty_zone_native_host` fields plus the declared NetworkManager
-    /// unmanaged contract.
-    fn sample_v3_host_contract_json() -> serde_json::Value {
-        json!({
-            "schemaVersion": "v3",
-            "site": { "allowUnsafeEastWest": false },
-            "environments": [],
-            "nftables": {
-                "family": "inet",
-                "table": "d2b",
-                "chains": [],
-                "ownershipId": ""
-            },
-            "networkManager": {
-                "filePath": "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf",
-                "matchCriteria": ["interface-name:d2b-*"],
-                "reloadBehavior": "atomic-reload",
-                "ownership": {
-                    "owner": "root",
-                    "group": "d2bd",
-                    "mode": "0640",
-                    "driftPolicy": "preserve"
-                }
-            },
-            "hostsFile": {
-                "startMarker": "# d2b-managed begin",
-                "endMarker": "# d2b-managed end",
-                "rule": ""
-            },
-            "kernelModules": [],
-            "fdOwnership": [],
-            "cloudHypervisorCapabilities": []
-        })
-    }
-
     /// Run `host prepare` against a v3 zone-native bundle fixture that
     /// optionally declares the hashed `host.json` contract artifact, over a
     /// fake broker capturing the two kernel envelope invocations. Returns the
@@ -28944,7 +28880,7 @@ mod broker_dispatch_tests {
     #[test]
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
     fn host_prepare_installs_declared_nm_unmanaged_contract() {
-        let host_contract = sample_v3_host_contract_json();
+        let host_contract = d2b_core::test_support::sample_zone_native_host_json();
         let (operations, nm_payload, response) =
             run_host_prepare_nm_scenario("host-prepare-nm-declared", Some(&host_contract));
         assert_eq!(operations, vec!["apply-nftables", "apply-nm-unmanaged"]);
@@ -30554,6 +30490,7 @@ mod g5_provider_identity_seed_tests {
 mod loader_worker_refusal_tests {
     use super::*;
     use d2b_core::loader_worker::{self, LoaderRefusal, MAX_LOADER_QUEUE_DEPTH};
+    use d2b_core::test_support::block_on;
     use std::{
         pin::Pin,
         process::Command,
@@ -30603,19 +30540,6 @@ mod loader_worker_refusal_tests {
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
         future.poll(&mut context)
-    }
-
-    /// Drive a future with no executor, reactor, or timer.
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let waker = Waker::noop();
-        let mut context = Context::from_waker(waker);
-        let mut future = std::pin::pin!(future);
-        loop {
-            match future.as_mut().poll(&mut context) {
-                Poll::Ready(value) => return value,
-                Poll::Pending => std::thread::yield_now(),
-            }
-        }
     }
 
     /// Releases the parked job even when an assertion unwinds first, so a

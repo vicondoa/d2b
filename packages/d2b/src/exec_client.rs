@@ -1972,6 +1972,46 @@ mod tests {
     }
 
     #[test]
+    fn fd_state_guard_propagates_raw_setup_failure_without_touching_state() {
+        struct RawFailingTty {
+            events: std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>,
+        }
+        impl HostTtyOps for RawFailingTty {
+            fn enter_raw(&self) -> io::Result<()> {
+                self.events.borrow_mut().push("raw_failed");
+                Err(io::Error::from_raw_os_error(5))
+            }
+            fn restore_termios(&self) {
+                self.events.borrow_mut().push("raw_restored");
+            }
+            fn try_add_nonblock(&self) -> io::Result<bool> {
+                self.events.borrow_mut().push("nonblock_set");
+                Ok(true)
+            }
+            fn clear_nonblock(&self) {
+                self.events.borrow_mut().push("nonblock_cleared");
+            }
+        }
+        let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let err = match FdStateGuard::enter_with(
+            Box::new(RawFailingTty {
+                events: events.clone(),
+            }),
+            true,
+            true,
+        ) {
+            Ok(_) => panic!("raw failure must propagate"),
+            Err(err) => err,
+        };
+        assert_eq!(err.raw_os_error(), Some(5));
+        assert_eq!(
+            *events.borrow(),
+            vec!["raw_failed"],
+            "nothing was applied, so nothing may be restored or flagged"
+        );
+    }
+
+    #[test]
     fn fd_state_guard_restores_raw_mode_when_nonblock_setup_fails() {
         // raw=true succeeds, then the O_NONBLOCK step fails: the terminal MUST
         // be restored out of raw mode before `enter` returns Err.

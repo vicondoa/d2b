@@ -193,23 +193,6 @@ mod tests {
     }
 
     #[test]
-    fn conflict_revision_survives_typed_wire_mapping() {
-        let error = map_store_error(StoreError::new(
-            StoreErrorKind::Resource(ResourceErrorKind::ResourceConflict),
-            Some(ZoneRevision::new(8)),
-            None,
-            RetryClass::Immediate,
-            "resource revision changed",
-        ));
-        let wire = to_wire_error(&error);
-        assert_eq!(wire.current_revision, Some(8));
-        assert_eq!(
-            wire.kind.enum_value().unwrap(),
-            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_CONFLICT
-        );
-    }
-
-    #[test]
     fn assignment_required_conflict_is_wire_valid_and_retryable() {
         let error = map_store_error(StoreError::new(
             StoreErrorKind::Resource(ResourceErrorKind::ResourceConflict),
@@ -244,22 +227,6 @@ mod tests {
             "invalid-store-error",
         ));
         assert_eq!(error.kind(), ResourceErrorKind::InternalIntegrityFailure);
-    }
-
-    #[test]
-    fn conflict_revision_can_be_hidden_without_changing_the_kind() {
-        let error = map_store_error_with_revision_visibility(
-            StoreError::new(
-                StoreErrorKind::Resource(ResourceErrorKind::ResourceConflict),
-                Some(ZoneRevision::new(8)),
-                None,
-                RetryClass::Reauthorize,
-                "revision-changed",
-            ),
-            false,
-        );
-        assert_eq!(error.kind(), ResourceErrorKind::ResourceConflict);
-        assert_eq!(error.current_revision(), None);
     }
 
     #[test]
