@@ -13,7 +13,7 @@ use d2b_contracts_broker::broker_wire::{
     GuestExecutionBinding as BrokerGuestExecutionBinding, ObserveRunnerRequest,
     ObserveRunnerResponse, OpenPidfdRequest, OpenPidfdResponse, RunnerLaunchArgs, RunnerRole,
     RunnerSignal, SandboxLaunchPlan, SignalRunnerRequest, SignalRunnerResponse, SpawnRunnerRequest,
-    SpawnRunnerResponse,
+    SpawnRunnerResponse, TakeControllerBootstrapRequest, TakeControllerBootstrapResponse,
 };
 use d2b_contracts_broker::kernel_client::{
     KernelInvocation, KernelInvokeError, KernelReply, envelope_invoke_kernel,
@@ -1530,14 +1530,16 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         // restart takes the retained escrow so the controller's bootstrap
         // sends - which have been landing in it - can be consumed.
         let intent = &handle.observed.intent;
-        let payload = serde_json::json!({
-            "vmId": intent.vm_id.to_string(),
-            "roleId": intent.role_id.to_string(),
-            "resourceRef": intent.resource_ref.to_canonical_string(),
-            "resourceUid": intent.resource_uid.as_str(),
-            "zoneUid": intent.zone_uid.as_ref().map(|uid| uid.as_str()),
-            "runtimeScope": intent.runtime_scope.map(|scope| scope.to_vec()),
-        });
+        let payload = serde_json::to_value(take_controller_bootstrap_request(intent)).map_err(
+            |error| {
+                warn!(
+                    provider = "supervisor",
+                    error = %error,
+                    "broker take-controller-bootstrap payload encoding failed"
+                );
+                ProcessEffectError::LaunchFailed
+            },
+        )?;
         let mut reply = self
             .envelope_call(
                 "take-controller-bootstrap",
@@ -1554,14 +1556,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                 );
                 response_error(&error, BrokerOperation::Other)
             })?;
-        let taken = reply
-            .response
-            .result
-            .as_ref()
-            .and_then(|result| result.get("taken"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        if !taken {
+        if !take_controller_bootstrap_verdict(&reply)?.taken {
             return Ok(None);
         }
         reply_take_fd(&mut reply, 0).map(Some).inspect_err(|&error| {
@@ -1711,6 +1706,55 @@ enum BrokerOperation<'a> {
     Other,
 }
 
+/// The committed `take-controller-bootstrap` payload for one runner identity.
+///
+/// The identity fields are the row's payload, and the typed request is what
+/// keeps their names and their presence in step with the row: the leg used
+/// to hand-build the same object, so a rename or a dropped field left a
+/// broker refusal that read like an absent runner identity.
+fn take_controller_bootstrap_request(
+    intent: &BrokerLaunchIntent,
+) -> TakeControllerBootstrapRequest {
+    TakeControllerBootstrapRequest {
+        vm_id: intent.vm_id.clone(),
+        role_id: intent.role_id.clone(),
+        resource_ref: Some(intent.resource_ref.clone()),
+        resource_uid: Some(intent.resource_uid.clone()),
+        zone_uid: intent.zone_uid.clone(),
+        runtime_scope: intent.runtime_scope,
+    }
+}
+
+/// Read the take verdict out of one settled `take-controller-bootstrap`
+/// reply.
+///
+/// A reply that carries no result, or a result that is not the committed
+/// take response, is a hard failure under the error the leg already reports
+/// for a failed invocation: reading it as "not taken" would make a broker
+/// wire defect indistinguishable from an absent escrow, and the caller
+/// would then replace a controller whose bootstrap endpoint it never
+/// claimed. `taken == false` is not that case - it is the broker's answer
+/// that no escrow is held for the identity, and stays an absent result.
+fn take_controller_bootstrap_verdict(
+    reply: &KernelReply,
+) -> Result<TakeControllerBootstrapResponse, ProcessEffectError> {
+    let result = reply.response.result.clone().ok_or_else(|| {
+        warn!(
+            provider = "supervisor",
+            "broker take-controller-bootstrap reply carried no result"
+        );
+        ProcessEffectError::LaunchFailed
+    })?;
+    serde_json::from_value(result).map_err(|error| {
+        warn!(
+            provider = "supervisor",
+            error = %error,
+            "broker take-controller-bootstrap reply is not the typed take response"
+        );
+        ProcessEffectError::LaunchFailed
+    })
+}
+
 /// Classify the start time observed for a freshly spawned child against the
 /// value the broker reported for it, and report the adoption refusal when the
 /// child cannot be adopted.
@@ -1836,6 +1880,10 @@ fn response_error(error: &KernelInvokeError, operation: BrokerOperation<'_>) -> 
 mod tests {
     use std::path::Path;
 
+    use d2b_contracts_broker::broker_wire::PIDFD_DISPATCH_FAILURE_KINDS;
+    use d2b_contracts_broker::broker_wire::{
+        BrokerRequest, BrokerRequestEnvelope, BrokerResponse, EnvelopeInvokeResponse, FdKind,
+    };
     use d2b_core::processes::ProcessRole;
 
     use crate::observations::MAX_PENDING_OBSERVATIONS;
@@ -1935,11 +1983,14 @@ mod tests {
     /// kernel's own `errored` code (the daemon-side family handler
     /// propagates the kernel's refusal), which is one of the
     /// dispatch-failure codes the backend classifies against the observed
-    /// process state.
+    /// process state. The detail is the shape the open-pidfd kernel emits:
+    /// the leg's name, the shared failure kind, then the handler's own text.
     fn pidfd_open_refusal() -> KernelInvokeError {
         KernelInvokeError::Refused {
             code: "errored".to_owned(),
-            detail: Some("open-pidfd: pidfd_open(123) failed: ESRCH".to_owned()),
+            detail: Some(
+                "open-pidfd: PidfdOpenFailed: pidfd_open(123) failed: ESRCH".to_owned(),
+            ),
         }
     }
 
@@ -2009,9 +2060,17 @@ mod tests {
 
     #[test]
     fn open_pidfd_dispatch_failure_is_ambiguous_only_after_identity_drift() {
-        const LIVE_HANDLER_SOURCE: &str = include_str!("../../d2b-broker/src/live_handlers.rs");
-        for producer_error in ["PidfdRace", "PidfdOpenFailed", "ProcStatReadFailed"] {
-            assert!(LIVE_HANDLER_SOURCE.contains(producer_error));
+        // The kinds the broker's pidfd handler reports come from the shared
+        // vocabulary the handler maps its variants through, so this leg
+        // never has to scrape the producer's source to know them. What it
+        // still relies on is their shape: the kind rides the refusal detail
+        // as a bare token, and the classification below reads the envelope's
+        // dispatch-failure code, not the token.
+        for kind in PIDFD_DISPATCH_FAILURE_KINDS {
+            assert!(
+                !kind.is_empty() && !kind.contains(char::is_whitespace),
+                "pidfd dispatch failure kind {kind:?} is not a bare token"
+            );
         }
 
         let refusal = pidfd_open_refusal();
@@ -2047,6 +2106,261 @@ mod tests {
         assert_eq!(
             response_error(&admission, BrokerOperation::OpenPidfd(&drifted)),
             ProcessEffectError::LaunchFailed
+        );
+    }
+
+    /// A fake broker answering exactly one `take-controller-bootstrap` leg:
+    /// the socket the leg dials (the directory holding it stays alive with
+    /// the leg) and the thread that served it.
+    struct TakeBootstrapLeg {
+        _directory: tempfile::TempDir,
+        socket: PathBuf,
+        server: std::thread::JoinHandle<()>,
+    }
+
+    /// The bytes the answering leg writes into the escrow descriptor, so the
+    /// caller can prove the descriptor it took is the one the broker sent.
+    const ESCROW_BYTES: &[u8] = b"controller-bootstrap";
+
+    /// Serve one `take-controller-bootstrap` leg on a fresh broker socket.
+    ///
+    /// The answering leg asserts the request it received is the committed
+    /// row's: the operation, a root call carrying no request descriptor, and
+    /// a payload of exactly the row's camelCase identity fields, which the
+    /// typed request decodes.
+    ///
+    /// `result` is the reply's result body (`None` is a resultless reply);
+    /// `attach_escrow` attaches one descriptor holding [`ESCROW_BYTES`].
+    fn serve_take_controller_bootstrap(
+        result: Option<serde_json::Value>,
+        attach_escrow: bool,
+    ) -> TakeBootstrapLeg {
+        use std::io::{IoSlice, IoSliceMut};
+        use std::os::fd::AsFd;
+        use std::os::unix::net::UnixStream;
+
+        use rustix::net::{
+            AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags,
+            SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketAddrUnix, SocketFlags,
+            SocketType, accept, bind_unix, listen, recvmsg, sendmsg, socket_with,
+        };
+
+        let directory = tempfile::tempdir().expect("socket directory");
+        let socket_path = directory.path().join("broker.sock");
+        let listener = socket_with(
+            AddressFamily::UNIX,
+            SocketType::SEQPACKET,
+            SocketFlags::CLOEXEC,
+            None,
+        )
+        .expect("listener socket");
+        let address = SocketAddrUnix::new(&socket_path).expect("socket address");
+        bind_unix(&listener, &address).expect("bind");
+        listen(&listener, 1).expect("listen");
+
+        let socket = socket_path.clone();
+        let server = std::thread::spawn(move || {
+            let connection = accept(&listener).expect("the take leg dials");
+            let mut buffer = vec![0_u8; d2b_contracts::MAX_FRAME_SIZE + 4];
+            let mut iov = [IoSliceMut::new(&mut buffer)];
+            let mut ancillary_bytes = [0_u8; rustix::cmsg_space!(ScmRights(1))];
+            let mut ancillary = RecvAncillaryBuffer::new(&mut ancillary_bytes);
+            let received = recvmsg(&connection, &mut iov, &mut ancillary, RecvFlags::CMSG_CLOEXEC)
+                .expect("request frame");
+            let mut request_fds = 0;
+            for message in ancillary.drain() {
+                if let RecvAncillaryMessage::ScmRights(fds) = message {
+                    request_fds += fds.len();
+                }
+            }
+            assert_eq!(request_fds, 0, "the take leg attaches no request descriptor");
+            let envelope: BrokerRequestEnvelope =
+                d2b_contracts::decode_frame("BrokerRequestEnvelope", &buffer[..received.bytes])
+                    .expect("request envelope");
+            let BrokerRequest::EnvelopeInvoke(request) = envelope.request else {
+                panic!("expected one EnvelopeInvoke leg");
+            };
+            assert_eq!(request.operation, "take-controller-bootstrap");
+            assert_eq!(request.zone, "corp");
+            assert_eq!(request.chain_root_invocation_id, None);
+            assert_eq!(request.chain_identities, None);
+            assert_eq!(
+                request.payload,
+                serde_json::json!({
+                    "vmId": "corp-vm",
+                    "roleId": "worker",
+                    "resourceRef": "Process/worker",
+                    "resourceUid": "00000000-0000-4000-8000-000000000001",
+                }),
+                "the leg carries the committed take-controller-bootstrap payload"
+            );
+            let _: TakeControllerBootstrapRequest =
+                serde_json::from_value(request.payload.clone())
+                    .expect("the committed payload decodes into the typed take request");
+
+            let (fd_indexes, fd_kinds) = if attach_escrow {
+                (vec![0], vec![FdKind::Any])
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            let response = BrokerResponse::EnvelopeInvoke(EnvelopeInvokeResponse {
+                operation: "take-controller-bootstrap".to_owned(),
+                invocation_id: "invocation-take".to_owned(),
+                result,
+                refusal: None,
+                detail: None,
+                fd_indexes,
+                fd_kinds,
+            });
+            let frame = d2b_contracts::encode_frame(&response).expect("response frame");
+            let iov = [IoSlice::new(&frame)];
+            if attach_escrow {
+                // The escrow crosses as an SCM_RIGHTS attachment of the same
+                // frame that carries the verdict, exactly as the kernel's
+                // reply leg sends it.
+                let (peer, escrow) = UnixStream::pair().expect("escrow socket pair");
+                let mut written = 0;
+                while written < ESCROW_BYTES.len() {
+                    written +=
+                        rustix::io::write(&peer, &ESCROW_BYTES[written..]).expect("escrow bytes");
+                }
+                let escrow: OwnedFd = escrow.into();
+                let descriptors = [escrow.as_fd()];
+                let mut control_bytes = [0_u8; rustix::cmsg_space!(ScmRights(1))];
+                let mut control = SendAncillaryBuffer::new(&mut control_bytes);
+                assert!(control.push(SendAncillaryMessage::ScmRights(&descriptors)));
+                assert_eq!(
+                    sendmsg(&connection, &iov, &mut control, SendFlags::empty())
+                        .expect("escrow reply frame"),
+                    frame.len()
+                );
+            } else {
+                assert_eq!(
+                    rustix::net::send(&connection, &frame, SendFlags::empty())
+                        .expect("reply frame"),
+                    frame.len()
+                );
+            }
+        });
+        TakeBootstrapLeg {
+            _directory: directory,
+            socket,
+            server,
+        }
+    }
+
+    /// Run one `take-controller-bootstrap` leg through the production
+    /// backend against a fake broker that answers with `result`.
+    fn take_controller_bootstrap_against(
+        result: Option<serde_json::Value>,
+        attach_escrow: bool,
+    ) -> (Result<Option<OwnedFd>, ProcessEffectError>, TakeBootstrapLeg) {
+        let leg = serve_take_controller_bootstrap(result, attach_escrow);
+        let backend = BrokerProcessBackend::with_socket_and_role(
+            Resolver,
+            &leg.socket,
+            Duration::from_secs(5),
+            BrokerCallerRole::AdminUid { uid: 1000 },
+        );
+        // The leg never touches the handle's own descriptor; only the
+        // runner intent it was adopted from crosses.
+        let handle = BrokerPidfdHandle {
+            pidfd: rustix::event::eventfd(0, rustix::event::EventfdFlags::empty())
+                .expect("placeholder descriptor"),
+            observed: observed(1),
+            spawn_invocation_id: None,
+        };
+        let outcome = backend.take_controller_bootstrap(&handle);
+        (outcome, leg)
+    }
+
+    /// Read the escrow bytes back from the descriptor a take handed over.
+    fn read_escrow(escrow: OwnedFd) -> Vec<u8> {
+        let mut bytes = vec![0_u8; ESCROW_BYTES.len()];
+        let mut read = 0;
+        while read < bytes.len() {
+            read += rustix::io::read(&escrow, &mut bytes[read..]).expect("escrow read");
+        }
+        bytes
+    }
+
+    /// The take-controller-bootstrap leg reads the committed reply: an
+    /// escrow-less take is an absent result, and a reply that is not the
+    /// committed response - resultless, mistyped, or carrying a field the
+    /// row does not declare - fails the leg instead of reading as "not
+    /// taken", which would replace a controller whose bootstrap endpoint
+    /// the caller never claimed.
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    #[test]
+    fn take_controller_bootstrap_reads_the_committed_reply() {
+        let (absent, leg) =
+            take_controller_bootstrap_against(Some(serde_json::json!({ "taken": false })), false);
+        assert!(
+            absent.expect("a not-taken reply is an absent escrow").is_none(),
+            "a broker holding no escrow takes nothing"
+        );
+        leg.server.join().expect("the answering leg served the take");
+
+        let (taken, leg) =
+            take_controller_bootstrap_against(Some(serde_json::json!({ "taken": true })), true);
+        let escrow = taken
+            .expect("a taken escrow")
+            .expect("the escrow descriptor the reply attached");
+        assert_eq!(
+            read_escrow(escrow),
+            ESCROW_BYTES,
+            "the take hands over the descriptor the broker attached"
+        );
+        leg.server.join().expect("the answering leg served the take");
+
+        let malformed = [
+            None,
+            Some(serde_json::json!({ "taken": "yes" })),
+            Some(serde_json::json!({ "taken": true, "escrow": 1 })),
+        ];
+        for result in malformed {
+            let (failed, leg) = take_controller_bootstrap_against(result, false);
+            assert_eq!(
+                failed.expect_err("a malformed reply fails the take"),
+                ProcessEffectError::LaunchFailed,
+                "a reply that is not the committed take response must not read as not-taken"
+            );
+            leg.server.join().expect("the answering leg served the take");
+        }
+    }
+
+    /// The take payload is the committed row's: its camelCase identity
+    /// fields and nothing else (the row is `additionalProperties: false`),
+    /// with the runtime scope as the row's 32-byte array and the optional
+    /// pair omitted when the launch carries none.
+    #[test]
+    fn take_controller_bootstrap_payload_carries_the_row_identity_fields() {
+        let mut intent = observed(1).intent;
+        assert_eq!(
+            serde_json::to_value(take_controller_bootstrap_request(&intent)).unwrap(),
+            serde_json::json!({
+                "vmId": "corp-vm",
+                "roleId": "worker",
+                "resourceRef": "Process/worker",
+                "resourceUid": "00000000-0000-4000-8000-000000000001",
+            })
+        );
+
+        intent.zone_uid = Some(
+            ResourceUid::parse("00000000-0000-4000-8000-000000000002").expect("zone uid"),
+        );
+        intent.runtime_scope = Some([7; 32]);
+        let scope = [7_u8; 32];
+        assert_eq!(
+            serde_json::to_value(take_controller_bootstrap_request(&intent)).unwrap(),
+            serde_json::json!({
+                "vmId": "corp-vm",
+                "roleId": "worker",
+                "resourceRef": "Process/worker",
+                "resourceUid": "00000000-0000-4000-8000-000000000001",
+                "zoneUid": "00000000-0000-4000-8000-000000000002",
+                "runtimeScope": scope,
+            })
         );
     }
 
