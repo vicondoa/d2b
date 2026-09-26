@@ -211,8 +211,8 @@ tagline sweep (drop "on microvm.nix" from `flake.nix` /
 
 > **v1.1.1 status note**: v1.1.1 keeps emitting the v1.0/v1.1
 > `StatusServicesOutputV2` shape. The V3 wire schema
-> (`StatusServicesOutputV3`) ships with the emit-side flip,
-> scheduled for v1.1.2, per the rename map below.
+> ships with the emit-side flip, scheduled for v1.1.2. The V3 shape is the
+> rename map below applied to V2; it is not a type you can name today.
 >
 > Tooling authors that consume the JSON output should:
 > - At v1.1.1, continue parsing V2 (`microvm`/`snd`/`virtiofsd`).

@@ -47,8 +47,8 @@ The audit (16 craft lenses over every workspace crate, independently verified) p
 
 **Recording**
 
-- R8. The audit report and lane files stay unedited; the remediation ledger lives beside them and is updated in the same pull request as the fixes it describes.
-- R9. Finding identifiers appear only inside the audit directory and its ledger - never in source, doc comments, commit messages, changelog fragments, or the pull request body.
+- R8. The audit report and lane files stay unedited while the remediation runs, and the ledger is updated in the same pull request as the fixes it describes. The audit record is working material for the remediation and does not ship; the gate set and the changelog fragments are the record that does.
+- R9. Finding identifiers appear only inside the audit record while it is being built - never in source, doc comments, commit messages, changelog fragments, or the pull request body.
 
 **Gates**
 
@@ -318,9 +318,9 @@ Each gate is the KTD3 set. Ratchet reconciliation (KTD6) and ledger rows (R8) ha
 - Every one of the audit's findings is applied, or recorded with evidence as skipped-stale, already-fixed, escalated, reclassified, or policy-confirmed; no finding is silently dropped and none is applied without re-verification.
 - Each wave's gate set (R10) is green before the next wave starts; residual failures are attributed to the wave-0 baseline with recorded evidence, and any baseline-attributed failure that later blocks close-out has an owner recorded in the ledger.
 - Ratchet surfaces moved by the fixes were moved in the same commits, and the contract-surface changes shipped with their schema, emitter, prose, version, and pins together.
-- The audit report and lane files are byte-unchanged; the ledger is complete and lives in the audit directory.
+- The audit report and lane files stayed byte-unchanged and the ledger was complete for the whole remediation. The record itself is not part of the shipped tree: each finding's outcome is carried by its changelog fragment and by the code the gate exercises.
 - Final acceptance ran both integration lanes on the reviewed head, and the pull request carries review evidence for that head.
-- No finding identifier leaked outside the audit directory: not into source, doc comments, commits, changelog fragments, or the pull request body.
+- No finding identifier reached the shipped tree: not into source, doc comments, commits, changelog fragments, or the pull request body.
 
 ---
 
