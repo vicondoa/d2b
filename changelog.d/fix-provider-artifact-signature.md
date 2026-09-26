@@ -11,9 +11,12 @@
   the current manifest bytes. The manifest itself is byte-for-byte unchanged.
   The previous private key is not recoverable, so the publisher key changes
   rather than being re-derived; the operator holds the new private half
-  outside the repository, and only its location and public fingerprint are
-  recorded here. Consumers that pinned the old publisher key must trust the
-  new public key before building a Zone that installs this artifact.
+  outside the repository. The new public key is the committed
+  `packages/d2b-provider-guest-cloud-hypervisor/publisher-public-key.pem`,
+  whose `sha256` over the DER `SubjectPublicKeyInfo` is
+  `d798fa9f94f64015d5711c0484b5b30cef1b6c9bb918cb46bf43338e0d817b57`.
+  Consumers that pinned the old publisher key must trust the new public key
+  before building a Zone that installs this artifact.
 
 ### Added
 

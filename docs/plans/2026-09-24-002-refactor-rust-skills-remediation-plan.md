@@ -68,7 +68,7 @@ The audit (16 craft lenses over every workspace crate, independently verified) p
 **Deferred to Follow-Up Work**
 
 - Findings reclassified at apply time into a surface this plan excludes (recorded in the ledger, then planned separately).
-- The retired `labs/` tree and any pre-existing failure the baseline attributes to work outside the audit's crates.
+- The `labs/` tree, which is live at this head rather than retired: it is tracked, carries its own `AGENTS.md` and live prototypes such as ADR 0047's `labs/window-chrome/`, so its disposition stays with those owners and this plan does not retire it. Also any pre-existing failure the baseline attributes to work outside the audit's crates.
 - New benchmark coverage for the perf lens: the audit's perf rows are static, and this plan applies only their structural wins (KTD10).
 
 ### Open Questions
@@ -148,7 +148,7 @@ Each gate is the KTD3 set. Ratchet reconciliation (KTD6) and ledger rows (R8) ha
 - **Goal:** the unit of record is tracked, the gate baseline is recorded, and the correctness-first rows are fixed (or, for the one policy-confirmed row, recorded) so the first wave gate reads as evidence.
 - **Requirements:** R2, R3, R5, R10; KTD4.
 - **Dependencies:** none.
-- **Files:** `changelog.d/`, and the finding sites - `packages/d2b-resource-runtime/src/revision.rs`, `packages/d2bd-runtime/src/runtime_process.rs`, `packages/d2b-broker/src/runtime.rs`, `packages/d2b-broker/src/ops/kernel_ops.rs`, `packages/d2b-broker/src/ops/sys.rs`, `packages/d2b-bus/src/` (telemetry test), `packages/d2b-provider-display-wayland/src/filter.rs`, `packages/d2b-provider-wayland-policy/src/` (applied), `packages/d2b-provider-user/src/` (record-only, no code change).
+- **Files:** `changelog.d/`, and the finding sites - `packages/d2b-resource-runtime/src/revision.rs`, `packages/d2bd-runtime/src/runtime_process.rs`, `packages/d2b-broker/src/runtime.rs`, `packages/d2b-broker/src/kernel_ops.rs`, `packages/d2b-broker/src/sys.rs`, `packages/d2b-bus/src/` (telemetry test), `packages/d2b-provider-display-wayland/src/wayland_proxy/filter.rs`, `packages/d2b-provider-wayland-policy/src/` (applied), `packages/d2b-provider-user/src/` (record-only, no code change).
 - **Approach:**
   1. Commit the audit corpus and create the ledger with this row schema: finding id, lens, cluster, audit verdict, outcome, apply-time anchor, wave, commit, reason or policy citation, escalation history, and - for an escalated row - the final outcome recorded when the owning wave applies it (KTD1, R8).
   2. Record the baseline: run the KTD3 gate set at the untouched head and write the result - pass or fail per gate, with every pre-existing failure attributed. Any additional pre-existing failure inside the audit's crates is fixed here when it blocks the gate and otherwise recorded as baseline-attributed and deferred.

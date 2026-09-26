@@ -1366,9 +1366,10 @@ The settings schema file at:
 docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json
 ```
 
-is committed, version-controlled, and kept in sync with the Rust
-`AzureRelayTransportSettings` type by `make test-drift` (via
-`xtask gen-provider-transport-schemas && git diff --exit-code`).
+is committed and hand-authored: the crate embeds it verbatim through
+`RelayTransportSettings::schema_json` and re-runs the same admission rules on
+every settings object it deserializes, so the committed file is the review
+surface rather than a derived copy.
 
 The committed settings schema remains the review surface. The derivation copy
 at `share/d2b/provider/config-schema.json` is the copy the resource compiler
@@ -1461,8 +1462,8 @@ download, or PATH scan.
 | Current source | `docs/specs/ADR-046-zone-routing.md` transport settings Nix example |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/transport_settings.rs`; `docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json` |
-| Detailed design | `AzureRelayTransportSettings` Rust struct with serde for only `relayNamespaceId` and `relayEntityId`; validation against committed JSON Schema; reject secret-shaped fields/values; generate and admit the exact six-field ZoneLink base; reject legacy provider envelopes and allocator-private fingerprint/capability fields; resolve `spec.transportProviderRef` before schema validation; validate exactly two same-Zone `spec.transportCredentials` refs with one `azure-relay-listen` and one `azure-relay-send` audience; enforce `disabled`/`limits` in child core; xtask `gen-provider-transport-schemas` integration |
-| Integration | `make test-drift` gate: `xtask gen-provider-transport-schemas && git diff --exit-code` |
+| Detailed design | `RelayTransportSettings` Rust struct with serde for only `relayNamespaceId` and `relayEntityId`; validation against committed JSON Schema; reject secret-shaped fields/values; generate and admit the exact six-field ZoneLink base; reject legacy provider envelopes and allocator-private fingerprint/capability fields; resolve `spec.transportProviderRef` before schema validation; validate exactly two same-Zone `spec.transportCredentials` refs with one `azure-relay-listen` and one `azure-relay-send` audience; enforce `disabled`/`limits` in child core; the committed schema is hand-authored and embedded verbatim through `RelayTransportSettings::schema_json` |
+| Integration | No generator owns the file: `RelayTransportSettings::schema_json` embeds it verbatim and `tests/transport_settings_schema.rs` parses and pins it |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/transport_settings_schema.rs`: valid/invalid schema vectors; `tests/transport_credentials.rs`: exact canonical ZoneLink field set, same-Zone ref/count/audience/scope checks, and rejection of credential refs inside `transportSettings`; eval-time Nix assertion coverage from `nix-unit: transport-settings-secret-key` test (see zone-routing spec) |
 | Removal proof | N/A; new contract |
