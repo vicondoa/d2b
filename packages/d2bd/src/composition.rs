@@ -19467,7 +19467,7 @@ fn dispatch_broker_vm_start_inner(
                 vm: request.vm.clone(),
                 runner: VM_RUNNER_ROLE_ID.to_owned(),
                 elapsed_secs: api_timeout.as_secs(),
-                mode: "strict".to_owned(),
+                mode: d2bd_runtime::daemon_audit::ApiReadyMode::Strict,
             },
         ) {
             tracing::warn!(
@@ -28800,7 +28800,7 @@ mod broker_dispatch_tests {
                 vm: "vm-a".to_owned(),
                 runner: VM_RUNNER_ROLE_ID.to_owned(),
                 elapsed_secs: 120,
-                mode: "strict".to_owned(),
+                mode: d2bd_runtime::daemon_audit::ApiReadyMode::Strict,
             })
             .expect("write ApiReadyTimeout audit event");
 
