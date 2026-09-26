@@ -1397,7 +1397,7 @@ fn peer_matches_instance(config: &ServerConfig, peer_uid: u32, peer_gid: u32) ->
         || (config.profile == BrokerProfile::Host && peer_uid == 0)
 }
 
-/// The harness-only peer-uid override's frame member (RS-0328).
+/// The harness-only peer-uid override's frame member.
 ///
 /// The broker's own harness - the bootstrap probe CLI and the integration
 /// tests - asks a `--test-mode` broker to treat one connection as a peer other

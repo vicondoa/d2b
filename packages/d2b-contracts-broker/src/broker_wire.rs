@@ -3242,7 +3242,7 @@ mod tests {
 
     #[test]
     fn broker_request_envelope_refuses_a_test_only_peer_uid_member() {
-        // RS-0328: the test-only peer-uid override is no longer a member of
+        // The test-only peer-uid override is no longer a member of
         // the wire contract. The harness frames a `--test-mode` broker
         // unwraps it from; every other broker refuses it here.
         let env = BrokerRequestEnvelope {

@@ -30,7 +30,7 @@ pub enum AuditExportErrorCode {
 /// One typed audit export entry. Its payload is exactly one of an audit record
 /// or a closed export failure class, so the state the retired `record` /
 /// `error` pair left representable - neither populated - cannot be built, and
-/// an entry that carries both is refused at decode (RS-0546).
+/// an entry that carries both is refused at decode.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "AuditExportEntryWire", into = "AuditExportEntryWire")]
 pub struct AuditExportEntry {

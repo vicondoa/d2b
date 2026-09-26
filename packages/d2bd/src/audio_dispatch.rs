@@ -379,8 +379,8 @@ pub(crate) fn combined_audio_applied(
     /// A mutation refuses a target that is not declared in the public manifest
     /// through [`TypedError::AudioVmNotFound`], and a target whose manifest
     /// entry does not declare audio through [`TypedError::AudioNotEnabled`] -
-    /// the same classes the status path reports per VM through `AudioVmError`
-    /// (RS-0537). Lock, read, write, and enforcement failures keep returning
+    /// the same classes the status path reports per VM through `AudioVmError`.
+    /// Lock, read, write, and enforcement failures keep returning
     /// [`TypedError::InternalIo`].
     pub fn dispatch_audio(
     state: &ServerState,
@@ -405,7 +405,7 @@ fn dispatch_audio_status(
 
     // Collect the set of VMs to query before sizing the result buffers: the
     // only lower bound on admission of that set, so both grow-by-push lists
-    // below are pre-sized to it instead of starting empty (RS-0803).
+    // below are pre-sized to it instead of starting empty.
     let vm_names: Vec<String> = if args.vms.is_empty() {
         manifest
             .vms

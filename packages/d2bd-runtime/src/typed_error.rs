@@ -713,13 +713,13 @@ pub enum TypedError {
     /// declared in the public manifest. The status path reports the same class
     /// per VM as `AudioErrorKind::VmNotFound`, so a mutation caller
     /// distinguishes a bad target from an internal I/O failure by `kind` /
-    /// exit code instead of by matching the message text (RS-0537).
+    /// exit code instead of by matching the message text.
     AudioVmNotFound {
         vm: String,
     },
     /// An audio mutation (`set-volume` / `mute`) named a VM whose manifest
     /// entry does not declare audio. The status path reports the same class
-    /// per VM as `AudioErrorKind::AudioNotEnabled` (RS-0537).
+    /// per VM as `AudioErrorKind::AudioNotEnabled`.
     AudioNotEnabled {
         vm: String,
     },
@@ -1812,7 +1812,7 @@ mod tests {
 
     #[test]
     fn audio_mutation_refusals_are_structured_and_leak_free() {
-        // RS-0537: an audio mutation must not report a user-input refusal as
+        // An audio mutation must not report a user-input refusal as
         // the `internal-io` class, so a caller can tell the two apart without
         // matching the message text.
         let not_found = TypedError::AudioVmNotFound {
