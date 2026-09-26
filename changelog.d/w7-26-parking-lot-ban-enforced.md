@@ -8,9 +8,9 @@
   matches a configured method path against the definition a call
   resolves to, so an alias spelling never matched a call site. Reasons
   and replacements are unchanged, the sanctioned per-site allow
-  vocabulary (`synchronous path`, `cfg(test) helper`, R4 worker
-  boundary) is unchanged, and `parking_lot::Condvar::wait` stays as
-  configured because `Condvar` is a real type, not an alias.
+  vocabulary (`synchronous path`, `cfg(test) helper`, the dedicated
+  bounded-worker reason) is unchanged, and `parking_lot::Condvar::wait` stays
+  as configured because `Condvar` is a real type, not an alias.
 
 ### Fixed
 

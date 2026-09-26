@@ -115,7 +115,7 @@ Wave and gate sequence - one branch, one pull request:
 
 ```mermaid
 flowchart TB
-  W0[Wave 0: commit audit corpus; baseline snapshot; clear the red-at-head rows] --> G0{Gate}
+  W0[Wave 0: baseline snapshot; ledger; clear the red-at-head rows] --> G0{Gate}
   G0 -->|green or baseline-attributed| W1[Wave 1: docs + idiom + own leaf]
   W1 --> G1{Gate}
   G1 --> W2[Wave 2: type + api + err + serde + obs leaf]
@@ -135,7 +135,9 @@ Each gate is the KTD3 set. Ratchet reconciliation (KTD6) and ledger rows (R8) ha
 
 ### Assumptions
 
-- The audit corpus is committed with wave 0 so worktrees and reviewers can read the lanes (its directory is currently untracked).
+- The audit corpus stays working material outside the shipped tree, as R8
+  requires: wave 0 reads the lane files where the audit wrote them, and each
+  finding's outcome is carried by its changelog fragment and by the code.
 - `make check` at the untouched head is red on the audit's reported test; wave 0 confirms or refutes this, and the baseline record decides how later red gates are attributed.
 - Findings' anchors are valid at the audit's baseline commit; the tree has not changed since, but application still locates symbols rather than lines (R3).
 
@@ -143,14 +145,16 @@ Each gate is the KTD3 set. Ratchet reconciliation (KTD6) and ledger rows (R8) ha
 
 ## Implementation Units
 
-### U1. Wave 0 - baseline, corpus commit, and the red-at-head rows
+### U1. Wave 0 - baseline, ledger, and the red-at-head rows
 
-- **Goal:** the unit of record is tracked, the gate baseline is recorded, and the correctness-first rows are fixed (or, for the one policy-confirmed row, recorded) so the first wave gate reads as evidence.
+- **Goal:** the ledger is started, the gate baseline is recorded, and the
+  correctness-first rows are fixed (or, for the one policy-confirmed row,
+  recorded) so the first wave gate reads as evidence.
 - **Requirements:** R2, R3, R5, R10; KTD4.
 - **Dependencies:** none.
 - **Files:** `changelog.d/`, and the finding sites - `packages/d2b-resource-runtime/src/revision.rs`, `packages/d2bd-runtime/src/runtime_process.rs`, `packages/d2b-broker/src/runtime.rs`, `packages/d2b-broker/src/kernel_ops.rs`, `packages/d2b-broker/src/sys.rs`, `packages/d2b-bus/src/` (telemetry test), `packages/d2b-provider-display-wayland/src/wayland_proxy/filter.rs`, `packages/d2b-provider-wayland-policy/src/` (applied), `packages/d2b-provider-user/src/` (record-only, no code change).
 - **Approach:**
-  1. Commit the audit corpus and create the ledger with this row schema: finding id, lens, cluster, audit verdict, outcome, apply-time anchor, wave, commit, reason or policy citation, escalation history, and - for an escalated row - the final outcome recorded when the owning wave applies it (KTD1, R8).
+  1. Create the ledger with this row schema: finding id, lens, cluster, audit verdict, outcome, apply-time anchor, wave, commit, reason or policy citation, escalation history, and - for an escalated row - the final outcome recorded when the owning wave applies it (KTD1, R8).
   2. Record the baseline: run the KTD3 gate set at the untouched head and write the result - pass or fail per gate, with every pre-existing failure attributed. Any additional pre-existing failure inside the audit's crates is fixed here when it blocks the gate and otherwise recorded as baseline-attributed and deferred.
   3. Dispose of the 13 `high` rows, re-verified per R3: apply the four test rows, the two wire-digest panic rows, the provider-wayland-policy caller-input panic at its driver-args boundary, and the four executor-blocking rows (each with the replacement the lint vocabulary names rather than a new allowance); record the provider-user blocking-NSS row as a policy-confirmed no-op citing its policy (R14, KTD8); escalate the remaining member sites of the shared driver-args class to U5, with the escalation recorded. Those groups account for all thirteen: the eight `leaf` rows (the four test rows, the daemon audit-join digest row, two of the four executor-blocking rows, and the provider-user row recorded as a no-op), both `family` rows (the driver-args class - one applied here, one escalated), and the three `wide` rows (the broker dispatch digest row inside the wire-digest pair, and the broker reap-poll and NSS-lookup rows inside the executor-blocking four).
   4. Reconcile the ratchets these rows touch, then run the gate; the wave only closes with a red-to-green delta on the baseline record.
@@ -164,7 +168,7 @@ Each gate is the KTD3 set. Ratchet reconciliation (KTD6) and ledger rows (R8) ha
   - The provider-wayland-policy driver constructor returns a typed refusal for a malformed zone token instead of panicking.
   - The ledger carries the provider-user NSS row as a policy-confirmed no-op citing the policy file, with no code change in that crate.
   - `make check-census` is no worse than the recorded baseline after the blocking fixes.
-- **Verification:** the audit corpus is tracked; the baseline record states each gate's state at the frozen head; every U1 ledger row carries an outcome and an apply-time anchor; the wave gate set is green or the residual failures are attributed to the baseline with evidence.
+- **Verification:** the ledger carries a row for every finding with an outcome and an apply-time anchor; the baseline record states each gate's state at the frozen head; the wave gate set is green or the residual failures are attributed to the baseline with evidence.
 
 ### U2. Wave 1 - documentation, idiom, and ownership leaf work
 

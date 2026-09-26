@@ -228,7 +228,7 @@ instances: `virtiofsd[store]` is the share whose `tag` is `store`;
 output; JSON uses `{"virtiofsd_per_share": {"store": {...}},
 "usbip_backend_per_env": {"default": {...}}}`.
 
-| V2 field (current CLI output)    | V3 field (wire-side, v1.1.1+) | Notes                                                              |
+| V2 field (current CLI output)    | V3 field (wire-side, v1.1.2+) | Notes                                                              |
 | -------------------------------- | ----------------------------- | ------------------------------------------------------------------ |
 | `d2b`                        | (deleted)                     | The legacy wrapper unit was removed in v1.0; V3 drops the field.   |
 | `microvm`                        | `hypervisor`                  | Cloud Hypervisor runner is broker-spawned in v1.1.                 |

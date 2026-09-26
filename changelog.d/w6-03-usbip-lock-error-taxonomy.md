@@ -9,5 +9,7 @@
   lock record keeps using the broker's own uid and the daemon gid.
 - d2b-broker: `guest_socket_directory` returns a typed `GuestSocketError`
   instead of a `&'static str` code, with the same stable refusal strings
-  ("not-a-plain-name", "not-anchored", "outside-runtime-root") surfaced
-  through the launch-failure envelope.
+  (`device-worker-guest-not-a-plain-name`,
+  `device-worker-runtime-root-not-anchored`,
+  `device-worker-socket-dir-outside-runtime-root`) surfaced through the
+  launch-failure envelope.
