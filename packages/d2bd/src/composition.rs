@@ -37,6 +37,7 @@ use d2b_contracts_broker::broker_wire::{
     BrokerCallerRole,
     BrokerRequest, BrokerRequestEnvelope, BrokerResponse,
     ChildExitKind, ChildExitStatus, ChildReapedNotification,
+    DEFAULT_CONTEXT_DEADLINE_MS,
     ExportBrokerAuditRequest,
     QemuMediaBootRequest as BrokerQemuMediaBootRequest,
     QemuMediaHotplugRequest as BrokerQemuMediaHotplugRequest,
@@ -10304,6 +10305,21 @@ pub(crate) fn broker_socket_path(state: &ServerState) -> PathBuf {
 /// The broker kernel IO budget one legacy kernel invocation may take.
 pub(crate) const KERNEL_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The io budget the two lifecycle-cell claims poll the broker under.
+///
+/// `consume-cell` and `complete-cell` declare the carrier's
+/// `DeadlineTier::Standard`, so the claim polls for `DEFAULT_CONTEXT_DEADLINE_MS`
+/// rather than the legacy 10s `KERNEL_IO_TIMEOUT`: a poll shorter than the
+/// budget the row is served under abandons a claim the broker is still
+/// serving. Measured 2026-09-25: a 10s poll on this leg turned a slow broker
+/// reply into `EffectRejected`, the one spelling the Device Providers read as
+/// permanent, and the TPM device controller then spun on it for the rest of
+/// the run (`device-worker-launch` failing runs carry 100 to 855
+/// `EffectRejected` lines; most passing runs carry none), which left the
+/// one-shot `EphemeralProcess/swtpm-flush-tpm0` refused and its outcome wait
+/// unsatisfiable.
+const LIFECYCLE_CELL_IO_TIMEOUT: Duration = Duration::from_millis(DEFAULT_CONTEXT_DEADLINE_MS);
+
 /// The daemon-side runner lookup the U10 family seam wires: `(vm, role)` to
 /// the retained `(pid, start_time_ticks)` of the daemon's pidfd table.
 ///
@@ -19057,7 +19073,7 @@ pub(crate) fn consume_lifecycle_lease(
     for (kernel, result_field) in [("consume-cell", "consumed"), ("complete-cell", "completed")] {
         let reply = envelope_invoke_kernel(
             &broker_socket_path(state),
-            KERNEL_IO_TIMEOUT,
+            LIFECYCLE_CELL_IO_TIMEOUT,
             caller_role.clone(),
             KernelInvocation {
                 operation: kernel,
@@ -19068,7 +19084,20 @@ pub(crate) fn consume_lifecycle_lease(
                 chain_identities: None,
             },
         )
-        .map_err(|_| provider_effects::ProviderEffectError::EffectRejected)?;
+        // A served refusal is the claim's own answer - the cell machinery
+        // refused it, and no retry reverses a spent claim - so it keeps the
+        // permanent spelling. Everything else (an unanswered broker, a
+        // malformed reply) says nothing about the claim and keeps the
+        // retryable spelling the callers defer on; reporting those as
+        // `EffectRejected` made a merely unanswered claim permanently fatal.
+        .map_err(|error| match error {
+            KernelInvokeError::Refused { .. } => {
+                provider_effects::ProviderEffectError::EffectRejected
+            }
+            KernelInvokeError::Transport(_) | KernelInvokeError::Protocol(_) => {
+                provider_effects::ProviderEffectError::StateUnavailable
+            }
+        })?;
         let granted = reply
             .response
             .result
@@ -27304,6 +27333,37 @@ mod broker_dispatch_tests {
             Err(super::provider_effects::ProviderEffectError::EffectRejected)
         );
         broker.join().expect("broker join");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
+    fn an_unanswered_cell_kernel_defers_instead_of_refusing() {
+        // The other half of the refusal contract: a broker that never
+        // answered says nothing about the claim, so the caller hands back
+        // the retryable spelling the Device Providers defer on. Returning
+        // `EffectRejected` here (the served replay refusal above) would read
+        // as permanent, and a Guest whose claim was merely unanswered would
+        // wedge on it.
+        let state =
+            test_state_with_broker_socket(unreachable_broker_socket_path("lease-cell-silent"));
+        let authorization = LifecycleAuthorization::for_test_with_guest(
+            "Guest/vm-a",
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            4,
+            9,
+            7,
+            "lease-caller-silent",
+        );
+        assert_eq!(
+            super::consume_lifecycle_lease(
+                &state,
+                &authorization,
+                super::provider_effects::GuestLifecycleOperation::Start,
+                &BrokerCallerRole::AdminUid { uid: 0 },
+            ),
+            Err(super::provider_effects::ProviderEffectError::StateUnavailable)
+        );
     }
 
     #[test]
