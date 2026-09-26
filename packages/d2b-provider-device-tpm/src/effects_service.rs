@@ -26,6 +26,8 @@ use d2b_contracts::types::{BundleOpId, VmId};
 use d2b_contracts_broker::kernel_client::{KernelInvocation, envelope_invoke_kernel};
 use d2b_contracts_resource::v3::{ResourceRef, ResourceUid};
 use d2b_core::bundle_resolver::BundleResolver;
+use d2b_core::kernel_seat;
+use d2b_core::loader_worker;
 use d2b_core::storage::StoragePathSpec;
 use d2b_core_controller::migration::LegacyTpmMigrationDecision;
 use d2b_provider_toolkit::{
@@ -436,44 +438,84 @@ impl LiveTpmResourceEffectPort<'_> {
                 let (spec, state_root) =
                     zone_native_swtpm_state_row(&resolver, self.vm_id.as_str())
                         .ok_or(TpmResourceEffectError::StateIntegrity)?;
-                let (owner_uid, owner_gid, mode) = row_posture(spec)
-                    .ok_or(TpmResourceEffectError::StateIntegrity)?;
+                // The row's `User`/`Group` principals resolve through NSS
+                // lookups, which have no async form, so the whole posture
+                // resolution runs on the bounded probe seat: a slow or wedged
+                // backend (LDAP/NIS) refuses later probes rather than parking
+                // this executor worker for the lookup (`spawn_blocking` is
+                // banned by plan KD2; the seat is the house replacement).
+                let (owner_uid, owner_gid, mode) = {
+                    let spec = spec.clone();
+                    loader_worker::run_probe(move || row_posture(&spec))
+                        .await
+                        .map_err(|refusal| {
+                            tracing::warn!(
+                                device = %self.device_ref.to_canonical_string(),
+                                error = %refusal,
+                                "tpm prepare: storage-row posture probe refused",
+                            );
+                            TpmResourceEffectError::Transient
+                        })?
+                        .ok_or(TpmResourceEffectError::StateIntegrity)?
+                };
                 (state_root, owner_uid, owner_gid, mode)
             }
         };
         // The Device row's own Zone - never a zone-authority lookup of the
         // Guest target VM, which the host daemon's coordinator does not
-        // register (the guest's plane lives inside the nested VM).
-        let invocation = KernelInvocation {
-            operation: "prepare-directory",
-            zone: self.zone.as_str(),
-            payload: serde_json::json!({
-                "kind": "state",
-                "baseDir": base_dir.display().to_string(),
-                "vmIdOrScope": self.vm_id.as_str(),
-                "mode": mode,
-                "ownerUid": owner_uid,
-                "ownerGid": owner_gid,
-                "createdPaths": [],
-            }),
-            fds: &[],
-            chain_root_invocation_id: None,
-            chain_identities: None,
-        };
-        match envelope_invoke_kernel(
-            self.facets.runtime.broker_socket_path(),
-            self.facets.runtime.kernel_io_timeout(),
-            self.facets.runtime.caller_role(),
-            invocation,
-        ) {
-            Ok(_) => Ok(()),
-            Err(error) => {
+        // register (the guest's plane lives inside the nested VM) - cloned
+        // for the seat job.
+        let zone = self.zone.clone();
+        let payload = serde_json::json!({
+            "kind": "state",
+            "baseDir": base_dir.display().to_string(),
+            "vmIdOrScope": self.vm_id.as_str(),
+            "mode": mode,
+            "ownerUid": owner_uid,
+            "ownerGid": owner_gid,
+            "createdPaths": [],
+        });
+        // The broker round trip is a blocking seqpacket RPC (connect, frame
+        // write, reply poll, frame read) with no async form in the tree, so
+        // it runs on the bounded kernel seat under the same io budget: the
+        // executor worker is never parked for the leg (`spawn_blocking` is
+        // banned by plan KD2; the seat is the house replacement).
+        let socket_path = self.facets.runtime.broker_socket_path().to_path_buf();
+        let io_timeout = self.facets.runtime.kernel_io_timeout();
+        let caller_role = self.facets.runtime.caller_role();
+        match kernel_seat::run(move || {
+            envelope_invoke_kernel(
+                &socket_path,
+                io_timeout,
+                caller_role,
+                KernelInvocation {
+                    operation: "prepare-directory",
+                    zone: &zone,
+                    payload,
+                    fds: &[],
+                    chain_root_invocation_id: None,
+                    chain_identities: None,
+                },
+            )
+        })
+        .await
+        {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => {
                 tracing::warn!(
                     device = %self.device_ref.to_canonical_string(),
                     error = %error,
                     "broker state-directory preparation refused",
                 );
                 Err(TpmResourceEffectError::StateIntegrity)
+            }
+            Err(refusal) => {
+                tracing::warn!(
+                    device = %self.device_ref.to_canonical_string(),
+                    error = ?refusal,
+                    "broker state-directory preparation seat refused",
+                );
+                Err(TpmResourceEffectError::Transient)
             }
         }
     }
