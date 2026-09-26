@@ -107,9 +107,9 @@ async fn serve_inspect_network(
         .ok_or_else(|| declined("inspect-network-installed-generation-unavailable"))?;
     inspect_network_response(
         installed.as_str(),
-        &bundle.host.nftables.family,
-        &bundle.host.nftables.table,
-        bundle.host.site.allow_unsafe_east_west,
+        &bundle.host().nftables.family,
+        &bundle.host().nftables.table,
+        bundle.host().site.allow_unsafe_east_west,
     )
 }
 

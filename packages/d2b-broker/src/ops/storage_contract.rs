@@ -589,7 +589,7 @@ mod tests {
             manifest(),
             BTreeMap::new(),
         );
-        resolver.storage = Some(storage_contract);
+        resolver.set_storage(storage_contract);
         resolver
     }
 

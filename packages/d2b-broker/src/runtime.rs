@@ -3868,7 +3868,7 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let resolver = require_resolver(resolver)?;
             let outcome = crate::ops::security_key::live_open_hidraw_security_key(
                 &req,
-                &resolver.host.security_key_selectors,
+                &resolver.host().security_key_selectors,
                 audit_log,
             )
             .await
@@ -4826,13 +4826,13 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             let expected_hash = persisted_nft_hash()
                 .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-                .or_else(|| resolver.host.nftables.table_hash_after_apply.clone());
+                .or_else(|| resolver.host().nftables.table_hash_after_apply.clone());
             crate::ops::nft::apply_with_coexistence(
                 &exec,
                 &nft_binary,
                 &nft_script,
-                resolver.host.nftables.ownership_id.as_str(),
-                resolver.host.firewall_coexistence_policy.as_ref(),
+                resolver.host().nftables.ownership_id.as_str(),
+                resolver.host().firewall_coexistence_policy.as_ref(),
                 expected_hash.as_deref(),
             )
             .await
@@ -4866,8 +4866,8 @@ async fn dispatch_request_with_backend_and_request_fds<B: DispatchBackend>(
             crate::ops::nft::persist_live_nft_hash(
                 &exec,
                 &nft_binary,
-                &resolver.host.nftables.family,
-                &resolver.host.nftables.table,
+                &resolver.host().nftables.family,
+                &resolver.host().nftables.table,
                 &nft_hash_sidecar_path(),
             )
             .await
@@ -6564,8 +6564,8 @@ impl DispatchBackend for LiveDispatchBackend {
             let destroy_script;
             let script_body = if destroy {
                 destroy_script = render_nft_destroy_script(
-                    &resolver.host.nftables.family,
-                    &resolver.host.nftables.table,
+                    &resolver.host().nftables.family,
+                    &resolver.host().nftables.table,
                 );
                 destroy_script.as_str()
             } else {
@@ -6577,7 +6577,7 @@ impl DispatchBackend for LiveDispatchBackend {
                 persisted_nft_hash()
                     .await
                     .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-                    .or_else(|| resolver.host.nftables.table_hash_after_apply.clone())
+                    .or_else(|| resolver.host().nftables.table_hash_after_apply.clone())
             };
             let expected_hash = if destroy {
                 None
@@ -6589,7 +6589,7 @@ impl DispatchBackend for LiveDispatchBackend {
                 &nft_binary,
                 script_body,
                 intent.ownership_id.as_str(),
-                resolver.host.firewall_coexistence_policy.as_ref(),
+                resolver.host().firewall_coexistence_policy.as_ref(),
                 expected_hash,
             )
             .await
@@ -6623,8 +6623,8 @@ impl DispatchBackend for LiveDispatchBackend {
             crate::ops::nft::persist_live_nft_hash(
                 &exec,
                 &nft_binary,
-                &resolver.host.nftables.family,
-                &resolver.host.nftables.table,
+                &resolver.host().nftables.family,
+                &resolver.host().nftables.table,
                 &nft_hash_sidecar_path(),
             )
             .await
@@ -6945,13 +6945,13 @@ impl DispatchBackend for LiveDispatchBackend {
             let expected_hash = persisted_nft_hash()
                 .await
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?
-                .or_else(|| resolver.host.nftables.table_hash_after_apply.clone());
+                .or_else(|| resolver.host().nftables.table_hash_after_apply.clone());
             crate::ops::nft::apply_with_coexistence(
                 &exec,
                 &nft_binary,
                 &nft_script,
-                resolver.host.nftables.ownership_id.as_str(),
-                resolver.host.firewall_coexistence_policy.as_ref(),
+                resolver.host().nftables.ownership_id.as_str(),
+                resolver.host().firewall_coexistence_policy.as_ref(),
                 expected_hash.as_deref(),
             )
             .await
@@ -6985,8 +6985,8 @@ impl DispatchBackend for LiveDispatchBackend {
             crate::ops::nft::persist_live_nft_hash(
                 &exec,
                 &nft_binary,
-                &resolver.host.nftables.family,
-                &resolver.host.nftables.table,
+                &resolver.host().nftables.family,
+                &resolver.host().nftables.table,
                 &nft_hash_sidecar_path(),
             )
             .await

@@ -1085,7 +1085,7 @@ impl ProductionProcessProviders {
     /// Return every VM that has a process DAG in the trusted bundle.
     pub fn vm_ids(&self) -> Vec<String> {
         self.bundle
-            .processes
+            .processes()
             .vms
             .iter()
             .map(|dag| dag.vm.clone())
@@ -3222,7 +3222,7 @@ pub(crate) async fn resolve_device_worker_launch(
             // artifact, or a headless site, leaves the slot unbound and
             // the launch refuses with its own code instead of naming a
             // path no trusted artifact names.
-            let wayland_sock = gpu_worker_wayland_sock(self.bundle().site.as_ref())?;
+            let wayland_sock = gpu_worker_wayland_sock(self.bundle().site())?;
             // The typed parameters travel as the canonical JSON of the
             // Provider's own `GpuParams`; the argv seat decodes them back.
             let params = serde_json::to_value(d2b_provider_device_gpu::GpuParams {
@@ -4155,7 +4155,7 @@ fn compiled_resource_digests(
             ManagedProvider::Minijail => "system-minijail",
             ManagedProvider::Systemd => "system-systemd",
         },
-        bundle.bundle.bundle_hash.as_deref().unwrap_or("bundle"),
+        bundle.bundle().bundle_hash.as_deref().unwrap_or("bundle"),
     );
     CompiledDigests {
         sandbox: digest(&format!("{context}:sandbox"), spec_bytes),
@@ -4294,7 +4294,7 @@ fn compiled_digests(
             ManagedProvider::Minijail => "system-minijail",
             ManagedProvider::Systemd => "system-systemd",
         },
-        bundle.bundle.bundle_hash.as_deref().unwrap_or("bundle")
+        bundle.bundle().bundle_hash.as_deref().unwrap_or("bundle")
     );
     CompiledDigests {
         sandbox: digest(&format!("{context}:sandbox"), &node_bytes),
@@ -4311,10 +4311,10 @@ fn stable_generation(bundle: &BundleResolver) -> u64 {
     let mut hasher = Sha256::new();
     hasher.update(
         bundle
-            .bundle
+            .bundle()
             .bundle_hash
             .as_deref()
-            .unwrap_or(bundle.bundle.generation.generator.as_str()),
+            .unwrap_or(bundle.bundle().generation.generator.as_str()),
     );
     let bytes: [u8; 32] = hasher.finalize().into();
     let generation = u64::from_le_bytes(bytes[..8].try_into().expect("digest prefix"));

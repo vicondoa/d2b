@@ -2482,7 +2482,7 @@ impl OperationHandler for SpawnRunnerHandler {
                     "bundle_content_identity: required".to_owned(),
                 ));
             };
-            let resolved = kernel.bundle.bundle.bundle_hash.as_deref().ok_or_else(|| {
+            let resolved = kernel.bundle.bundle().bundle_hash.as_deref().ok_or_else(|| {
                 OperationFailure::with_detail(
                     INTENT_MISMATCH,
                     "bundle_content_identity: missing".to_owned(),
@@ -2582,13 +2582,13 @@ impl OperationHandler for SpawnRunnerHandler {
         // declares; any other target would let a tampered bundle redirect
         // host OTLP egress (the retired arm's fail-closed fence).
         if matches!(request.role, RunnerRole::OtelHostBridge)
-            && intent.vm_name != kernel.bundle.manifest.observability.vm_name
+            && intent.vm_name != kernel.bundle.manifest().observability.vm_name
         {
             return Err(OperationFailure::with_detail(
                 INTENT_MISMATCH,
                 format!(
                     "OtelHostBridge: intent vm {} does not match the obs VM {}",
-                    intent.vm_name, kernel.bundle.manifest.observability.vm_name
+                    intent.vm_name, kernel.bundle.manifest().observability.vm_name
                 ),
             ));
         }
