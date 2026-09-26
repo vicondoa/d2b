@@ -1078,35 +1078,17 @@
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-<<<<<<< HEAD
-      "line": 10812,
-||||||| 12e510b55
-      "line": 10790,
-=======
-      "line": 10854,
->>>>>>> phase-w5-integration
+      "line": 10876,
       "reason": "awaited through tokio::time::timeout"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-<<<<<<< HEAD
-      "line": 26331,
-||||||| 12e510b55
-      "line": 26251,
-=======
-      "line": 26361,
->>>>>>> phase-w5-integration
+      "line": 26441,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
       "file": "packages/d2bd/src/composition.rs",
-<<<<<<< HEAD
-      "line": 26728,
-||||||| 12e510b55
-      "line": 26648,
-=======
-      "line": 26758,
->>>>>>> phase-w5-integration
+      "line": 26838,
       "reason": "synchronous lock acquisition, no await while the guard is held"
     },
     {
