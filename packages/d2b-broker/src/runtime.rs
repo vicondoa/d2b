@@ -12782,9 +12782,9 @@ mod tests {
         use d2b_core::host::{
             BridgePortFlags, ChNetHandoffMode, CloudHypervisorCapability, FdOwnershipEntry,
             HostChConfig, HostJson, HostsFileOwnership, IfNameMapping, Ipv6SysctlEntry,
-            KernelModulesEntry, LanPolicy, NetEnv, NetworkManagerUnmanaged, NftChain,
-            NftablesModel, OwnershipRule, SitePolicy, TapRole, UsbipBusidLock, UsbipLockOwner,
-            UsbipLockScope, VendorProductPair,
+            KernelModulesEntry, LanPolicy, NetEnv, NmReloadBehavior, NetworkManagerUnmanaged,
+            NftChain, NftablesModel, OwnershipRule, SitePolicy, TapRole, UsbipBusidLock,
+            UsbipLockOwner, UsbipLockScope, VendorProductPair,
         };
         use d2b_core::manifest_v04::{
             ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
@@ -12875,7 +12875,7 @@ mod tests {
             network_manager: NetworkManagerUnmanaged {
                 file_path: "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf".to_owned(),
                 match_criteria: vec!["interface-name:d2b-*".to_owned()],
-                reload_behavior: "atomic-reload".to_owned(),
+                reload_behavior: NmReloadBehavior::AtomicReload,
                 ownership: OwnershipRule {
                     owner: "root".to_owned(),
                     group: "root".to_owned(),

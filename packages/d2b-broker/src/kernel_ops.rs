@@ -1162,7 +1162,7 @@ async fn apply_nm_unmanaged(
         mode: field_i64(invocation.payload, "mode")? as u32,
         owner: field_str(invocation.payload, "owner")?.to_owned(),
         group: field_str(invocation.payload, "group")?.to_owned(),
-        reload_behavior: field_str(invocation.payload, "reloadBehavior")?.to_owned(),
+        reload_behavior: parse_field(invocation.payload, "reloadBehavior")?,
     };
     let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
     if destroy {
