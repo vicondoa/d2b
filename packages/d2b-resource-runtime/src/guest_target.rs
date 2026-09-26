@@ -519,7 +519,7 @@ impl GuestTargetRuntime {
         };
         let mut instances: Vec<TargetResourceInstance> =
             state.values().cloned().collect();
-        instances.sort_by(|left, right| identity_order(&left.source).cmp(&identity_order(&right.source)));
+        instances.sort_by_cached_key(|instance| identity_order(&instance.source));
         instances
     }
 
@@ -1279,8 +1279,12 @@ impl fmt::Display for GuestTargetError {
 impl std::error::Error for GuestTargetError {}
 
 /// Stable ordering for resource identities inside a target.
-fn identity_order(key: &ResourceKey) -> (&str, &str, &str) {
-    (&key.zone, &key.type_name, &key.name)
+///
+/// The key is owned rather than a tuple of borrows because the ordering is
+/// applied through `sort_by_cached_key`, which caches one key per element and
+/// so cannot take a key borrowed from the element it is called on.
+fn identity_order(key: &ResourceKey) -> (String, String, String) {
+    (key.zone.clone(), key.type_name.clone(), key.name.clone())
 }
 
 #[cfg(test)]
