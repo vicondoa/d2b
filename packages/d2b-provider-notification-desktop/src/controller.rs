@@ -17,13 +17,24 @@ use crate::Category;
 /// The bounded repair interval for the notification ComponentSession runtime.
 pub const NOTIFICATION_REPAIR_INTERVAL_SECS: u64 = 300;
 
+/// The cutover state of the notification ComponentSession runtime.
+///
+/// The two booleans the contract used to carry were both pinned true by its
+/// single constructor, so they were one state spelled twice. The state is
+/// typed instead: `ServiceOnly` means configuration is dependency-only and
+/// notification state stays on typed ComponentSession streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationCutoverState {
+    /// Only the service package is the notification runtime.
+    ServiceOnly,
+}
+
 /// The cutover contract for the notification service-only runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotificationRunnerContract {
     service_package: &'static str,
     repair_interval_secs: u64,
-    watched_configuration_is_dependency: bool,
-    component_session_only: bool,
+    cutover: NotificationCutoverState,
 }
 
 impl NotificationRunnerContract {
@@ -39,12 +50,12 @@ impl NotificationRunnerContract {
 
     /// Whether configuration is dependency-only.
     pub const fn watched_configuration_is_dependency(self) -> bool {
-        self.watched_configuration_is_dependency
+        matches!(self.cutover, NotificationCutoverState::ServiceOnly)
     }
 
     /// Whether notification state remains on typed ComponentSession streams.
     pub const fn component_session_only(self) -> bool {
-        self.component_session_only
+        matches!(self.cutover, NotificationCutoverState::ServiceOnly)
     }
 }
 
@@ -53,8 +64,7 @@ pub const fn notification_runner_contract() -> NotificationRunnerContract {
     NotificationRunnerContract {
         service_package: crate::SERVICE_PACKAGE,
         repair_interval_secs: NOTIFICATION_REPAIR_INTERVAL_SECS,
-        watched_configuration_is_dependency: true,
-        component_session_only: true,
+        cutover: NotificationCutoverState::ServiceOnly,
     }
 }
 

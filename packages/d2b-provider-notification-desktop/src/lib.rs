@@ -33,7 +33,7 @@ pub use admission::{AdmissionError, AdmissionPurpose, SessionEvidence, Transport
 pub use audit::{NotificationAuditKind, NotificationAuditRecord};
 pub use controller::{
     DisplayDependencyEvidence, DisplayDependencyState, GuestSourceConfig, NotificationController,
-    NotificationProviderConfig, NotificationRunnerContract, ProcessPlan,
+    NotificationCutoverState, NotificationProviderConfig, NotificationRunnerContract, ProcessPlan,
     SourceProcessEffectPort, SourceProcessEffectReceipt, SourceReconcileResult,
     notification_runner_contract,
 };
