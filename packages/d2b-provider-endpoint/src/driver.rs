@@ -623,22 +623,22 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
     /// each child retirement nudge, and every other mutating route still
     /// fails, so an unexpected flow is caught.
     struct DeadManager {
-        owned: parking_lot::Mutex<Vec<StoredDesiredResource>>,
-        deleted: parking_lot::Mutex<Vec<ResourceKey>>,
+        owned: tokio::sync::Mutex<Vec<StoredDesiredResource>>,
+        deleted: tokio::sync::Mutex<Vec<ResourceKey>>,
     }
 
     impl DeadManager {
         fn new() -> Self {
             Self {
-                owned: parking_lot::Mutex::new(Vec::new()),
-                deleted: parking_lot::Mutex::new(Vec::new()),
+                owned: tokio::sync::Mutex::new(Vec::new()),
+                deleted: tokio::sync::Mutex::new(Vec::new()),
             }
         }
 
         fn with_owned(row: StoredDesiredResource) -> Arc<Self> {
             Arc::new(Self {
-                owned: parking_lot::Mutex::new(vec![row]),
-                deleted: parking_lot::Mutex::new(Vec::new()),
+                owned: tokio::sync::Mutex::new(vec![row]),
+                deleted: tokio::sync::Mutex::new(Vec::new()),
             })
         }
     }
@@ -668,8 +668,8 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.deleted.lock().push(key.clone()); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            self.owned.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.deleted.lock().await.push(key.clone());
+            self.owned.lock().await.retain(|row| row.key != *key);
             Err(ResourceError::ManagerUnavailable("dead".into()))
         }
 
@@ -677,7 +677,7 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
             &self,
             _owner_uid: [u8; 16],
         ) -> Result<Vec<StoredDesiredResource>, ResourceError> {
-            Ok(self.owned.lock().clone())
+            Ok(self.owned.lock().await.clone())
         }
 
         async fn register_watch(
@@ -894,7 +894,7 @@ use crate::endpoint::{ EndpointAttachmentPolicy, EndpointClass, EndpointConsumer
         let failure = d.finalize(&mut ctx).await.expect_err("owned child still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert_eq!(
-            manager.deleted.lock().len(), // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            manager.deleted.lock().await.len(),
             1,
             "the owned child is nudged through its own finalize-before-delete pass"
         );

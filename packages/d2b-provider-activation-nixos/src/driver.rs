@@ -992,8 +992,8 @@ mod tests {
     struct RecordingManager {
         zone: String,
         owner_uid: [u8; 16],
-        log: Arc<parking_lot::Mutex<Vec<String>>>,
-        rows: Arc<parking_lot::Mutex<Vec<StoredDesiredResource>>>,
+        log: Arc<tokio::sync::Mutex<Vec<String>>>,
+        rows: Arc<tokio::sync::Mutex<Vec<StoredDesiredResource>>>,
         next_uid: Arc<std::sync::atomic::AtomicU64>,
     }
 
@@ -1002,23 +1002,28 @@ mod tests {
             Self {
                 zone: "work".to_owned(),
                 owner_uid,
-                log: Arc::new(parking_lot::Mutex::new(Vec::new())),
-                rows: Arc::new(parking_lot::Mutex::new(Vec::new())),
+                log: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+                rows: Arc::new(tokio::sync::Mutex::new(Vec::new())),
                 next_uid: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             }
         }
 
-        fn with_row(self, row: StoredDesiredResource) -> Self {
-            self.rows.lock().push(row);
+        async fn with_row(self, row: StoredDesiredResource) -> Self {
+            self.rows.lock().await.push(row);
             self
         }
 
-        fn log(&self) -> Vec<String> {
-            self.log.lock().clone()
+        async fn log(&self) -> Vec<String> {
+            self.log.lock().await.clone()
         }
 
-        fn row(&self, key: &ResourceKey) -> Option<StoredDesiredResource> {
-            self.rows.lock().iter().find(|row| row.key == *key).cloned()
+        async fn row(&self, key: &ResourceKey) -> Option<StoredDesiredResource> {
+            self.rows
+                .lock()
+                .await
+                .iter()
+                .find(|row| row.key == *key)
+                .cloned()
         }
     }
 
@@ -1030,7 +1035,7 @@ mod tests {
             child: ChildEnsure,
         ) -> Result<EnsureOutcome, ResourceError> {
             let id = format!("{}/{}", child.type_name.as_str(), child.name);
-            self.log.lock().push(format!("ensure:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.log.lock().await.push(format!("ensure:{id}"));
             let next = self
                 .next_uid
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1047,20 +1052,26 @@ mod tests {
                 metadata: child.metadata,
                 created_at: 0,
             };
-            let mut rows = self.rows.lock(); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
-            let outcome = match rows.iter_mut().find(|existing| existing.key == row.key) {
-                Some(existing) if existing.spec == row.spec => EnsureOutcome::Unchanged(existing.clone()),
-                Some(existing) => {
-                    *existing = row.clone();
-                    EnsureOutcome::Updated(row.clone())
-                }
-                None => {
-                    rows.push(row.clone());
-                    EnsureOutcome::Created(row.clone())
+            // The row guard is scoped so it is released before the spawn
+            // notification's await below.
+            let outcome = {
+                let mut rows = self.rows.lock().await;
+                match rows.iter_mut().find(|existing| existing.key == row.key) {
+                    Some(existing) if existing.spec == row.spec => {
+                        EnsureOutcome::Unchanged(existing.clone())
+                    }
+                    Some(existing) => {
+                        *existing = row.clone();
+                        EnsureOutcome::Updated(row.clone())
+                    }
+                    None => {
+                        rows.push(row.clone());
+                        EnsureOutcome::Created(row.clone())
+                    }
                 }
             };
             // The spawn notification the manager emits after the commit (F1).
-            self.log.lock().push(format!("spawned:{id}")); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.log.lock().await.push(format!("spawned:{id}"));
             Ok(outcome)
         }
 
@@ -1068,7 +1079,7 @@ mod tests {
             &self,
             key: &ResourceKey,
         ) -> Result<Option<StoredDesiredResource>, ResourceError> {
-            Ok(self.row(key))
+            Ok(self.row(key).await)
         }
 
         async fn view(
@@ -1081,11 +1092,11 @@ mod tests {
         }
 
         async fn delete(&self, key: &ResourceKey) -> Result<(), ResourceError> {
-            self.log.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.log.lock().await.push(format!(
                 "delete:{}/{}",
                 key.type_name, key.name
             ));
-            self.rows.lock().retain(|row| row.key != *key); // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.rows.lock().await.retain(|row| row.key != *key);
             Ok(())
         }
 
@@ -1096,6 +1107,7 @@ mod tests {
             Ok(self
                 .rows
                 .lock()
+                .await
                 .iter()
                 .filter(|row| row.owner_uid.as_ref() == Some(&owner_uid))
                 .cloned()
@@ -1108,7 +1120,7 @@ mod tests {
             registration: WatchRegistration,
         ) -> Result<WatchId, ResourceError> {
             assert_eq!(registration.condition, WatchCondition::Ready);
-            self.log.lock().push(format!( // async-gate-allow: synchronous lock acquisition, no await while the guard is held
+            self.log.lock().await.push(format!(
                 "watch:{}/{}",
                 registration.target.type_name, registration.target.name
             ));
@@ -1270,7 +1282,7 @@ mod tests {
             ActivationMode::Switch,
             None,
             [0x41; 16],
-        ));
+        )).await;
         let mut f = fixture(
             generation_row(
                 "gen-2",
@@ -1312,7 +1324,7 @@ mod tests {
         assert_eq!(projected.detail(), ActivationDetail::Applied);
         assert_eq!(projected.outcome(), Some(ActivationOutcomeCode::Succeeded));
         // A Host target realizes through the broker: no runner child.
-        assert!(f.manager.log().is_empty());
+        assert!(f.manager.log().await.is_empty());
     }
 
     /// The facets -> factory -> driver -> handoff seam the refactor
@@ -1347,7 +1359,7 @@ mod tests {
             ActivationMode::Switch,
             None,
             [0x41; 16],
-        ));
+        )).await;
         let mut f = fixture(
             generation_row(
                 "gen-2",
@@ -1401,7 +1413,7 @@ mod tests {
             ActivationMode::Switch,
             None,
             [0x41; 16],
-        ));
+        )).await;
         let mut f = fixture(
             generation_row(
                 "gen-2",
@@ -1451,7 +1463,7 @@ mod tests {
             projected.outcome(),
             Some(ActivationOutcomeCode::HelperRefused)
         );
-        assert!(f.manager.log().is_empty());
+        assert!(f.manager.log().await.is_empty());
     }
 
     #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
@@ -1491,7 +1503,7 @@ mod tests {
                 ActivationMode::Switch,
                 None,
                 [0x41; 16],
-            )),
+            )).await,
         );
         let mut cross_driver = driver(effects.clone(), Arc::new(AllowVerifier)).await;
         assert!(cross_driver.reconcile(&mut cross.ctx).await.is_err());
@@ -1519,7 +1531,7 @@ mod tests {
                 ActivationMode::Switch,
                 None,
                 [0x41; 16],
-            )),
+            )).await,
         );
         let mut d = driver(
             effects.clone(),
@@ -1565,7 +1577,7 @@ mod tests {
         // KTD13: the launch is a Process-resource mint through the manager,
         // never a spawn from this controller, and the child row is committed
         // before its spawn notification (F1).
-        let log = manager.log();
+        let log = manager.log().await;
         let ensure = log
             .iter()
             .position(|entry| entry.starts_with("ensure:EphemeralProcess/"))
@@ -1590,7 +1602,7 @@ mod tests {
             .name()
             .as_str(),
         );
-        let runner = manager.row(&runner_key).expect("runner row committed");
+        let runner = manager.row(&runner_key).await.expect("runner row committed");
         assert_eq!(runner.owner_uid, Some(GENERATION_UID));
 
         // The launch parameters travel on the sanctioned typed channel: the
@@ -1627,7 +1639,7 @@ mod tests {
         d.reconcile(&mut f.ctx).await.expect("first reconcile");
         d.reconcile(&mut f.ctx).await.expect("rejoin reconcile");
 
-        let log = manager.log();
+        let log = manager.log().await;
         assert_eq!(
             log.iter().filter(|entry| entry.starts_with("ensure:")).count(),
             1,
@@ -1663,7 +1675,7 @@ mod tests {
             f.ctx.status::<ActivationDriverStatus>().is_none(),
             "no runner to rejoin: recovery projects nothing"
         );
-        assert!(manager.log().is_empty());
+        assert!(manager.log().await.is_empty());
 
         // The Host target realizes through the broker authority.
         let mut host = fixture(
@@ -1697,7 +1709,7 @@ mod tests {
                 None,
                 [0x77; 16],
             )
-        });
+        }).await;
         let Fixture { mut ctx, manager } = fixture(
             generation_row(
                 "gen-1",
@@ -1718,7 +1730,7 @@ mod tests {
         let failure = d.finalize(&mut ctx).await.expect_err("owned runner still live");
         assert_eq!(failure.class(), FailureClass::Retryable);
         assert!(
-            manager.log().iter().any(|call| call.starts_with("delete:")),
+            manager.log().await.iter().any(|call| call.starts_with("delete:")),
             "the owned runner is nudged through its own finalize-before-delete pass"
         );
 
@@ -1757,6 +1769,7 @@ mod tests {
         .to_owned();
         let deletions = manager
             .log()
+            .await
             .into_iter()
             .filter(|entry| entry.starts_with("delete:"))
             .collect::<BTreeSet<_>>();
@@ -1767,7 +1780,7 @@ mod tests {
         );
         let runner_key = ResourceKey::new("work", "EphemeralProcess", &runner_name);
         assert!(
-            manager.row(&runner_key).is_none(),
+            manager.row(&runner_key).await.is_none(),
             "the runner child retires through the manager"
         );
     }
