@@ -134,7 +134,7 @@ pub fn recv_json_frame<T: DeserializeOwned>(fd: RawFd) -> io::Result<Option<T>> 
             // A socket type without `MSG_PEEK` support keeps the fixed
             // ceiling allocation; the receive itself is unchanged. (`ENOTSUP`
             // and `EOPNOTSUPP` are the same errno on Linux.)
-            Err(err) if matches!(err, Errno::EINVAL | Errno::ENOTSUP) => {
+            Err(Errno::EINVAL | Errno::ENOTSUP) => {
                 return recv_json_frame_fixed(fd);
             }
             Err(err) => return Err(io_error(err)),
@@ -258,7 +258,7 @@ pub fn recv_json_frame_with_fds<T: DeserializeOwned>(
             // A socket type without `MSG_PEEK` support keeps the fixed
             // ceiling allocation; the receive itself is unchanged. (`ENOTSUP`
             // and `EOPNOTSUPP` are the same errno on Linux.)
-            Err(err) if matches!(err, Errno::EINVAL | Errno::ENOTSUP) => {
+            Err(Errno::EINVAL | Errno::ENOTSUP) => {
                 return recv_json_frame_with_fds_fixed(fd);
             }
             Err(err) => return Err(io_error(err)),
