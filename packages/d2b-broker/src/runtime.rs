@@ -7708,27 +7708,51 @@ async fn usb_audit_serial_hmac_keyring(
     test_mode: bool,
 ) -> Result<UsbAuditSerialHmacKeyring, BrokerError> {
     let key_dir = usb_audit_serial_hmac_key_dir(state_dir);
-    ensure_usb_audit_serial_hmac_key_dir(&key_dir, test_mode)?;
+    // The build is blocking filesystem work: the `path_safe` directory
+    // prepare and the dir-fd key create are openat chains with no async
+    // form, and the descriptor-open `O_NOFOLLOW` reads interleave them. It
+    // runs as one job on the bounded probe seat, so admission is a
+    // non-blocking `try_send` and a saturated seat refuses the call instead
+    // of growing threads or parking an executor worker.
+    let keyring = d2b_core::loader_worker::run_probe(move || {
+        build_usb_audit_serial_hmac_keyring(&key_dir, test_mode)
+    })
+    .await
+    .map_err(|err| {
+        BrokerError::LiveHandler(format!(
+            "USB audit serial HMAC keyring worker refused: {err}"
+        ))
+    })??;
+    // Logged from the async seat so the event keeps the caller's span
+    // context; the built keyring is all this needs.
+    log_usb_audit_serial_hmac_rotation_window(&keyring);
+    Ok(keyring)
+}
+
+/// Build the keyring. Blocking-work body: reached only through
+/// [`usb_audit_serial_hmac_keyring`], whose job runs it on the bounded probe
+/// seat, so the directory ensures, the `O_NOFOLLOW` opens, the dir-fd key
+/// create, and the dir-fd fsync never run on an executor worker.
+#[cfg(not(feature = "layer1-bootstrap"))]
+fn build_usb_audit_serial_hmac_keyring(
+    key_dir: &Path,
+    test_mode: bool,
+) -> Result<UsbAuditSerialHmacKeyring, BrokerError> {
+    ensure_usb_audit_serial_hmac_key_dir(key_dir, test_mode)?;
     let current = match read_usb_audit_serial_hmac_key_file(
         &key_dir.join(USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE),
         UsbAuditSerialHmacKeySlot::Current,
         test_mode,
-    )
-    .await?
-    {
+    )? {
         Some(key) => key,
-        None => create_usb_audit_serial_hmac_key(&key_dir, test_mode).await?,
+        None => create_usb_audit_serial_hmac_key(key_dir, test_mode)?,
     };
     let previous = read_usb_audit_serial_hmac_key_file(
         &key_dir.join(USB_AUDIT_SERIAL_HMAC_PREVIOUS_KEY_FILE),
         UsbAuditSerialHmacKeySlot::Previous,
         test_mode,
-    )
-    .await?;
-
-    let keyring = UsbAuditSerialHmacKeyring { current, previous };
-    log_usb_audit_serial_hmac_rotation_window(&keyring);
-    Ok(keyring)
+    )?;
+    Ok(UsbAuditSerialHmacKeyring { current, previous })
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
@@ -7738,6 +7762,10 @@ fn usb_audit_serial_hmac_key_dir(state_dir: &Path) -> PathBuf {
         .join(USB_AUDIT_SERIAL_HMAC_KEY_DIR)
 }
 
+/// Prepare the secrets and key directories at 0o700 with the key directory
+/// owned by root outside test mode. Blocking-work body: reached only from
+/// [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat, so the
+/// openat walk, the mkdir, and the mode/owner stamp stay off the executor.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn ensure_usb_audit_serial_hmac_key_dir(
     key_dir: &Path,
@@ -7760,12 +7788,17 @@ fn ensure_usb_audit_serial_hmac_key_dir(
     Ok(())
 }
 
+/// Read one key slot. Blocking-work body: reached only from
+/// [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat. The
+/// open is `O_NOFOLLOW | O_CLOEXEC`, and the descriptor it returns is
+/// validated as a root-only regular file before any byte is read.
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn read_usb_audit_serial_hmac_key_file(
+fn read_usb_audit_serial_hmac_key_file(
     path: &Path,
     slot: UsbAuditSerialHmacKeySlot,
     test_mode: bool,
 ) -> Result<Option<UsbAuditSerialHmacKey>, BrokerError> {
+    use std::io::Read as _;
     let fd = match nix::fcntl::open(
         path,
         nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NOFOLLOW,
@@ -7779,22 +7812,23 @@ async fn read_usb_audit_serial_hmac_key_file(
             )));
         }
     };
-    use tokio::io::AsyncReadExt as _;
-    let file = tokio::fs::File::from_std(fs::File::from(owned_fd_from_raw(fd)));
-    validate_usb_audit_serial_hmac_key_metadata(&file, test_mode).await?;
+    let mut file = fs::File::from(owned_fd_from_raw(fd));
+    validate_usb_audit_serial_hmac_key_metadata(&file, test_mode)?;
     let mut contents = String::new();
-    file.take(u64::MAX).read_to_string(&mut contents).await.map_err(|err| {
+    file.read_to_string(&mut contents).map_err(|err| {
         BrokerError::LiveHandler(format!("read USB audit serial HMAC key failed: {err}"))
     })?;
     parse_usb_audit_serial_hmac_key(&contents, slot).map(Some)
 }
 
+/// The root-only regular-file check, on the descriptor the caller already
+/// holds: no path is re-resolved between the open and the check.
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn validate_usb_audit_serial_hmac_key_metadata(
-    file: &tokio::fs::File,
+fn validate_usb_audit_serial_hmac_key_metadata(
+    file: &fs::File,
     test_mode: bool,
 ) -> Result<(), BrokerError> {
-    let metadata = file.metadata().await.map_err(|err| {
+    let metadata = file.metadata().map_err(|err| {
         BrokerError::LiveHandler(format!("stat USB audit serial HMAC key failed: {err}"))
     })?;
     if !metadata.is_file() || metadata.mode() & 0o077 != 0 || (!test_mode && metadata.uid() != 0) {
@@ -7805,18 +7839,20 @@ async fn validate_usb_audit_serial_hmac_key_metadata(
     Ok(())
 }
 
+/// Create the current key through the dir-fd `openat` create, then read it
+/// back so the caller uses exactly the bytes that reached the disk.
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn create_usb_audit_serial_hmac_key(
+fn create_usb_audit_serial_hmac_key(
     key_dir: &Path,
     test_mode: bool,
 ) -> Result<UsbAuditSerialHmacKey, BrokerError> {
-    let key = generate_usb_audit_serial_hmac_key().await?;
+    let key = generate_usb_audit_serial_hmac_key()?;
     let dir_fd = crate::sys::path_safe::open_dir_path_safe(key_dir).map_err(|err| {
         BrokerError::LiveHandler(format!(
             "open USB audit serial HMAC key directory failed: {err}"
         ))
     })?;
-    match write_new_usb_audit_serial_hmac_key_file(&dir_fd, &key).await {
+    match write_new_usb_audit_serial_hmac_key_file(&dir_fd, &key) {
         Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
         Err(err) => {
@@ -7829,36 +7865,40 @@ async fn create_usb_audit_serial_hmac_key(
         &key_dir.join(USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE),
         UsbAuditSerialHmacKeySlot::Current,
         test_mode,
-    )
-    .await?
+    )?
     .ok_or_else(|| {
         BrokerError::LiveHandler("USB audit serial HMAC key disappeared after creation".to_owned())
     })
 }
 
+/// Write the current key file. Blocking-work body: reached only from
+/// [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat, so the
+/// dir-fd create, the 0o400 stamp, and the file and directory fsyncs stay
+/// off the executor.
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn write_new_usb_audit_serial_hmac_key_file(
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn write_new_usb_audit_serial_hmac_key_file(
     dir_fd: &OwnedFd,
     key: &UsbAuditSerialHmacKey,
 ) -> io::Result<()> {
-    use tokio::io::AsyncWriteExt as _;
+    use std::io::Write as _;
     let fd = crate::sys::path_safe::create_file_at_safe(
         dir_fd,
         USB_AUDIT_SERIAL_HMAC_CURRENT_KEY_FILE,
         libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
         0o400,
     )?;
-    let mut file = tokio::fs::File::from_std(fs::File::from(fd));
-    file.write_all(render_usb_audit_serial_hmac_key(key).as_bytes()).await?;
+    let mut file = fs::File::from(fd);
+    file.write_all(render_usb_audit_serial_hmac_key(key).as_bytes())?;
     crate::sys::path_safe::fchmod(file.as_fd(), 0o400)?;
-    file.sync_all().await?;
+    file.sync_all()?;
     rustix::fs::fsync(dir_fd).map_err(|err| io::Error::from_raw_os_error(err.raw_os_error()))?;
     Ok(())
 }
 
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerError> {
-    let random = read_high_entropy_bytes(USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES).await?;
+fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, BrokerError> {
+    let random = read_high_entropy_bytes(USB_AUDIT_SERIAL_HMAC_RANDOM_BYTES)?;
     let (key, id_bytes) = random.split_at(USB_AUDIT_SERIAL_HMAC_KEY_BYTES);
     Ok(UsbAuditSerialHmacKey {
         slot: UsbAuditSerialHmacKeySlot::Current,
@@ -7867,16 +7907,19 @@ async fn generate_usb_audit_serial_hmac_key() -> Result<UsbAuditSerialHmacKey, B
     })
 }
 
+/// Read `len` bytes from the kernel CSPRNG. Blocking-work body: reached only
+/// from [`build_usb_audit_serial_hmac_keyring`] on the bounded probe seat.
 #[cfg(not(feature = "layer1-bootstrap"))]
-async fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
-    use tokio::io::AsyncReadExt as _;
-    let mut file = tokio::fs::File::open("/dev/urandom").await.map_err(|err| {
+#[allow(clippy::disallowed_methods, reason = "dedicated bounded worker per plan R4")]
+fn read_high_entropy_bytes(len: usize) -> Result<Vec<u8>, BrokerError> {
+    use std::io::Read as _;
+    let mut file = fs::File::open("/dev/urandom").map_err(|err| {
         BrokerError::LiveHandler(format!(
             "open kernel CSPRNG for USB audit key failed: {err}"
         ))
     })?;
     let mut bytes = vec![0u8; len];
-    file.read_exact(&mut bytes).await.map_err(|err| {
+    file.read_exact(&mut bytes).map_err(|err| {
         BrokerError::LiveHandler(format!(
             "read kernel CSPRNG for USB audit key failed: {err}"
         ))
