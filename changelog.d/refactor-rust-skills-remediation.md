@@ -4,6 +4,7 @@
 - Malformed wire input no longer panics the broker, the daemon runtime, or the Wayland policy engine: a malformed authoritative audit join, a malformed broker zone digest, and a malformed driver zone token now return typed refusals at those boundaries.
 - Moved blocking reaping, file locking, ACL application, and NSS group lookup off the broker's async executor workers, so a busy executor no longer stalls on host syscalls.
 - The published v2 storage lifecycle report schema now names each issue field the way the daemon writes it, so a consumer validating a real report no longer rejects the five issue variants that carry a renamed field.
+- The daemon API reference now documents an audit response page as the wire carries it - entries, the continuing cursor, and completion - rather than as the daemon holds it in memory.
 
 ### Changed
 

@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 use std::{
+    collections::BTreeMap,
     env, fs,
     path::{Path, PathBuf},
     sync::LazyLock,
@@ -108,6 +109,11 @@ struct RustItem {
     line: usize,
     fields: Vec<Field>,
     variants: Vec<Variant>,
+    /// The fields of the struct this type's hand-written `JsonSchema`
+    /// publishes, when it delegates to one. The table documents the wire,
+    /// so a type that serializes to a different shape than it holds in
+    /// memory is documented from its published schema instead.
+    published_fields: Option<Vec<Field>>,
 }
 
 fn main() -> std::process::ExitCode {
@@ -1140,8 +1146,11 @@ fn parse_rust_items(
         offsets: &offsets,
         file_rel: &file_rel,
         items: &mut items,
+        struct_fields: BTreeMap::new(),
+        schema_delegates: Vec::new(),
     };
-    syn::visit::Visit::visit_file(&mut collector, &syntax);
+    syn::visit::visit_file(&mut collector, &syntax);
+    collector.resolve_published_shapes();
     Ok(items)
 }
 
@@ -1155,25 +1164,86 @@ struct IpcItemCollector<'a> {
     offsets: &'a LineOffsets,
     file_rel: &'a str,
     items: &'a mut Vec<RustItem>,
+    /// The named fields of every struct in the file, public or private, so
+    /// a `JsonSchema` delegate resolves to the shape it publishes.
+    struct_fields: BTreeMap<String, Vec<Field>>,
+    /// `(owner, candidate)` pairs named by a hand-written `JsonSchema`
+    /// impl, resolved against `struct_fields` after the file is walked.
+    schema_delegates: Vec<(String, String)>,
+}
+
+impl IpcItemCollector<'_> {
+    /// Point every collected type at the fields its hand-written
+    /// `JsonSchema` publishes. Resolved after the walk so a delegate
+    /// declared below its impl still counts.
+    fn resolve_published_shapes(&mut self) {
+        for (owner, candidate) in std::mem::take(&mut self.schema_delegates) {
+            let Some(published) = self.struct_fields.get(&candidate).cloned() else {
+                continue;
+            };
+            for item in self.items.iter_mut() {
+                if item.name == owner {
+                    item.published_fields = Some(published.clone());
+                }
+            }
+        }
+    }
 }
 
 impl<'ast> syn::visit::Visit<'ast> for IpcItemCollector<'_> {
     fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
-        if !matches!(item.vis, syn::Visibility::Public(_)) {
-            return;
-        }
         let fields = match &item.fields {
             syn::Fields::Named(fields) => collect_named_fields(self.text, self.offsets, fields),
             _ => Vec::new(),
         };
+        let name = item.ident.to_string();
+        if !fields.is_empty() {
+            self.struct_fields.insert(name.clone(), fields.clone());
+        }
+        if !matches!(item.vis, syn::Visibility::Public(_)) {
+            return;
+        }
         self.items.push(RustItem {
-            name: item.ident.to_string(),
+            name,
             kind: ItemKind::Struct,
             file_rel: self.file_rel.to_owned(),
             line: item.struct_token.span.start().line,
             fields,
             variants: Vec::new(),
+            published_fields: None,
         });
+    }
+
+    /// A type that hand-writes `JsonSchema` publishes another type's shape.
+    /// Record the pair so the response tables document the published wire
+    /// rather than the in-memory struct a hand-written `Serialize` reads
+    /// from.
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        if !item.trait_.as_ref().is_some_and(|(_, path, _)| {
+            path.segments
+                .last()
+                .is_some_and(|last| last.ident == "JsonSchema")
+        })
+        {
+            return;
+        }
+        let syn::Type::Path(owner) = &*item.self_ty else {
+            return;
+        };
+        if owner.qself.is_some() || owner.path.segments.len() != 1 {
+            return;
+        }
+        let owner = owner.path.segments[0].ident.to_string();
+        let mut delegate = None;
+        syn::visit::visit_item_impl(self, item);
+        let mut finder = SchemaDelegateFinder {
+            owner: &owner,
+            delegate: &mut delegate,
+        };
+        syn::visit::visit_item_impl(&mut finder, item);
+        if let Some(delegate) = delegate {
+            self.schema_delegates.push((owner, delegate));
+        }
     }
 
     fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
@@ -1216,7 +1286,32 @@ impl<'ast> syn::visit::Visit<'ast> for IpcItemCollector<'_> {
             line: item.enum_token.span.start().line,
             fields: Vec::new(),
             variants,
+            published_fields: None,
         });
+    }
+}
+
+/// Finds the type a hand-written `JsonSchema` impl names first in its body,
+/// so the response tables can document the published wire rather than the
+/// in-memory struct a hand-written `Serialize` reads from. Whether the name
+/// is a struct of this file is decided after the walk, so a delegate
+/// declared below its impl still resolves.
+struct SchemaDelegateFinder<'a, 'b> {
+    owner: &'a str,
+    delegate: &'b mut Option<String>,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for SchemaDelegateFinder<'_, '_> {
+    fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
+        if self.delegate.is_none()
+            && let Some(first) = expr.path.segments.first()
+        {
+            let candidate = first.ident.to_string();
+            if candidate != *self.owner {
+                *self.delegate = Some(candidate);
+            }
+        }
+        syn::visit::visit_expr_path(self, expr);
     }
 }
 
@@ -1285,10 +1380,11 @@ fn render_fields(fields: &[Field]) -> String {
 fn render_shape(item: &RustItem) -> String {
     match item.kind {
         ItemKind::Struct => {
-            if item.fields.is_empty() {
+            let fields = item.published_fields.as_deref().unwrap_or(&item.fields);
+            if fields.is_empty() {
                 "empty struct".to_string()
             } else {
-                format!("struct {{ {} }}", render_fields(&item.fields))
+                format!("struct {{ {} }}", render_fields(fields))
             }
         }
         ItemKind::Enum => {

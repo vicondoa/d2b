@@ -383,7 +383,7 @@ see the auto-generated tables above for the committed Rust variants.
 | `AuthStatusResponse` | struct | [`AuthStatusResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2252) | struct { `allowed_subcommands`: `Vec<String>`; `denied_subcommands`: `Vec<DeniedCommandHint>`; `role`: `AuthRole`; `sockets`: `Vec<SocketReachability>` } |
 | `ListResponse` | struct | [`ListResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2261) | struct { `vms`: `Vec<ListEntry>`; `read_model`: `Option<PublicReadModelMetadata>` } |
 | `StatusResponse` | struct | [`StatusResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2269) | struct { `entries`: `Vec<VmStatus>`; `read_model`: `Option<PublicReadModelMetadata>` } |
-| `AuditResponse` | struct | [`AuditResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2349) | struct { `entries`: `Vec<AuditExportEntry>`; `page_end`: `AuditPageEnd` } |
+| `AuditResponse` | struct | [`AuditResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2349) | struct { `entries`: `Vec<AuditExportEntry>`; `next_cursor`: `Option<AuditExportCursor>`; `complete`: `bool` } |
 | `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/d2b-contracts-control/src/public_wire.rs#L2664) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
 
 ### Broker socket response types
