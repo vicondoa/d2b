@@ -37,6 +37,7 @@ use crate::ops::spawn_runner::{
 };
 use d2b_contracts_resource::v3::{ActivationRunnerInput, MAX_ACTIVATION_RUNNER_INPUT_BYTES};
 use d2b_core::bundle_resolver::HostRuntime;
+use d2b_core::host::NmReloadBehavior;
 use d2b_core::sandbox_profile::CgroupPlacement;
 use rustix::fs::{CWD, Mode, OFlags, ResolveFlags};
 
@@ -87,10 +88,6 @@ pub enum LiveHandlerError {
     /// NetworkManager reload failure after writing the unmanaged config
     /// snippet.
     NmReload(String),
-    /// The NetworkManager unmanaged intent declared a reload behavior the
-    /// contract does not admit. Carries the rejected value so the refusal
-    /// names exactly what a hand-declared bundle got wrong.
-    NmReloadBehaviorRefused(String),
     /// The declared owner/group of the NetworkManager unmanaged file could
     /// not be resolved or enforced. Carries the failing principal or the
     /// enforcement detail.
@@ -135,10 +132,6 @@ impl std::fmt::Display for LiveHandlerError {
             Self::KeysRotate(detail) => write!(f, "keys rotate: {detail}"),
             Self::HostKey(detail) => write!(f, "host key: {detail}"),
             Self::NmReload(detail) => write!(f, "networkmanager reload: {detail}"),
-            Self::NmReloadBehaviorRefused(value) => write!(
-                f,
-                "NetworkManager reload behavior {value:?} is not supported; expected \"atomic-reload\" or \"none\""
-            ),
             Self::NmFileOwnership(detail) => {
                 write!(f, "NetworkManager unmanaged file ownership: {detail}")
             }
@@ -279,24 +272,6 @@ impl NmReloadMethod {
     }
 }
 
-/// The closed reload-behavior set the NetworkManager unmanaged contract
-/// admits. `"atomic-reload"` selects the reload branch; `"none"` and the
-/// empty no-host-contract sentinel select the write-only path. Any other
-/// value is a hand-declared bundle defect: refusing it here (before any
-/// mutation) keeps a typo from silently skipping the NetworkManager reload
-/// while the apply acks success.
-///
-/// Shared with the remove path in `ops/nm.rs`; both arms branch on the
-/// same value, so both must apply the same contract check.
-pub(crate) fn validate_nm_reload_behavior(
-    reload_behavior: &str,
-) -> Result<(), LiveHandlerError> {
-    if matches!(reload_behavior, "atomic-reload" | "none" | "") {
-        return Ok(());
-    }
-    Err(LiveHandlerError::NmReloadBehaviorRefused(reload_behavior.to_owned()))
-}
-
 /// Resolve the declared owner/group names of the NetworkManager unmanaged
 /// drop-in to uid/gid. The declaration is part of the bundle contract and
 /// is enforced on the written file; an unresolvable principal refuses the
@@ -359,7 +334,6 @@ pub(crate) async fn live_apply_nm_unmanaged_with_reload<F>(
 where
     F: AsyncFnMut(&[&str]) -> Result<(), String>,
 {
-    validate_nm_reload_behavior(&intent.reload_behavior)?;
     let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
@@ -378,7 +352,7 @@ where
         )
         .await
         .map_err(LiveHandlerError::ReconcileExec)?;
-    if intent.reload_behavior == "atomic-reload" {
+    if matches!(intent.reload_behavior, NmReloadBehavior::AtomicReload) {
         reload(&["reload", "NetworkManager"])
             .await
             .map_err(LiveHandlerError::NmReload)?;
@@ -401,7 +375,6 @@ where
     D: AsyncFnMut() -> Result<(), String>,
     F: AsyncFnMut(&[&str]) -> Result<(), String>,
 {
-    validate_nm_reload_behavior(&intent.reload_behavior)?;
     let existing = match crate::sys::path_safe::read_to_string_nofollow(&intent.file_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
@@ -420,7 +393,7 @@ where
         )
         .await
         .map_err(LiveHandlerError::ReconcileExec)?;
-    if intent.reload_behavior != "atomic-reload" {
+    if !matches!(intent.reload_behavior, NmReloadBehavior::AtomicReload) {
         return Ok(None);
     }
     match dbus_reload().await {
@@ -3291,7 +3264,7 @@ mod tests {
             mode: 0o644,
             owner: "root".to_owned(),
             group: "root".to_owned(),
-            reload_behavior: "atomic-reload".to_owned(),
+            reload_behavior: NmReloadBehavior::AtomicReload,
         }
     }
 
@@ -4007,33 +3980,6 @@ mod tests {
             Err(LiveHandlerError::NmOwnershipConflict)
         ));
         assert!(exec.take_log().is_empty());
-    }
-
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
-    async fn live_apply_nm_unmanaged_refuses_unknown_reload_behavior_before_mutation() {
-        let exec = FakeReconcileExecutor::new();
-        let root = TestDir::new("nm-unmanaged-reload-refused");
-        let mut intent = sample_nm_unmanaged_intent(&root);
-        intent.reload_behavior = "atomic-reloadd".to_owned();
-
-        let err = live_apply_nm_unmanaged_with_reloaders(
-            &exec,
-            &intent,
-            async || Ok(()),
-            async |_| Ok(()),
-        )
-        .await
-        .expect_err("a typo'd reload behavior must refuse the apply");
-
-        assert!(matches!(
-            &err,
-            LiveHandlerError::NmReloadBehaviorRefused(value) if value == "atomic-reloadd"
-        ));
-        assert!(
-            exec.take_log().is_empty(),
-            "the reload-behavior refusal must precede any file mutation"
-        );
     }
 
     #[tokio::test]

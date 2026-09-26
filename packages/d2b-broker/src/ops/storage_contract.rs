@@ -24,9 +24,75 @@ use super::hosts::stable_hash_str;
 pub enum StorageContractError {
     UnknownStorage(String),
     UnknownLock(String),
-    Refused { subject: String, reason: String },
+    Refused {
+        subject: String,
+        reason: RefusalReason,
+    },
     Invalid { subject: String, detail: String },
     Io { path_hash: String, detail: String },
+}
+
+/// The closed refusal-reason set of the broker storage/sync contract.
+///
+/// Every refusal this module raises names one variant instead of spelling a
+/// slug at the raise site, so a new refusal cannot typo its audit-visible
+/// text. The variants are not serialized; [`Display`](std::fmt::Display)
+/// renders the slug the operator/audit surface already carries, and the one
+/// host-detail failure
+/// ([`StoragePathCanonicalizeFailed`](Self::StoragePathCanonicalizeFailed))
+/// renders its fixed slug with the detail appended after a `:`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefusalReason {
+    /// `--apply` on an unexpanded template path the broker would mutate.
+    StorageCriticalTemplateUnexpanded,
+    /// `--apply` under `/etc/d2b`, which Nix owns and the broker only checks.
+    StorageConfigRootIsNixManaged,
+    /// `--apply` on a storage row whose kind is not a directory.
+    StorageApplySupportedForDirectoryOnly,
+    /// A path carrying a `..` component.
+    StoragePathParentDirRefused,
+    /// A path outside every broker-owned root.
+    StoragePathOutsideOwnedRoots,
+    /// A path whose canonical form escapes its owned root.
+    StoragePathEscapesOwnedRoot,
+    /// Canonicalization reached a path component with no leaf name.
+    StoragePathHasNoLeaf,
+    /// Canonicalization reached a path component with no parent.
+    StoragePathHasNoParent,
+    /// Canonicalizing a path failed for a reason other than `NotFound`;
+    /// carries the host error detail.
+    StoragePathCanonicalizeFailed(String),
+}
+
+impl RefusalReason {
+    /// The fixed refusal slug. `Display` appends the carried detail of
+    /// [`Self::StoragePathCanonicalizeFailed`].
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::StorageCriticalTemplateUnexpanded => "storage-critical-template-unexpanded",
+            Self::StorageConfigRootIsNixManaged => "storage-config-root-is-nix-managed",
+            Self::StorageApplySupportedForDirectoryOnly => {
+                "storage-apply-supported-for-directory-only"
+            }
+            Self::StoragePathParentDirRefused => "storage-path-parent-dir-refused",
+            Self::StoragePathOutsideOwnedRoots => "storage-path-outside-owned-roots",
+            Self::StoragePathEscapesOwnedRoot => "storage-path-escapes-owned-root",
+            Self::StoragePathHasNoLeaf => "storage-path-has-no-leaf",
+            Self::StoragePathHasNoParent => "storage-path-has-no-parent",
+            Self::StoragePathCanonicalizeFailed(_) => "storage-path-canonicalize-failed",
+        }
+    }
+}
+
+impl std::fmt::Display for RefusalReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StoragePathCanonicalizeFailed(detail) => {
+                write!(f, "{}:{detail}", self.as_str())
+            }
+            fixed => f.write_str(fixed.as_str()),
+        }
+    }
 }
 
 impl std::fmt::Display for StorageContractError {
@@ -59,7 +125,7 @@ pub async fn reconcile_storage_scope(
         if apply && path.starts_with("/etc/d2b") {
             return Err(StorageContractError::Refused {
                 subject: storage_ref.as_str().to_owned(),
-                reason: "storage-critical-template-unexpanded".to_owned(),
+                reason: RefusalReason::StorageCriticalTemplateUnexpanded,
             });
         }
         return Ok(ReconcileStorageScopeResponse {
@@ -86,7 +152,7 @@ pub async fn reconcile_storage_scope(
     if apply && apply_is_check_only(&path_buf) {
         return Err(StorageContractError::Refused {
             subject: storage_ref.as_str().to_owned(),
-            reason: "storage-config-root-is-nix-managed".to_owned(),
+            reason: RefusalReason::StorageConfigRootIsNixManaged,
         });
     }
     match spec.kind {
@@ -139,7 +205,7 @@ pub async fn reconcile_storage_scope(
         }
         _ if apply => Err(StorageContractError::Refused {
             subject: storage_ref.as_str().to_owned(),
-            reason: "storage-apply-supported-for-directory-only".to_owned(),
+            reason: RefusalReason::StorageApplySupportedForDirectoryOnly,
         }),
         _ => Ok(ReconcileStorageScopeResponse {
             storage_ref: storage_ref.clone(),
@@ -202,7 +268,7 @@ async fn validate_owned_root_against(
     {
         return Err(StorageContractError::Refused {
             subject: subject.to_owned(),
-            reason: "storage-path-parent-dir-refused".to_owned(),
+            reason: RefusalReason::StoragePathParentDirRefused,
         });
     }
     let root = roots
@@ -211,14 +277,14 @@ async fn validate_owned_root_against(
         .find(|root| path.starts_with(root))
         .ok_or_else(|| StorageContractError::Refused {
             subject: subject.to_owned(),
-            reason: "storage-path-outside-owned-roots".to_owned(),
+            reason: RefusalReason::StoragePathOutsideOwnedRoots,
         })?;
     let canonical_root = canonicalize_existing_or_nearest_ancestor(root, subject).await?;
     let canonical_target = canonicalize_existing_or_nearest_ancestor(path, subject).await?;
     if !canonical_target.starts_with(&canonical_root) {
         return Err(StorageContractError::Refused {
             subject: subject.to_owned(),
-            reason: "storage-path-escapes-owned-root".to_owned(),
+            reason: RefusalReason::StoragePathEscapesOwnedRoot,
         });
     }
     Ok(())
@@ -244,20 +310,20 @@ async fn canonicalize_existing_or_nearest_ancestor(
                     .file_name()
                     .ok_or_else(|| StorageContractError::Refused {
                         subject: subject.to_owned(),
-                        reason: "storage-path-has-no-leaf".to_owned(),
+                        reason: RefusalReason::StoragePathHasNoLeaf,
                     })?;
                 missing_suffix.push(leaf.to_os_string());
                 current = current
                     .parent()
                     .ok_or_else(|| StorageContractError::Refused {
                         subject: subject.to_owned(),
-                        reason: "storage-path-has-no-parent".to_owned(),
+                        reason: RefusalReason::StoragePathHasNoParent,
                     })?;
             }
             Err(err) => {
                 return Err(StorageContractError::Refused {
                     subject: subject.to_owned(),
-                    reason: format!("storage-path-canonicalize-failed:{err}"),
+                    reason: RefusalReason::StoragePathCanonicalizeFailed(err.to_string()),
                 });
             }
         }
@@ -380,15 +446,15 @@ mod tests {
         assert!(validate_owned_root(Path::new("/run/d2b"), "x").await.is_ok());
         assert_refused_reason(
             validate_owned_root(Path::new("/var/lib/d2b/../../etc/malicious"), "x").await,
-            "storage-path-parent-dir-refused",
+            RefusalReason::StoragePathParentDirRefused,
         );
         assert_refused_reason(
             validate_owned_root(Path::new("/var/lib/d2b/../d2b-escape"), "x").await,
-            "storage-path-parent-dir-refused",
+            RefusalReason::StoragePathParentDirRefused,
         );
         assert_refused_reason(
             validate_owned_root(Path::new("/home/not-d2b"), "x").await,
-            "storage-path-outside-owned-roots",
+            RefusalReason::StoragePathOutsideOwnedRoots,
         );
     }
 
@@ -403,7 +469,7 @@ mod tests {
             std::os::unix::fs::symlink("/etc", root.join("escape")).unwrap();
             assert_refused_reason(
                 validate_owned_root_against(&root.join("escape/passwd"), "x", &[&root]).await,
-                "storage-path-escapes-owned-root",
+                RefusalReason::StoragePathEscapesOwnedRoot,
             );
         }
     }
@@ -428,7 +494,10 @@ mod tests {
         let err = reconcile_storage_scope(&resolver, &BundleOpId::new("path:regular-file"), true)
             .await
             .expect_err("regular files are check-only in broker reconcile");
-        assert_refused_reason(Err(err), "storage-apply-supported-for-directory-only");
+        assert_refused_reason(
+            Err(err),
+            RefusalReason::StorageApplySupportedForDirectoryOnly,
+        );
     }
 
     #[tokio::test]
@@ -462,7 +531,7 @@ mod tests {
         let err = reconcile_storage_scope(&resolver, &BundleOpId::new("path:config-root"), true)
             .await
             .expect_err("nix-managed config roots are not broker-mutated");
-        assert_refused_reason(Err(err), "storage-config-root-is-nix-managed");
+        assert_refused_reason(Err(err), RefusalReason::StorageConfigRootIsNixManaged);
     }
 
     #[tokio::test]
@@ -521,14 +590,47 @@ mod tests {
 
     fn assert_refused_reason(
         result: Result<(), StorageContractError>,
-        expected_reason: &'static str,
+        expected_reason: RefusalReason,
     ) {
         match result {
             Err(StorageContractError::Refused { reason, .. }) => {
                 assert_eq!(reason, expected_reason);
             }
-            other => panic!("expected refused reason {expected_reason}, got {other:?}"),
+            other => panic!("expected refused reason {expected_reason:?}, got {other:?}"),
         }
+    }
+
+    /// The refusal text is operator/audit-visible: the dispatch caller
+    /// forwards `StorageContractError::to_string()` into the operation
+    /// record. The enum must therefore reproduce every pre-enum slug, with
+    /// the canonicalize failure still appending its host detail.
+    #[test]
+    fn refused_display_keeps_the_wire_text() {
+        let fixed = StorageContractError::Refused {
+            subject: "path:run-root".to_owned(),
+            reason: RefusalReason::StoragePathParentDirRefused,
+        };
+        assert_eq!(
+            fixed.to_string(),
+            "path:run-root: refused: storage-path-parent-dir-refused"
+        );
+        assert_eq!(
+            RefusalReason::StoragePathParentDirRefused.as_str(),
+            "storage-path-parent-dir-refused"
+        );
+
+        let detailed = StorageContractError::Refused {
+            subject: "path:run-root".to_owned(),
+            reason: RefusalReason::StoragePathCanonicalizeFailed("EACCES".to_owned()),
+        };
+        assert_eq!(
+            detailed.to_string(),
+            "path:run-root: refused: storage-path-canonicalize-failed:EACCES"
+        );
+        assert_eq!(
+            RefusalReason::StoragePathCanonicalizeFailed(String::new()).as_str(),
+            "storage-path-canonicalize-failed"
+        );
     }
 
     struct ScratchDir(PathBuf);

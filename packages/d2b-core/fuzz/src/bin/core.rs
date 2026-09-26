@@ -15,8 +15,8 @@ use d2b_core::{
     },
     host::{
         BridgePortFlags, HostJson, HostsFileOwnership, Ipv6SysctlEntry, LanPolicy, NetEnv,
-        NetworkManagerUnmanaged, NftChain, NftablesModel, OwnershipRule, SitePolicy, TapRole,
-        UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
+        NmReloadBehavior, NetworkManagerUnmanaged, NftChain, NftablesModel, OwnershipRule,
+        SitePolicy, TapRole, UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
     },
     manifest_v04::ManifestV04,
     sandbox_profile::CgroupPlacement,
@@ -45,6 +45,10 @@ fn main() {
         (
             "host_json_denies_unknown_fields",
             host_json_denies_unknown_fields,
+        ),
+        (
+            "nm_reload_behavior_wire_values_are_closed",
+            nm_reload_behavior_wire_values_are_closed,
         ),
         (
             "usbip_busid_lock_round_trips_bus_ids",
@@ -136,6 +140,31 @@ fn host_json_denies_unknown_fields() {
     let err = serde_json::from_str::<HostJson>(r#"{"schemaVersion":"v1","extra":true}"#)
         .expect_err("unknown fields fail closed");
     assert!(err.to_string().contains("unknown field"));
+}
+
+fn nm_reload_behavior_wire_values_are_closed() {
+    for (wire, behavior) in [
+        ("atomic-reload", NmReloadBehavior::AtomicReload),
+        ("none", NmReloadBehavior::None),
+        ("", NmReloadBehavior::Unspecified),
+    ] {
+        let rendered = serde_json::to_string(&behavior).expect("serialize reload behavior");
+        assert_eq!(rendered, format!("{wire:?}"));
+        let parsed: NmReloadBehavior =
+            serde_json::from_str(&rendered).expect("parse reload behavior");
+        assert_eq!(parsed, behavior);
+    }
+
+    let declared = |reload_behavior: &str| {
+        format!(
+            r##"{{"filePath":"/etc/NetworkManager/conf.d/00-d2b.conf","matchCriteria":[],"reloadBehavior":{reload_behavior:?},"ownership":{{"owner":"root","group":"root","mode":"0644","driftPolicy":"replace"}}}}"##
+        )
+    };
+    serde_json::from_str::<NetworkManagerUnmanaged>(&declared("atomic-reload"))
+        .expect("a declared reload behavior resolves");
+    let err = serde_json::from_str::<NetworkManagerUnmanaged>(&declared("atomic-reloadd"))
+        .expect_err("a hand-declared reload behavior typo must fail at resolution");
+    assert!(err.to_string().contains("unknown variant"), "{err}");
 }
 
 fn usbip_busid_lock_round_trips_bus_ids() {
@@ -339,7 +368,7 @@ fn build_synthetic_resolver() -> BundleResolver {
         network_manager: NetworkManagerUnmanaged {
             file_path: "/etc/NetworkManager/conf.d/00-d2b.conf".to_owned(),
             match_criteria: vec!["interface-name:d2b-*".to_owned()],
-            reload_behavior: "atomic-reload".to_owned(),
+            reload_behavior: NmReloadBehavior::AtomicReload,
             ownership: OwnershipRule {
                 owner: "root".to_owned(),
                 group: "root".to_owned(),

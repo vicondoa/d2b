@@ -67,7 +67,7 @@ use crate::allocator_config::AllocatorZoneTopology;
 use crate::bundle::{Bundle, BundleGeneration};
 use d2b_contracts::error::Error;
 use crate::host::{
-    ChNetHandoffMode, HostJson, HostsFileOwnership, ModuleRequirement, NetEnv,
+    ChNetHandoffMode, HostJson, HostsFileOwnership, ModuleRequirement, NetEnv, NmReloadBehavior,
     NetworkManagerUnmanaged, NftablesModel, OwnershipRule, QemuMediaSourceIntent, SitePolicy,
     UsbipBusidLock, VendorProductPair,
 };
@@ -337,7 +337,7 @@ pub struct ResolvedNmUnmanagedIntent {
     pub mode: u32,
     pub owner: String,
     pub group: String,
-    pub reload_behavior: String,
+    pub reload_behavior: NmReloadBehavior,
 }
 
 /// Resolved per-busid USBIP firewall rule body.
@@ -1200,7 +1200,7 @@ fn empty_zone_native_host() -> HostJson {
         network_manager: NetworkManagerUnmanaged {
             file_path: String::new(),
             match_criteria: Vec::new(),
-            reload_behavior: String::new(),
+            reload_behavior: NmReloadBehavior::Unspecified,
             ownership: OwnershipRule {
                 owner: String::new(),
                 group: String::new(),
@@ -4256,7 +4256,7 @@ fn build_nm_unmanaged_intents(host: &HostJson) -> BTreeMap<String, ResolvedNmUnm
             mode,
             owner: host.network_manager.ownership.owner.clone(),
             group: host.network_manager.ownership.group.clone(),
-            reload_behavior: host.network_manager.reload_behavior.clone(),
+            reload_behavior: host.network_manager.reload_behavior,
         },
     );
     out
@@ -6000,8 +6000,8 @@ mod tests {
     use crate::bundle::{Bundle, BundleGeneration};
     use crate::host::{
         BridgePortFlags, ChNetHandoffMode, HostChConfig, HostJson, HostsFileOwnership,
-        IfNameMapping, LanPolicy, NetEnv, NetworkManagerUnmanaged, NftablesModel, OwnershipRule,
-        SitePolicy, UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
+        IfNameMapping, LanPolicy, NetEnv, NmReloadBehavior, NetworkManagerUnmanaged, NftablesModel,
+        OwnershipRule, SitePolicy, UsbipBusidLock, UsbipLockOwner, UsbipLockScope,
     };
     use crate::manifest_v04::{
         ManifestMeta, ManifestV04, ObservabilityMeta, VmEntry, VmLanPolicy, VmObservability,
@@ -6887,7 +6887,7 @@ mod tests {
             network_manager: NetworkManagerUnmanaged {
                 file_path: "/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf".to_owned(),
                 match_criteria: vec!["interface-name:d2b-*".to_owned()],
-                reload_behavior: "atomic-reload".to_owned(),
+                reload_behavior: NmReloadBehavior::AtomicReload,
                 ownership: OwnershipRule {
                     owner: "root".to_owned(),
                     group: "root".to_owned(),
@@ -7338,7 +7338,10 @@ mod tests {
             loaded.network_manager.match_criteria,
             vec!["interface-name:d2b-*".to_owned()]
         );
-        assert_eq!(loaded.network_manager.reload_behavior, "atomic-reload");
+        assert_eq!(
+            loaded.network_manager.reload_behavior,
+            NmReloadBehavior::AtomicReload
+        );
         assert_eq!(loaded.network_manager.ownership.owner, "root");
         assert_eq!(loaded.network_manager.ownership.group, "d2bd");
         assert_eq!(loaded.network_manager.ownership.mode, "0640");
@@ -7356,7 +7359,7 @@ mod tests {
         );
         assert!(intent.contents.contains("interface-name:d2b-*"));
         assert_eq!(intent.mode, 0o640);
-        assert_eq!(intent.reload_behavior,"atomic-reload");
+        assert_eq!(intent.reload_behavior, NmReloadBehavior::AtomicReload);
 
         #[allow(clippy::disallowed_methods, reason = "cfg(test) helper")]
         let _ = fs::remove_dir_all(root);
@@ -7380,7 +7383,10 @@ mod tests {
         .expect("an undeclared host artifact is not an error");
         assert!(host.network_manager.file_path.is_empty());
         assert!(host.network_manager.match_criteria.is_empty());
-        assert!(host.network_manager.reload_behavior.is_empty());
+        assert_eq!(
+            host.network_manager.reload_behavior,
+            NmReloadBehavior::Unspecified
+        );
 
         let intents = build_nm_unmanaged_intents(&host);
         let intent = intents
