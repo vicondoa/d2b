@@ -17,6 +17,7 @@ use super::{
     ResourceRef,
     resource_schema::{CanonicalJsonError, CanonicalJsonObject, canonical_json_bytes},
 };
+use d2b_contracts::wire_deserialize;
 
 #[macro_export]
 macro_rules! redacted_debug {
@@ -721,39 +722,37 @@ impl core::fmt::Debug for BudgetSpec {
     }
 }
 
-impl<'de> Deserialize<'de> for BudgetSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default)]
-            cpu: Option<CpuBudget>,
-            #[serde(default)]
-            memory: Option<MemoryBudget>,
-            #[serde(default)]
-            pids: Option<CountBudget>,
-            #[serde(default)]
-            fds: Option<CountBudget>,
-            #[serde(default)]
-            io_weight: Option<u32>,
-            #[serde(default)]
-            network_egress_bps: Option<u64>,
-            #[serde(default)]
-            thread_limit: Option<u32>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.cpu,
-            wire.memory,
-            wire.pids,
-            wire.fds,
-            wire.io_weight,
-            wire.network_egress_bps,
-            wire.thread_limit,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    BudgetSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default)]
+        cpu: Option<CpuBudget>,
+        #[serde(default)]
+        memory: Option<MemoryBudget>,
+        #[serde(default)]
+        pids: Option<CountBudget>,
+        #[serde(default)]
+        fds: Option<CountBudget>,
+        #[serde(default)]
+        io_weight: Option<u32>,
+        #[serde(default)]
+        network_egress_bps: Option<u64>,
+        #[serde(default)]
+        thread_limit: Option<u32>,
+    },
+    wire,
+    Self::new(
+        wire.cpu,
+        wire.memory,
+        wire.pids,
+        wire.fds,
+        wire.io_weight,
+        wire.network_egress_bps,
+        wire.thread_limit,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// One Network made available to Processes under an execution target.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -786,19 +785,17 @@ impl NetworkAttachment {
 
 redacted_debug!(NetworkAttachment);
 
-impl<'de> Deserialize<'de> for NetworkAttachment {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            network_ref: ResourceRef,
-            #[serde(default)]
-            default: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.network_ref, wire.default).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    NetworkAttachment,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        network_ref: ResourceRef,
+        #[serde(default)]
+        default: bool,
+    },
+    wire,
+    Self::new(wire.network_ref, wire.default).map_err(serde::de::Error::custom)
+);
 
 /// One Device made available to Processes under an execution target.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -831,19 +828,17 @@ impl DeviceAttachment {
 
 redacted_debug!(DeviceAttachment);
 
-impl<'de> Deserialize<'de> for DeviceAttachment {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            device_ref: ResourceRef,
-            #[serde(default)]
-            exclusive: bool,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.device_ref, wire.exclusive).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    DeviceAttachment,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        device_ref: ResourceRef,
+        #[serde(default)]
+        exclusive: bool,
+    },
+    wire,
+    Self::new(wire.device_ref, wire.exclusive).map_err(serde::de::Error::custom)
+);
 
 /// The shared Host and Guest execution, policy, and budget parent schema.
 ///

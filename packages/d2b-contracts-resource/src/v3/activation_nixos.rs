@@ -5,9 +5,10 @@ use schemars::{
     r#gen::SchemaGenerator,
     schema::{Schema, SchemaObject},
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use super::{ArtifactId, ResourceRef, ResourceTypeName, execution_policy::require_execution_ref};
+use d2b_contracts::wire_deserialize;
 
 /// The canonical activation generation ResourceType.
 pub const NIXOS_GENERATION_RESOURCE_TYPE: &str = "activation-nixos.d2bus.org.NixosGeneration";
@@ -246,29 +247,27 @@ impl NixosGenerationSpec {
     }
 }
 
-impl<'de> Deserialize<'de> for NixosGenerationSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            provider_ref: ResourceRef,
-            execution_ref: ResourceRef,
-            system_artifact_id: String,
-            activation_mode: ActivationMode,
-            #[serde(default)]
-            prior_generation_ref: Option<ResourceRef>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(
-            wire.provider_ref,
-            wire.execution_ref,
-            wire.system_artifact_id,
-            wire.activation_mode,
-            wire.prior_generation_ref,
-        )
-        .map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    NixosGenerationSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        provider_ref: ResourceRef,
+        execution_ref: ResourceRef,
+        system_artifact_id: String,
+        activation_mode: ActivationMode,
+        #[serde(default)]
+        prior_generation_ref: Option<ResourceRef>,
+    },
+    wire,
+    Self::new(
+        wire.provider_ref,
+        wire.execution_ref,
+        wire.system_artifact_id,
+        wire.activation_mode,
+        wire.prior_generation_ref,
+    )
+    .map_err(serde::de::Error::custom)
+);
 
 /// Typed activation status below the universal ResourceStatus layer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

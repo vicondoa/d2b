@@ -1,38 +1,5 @@
 //! Canonical Zone and ComponentSession contract family.
 
-/// Captures the crate's Wire-struct `Deserialize` shape: a private
-/// `#[derive(Deserialize)]` wire struct with `deny_unknown_fields`, then a
-/// validated constructor admission check.
-///
-/// The binding name is passed explicitly (`wire` at every site) so the
-/// construct expression can reference it across macro hygiene.
-macro_rules! wire_deserialize {
-    (
-        $type:ty,
-        $(#[$container:meta])*
-        $wire:ident {
-            $( $(#[$field_attr:meta])* $field:ident : $field_ty:ty ),* $(,)?
-        },
-        $binding:ident,
-        $construct:expr
-    ) => {
-        impl<'de> serde::Deserialize<'de> for $type {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'de>,
-            {
-                #[derive(serde::Deserialize)]
-                $(#[$container])*
-                struct $wire {
-                    $( $(#[$field_attr])* $field: $field_ty, )*
-                }
-                let $binding = $wire::deserialize(deserializer)?;
-                $construct
-            }
-        }
-    };
-}
-
 pub mod component_session;
 pub mod emergency_policy;
 pub mod resource_bundle;

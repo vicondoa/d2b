@@ -6,7 +6,7 @@
 //! `ResourceSpec` and are never restated here.
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use super::{
     ResourceRef,
@@ -16,6 +16,7 @@ use super::{
     },
     resource_schema::CanonicalJsonObject,
 };
+use d2b_contracts::wire_deserialize;
 
 /// The canonical ResourceType name for this module.
 pub const HOST_RESOURCE_TYPE: &str = "Host";
@@ -106,29 +107,29 @@ impl HostSpec {
 
 redacted_debug!(HostSpec);
 
-impl<'de> Deserialize<'de> for HostSpec {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            #[serde(default = "system_domain")]
-            default_domain: ExecutionDomain,
-            #[serde(default = "system_domains")]
-            allowed_domains: Vec<ExecutionDomain>,
-            #[serde(default)]
-            default_user_ref: Option<ResourceRef>,
-            #[serde(default)]
-            budget: BudgetSpec,
-            #[serde(default)]
-            network_attachments: Vec<NetworkAttachment>,
-            #[serde(default)]
-            device_attachments: Vec<DeviceAttachment>,
-            #[serde(default)]
-            volume_attachment_defaults: Vec<CanonicalJsonObject>,
-            #[serde(default)]
-            isolation_posture: Option<IsolationPosture>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
+wire_deserialize!(
+    HostSpec,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        #[serde(default = "system_domain")]
+        default_domain: ExecutionDomain,
+        #[serde(default = "system_domains")]
+        allowed_domains: Vec<ExecutionDomain>,
+        #[serde(default)]
+        default_user_ref: Option<ResourceRef>,
+        #[serde(default)]
+        budget: BudgetSpec,
+        #[serde(default)]
+        network_attachments: Vec<NetworkAttachment>,
+        #[serde(default)]
+        device_attachments: Vec<DeviceAttachment>,
+        #[serde(default)]
+        volume_attachment_defaults: Vec<CanonicalJsonObject>,
+        #[serde(default)]
+        isolation_posture: Option<IsolationPosture>,
+    },
+    wire,
+    {
         let policy = ExecutionPolicyWire {
             default_domain: wire.default_domain,
             allowed_domains: wire.allowed_domains,
@@ -142,7 +143,7 @@ impl<'de> Deserialize<'de> for HostSpec {
         .map_err(serde::de::Error::custom)?;
         Self::new(policy, wire.isolation_posture).map_err(serde::de::Error::custom)
     }
-}
+);
 
 const fn system_domain() -> ExecutionDomain {
     ExecutionDomain::System

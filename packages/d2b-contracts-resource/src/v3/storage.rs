@@ -12,6 +12,7 @@ use schemars::{
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::ResourceUid;
+use d2b_contracts::wire_deserialize;
 
 /// Maximum byte length of a broker-resolved Zone storage identifier.
 pub const MAX_ZONE_STORAGE_ID_BYTES: usize = 160;
@@ -189,23 +190,17 @@ impl ZoneStoreIdentity {
     }
 }
 
-impl<'de> Deserialize<'de> for ZoneStoreIdentity {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Wire {
-            zone_uid: ResourceUid,
-            store_uid: ResourceUid,
-            store_epoch: u64,
-        }
-
-        let wire = Wire::deserialize(deserializer)?;
-        Self::new(wire.zone_uid, wire.store_uid, wire.store_epoch).map_err(serde::de::Error::custom)
-    }
-}
+wire_deserialize!(
+    ZoneStoreIdentity,
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    Wire {
+        zone_uid: ResourceUid,
+        store_uid: ResourceUid,
+        store_epoch: u64,
+    },
+    wire,
+    Self::new(wire.zone_uid, wire.store_uid, wire.store_epoch).map_err(serde::de::Error::custom)
+);
 
 /// Exact database-inode ownership and metadata requirements.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

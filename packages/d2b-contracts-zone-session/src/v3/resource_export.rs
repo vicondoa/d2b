@@ -5,6 +5,7 @@
 //! backing resource, remote Zone, session, stream, and lease handles stay
 //! outside this resource contract.
 
+use d2b_contracts::wire_deserialize;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
